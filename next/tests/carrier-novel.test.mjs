@@ -1,0 +1,252 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { join } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { createRegistry } from '../kernel/pluginRegistry.mjs'
+import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
+import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
+import { validateCarrierManifest } from '../kernel/carrierManifest.mjs'
+import { createProject } from '../project/createProject.mjs'
+import { openProject } from '../project/openProject.mjs'
+import { setCarrierEnabled } from '../project/carriers.mjs'
+import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
+import { kernelToolNames, toolOwnershipReport } from '../runtime/mcpSurface.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER, NOVEL_CARRIER_ID } from '../carriers/index.mjs'
+import { NOVEL_TOOL_NAMES } from '../carriers/novel/tools.mjs'
+import { FIXTURE_SCRIPT } from '../testing/fixtures.mjs'
+import { createTempWorkspace } from '../testing/harness.mjs'
+
+/**
+ * M2 · WP5/WP6：第一个真实载体（小说）与工具面聚合。
+ * 这里用的必须是 next/carriers/ 里的真清单，不再用 testing/fixtures.mjs 的夹具——
+ * 夹具证的是合同本身，真载体证的是「合同跑得起一个能读能写的小说板块」。
+ */
+
+async function novelProject(label, { primaryCarrier = NOVEL_CARRIER_ID, extraEnabled = [], plugins = BUILT_IN_CARRIER_PLUGINS } = {}) {
+  const workspace = await createTempWorkspace(label)
+  const root = join(workspace.projects, '小说载体靶子')
+  const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+  for (const plugin of plugins) {
+    const installed = registry.install(plugin.manifest, plugin.impl ?? {}, plugin.meta ?? {})
+    assert.equal(installed.ok, true, `${plugin.manifest.id}：${JSON.stringify(installed.error ?? {})}`)
+  }
+  const created = await createProject({ root, name: '小说载体靶子', primaryCarrier, registry, extraEnabled })
+  assert.equal(created.ok, true, JSON.stringify(created.error ?? {}))
+  const opened = await openProject({ root, registry })
+  assert.equal(opened.ok, true, JSON.stringify(opened.error ?? {}))
+  const runtime = createAgentRuntime({ registry, fileService: opened.value.fileService, view: opened.value.view })
+  return { workspace, root, registry, created, opened, runtime }
+}
+
+test('真清单过内核校验：认领的都是内核已有的名字，板块都在小说骨架里', () => {
+  const validated = validateCarrierManifest(NOVEL_CARRIER, { kinds: Object.keys(PROJECT_KINDS) })
+  assert.equal(validated.ok, true, JSON.stringify(validated.error ?? {}))
+  const kernel = new Set(kernelToolNames())
+  const claimed = NOVEL_CARRIER.tools.filter((name) => kernel.has(name))
+  assert.deepEqual(claimed, ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read'], '认领＝同名接管，不虚增工具面')
+  for (const dir of Object.values(NOVEL_CARRIER.dataDirs)) {
+    assert.ok(PROJECT_KINDS.novel.includes(dir), `载体目录「${dir}」必须落在固化小说骨架里`)
+  }
+  assert.deepEqual(validated.value.context.providers, ['selection', 'outline'], 'providers 必须写上下文块的种类名，运行时按名字找提供者')
+  assert.equal(NOVEL_CARRIER.primary.contextProfile, 'writing-chapter', '上下文档案名要对齐 shared/agentContextProfiles')
+})
+
+test('工具面聚合：启用小说后面是 20 个工具，三个只读名归属载体，声明无实现的绝不虚列', async () => {
+  const { workspace, registry, runtime } = await novelProject('carrier-surface')
+  try {
+    const started = await runtime.start()
+    assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
+    assert.equal(started.value.toolCount, 20, '19 内核 ＋ 载体自有的 pinax_chapter_save')
+    assert.equal(started.value.aggregatedSurface, true)
+    assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...NOVEL_TOOL_NAMES].sort())
+
+    const names = runtime.listTools().map((tool) => tool.name)
+    assert.equal(names.filter((name) => name === 'pinax_chapter_list').length, 1, '同名工具去重，载体接管不重复列')
+    assert.equal(runtime.ownerOf('pinax_chapter_list'), NOVEL_CARRIER_ID)
+    assert.equal(runtime.ownerOf('pinax_project_list'), 'kernel')
+
+    // 载体确实接住了调用：不传 projectPath 也能列出章节（内核那份必须要项目参数）。
+    const listed = await runtime.callTool('pinax_chapter_list', {})
+    assert.equal(listed.value.owner, NOVEL_CARRIER_ID)
+    assert.equal(listed.value.payload.ok, true, JSON.stringify(listed.value.payload))
+    assert.deepEqual(listed.value.payload.chapters, [])
+
+    const report = toolOwnershipReport(registry)
+    assert.equal(report.claimed.length, 5, '小说 3 把只读 ＋ 设定 2 把只读（认领面按已安装的清单算，不看启用开关）')
+    assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须往下走')
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save'])
+    assert.deepEqual(report.withoutImplementation, [], '小说声明的四个名字都得有实现')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('保存→读回→列表：修订号一路对上；既有文件不许用 0 盲写', async () => {
+  const { workspace, root, runtime } = await novelProject('carrier-save')
+  try {
+    await runtime.start()
+    const created = await runtime.callTool('pinax_chapter_save', {
+      title: '第001章-入场',
+      text: '雨从檐口滴下来。',
+      expectedRevision: 0
+    })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+    assert.equal(created.value.payload.created, true)
+    assert.equal(created.value.payload.revision, 1)
+    assert.equal(created.value.payload.file, '正文/第001章-入场.md')
+    assert.match(await readFile(join(root, '正文', '第001章-入场.md'), 'utf-8'), /雨从檐口滴下来/)
+
+    // 作者原稿保护：磁盘上已有这个文件，再拿 0 来写必须是并发拒绝，而不是静默覆盖。
+    const blind = await runtime.callTool('pinax_chapter_save', { file: '正文/第001章-入场.md', text: '被推翻的写法', expectedRevision: 0 })
+    assert.equal(blind.value.payload.ok, false)
+    assert.equal(blind.value.payload.code, NEXT_ERROR_CODES.STALE_REVISION)
+    assert.equal(blind.value.payload.details.actual, 1)
+    assert.match(await readFile(join(root, '正文', '第001章-入场.md'), 'utf-8'), /雨从檐口滴下来/, '拒绝后磁盘内容不动')
+
+    const read = await runtime.callTool('pinax_chapter_read', { index: 0 })
+    assert.equal(read.value.payload.ok, true, JSON.stringify(read.value.payload))
+    assert.equal(read.value.payload.revision, 1)
+    assert.equal(read.value.payload.text, '雨从檐口滴下来。')
+    assert.equal(read.value.payload.truncated, false)
+
+    const updated = await runtime.callTool('pinax_chapter_save', {
+      file: read.value.payload.chapter.file,
+      text: '雨从檐口滴下来，巷子里没人。',
+      expectedRevision: read.value.payload.revision
+    })
+    assert.equal(updated.value.payload.ok, true, JSON.stringify(updated.value.payload))
+    assert.equal(updated.value.payload.revision, 2)
+    assert.equal(updated.value.payload.created, false)
+
+    const listed = await runtime.callTool('pinax_chapter_list', { limit: 10 })
+    assert.equal(listed.value.payload.total, 1)
+    assert.deepEqual(listed.value.payload.chapters.map((item) => [item.title, item.revision]), [['第001章-入场', 2]])
+
+    const byTitle = await runtime.callTool('pinax_chapter_read', { title: '入场', maxChars: 1000 })
+    assert.equal(byTitle.value.payload.ok, true)
+    assert.equal(byTitle.value.payload.matchedBy, 'title-contains')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('载体写不了别人的板块：越界路径、跨目录、非 .md 都拦在文件服务，不在载体里防', async () => {
+  const { workspace, runtime, opened } = await novelProject('carrier-fence')
+  try {
+    await runtime.start()
+    const escape = await runtime.callTool('pinax_chapter_save', { file: '../../../逃逸.md', text: 'x', expectedRevision: 0 })
+    assert.equal(escape.value.payload.ok, false)
+    assert.equal(escape.value.payload.code, NEXT_ERROR_CODES.PATH_OUTSIDE_PROJECT)
+
+    const metadata = await runtime.callTool('pinax_chapter_save', { file: '../.pinax/偷写.md', text: 'x', expectedRevision: 0 })
+    assert.equal(metadata.value.payload.ok, false)
+    assert.equal(metadata.value.payload.code, NEXT_ERROR_CODES.PATH_OUTSIDE_PROJECT)
+
+    const missingArgs = await runtime.callTool('pinax_chapter_save', { title: '没正文' })
+    assert.equal(missingArgs.value.payload.ok, false)
+    assert.equal(missingArgs.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    const notMarkdown = await runtime.callTool('pinax_chapter_save', { file: '正文/没有扩展名', text: 'x', expectedRevision: 0 })
+    assert.equal(notMarkdown.value.payload.ok, false)
+    assert.equal(notMarkdown.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    // 世界书不是小说的板块：归属闸（C3）先拒，跟它申请了什么 scope 无关。
+    const foreign = await opened.value.fileService.write({ pluginId: NOVEL_CARRIER_ID, dir: '世界书', file: '偷.md', text: 'x', expectedRevision: 0 })
+    assert.equal(foreign.ok, false)
+    assert.equal(foreign.error.code, NEXT_ERROR_CODES.DIR_CONFLICT)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('大纲：结构化优先，只有散文稿时如实给警告，不凭空造节点', async () => {
+  const { workspace, root, runtime, opened } = await novelProject('carrier-outline')
+  try {
+    await runtime.start()
+    const empty = await runtime.callTool('pinax_outline_read', {})
+    assert.equal(empty.value.payload.ok, false, '大纲目录空着就是没有大纲，不返回空节点冒充读到了')
+
+    const written = await opened.value.fileService.write({
+      pluginId: NOVEL_CARRIER_ID,
+      dir: '大纲',
+      file: 'outline.json',
+      text: JSON.stringify({ nodes: [{ id: 'n1', title: '开场：雨夜进城' }, { id: 'n2', title: '第一折' }], edges: [{ from: 'n1', to: 'n2' }] }, null, 2),
+      expectedRevision: 0
+    })
+    assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+
+    const read = await runtime.callTool('pinax_outline_read', { maxNodes: 300 })
+    assert.equal(read.value.payload.ok, true, JSON.stringify(read.value.payload))
+    assert.equal(read.value.payload.nodeTotal, 2)
+    assert.deepEqual(read.value.payload.nodes.map((node) => node.id), ['n1', 'n2'])
+    assert.equal(read.value.payload.warning, null)
+    assert.match(await readFile(join(root, '大纲', 'outline.json'), 'utf-8'), /雨夜进城/)
+
+    // 只有散文稿的第二种项目：警告要有，节点必须是空数组。
+    const proseRoot = join(workspace.projects, '散文大纲靶子')
+    const registry2 = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+    for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry2.install(plugin.manifest, plugin.impl, plugin.meta)
+    const made = await createProject({ root: proseRoot, name: '散文大纲靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: registry2 })
+    assert.equal(made.ok, true, JSON.stringify(made.error ?? {}))
+    const opened2 = await openProject({ root: proseRoot, registry: registry2 })
+    await opened2.value.fileService.write({ pluginId: NOVEL_CARRIER_ID, dir: '大纲', file: '大纲.md', text: '第一卷：雨夜。', expectedRevision: 0 })
+    const runtime2 = createAgentRuntime({ registry: registry2, fileService: opened2.value.fileService, view: opened2.value.view })
+    await runtime2.start()
+    const prose = await runtime2.callTool('pinax_outline_read', {})
+    assert.equal(prose.value.payload.ok, true)
+    assert.deepEqual(prose.value.payload.nodes, [])
+    assert.match(prose.value.payload.warning, /未凭空生成节点树/)
+    await runtime2.stop()
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('停用载体后工具面回落内核：面少一个名字，同名工具回到内核实现', async () => {
+  const { workspace, root, registry, opened, runtime } = await novelProject('carrier-disable', {
+    primaryCarrier: FIXTURE_SCRIPT.id,
+    extraEnabled: [NOVEL_CARRIER_ID],
+    plugins: [...BUILT_IN_CARRIER_PLUGINS, { manifest: FIXTURE_SCRIPT }]
+  })
+  try {
+    await runtime.start()
+    assert.equal(runtime.listTools().length, 20)
+    assert.ok(opened.value.view.enabled.includes(NOVEL_CARRIER_ID))
+
+    const disabled = await setCarrierEnabled({ root, registry, pluginId: NOVEL_CARRIER_ID, enabled: false, expectedRevision: opened.value.document.carriers.revision })
+    assert.equal(disabled.ok, true, JSON.stringify(disabled.error ?? {}))
+    const reopened = await openProject({ root, registry })
+    assert.equal(reopened.ok, true, JSON.stringify(reopened.error ?? {}))
+    assert.equal(reopened.value.view.enabled.includes(NOVEL_CARRIER_ID), false)
+
+    const runtimeAfter = createAgentRuntime({ registry, fileService: reopened.value.fileService, view: reopened.value.view })
+    await runtimeAfter.start()
+    const names = runtimeAfter.listTools().map((tool) => tool.name)
+    assert.equal(names.length, 19, '载体工具从面上下掉，内核 19 工具一个不少')
+    assert.equal(names.includes('pinax_chapter_save'), false)
+    assert.equal(runtimeAfter.ownerOf('pinax_chapter_list'), 'kernel', '停用＝回落内核，不拿停用者的 scope 卡人')
+
+    const kernelAnswer = await runtimeAfter.callTool('pinax_chapter_list', {})
+    assert.equal(kernelAnswer.value.owner, 'kernel')
+    assert.equal(kernelAnswer.value.payload.ok, false, '内核那份要项目参数，这里如实失败')
+    await runtimeAfter.stop()
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('没有项目（view 为空）时面就是内核 19 工具——空框架轨道不被真载体污染', async () => {
+  const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+  for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry.install(plugin.manifest, plugin.impl, plugin.meta)
+  const runtime = createAgentRuntime({ registry })
+  const started = await runtime.start()
+  assert.equal(started.value.toolCount, 19)
+  assert.equal(started.value.aggregatedSurface, false)
+  assert.deepEqual(runtime.surfaceInfo().carrierToolNames, [])
+  await runtime.stop()
+})

@@ -166,3 +166,25 @@ jobs:
           name: workspace-backup-smoke-artifacts
           path: backup-smoke-artifacts/
           retention-days: 7
+
+  # Pinax-Electron-Next（M1 框架骨架）的门禁。独立 job：不依赖 Vue 构建与 Playwright，
+  # 挂了只说明内核合同/打包断言坏了，不会把老 web 轨的失败混进来。
+  next-kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify Next (空框架验收 ＋ 内核合同单测 ＋ 外壳界面测 ＋ lint ＋ 打包门禁)
+        run: npm run verify:next

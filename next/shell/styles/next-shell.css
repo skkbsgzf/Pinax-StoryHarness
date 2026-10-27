@@ -1,0 +1,544 @@
+/* ============================================================================
+ * Next 外壳自己的布局层。
+ *
+ * 颜色 / 字体 / 圆角 / 控件一律走老前端的 token（src/styles/themes/legacy.css）
+ * 与控件词汇（src/styles/workbench-controls.css）：本文件里不许出现硬编码颜色，
+ * 门禁见 next/tests/visual-contract.test.mjs。
+ *
+ * 复用优先（作者口径：「尽可能复用之前的，不是所有的部分都需要重新开发」）：
+ *   - 索引窗的行直接用老版的 .workspace-nav-item 词汇
+ *     （src/styles/workspace-navigation.css:21-75）——行高、悬停、选中、焦点环全是原件；
+ *   - 两级选中色不再抄：老版把公式放在 --nav-* 里（workspace-navigation.css:2-14），
+ *     外壳根节点挂 .app-shell 就能拿到，本文件因此一个 --nav-* 都不许再定义；
+ *   - 这里只负责 Next 自己的东西：Obsidian 三栏的骨架布局、「行按钮」primitive（nx-row）
+ *     与「输入框」primitive（nx-field）。
+ * ============================================================================ */
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+.next-shell {
+  --nx-section-gap: 18px;
+  display: flex;
+  height: 100vh;
+  width: 100%;
+  background: var(--surface-workbench-muted);
+  color: var(--archive-ink);
+  font-family: var(--font-interface);
+  font-size: var(--fs-base);
+}
+
+/* —— 行按钮 primitive：清单行与竖条行共用一个形态 ————————————————
+   选它＝看它，所以行本身也是按钮；但行不是「命令」，
+   因此不套 .control-*（那套是命令语义），单独走这一条。
+   行高沿用老版侧栏导航行：--nav-row-height 42px（src/styles/workspace-navigation.css:13）。 */
+.nx-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--nav-row-height);
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--archive-ink-soft);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.nx-row:hover {
+  background: var(--nav-hover);
+  color: var(--archive-ink);
+}
+.nx-row:active {
+  background: var(--nav-focused);
+}
+.nx-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* —— 输入框 primitive：老版写作面输入的一条边界一个焦点 ——————————— */
+.nx-field {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 12px;
+  background: var(--surface-workbench-input);
+  color: var(--archive-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.nx-field::placeholder {
+  color: var(--text-muted);
+}
+.nx-field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* —— 图标竖条：抄老前端 .workspace-activity-bar ————————————————————
+   老版那几条规则写在 SFC 的 scoped 样式里（src/components/workbench/WorkspaceContentGroups.vue:190-196），
+   scoped 样式没法 import，所以这里按同一条度量抄一份；
+   44/46/4/8 这几个数字由 next/tests/visual-contract.test.mjs 直接回老文件核对，抄歪了门禁就红。 */
+.nx-ribbon {
+  display: flex;
+  flex: 0 0 44px;
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 4px;
+  background: var(--workbench-chrome);
+  border-inline-end: 1px solid transparent;
+}
+.nx-ribbon-item {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.nx-ribbon-item.is-bottom {
+  margin-top: auto;
+  margin-bottom: 8px;
+}
+.nx-ribbon-item:hover {
+  color: var(--text-primary);
+  background: var(--nav-hover);
+}
+/* 当前板＝强选中：老版竖条用 --workbench-selected，这里走老版给的那枚 token
+   （--nav-primary-selected 就是它，workspace-navigation.css:10）。 */
+.nx-ribbon-item.is-active {
+  color: var(--text-primary);
+  background: var(--nav-primary-selected);
+}
+.nx-ribbon-item:focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: -3px;
+}
+
+/* —— 索引窗 ————————————————————————————————————————————————
+   行本身用老版的 .workspace-nav-item / --tree 词汇
+   （src/styles/workspace-navigation.css:21-75）：行高 42/36px、悬停、次级选中、
+   焦点环全是原件那份 CSS。这里只补排版与手势，不碰配色。 */
+.nx-index-window {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--nav-surface);
+  color: var(--nav-fg);
+  border-inline-end: 1px solid var(--hairline-soft);
+}
+.nx-index-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  height: 44px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.nx-index-collapse {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 6px;
+}
+.nx-index-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 8px 16px;
+  scrollbar-width: thin;
+}
+.nx-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nx-tree-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+.nx-tree-row.is-static {
+  cursor: default;
+}
+/* 骨架目录与归档是只读清单，不是可点的行：压暗一档，别让人以为是能打开的面板。 */
+.nx-tree-static {
+  color: var(--text-muted);
+}
+.nx-index-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 10px;
+}
+.nx-index-new .nx-field {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+.nx-index-add {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+.nx-index-empty {
+  margin: 6px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.nx-index-error {
+  margin: 6px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--control-danger);
+}
+.nx-index-warn {
+  margin: 8px 10px 0;
+  padding-left: 16px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--signal-warm);
+}
+
+/* —— 三栏骨架 ————————————————————————————————————————————— */
+.col-center {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface-workbench);
+}
+.col-dock {
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+/* —— 中栏 ——————————————————————————————————————————————— */
+.center {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nx-section-gap);
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 18px 24px 28px;
+  background: var(--surface-workbench);
+  color: var(--archive-ink);
+  overflow: auto;
+}
+.center-head {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.center-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--archive-ink);
+}
+.center-sub {
+  margin: 5px 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.center-empty {
+  margin: 0;
+  padding: 0 24px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* —— 拖拽把手 ————————————————————————————————————————————— */
+.resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  transition: background-color 120ms ease;
+}
+.resizer:hover,
+.next-shell[data-dragging] .resizer {
+  background: var(--workbench-selected);
+}
+
+/* —— 横幅 ——————————————————————————————————————————————— */
+.banner {
+  margin: 0 24px;
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.banner.is-error {
+  border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--control-danger) 8%, transparent);
+  color: var(--control-danger);
+}
+.banner.is-warn {
+  border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent);
+  background: color-mix(in srgb, var(--signal-warm) 10%, transparent);
+  color: var(--signal-warm);
+}
+
+/* —— 建项目向导 ————————————————————————————————————————————— */
+.wizard {
+  margin: 0 24px;
+  padding: 18px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-surface);
+  background: var(--surface-workbench-raised);
+}
+.wizard h3 {
+  margin: 0 0 6px;
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.wizard-note {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--text-secondary);
+}
+.wizard-note.is-tight {
+  margin-bottom: 8px;
+}
+.wizard-companions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+.wizard-companion {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--archive-ink-soft);
+  cursor: pointer;
+}
+.wizard-companion input {
+  accent-color: var(--accent);
+}
+.wizard-companion small {
+  color: var(--text-muted);
+}
+.wizard-list,
+.wizard-bare {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wizard-item small {
+  margin-left: 6px;
+  color: var(--text-muted);
+}
+.wizard-empty {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--text-muted);
+}
+
+/* —— 右栏：Agent 对话框的宿主 ———————————————————————————————
+   这里只留一个容器：对话框本身的行高、配色、控件全是老版作品资料助手那套
+   （next/shell/AssistantDialog.vue 抄自 src/components/authoring/AuthoringKnowledgeAssistant.vue），
+   右栏不再另配一套样式，也不摆开发者向的说明文字。 */
+.dock {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface-assistant);
+  border-left: 1px solid var(--hairline-soft);
+  overflow: hidden;
+}
+.dock-hint {
+  margin: 0;
+  padding: 0 16px 12px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--signal-warm);
+}
+
+/* —— 载体面板 ————————————————————————————————————————————— */
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* 正文是核心区的主角：面板占满剩余高度，编辑面跟着长，不在下面留一块空白。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  font-size: 13px;
+  color: var(--archive-ink);
+}
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pane-empty p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+.pane-sub {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.pane-hint {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+.pane-note {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+.pane-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--accent);
+  line-height: 1.7;
+}
+.pane-error {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--control-danger) 8%, transparent);
+  color: var(--control-danger);
+  line-height: 1.7;
+}
+.pane-warn {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--signal-warm);
+}
+.shelf-head,
+.entries-head,
+.editor-head,
+.editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-btn {
+  font-size: 13px;
+}
+.editor-meta,
+.entry-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.editor-meta em {
+  color: var(--signal-warm);
+  font-style: normal;
+}
+.editor-area {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 340px;
+  padding: 18px 20px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench);
+  color: var(--archive-ink);
+  font-family: var(--font-writing);
+  font-size: 15px;
+  line-height: 1.9;
+  resize: vertical;
+}
+.editor-area:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+.entry-body {
+  padding: 14px 16px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.entry-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.85;
+  color: var(--archive-ink);
+}

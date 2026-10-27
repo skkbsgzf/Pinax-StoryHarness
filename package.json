@@ -89,7 +89,18 @@
     "smoke:worldbook-settlement": "node scripts/worldbook-settlement-smoke.mjs",
     "smoke:worldbook-localization": "node scripts/worldbook-localization-smoke.mjs",
     "build:knowledge-runtime": "node scripts/build-knowledge-runtime.mjs",
-    "build:agent-runtime": "node scripts/build-storyagent-runtime.mjs"
+    "build:agent-runtime": "node scripts/build-storyagent-runtime.mjs",
+    "next:accept": "node next/testing/acceptance.mjs",
+    "next:bundle": "node next/testing/bundleAssertions.mjs",
+    "next:build:main": "vite build --config next/vite.next.main.config.mjs",
+    "next:build:shell": "vite build --config next/vite.next.shell.config.mjs",
+    "next:build:renderer": "vite build --config next/vite.next.renderer.config.mjs",
+    "next:shell": "electron next/.build/pinax-next-shell-main.mjs",
+    "next:dev:renderer": "vite --config next/vite.next.renderer.config.mjs",
+    "test:next": "node --test \"next/tests/*.test.mjs\"",
+    "test:next:ui": "vitest run --config next/vitest.next.shell.config.mjs",
+    "lint:next": "eslint next --ext .mjs,.vue --max-warnings 0",
+    "verify:next": "node next/testing/acceptance.mjs && node --test \"next/tests/*.test.mjs\" && vitest run --config next/vitest.next.shell.config.mjs && npm run lint:next && node next/testing/bundleAssertions.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

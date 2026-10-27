@@ -1,0 +1,262 @@
+import assert from 'node:assert/strict'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import test from 'node:test'
+
+/**
+ * Next 外壳的视觉一致性门禁。
+ *
+ * 作者的口径是「在原本的前端审美一致性上添加功能，包括按钮和风格的复用」——
+ * 这条门禁就是那句话的机器版本：
+ *   1. Next 自己写的样式里不许出现硬编码颜色（一律走老前端的 token）；
+ *   2. Next 用到的每个 token 都必须在老前端那几份 CSS 或 Next 自己的布局层里有定义
+ *      （防止 var(--x) 写错名字后静默失效）；
+ *   3. Next 不许另立一套配色——除了自己的 --nx-* 布局变量，不许重新定义任何老 token；
+ *   4. 每个 <button> 都得落在共享词汇里（原版 .control-*、行按钮 .nx-row、
+ *      老版导航行 .workspace-nav-item、老版竖条 .nx-ribbon-item）；
+ *   5. 风格层引的是老前端 CSS 的本体（不是拷贝），文件得真的在；
+ *   6. 外壳根节点挂着 theme-legacy（颜色与控件词汇都靠这个 class 生效）；
+ *   7. 选中色分级全部来自老版原件——Next 一个公式都不许重定义；
+ *   8. 竖条的度量必须是老前端那份数字，抄歪了门禁就红。
+ */
+const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
+const shellDir = join(repoRoot, 'next', 'shell')
+
+/**
+ * Next 外壳引用的老前端样式层。
+ * 后两份是老前端工作区的 chrome（AppShell.vue:20-21 引的就是这两份）：
+ * 导航行词汇与两级选中色都住在里面，Next 外壳的根节点挂 .app-shell 就能拿到。
+ */
+const LEGACY_CSS = [
+  join(repoRoot, 'src', 'styles', 'main.css'),
+  join(repoRoot, 'src', 'styles', 'themes', 'legacy.css'),
+  join(repoRoot, 'src', 'styles', 'workbench-controls.css'),
+  join(repoRoot, 'src', 'styles', 'workspace-navigation.css'),
+  join(repoRoot, 'src', 'styles', 'workspace-surfaces.css')
+]
+
+/**
+ * 按钮的共享词汇。每一类都对应老前端已经存在的一套控件：
+ *   control-*        → 老版命令按钮（workbench-controls.css）
+ *   nx-row           → Next 自己的行按钮 primitive（度量沿用老版侧栏行）
+ *   workspace-nav-item → 老版侧栏导航行（workspace-navigation.css:21-75）
+ *   nx-ribbon-item   → 老版图标竖条按钮（WorkspaceContentGroups.vue:190-196 的镜像）
+ *   authoring-knowledge__* → 老版作品资料助手的会话控件
+ *     （AuthoringKnowledgeAssistant.vue，Next 右栏的对话框整块抽自它）
+ */
+const SHARED_BUTTON_CLASSES = ['control-', 'nx-row', 'workspace-nav-item', 'nx-ribbon-item', 'authoring-knowledge__']
+
+/** 允许出现的颜色关键字：这三个不是「写死的颜色」。 */
+const COLOR_ALLOWED = new Set(['transparent', 'currentcolor', 'inherit'])
+
+const HEX_COLOR = /#[0-9a-fA-F]{3,8}\b/g
+const FUNC_COLOR = /\b(?:rgba?|hsla?)\s*\(/g
+const NAMED_COLOR = /(?<![-\w])(?:white|black|red|blue|green|gray|grey|silver|gold|orange|purple|yellow|pink|cyan|magenta|brown|navy|teal|maroon|olive|lime|aqua|fuchsia)(?![-\w])/g
+
+async function exists(path) {
+  return stat(path).then(() => true, () => false)
+}
+
+async function walk(dir) {
+  const out = []
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) out.push(...await walk(full))
+    else out.push(full)
+  }
+  return out
+}
+
+/** Next 自己写的样式：布局层 CSS + 各 SFC 里的 <style> 块。 */
+async function authoredStyleSources() {
+  const sources = []
+  const files = await walk(shellDir)
+  for (const file of files) {
+    if (file.endsWith('.css')) {
+      sources.push({ path: file, text: await readFile(file, 'utf-8') })
+      continue
+    }
+    if (!file.endsWith('.vue')) continue
+    const text = await readFile(file, 'utf-8')
+    for (const match of text.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)) {
+      sources.push({ path: file, text: match[1] })
+    }
+  }
+  return sources
+}
+
+function stripComments(css) {
+  return css.replace(/\/\*[\s\S]*?\*\//g, '')
+}
+
+test('Next 外壳的样式里没有硬编码颜色：一律走老前端的 token', async () => {
+  const sources = await authoredStyleSources()
+  assert.ok(sources.length > 0, '没找到 Next 自己写的样式，扫描面空了等于没测')
+  const offenders = []
+  for (const source of sources) {
+    const css = stripComments(source.text)
+    for (const pattern of [HEX_COLOR, FUNC_COLOR]) {
+      pattern.lastIndex = 0
+      for (const match of css.matchAll(pattern)) offenders.push(`${source.path}: ${match[0]}`)
+    }
+    NAMED_COLOR.lastIndex = 0
+    for (const match of css.matchAll(NAMED_COLOR)) {
+      if (COLOR_ALLOWED.has(match[0].toLowerCase())) continue
+      offenders.push(`${source.path}: ${match[0]}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `Next 外壳出现硬编码颜色：\n${offenders.join('\n')}`)
+})
+
+test('Next 用到的每个 token 都有定义（var(--x) 写错名字会静默失效）', async () => {
+  const defined = new Set()
+  for (const file of [...LEGACY_CSS, join(shellDir, 'styles', 'next-shell.css')]) {
+    const text = await readFile(file, 'utf-8')
+    for (const match of text.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) defined.add(match[1])
+  }
+  const sources = await authoredStyleSources()
+  const missing = new Set()
+  for (const source of sources) {
+    for (const match of stripComments(source.text).matchAll(/var\(\s*(--[a-zA-Z0-9-]+)\s*(,|\))/g)) {
+      if (match[2] === ',') continue
+      if (!defined.has(match[1])) missing.add(`${source.path}: ${match[1]}`)
+    }
+  }
+  assert.deepEqual([...missing], [], `用到了没有定义的 token：\n${[...missing].join('\n')}`)
+})
+
+test('Next 不许另立一套配色：除了 --nx-* 布局变量，不许重新定义老 token', async () => {
+  const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
+  const redefined = []
+  for (const match of stripComments(layout).matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) {
+    if (match[1].startsWith('--nx-')) continue
+    redefined.push(match[1])
+  }
+  assert.deepEqual(redefined, [], `Next 布局层重新定义了老前端的 token：${redefined.join(' ')}`)
+})
+
+test('每个按钮都落在共享词汇里：老版控件／行按钮／老版导航行／老版竖条', async () => {
+  const files = (await walk(shellDir)).filter((file) => file.endsWith('.vue'))
+  const offenders = []
+  for (const file of files) {
+    const text = await readFile(file, 'utf-8')
+    for (const match of text.matchAll(/<button\b(?:[^>"']|"[^"]*"|'[^']*')*>/g)) {
+      const tag = match[0]
+      const classAttr = tag.match(/class="([^"]*)"/)
+      const classes = classAttr ? classAttr[1].split(/\s+/) : []
+      const shared = classes.some((name) => SHARED_BUTTON_CLASSES.some((prefix) => name === prefix || name.startsWith(prefix)))
+      if (!shared) offenders.push(`${file}: ${tag.replace(/\s+/g, ' ').slice(0, 120)}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `这些按钮没进共享控件词汇：\n${offenders.join('\n')}`)
+})
+
+test('风格层引的是老前端 CSS 本体：文件在、有内容、Next 没自带副本', async () => {
+  const legacyPath = join(shellDir, 'styles', 'legacy.mjs')
+  const legacyModule = await readFile(legacyPath, 'utf-8')
+  const stylesDir = join(shellDir, 'styles')
+  const imported = [...legacyModule.matchAll(/(?:import|from)\s+['"]([^'"]+)['"]/g)].map((match) => match[1])
+  const resolved = imported.map((specifier) => resolve(stylesDir, specifier))
+  for (const file of LEGACY_CSS) {
+    assert.equal(await exists(file), true, `老前端样式层缺文件：${file}`)
+    const text = await readFile(file, 'utf-8')
+    assert.ok(text.length > 500, `老前端样式层文件像是空的：${file}`)
+    assert.ok(resolved.includes(file), `legacy.mjs 没有引老前端样式：${file}`)
+  }
+  assert.ok(resolved.includes(join(stylesDir, 'next-shell.css')), 'Next 自己的布局层也要引进来')
+  // 拷贝一份 CSS 进来就等于另立一套视觉系统：Next 的样式目录里只该有自己的布局层。
+  const cssFiles = (await walk(stylesDir)).filter((file) => file.endsWith('.css'))
+  assert.deepEqual(cssFiles.map((file) => file.replace(/\\/g, '/')), [join(stylesDir, 'next-shell.css').replace(/\\/g, '/')], 'next/shell/styles 下出现了老前端 CSS 的拷贝')
+})
+
+test('外壳根节点挂着 theme-legacy：颜色与控件词汇都靠这个 class 生效', async () => {
+  const html = await readFile(join(shellDir, 'index.html'), 'utf-8')
+  assert.match(html, /<html[^>]*class="[^"]*theme-legacy/, 'next/shell/index.html 的 html 根必须带 theme-legacy')
+  const renderer = await readFile(join(shellDir, 'renderer.mjs'), 'utf-8')
+  assert.match(renderer, /styles\/legacy\.mjs/, '渲染层入口必须引老前端样式层')
+})
+
+/** 取一条规则的花括号内容。 */
+function ruleBody(css, selector) {
+  const index = css.indexOf(selector)
+  if (index < 0) return null
+  const open = css.indexOf('{', index)
+  const close = css.indexOf('}', open)
+  return open < 0 || close < 0 ? null : css.slice(open + 1, close)
+}
+
+test('外壳根节点挂着 app-shell：老版那两段 token 与行规则靠它生效', async () => {
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  assert.match(app, /class="next-shell app-shell"/, 'Next 外壳根节点必须同时挂 .app-shell，老版的 --nav-* 与 .workspace-nav-item 规则都靠它生效')
+})
+
+test('右栏是一个纯粹的对话框：形态抽自老版助手，开发者向的备注不许留在面上', async () => {
+  const dialog = await readFile(join(shellDir, 'AssistantDialog.vue'), 'utf-8')
+  const legacy = await readFile(join(repoRoot, 'src', 'components', 'authoring', 'AuthoringKnowledgeAssistant.vue'), 'utf-8')
+
+  // 形态必须是老版那套会话词汇，不是新造的：抽象不是重写。
+  for (const needle of [
+    'authoring-knowledge__thread',
+    'authoring-knowledge__question-row',
+    'authoring-knowledge__answer',
+    'authoring-knowledge__answer-text',
+    'authoring-knowledge__composer',
+    'authoring-knowledge__input-row',
+    'authoring-knowledge__send'
+  ]) {
+    assert.ok(legacy.includes(needle), `老前端助手里没有 ${needle}，抽象的基准没了`)
+    assert.ok(dialog.includes(needle), `对话框没有用老版的会话词汇：${needle}`)
+  }
+
+  // 运行时栏上不许再摆开发者向的说明文字（预算、占位权、写族闸、接管数）。
+  const dock = await readFile(join(shellDir, 'RuntimeDock.vue'), 'utf-8')
+  for (const needle of ['预算优先级', '不可停用', '一级公民', '写族闸', '载体接管', 'reservedSlotReason', 'budgetPriority', 'writeGuard']) {
+    assert.ok(!dock.includes(needle), `右栏还留着开发者向的备注：${needle}`)
+  }
+})
+
+test('主页面上不许摆无效模块：骨架目录、板块声明、保存口径都不在正文面板上', async () => {
+  const index = await readFile(join(shellDir, 'IndexWindow.vue'), 'utf-8')
+  assert.ok(!index.includes('固化骨架'), '索引窗不该再列固化骨架目录')
+  assert.ok(!index.includes('skeletonDirs'), '索引窗不该再收骨架目录这份数据')
+
+  const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
+  assert.ok(!pane.includes('板块声明'), '正文面板不该再摆「板块声明」清单')
+  assert.ok(!pane.includes('editor-note'), '正文面板不该再摆保存口径的脚注')
+})
+
+test('选中色分级全部来自老版原件：Next 不许抄一份公式', async () => {
+  const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
+  const nav = await readFile(join(repoRoot, 'src', 'styles', 'workspace-navigation.css'), 'utf-8')
+
+  // 老版的公式在原件里（workspace-navigation.css:7-10）；Next 一个字都不许重定义。
+  assert.match(nav, /--nav-surface:\s*var\(--surface-workbench-muted\)/, '老版导航底色就是 muted 面')
+  assert.match(nav, /--nav-hover:\s*color-mix\(in srgb, var\(--archive-ink\) 5%, var\(--nav-surface\)\)/, '老版 hover 是 5% 墨色叠导航面')
+  assert.match(nav, /--nav-selected:\s*color-mix\(in srgb, var\(--archive-ink\) 7%, var\(--nav-surface\)\)/, '老版次级选中是 7% 墨色叠导航面')
+  assert.match(nav, /--nav-selected-secondary:\s*color-mix\(in srgb, var\(--archive-ink\) 5%, var\(--nav-surface\)\)/, '老版导航行的选中是 5% 墨色叠导航面')
+  assert.match(nav, /--nav-primary-selected:\s*var\(--workbench-selected\)/, '老版的当前板就是强选中色')
+
+  const copied = [...stripComments(layout).matchAll(/(--nav-[a-zA-Z0-9-]+)\s*:/g)].map((match) => match[1])
+  assert.deepEqual(copied, [], `Next 抄了老版的选中色公式：${copied.join(' ')}`)
+
+  // 竖条的当前板走老版的强选中（--nav-primary-selected 就是 --workbench-selected）。
+  const ribbon = ruleBody(layout, '.nx-ribbon-item.is-active')
+  assert.ok(ribbon, 'next-shell.css 里没有 .nx-ribbon-item.is-active 规则')
+  assert.match(ribbon, /background:\s*var\(--nav-primary-selected\)/, '竖条的当前项应走老版的强选中色')
+  assert.match(ruleBody(layout, '.nx-ribbon-item:hover'), /var\(--nav-hover\)/, '竖条的悬停应走老版的 hover 色')
+
+  // 索引窗的行不写自己的选中色：它用老版的 .workspace-nav-item 词汇，选中色由原件那份 CSS 给。
+  const index = await readFile(join(shellDir, 'IndexWindow.vue'), 'utf-8')
+  assert.match(index, /class="workspace-nav-item workspace-nav-item--tree nx-tree-row[ "]/, '索引窗的行必须用老版的 .workspace-nav-item 词汇')
+})
+
+test('图标竖条的度量抄的是老前端那份：两个文件里的数字必须一致', async () => {
+  const legacy = await readFile(join(repoRoot, 'src', 'components', 'workbench', 'WorkspaceContentGroups.vue'), 'utf-8')
+  const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
+  // 老版那几条规则在 SFC 的 scoped 样式里，scoped 没法 import，所以 Next 抄了一份——数字必须一样。
+  for (const needle of ['flex: 0 0 44px', 'width: 44px', 'height: 46px', 'padding-top: 4px', 'margin-bottom: 8px']) {
+    assert.ok(legacy.includes(needle), `老前端竖条里没有 ${needle}，Next 抄的基准没了`)
+    assert.ok(layout.includes(needle), `next-shell.css 的竖条少了 ${needle}`)
+  }
+})

@@ -1,0 +1,164 @@
+import { fail, ok, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
+import { buildGrantTable, canPerform } from '../kernel/scopeGrant.mjs'
+import { createRuntimeSurface } from './mcpSurface.mjs'
+import { connectInProcess } from './transportInProcess.mjs'
+import { RUNTIME_CONTRACT, RUNTIME_ID } from './runtimeContract.mjs'
+
+/**
+ * 一级公民：Pi-Agent 运行时（规范 v1 第 5 节）。
+ * 与二级插件的区别只有四条，且都写成可断言的数据（见 runtimeContract.mjs）：
+ *   builtIn 不可停用 / 独占右栏 / 上下文预算优先 / 写回只进 .pinax/proposals/。
+ * 其余一切（注册、scope、工具面）走同一份合同——运行时也照样自缚申请权限。
+ */
+export { RUNTIME_CONTRACT, RUNTIME_ID }
+
+export function createAgentRuntime(options = {}) {
+  const registry = options.registry
+  const fileService = options.fileService ?? null
+  const runner = options.runner ?? null
+  const grants = buildGrantTable(RUNTIME_CONTRACT.scopes)
+  let link = null
+  let toolCache = null
+  let surfaceState = null
+
+  const runtime = {
+    contract: RUNTIME_CONTRACT,
+    grantTable: grants,
+
+    /** 工具面在 start() 里现取：项目打开与否、启用了哪些载体，都只在这一刻决定面的形状。 */
+    async start() {
+      if (link) return ok({ already: true, toolCount: toolCache?.length ?? 0 })
+      const surface = options.surface
+        ? { server: options.surface, carrierCount: 0, carrierToolNames: [], missingImplementations: [], aggregated: false }
+        : await createRuntimeSurface({ registry, view: options.view, fileService, advisorBaseUrl: options.advisorBaseUrl })
+      surfaceState = surface
+      link = await connectInProcess(surface.server, { clientName: options.clientName ?? 'pinax-next-shell' })
+      toolCache = await link.listTools()
+      return ok({ toolCount: toolCache.length, carrierTools: surface.carrierCount, aggregatedSurface: surface.aggregated, transports: ['in-process'], portsOpened: 0 })
+    },
+
+    /**
+     * 运行器的取数面：注册表＋项目视图＋文件服务。
+     * 单列一个方法而不是把三者塞进 runner 的入参，是为了让 runner（含测试里的假运行器）
+     * 只依赖这一处约定；载体块构建器拿到的仍是各板块自己的 pluginId 与 scope，运行时不替谁越权。
+     */
+    contextSources() {
+      return { registry, view: options.view ?? null, fileService, runner: typeof runner === 'function' ? runner : null }
+    },
+
+    async stop() {
+      if (!link) return ok({ stopped: false })
+      await link.close()
+      link = null
+      toolCache = null
+      return ok({ stopped: true })
+    },
+
+    listTools() {
+      return toolCache ?? []
+    },
+
+    /** 聚合状态的记账（门禁与右栏都用它，不靠猜）。 */
+    surfaceInfo() {
+      return {
+        carrierTools: surfaceState?.carrierCount ?? 0,
+        carrierToolNames: surfaceState?.carrierToolNames ?? [],
+        aggregated: surfaceState?.aggregated ?? false,
+        missingImplementations: surfaceState?.missingImplementations ?? [],
+        writeGuard: surfaceState?.writeGuard ?? null
+      }
+    },
+
+    /**
+     * 工具归属＝「这一刻是谁在服务这个调用」，不是「谁登记过这个名字」。
+     * 载体被停用后它的工具不在面上，调用回落内核实现——这时拿停用者的 scope 去卡人就是错的。
+     */
+    ownerOf(name) {
+      const owner = registry?.ownerOfTool?.(name) ?? null
+      if (!owner) return 'kernel'
+      return runtime.surfaceInfo().carrierToolNames.includes(name) ? owner : 'kernel'
+    },
+
+    /** 工具调用：载体在服务面上的工具先过它的 agent:ask 授权；其余一律走内核实现。 */
+    async callTool(name, args = {}) {
+      if (!link) return fail('INVALID_INPUT', '运行时尚未启动（先 start()）')
+      const owner = runtime.ownerOf(name)
+      if (owner !== 'kernel') {
+        const grant = canPerform(registry.grantFor(owner), { type: 'agent', action: 'ask' })
+        if (!grant.ok) return grant
+      }
+      const result = await link.callTool(name, args)
+      return ok({ tool: name, owner, ...result })
+    },
+
+    /**
+     * 问一句话。M2 的真实口径：
+     *   有注入的 runner（外壳主进程装 createAdvisorRunner，测试装假运行器）→ 由它组信封、调上游、原样回报；
+     *   没有 runner 但显式给了 advisorBaseUrl → 走既有 pinax_agent_ask（HTTP 自调用，后续要拆）；
+     *   两者都没有 → 如实报 DEPENDENCY_UNMET，绝不编一段回答冒充模型。
+     * runner 返回 {ok:false, error} 的失败信封一律原样透传（内核那句「未检测到可用模型…」必须能被作者看到）。
+     */
+    async ask(question, context = {}) {
+      const text = String(question || '').trim()
+      if (!text) return fail('INVALID_INPUT', '提问内容不能为空')
+      const grant = canPerform(grants, { type: 'agent', action: 'ask' })
+      if (!grant.ok) return grant
+      if (typeof runner === 'function') {
+        let answered = null
+        try {
+          answered = await runner({ question: text, context, runtime })
+        } catch (error) {
+          return fail('IO_FAILED', `运行时执行失败：${String(error?.message || error)}`, { code: error?.code ?? NEXT_ERROR_CODES.IO_FAILED })
+        }
+        if (answered && typeof answered === 'object' && answered.ok === false) return answered
+        if (answered && typeof answered === 'object' && answered.ok === true) {
+          const payload = { ...answered }
+          delete payload.ok
+          return ok({ source: 'in-process-runner', ...payload })
+        }
+        return ok({ source: 'in-process-runner', ...normalizeAnswer(answered) })
+      }
+      if (options.advisorBaseUrl) {
+        const result = await runtime.callTool('pinax_agent_ask', { question: text, ...context })
+        return result.ok ? ok({ source: 'advisor-http', ...result.value }) : result
+      }
+      return fail('DEPENDENCY_UNMET', 'Next 运行时未接模型运行器（runner）：工具面能列、项目能读，但回答不了自然语言问题。接法是在 createNextSession({ runtimeOptions: { runner: createAdvisorRunner() } }) 注入进程内运行器；外壳已按此装配，测试与验收刻意不注入以保留这条如实的失败路径', {
+        toolCount: runtime.listTools().length
+      })
+    },
+
+    /** 提案写回：只进 .pinax/proposals/，正文一个字节都不动。 */
+    async propose({ name, text }) {
+      if (!fileService) return fail('INVALID_INPUT', '运行时未绑定项目文件服务，无法落提案')
+      const grant = canPerform(grants, { type: 'state', action: 'write' })
+      if (!grant.ok) return grant
+      return fileService.writeProposal({ name, text })
+    },
+
+    /** 外壳读的右栏数据：工具清单＋归属，供 RuntimeDock 直接渲染。 */
+    dockViewModel() {
+      return {
+        title: RUNTIME_CONTRACT.title,
+        builtIn: true,
+        disableable: false,
+        surface: runtime.surfaceInfo(),
+        tools: runtime.listTools().map((tool) => ({
+          name: tool.name,
+          title: tool.title ?? tool.name,
+          owner: runtime.ownerOf(tool.name)
+        })),
+        started: Boolean(link)
+      }
+    }
+  }
+
+  return runtime
+}
+
+function normalizeAnswer(answer) {
+  if (typeof answer === 'string') return { text: answer }
+  if (answer && typeof answer === 'object') {
+    return { text: String(answer.text ?? answer.answer ?? answer.message ?? JSON.stringify(answer)).slice(0, 4000), payload: answer }
+  }
+  return { text: String(answer ?? '') }
+}

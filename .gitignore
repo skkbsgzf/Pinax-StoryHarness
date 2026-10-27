@@ -103,3 +103,6 @@ server/.pinax-app/
 
 # Local promotional renders, recordings, provider receipts and intermediate media
 /docs/marketing/pinax-h3-materials/generated/
+
+# Pinax-Electron-Next 构建产物（npm run next:build:* 产出，不入库）
+next/.build/

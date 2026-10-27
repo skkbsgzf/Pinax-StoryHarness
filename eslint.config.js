@@ -25,7 +25,7 @@ const nodeFiles = [
 
 export default [
   {
-    ignores: ['node_modules/**', 'dist/**', '.git/**', 'docs/**', 'prototype/**', 'deploy/**']
+    ignores: ['node_modules/**', 'dist/**', '.git/**', 'docs/**', 'prototype/**', 'deploy/**', 'next/.build/**']
   },
   js.configs.recommended,
   ...vue.configs['flat/essential'],
@@ -74,6 +74,34 @@ export default [
     files: nodeFiles,
     languageOptions: {
       globals: { ...globals.node }
+    }
+  },
+  // Pinax-Electron-Next：内核/运行时/外壳主进程跑在 Node，渲染层跑在 Chromium，
+  // 测试既用 node:test 也用 vitest。三段互不重叠，避免把浏览器全局泼到 Node 侧。
+  {
+    files: ['next/**/*.mjs'],
+    languageOptions: {
+      globals: { ...globals.node }
+    }
+  },
+  {
+    files: ['next/tests/*.{test,spec}.mjs', 'next/testing/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        ...globals.browser,
+        describe: 'readonly',
+        it: 'readonly',
+        test: 'readonly',
+        expect: 'readonly',
+        vi: 'readonly'
+      }
+    }
+  },
+  {
+    files: ['next/shell/*.vue', 'next/shell/renderer.mjs'],
+    languageOptions: {
+      globals: { ...globals.browser }
     }
   }
 ]
