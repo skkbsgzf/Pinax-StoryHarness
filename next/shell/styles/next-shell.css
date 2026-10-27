@@ -22,6 +22,15 @@ body {
 
 .next-shell {
   --nx-section-gap: 18px;
+  /* —— Next 字号刻度：老前端只 token 化了 --fs-sm(12)/--fs-base(14)，
+     中间档（11/13/15/17/19）历史上都是裸 px，这里收进 --nx-* 命名刻度，
+     门禁见 next/tests/visual-contract.test.mjs（裸 px 字号/圆角一律不许再写）。 —— */
+  --nx-fs-2xs: 11px; /* 角注：meta 行、警告、折叠标签 */
+  --nx-fs-md: 13px;  /* 面板正文与按钮 */
+  --nx-fs-lg: 15px;  /* 正文编辑与阅读 */
+  --nx-fs-xl: 17px;  /* 卡片标题 */
+  --nx-fs-2xl: 19px; /* 页面主标题 */
+  --nx-radius-xs: 6px; /* 小号图标按钮（28px 级） */
   display: flex;
   height: 100vh;
   width: 100%;
@@ -48,7 +57,7 @@ body {
   background: transparent;
   color: var(--archive-ink-soft);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.45;
   text-align: left;
   cursor: pointer;
@@ -73,11 +82,11 @@ body {
   min-height: 38px;
   padding: 9px 12px;
   border: 1px solid var(--hairline-soft);
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   background: var(--surface-workbench-input);
   color: var(--archive-ink);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.6;
   resize: vertical;
 }
@@ -164,7 +173,7 @@ body {
   min-height: 28px;
   padding: 0;
   justify-content: center;
-  border-radius: 6px;
+  border-radius: var(--nx-radius-xs);
 }
 .nx-index-body {
   flex: 1 1 auto;
@@ -214,23 +223,23 @@ body {
   flex: 0 0 auto;
   min-height: 32px;
   padding: 0 10px;
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
 }
 .nx-index-empty {
   margin: 6px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   color: var(--text-muted);
 }
 .nx-index-error {
   margin: 6px 10px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
   color: var(--control-danger);
 }
 .nx-index-warn {
   margin: 8px 10px 0;
   padding-left: 16px;
-  font-size: 11px;
+  font-size: var(--nx-fs-2xs);
   line-height: 1.7;
   color: var(--signal-warm);
 }
@@ -244,6 +253,10 @@ body {
   flex-direction: column;
   gap: 12px;
   background: var(--surface-workbench);
+}
+/* 核心区长文滚动条与索引窗一致走细（索引窗那份在 .nx-index-body）。 */
+.col-center .center {
+  scrollbar-width: thin;
 }
 .col-dock {
   flex: 0 0 auto;
@@ -269,7 +282,7 @@ body {
 .center-title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: 19px;
+  font-size: var(--nx-fs-2xl);
   font-weight: 600;
   line-height: 1.3;
   color: var(--archive-ink);
@@ -283,7 +296,7 @@ body {
 .center-empty {
   margin: 0;
   padding: 0 24px;
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
   line-height: 1.7;
   color: var(--text-muted);
 }
@@ -306,7 +319,7 @@ body {
   margin: 0 24px;
   padding: 10px 14px;
   border-radius: var(--radius-control);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.6;
 }
 .banner.is-error {
@@ -331,13 +344,13 @@ body {
 .wizard h3 {
   margin: 0 0 6px;
   font-family: var(--font-display);
-  font-size: 17px;
+  font-size: var(--nx-fs-xl);
   font-weight: 600;
   color: var(--archive-ink);
 }
 .wizard-note {
   margin: 0 0 12px;
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
   line-height: 1.75;
   color: var(--text-secondary);
 }
@@ -356,7 +369,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
   color: var(--archive-ink-soft);
   cursor: pointer;
 }
@@ -378,7 +391,7 @@ body {
 }
 .wizard-empty {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
   line-height: 1.75;
   color: var(--text-muted);
 }
@@ -399,7 +412,7 @@ body {
 .dock-hint {
   margin: 0;
   padding: 0 16px 12px;
-  font-size: 11px;
+  font-size: var(--nx-fs-2xs);
   line-height: 1.6;
   color: var(--signal-warm);
 }
@@ -412,7 +425,7 @@ body {
   /* 正文是核心区的主角：面板占满剩余高度，编辑面跟着长，不在下面留一块空白。 */
   flex: 1 1 auto;
   min-height: 0;
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
   color: var(--archive-ink);
 }
 .editor {
@@ -429,7 +442,7 @@ body {
 }
 .pane-sub {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
   font-weight: 600;
   color: var(--archive-ink);
 }
@@ -464,7 +477,7 @@ body {
 .pane-warn {
   margin: 6px 0 0;
   padding-left: 18px;
-  font-size: 11px;
+  font-size: var(--nx-fs-2xs);
   line-height: 1.7;
   color: var(--signal-warm);
 }
@@ -489,11 +502,11 @@ body {
   white-space: nowrap;
 }
 .pane-btn {
-  font-size: 13px;
+  font-size: var(--nx-fs-md);
 }
 .editor-meta,
 .entry-meta {
-  font-size: 11px;
+  font-size: var(--nx-fs-2xs);
   color: var(--text-muted);
 }
 .editor-meta em {
@@ -510,7 +523,7 @@ body {
   background: var(--surface-workbench);
   color: var(--archive-ink);
   font-family: var(--font-writing);
-  font-size: 15px;
+  font-size: var(--nx-fs-lg);
   line-height: 1.9;
   resize: vertical;
 }
@@ -538,7 +551,7 @@ body {
   margin: 0;
   white-space: pre-wrap;
   font-family: var(--font-body);
-  font-size: 15px;
+  font-size: var(--nx-fs-lg);
   line-height: 1.85;
   color: var(--archive-ink);
 }

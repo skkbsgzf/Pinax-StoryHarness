@@ -285,6 +285,17 @@ test('真模型这条链在主进程里接线：外壳必须注入进程内 advi
   assert.match(gateway, /process\.env\.PINAX_ADAPTER_ENDPOINT\s*\|\|\s*KIT_TASK_PLANE_ENDPOINT/, '模型面端点必须允许 env 覆写')
 })
 
+test('界面缩放是产品参数不是巧合：默认 0.85（作者口径）且 env 可覆写，菜单里有缩放入口', async () => {
+  const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
+  assert.match(mainSource, /PINAX_NEXT_ZOOM/, '缩放必须可用 PINAX_NEXT_ZOOM 覆写')
+  assert.match(mainSource, /zoomFactor:\s*resolveUiZoom\(\)/, '窗口 webPreferences 必须落 zoomFactor')
+  assert.match(mainSource, /0\.85/, '默认缩放＝作者口径 0.85')
+  const menuSource = await readFile(new URL('../shell/menus.mjs', import.meta.url), 'utf-8')
+  assert.match(menuSource, /role:\s*'resetZoom'/, '视图菜单要有重置缩放')
+  assert.match(menuSource, /role:\s*'zoomIn'/, '视图菜单要有放大')
+  assert.match(menuSource, /role:\s*'zoomOut'/, '视图菜单要有缩小')
+})
+
 function harness() {
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   const session = {

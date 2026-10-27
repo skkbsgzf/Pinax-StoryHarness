@@ -29,6 +29,10 @@ export const MENU_TEMPLATE = Object.freeze([
       { id: 'view.focusCenter', label: '焦点：主面板', accelerator: 'CmdOrCtrl+2' },
       { id: 'view.focusRuntime', label: '焦点：运行时栏', accelerator: 'CmdOrCtrl+3' },
       { type: 'separator' },
+      { role: 'resetZoom', label: '重置缩放（100%）' },
+      { role: 'zoomIn', label: '放大' },
+      { role: 'zoomOut', label: '缩小' },
+      { type: 'separator' },
       { role: 'toggleDevTools' },
       { role: 'reload' }
     ]

@@ -162,6 +162,20 @@ check('j 模型面在产物里：外壳 bundle 带着进程内 advisor 运行器
   missingModelPlane.length === 0,
   missingModelPlane.length ? `缺 ${missingModelPlane.join(' ')}` : `${modelPlaneMarkers.length} 个标记齐`)
 
+// preload 是「渲染层接得上主进程」的唯一桥：批次 7 前它是一次性手工产物，没有构建步骤也没有门禁，
+// 一次重建渲染层就让桥静默消失（实测踩中：界面报「渲染层未接主进程桥」而门禁全绿）。
+// 现在它在打包断言里就地构建（本文件上方与 a4/b2 同一套 vite 约束），并断言产物存在、桥面完整。
+const PRELOAD_CONFIG_PATH = join(repoRoot, 'next', 'vite.next.preload.config.mjs')
+const PRELOAD_BUNDLE_PATH = join(repoRoot, 'next', '.build', 'preload.mjs')
+await build({ logLevel: 'warn', configFile: PRELOAD_CONFIG_PATH })
+const preloadExists = await stat(PRELOAD_BUNDLE_PATH).then(() => true, () => false)
+const preloadSource = preloadExists ? await readFile(PRELOAD_BUNDLE_PATH, 'utf-8') : ''
+const preloadMarkers = ['contextBridge', 'pinaxNext', 'pinax:agent:']
+const missingPreload = preloadExists ? preloadMarkers.filter((marker) => !preloadSource.includes(marker)) : ['(文件缺失)']
+check('k preload 在产物里：bundle 同级 preload.mjs 存在且带 contextBridge 桥面与通道白名单',
+  preloadExists && missingPreload.length === 0,
+  missingPreload.length ? `缺 ${missingPreload.join(' ')}` : `${(preloadSource.length / 1024).toFixed(1)} kB`)
+
 if (failures.length) {
   console.log(`\n打包门禁：${failures.length} 项不合格 → ${failures.join(' / ')}`)
   process.exitCode = 1

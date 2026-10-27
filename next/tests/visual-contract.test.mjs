@@ -260,3 +260,32 @@ test('图标竖条的度量抄的是老前端那份：两个文件里的数字�
     assert.ok(layout.includes(needle), `next-shell.css 的竖条少了 ${needle}`)
   }
 })
+
+/**
+ * 字号/圆角刻度门禁（批次 7 起）。老前端只 token 化了 --fs-sm(12)/--fs-base(14) 与
+ * 三档 --radius-*，Next 把中间档收进 --nx-fs-* 与 --nx-radius-xs（定义在 next-shell.css）。
+ * 从此 Next 自己写的样式不许再出现裸 px 字号/圆角——写裸值就是又飘出一档刻度。
+ * 例外：注释里带 legacy-copied 的样式块（逐条抄老版度量的复用件，如 AssistantDialog 的会话形态）。
+ */
+test('字号与圆角一律走刻度 token：Next 自写样式不许再出现裸 px', async () => {
+  const sources = await authoredStyleSources()
+  const offenders = []
+  for (const source of sources) {
+    if (source.text.includes('legacy-copied')) continue
+    const css = stripComments(source.text)
+    for (const match of css.matchAll(/(?:font-size|border-radius)\s*:\s*\d+(?:\.\d+)?px/g)) {
+      offenders.push(`${source.path}: ${match[0]}`)
+    }
+    for (const match of css.matchAll(/\bfont\s*:\s*[^;}]*\b\d+(?:\.\d+)?px/g)) {
+      offenders.push(`${source.path}: ${match[0].trim().slice(0, 60)}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `Next 自写样式出现裸 px 字号/圆角（应收进 --nx-* 刻度或 --fs-*/--radius-*）：\n${offenders.join('\n')}`)
+})
+
+test('刻度 token 必须真的定义在布局层：--nx-fs-* 与 --nx-radius-xs 缺一条，var() 就静默失效', async () => {
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  for (const token of ['--nx-fs-2xs', '--nx-fs-md', '--nx-fs-lg', '--nx-fs-xl', '--nx-fs-2xl', '--nx-radius-xs']) {
+    assert.match(layout, new RegExp(`${token.replace(/-/g, '\\-')}\\s*:`), `next-shell.css 缺刻度 token ${token}`)
+  }
+})

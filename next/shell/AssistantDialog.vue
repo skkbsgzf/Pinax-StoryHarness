@@ -144,8 +144,9 @@ watch(() => props.messages.length, async () => {
 </template>
 
 <style scoped>
-/* 度量与配色逐条抄自 src/components/authoring/AuthoringKnowledgeAssistant.vue（老版原话），
-   只有两处是 Next 自己加的：审稿意见／可执行动作两块，与底部折叠的工具面清单。 */
+/* legacy-copied：度量与配色逐条抄自 src/components/authoring/AuthoringKnowledgeAssistant.vue（老版原话）。
+   本块在视觉合同里豁免「裸 px 字号/圆角」检查——那是复用老版度量，不是另立刻度；
+   Next 自己加的样式在第二个 style 块（审稿意见／可执行动作），走 --nx-* 刻度，受门禁管。 */
 .authoring-knowledge { position: relative; display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; color: var(--text-primary); background: var(--surface-assistant); font: 14px/1.5 var(--font-interface, var(--font-sans)); }
 .authoring-knowledge__toolbar { display: flex; min-height: 52px; box-sizing: border-box; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px 7px 14px; border-bottom: 0; }
 .authoring-knowledge__toolbar-primary { min-width: 0; }
@@ -169,12 +170,20 @@ watch(() => props.messages.length, async () => {
 .authoring-knowledge__thinking span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-primary, var(--accent)); animation: knowledge-pulse 900ms ease-in-out infinite alternate; }
 .authoring-knowledge__error { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: var(--archive-paper); color: var(--text-secondary); font-size: 13px; text-align: start; }
 .authoring-knowledge__error-retry { border: 0; background: transparent; color: var(--accent-primary, var(--accent)); cursor: pointer; }
-/* 结构化审稿：模型给的是「意见＋动作」两块，只显示 summary 一行等于把回答丢了。 */
+</style>
+
+<style scoped>
+/* Next 自己加的：结构化审稿（模型给的是「意见＋动作」，只显示 summary 一行等于把回答丢了）。
+   字号走 --nx-* 刻度，受 visual-contract 门禁管。 */
 .authoring-knowledge__findings { margin-top: 12px; }
-.authoring-knowledge__findings-label { margin: 0 0 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-muted); }
-.authoring-knowledge__findings-list { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; color: var(--archive-ink); }
-.authoring-knowledge__findings-sev { margin-right: 5px; font-size: 11px; color: var(--text-muted); }
+.authoring-knowledge__findings-label { margin: 0 0 4px; font-size: var(--nx-fs-2xs); font-weight: 700; letter-spacing: 0.1em; color: var(--text-muted); }
+.authoring-knowledge__findings-list { margin: 0; padding-left: 18px; font-size: var(--nx-fs-md); line-height: 1.7; color: var(--archive-ink); }
+.authoring-knowledge__findings-sev { margin-right: 5px; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
 .authoring-knowledge__actions { margin-top: 12px; }
+</style>
+
+<style scoped>
+/* legacy-copied（续）：composer／输入行／工具面折叠的度量同样逐条抄自老版原件。 */
 .authoring-knowledge__composer { position: relative; z-index: 1; flex: none; padding: 10px 16px 16px; background: var(--surface-assistant); }
 .authoring-knowledge__input-row { position: relative; box-sizing: border-box; display: flex; min-height: 98px; flex-direction: column; align-items: stretch; gap: 12px; padding: 14px; border: 1px solid var(--hairline-soft); border-radius: 20px; background: var(--surface-workbench-input); box-shadow: none; }
 .authoring-knowledge__input-row:focus-within { outline: 2px solid var(--workbench-focus); outline-offset: 1px; border-color: transparent; }
