@@ -386,6 +386,50 @@ body {
   color: var(--text-muted);
 }
 
+/* —— 统一设置二级页的内容组件（工单C0 内容组件化） ——————————————————
+   四个 Section（偏好与模型／载体管理／新建项目／主载体选择）住在 next/shell/settings/，
+   这份行栅格、徽标与节标题原样搬自 AppNext.vue 的 scoped 块（批次8①／工单A1 的原话）——
+   颜色与字号本来就全走 token，搬进布局层只为让四节共用同一份词汇。 */
+.prefs-grid { display: flex; flex-direction: column; gap: 14px; }
+.prefs-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prefs-row-label { flex: 0 0 auto; min-width: 88px; font-size: var(--nx-fs-md); color: var(--archive-ink-soft); }
+.prefs-input { flex: 1 1 260px; width: auto; }
+.prefs-zoom { flex: 0 0 96px; width: 96px; }
+.prefs-row-hint { font-size: var(--nx-fs-md); color: var(--text-muted); }
+.prefs-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prefs-state { margin: 0; padding: 8px 12px; border-radius: var(--radius-control); font-size: var(--nx-fs-md); line-height: 1.7; }
+.prefs-state.is-ready { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); }
+.prefs-state.is-warn { border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent); background: color-mix(in srgb, var(--signal-warm) 10%, transparent); color: var(--signal-warm); }
+.prefs-state.is-error { border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent); background: color-mix(in srgb, var(--control-danger) 8%, transparent); color: var(--control-danger); }
+
+.carriers-list { display: flex; flex-direction: column; gap: 8px; }
+.carriers-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-workbench-muted) 60%, transparent);
+}
+.carriers-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.carriers-title { font-size: var(--nx-fs-md); color: var(--archive-ink); }
+.carriers-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--nx-radius-xs);
+  font-size: var(--nx-fs-2xs); color: var(--accent);
+}
+.carriers-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.carriers-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.carriers-hint { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+
+/* 节的标题：老版把「这个项目要创作什么？」放在弹窗头，归一后随主载体节走（SettingsPopup
+   右栏 storage 节也有一块面板内标题，同一做法）。 */
+.settings-panel-heading {
+  margin: 0 0 12px;
+  font-family: var(--font-display);
+  font-size: var(--nx-fs-xl);
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+
 /* —— 右栏：Agent 对话框的宿主 ———————————————————————————————
    这里只留一个容器：对话框本身的行高、配色、控件全是老版作品资料助手那套
    （next/shell/AssistantDialog.vue 抄自 src/components/authoring/AuthoringKnowledgeAssistant.vue），

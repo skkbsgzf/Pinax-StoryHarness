@@ -264,19 +264,33 @@ describe('Obsidian 三栏', () => {
     wrapper.unmount()
   })
 
-  it('主载体向导列出可用载体并走 set-primary 通道', async () => {
-    const setPrimary = vi.fn(async () => ({ ok: true, value: {} }))
-    const view = { ...emptyFrameworkView(), needsPrimary: true, carriers: [{ id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }] }
-    const bridge = stubBridge(view, { [IPC_CHANNELS.carrierSetPrimary]: setPrimary })
+  it('统一弹窗内完成主载体选择：列出可用载体、走 set-primary 通道，选完弹窗才可关（工单C0）', async () => {
+    const carrier = { id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }
+    const view = { ...emptyFrameworkView(), needsPrimary: true, carriers: [carrier] }
+    let picked = false
+    const request = vi.fn(async (channel) => {
+      if (channel === IPC_CHANNELS.view) {
+        // 选完主载体后 refresh 拿到的新 view：needsPrimary 翻 false，硬闸放行。
+        return { ok: true, value: picked ? { ...view, needsPrimary: false, project: { root: 'x', name: '新书', kind: 'screenplay', spec: 'pinax-project@2', revision: 1 } } : view }
+      }
+      if (channel === IPC_CHANNELS.carrierSetPrimary) { picked = true; return { ok: true, value: {} } }
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const bridge = { request, channels: IPC_CHANNELS }
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 工单B0 弹窗化：向导不再是核心区里的 section，而是 needsPrimary 时自动打开的不可关弹窗。
-    const gate = wrapper.find('[aria-label="这个项目要创作什么？"]')
+    // 工单C0：主载体选择是统一二级页里的一节，needsPrimary 自动摊开、dismissable=false。
+    const gate = wrapper.find('[data-test="settings-panel-primary"]')
     expect(gate.exists()).toBe(true)
+    expect(wrapper.text()).toContain('这个项目要创作什么？')
+    expect(wrapper.find('.workbench-modal-close').exists()).toBe(false)
+
     await gate.find('.wizard-item').trigger('click')
     await flushPromises()
-    expect(setPrimary).toHaveBeenCalledWith({ pluginId: 'fixture.script', expectedRevision: 0 })
+    expect(request).toHaveBeenCalledWith(IPC_CHANNELS.carrierSetPrimary, { pluginId: 'fixture.script', expectedRevision: 0 })
+    // 选完主载体：needsPrimary 翻 false，统一弹窗放行（自动收起）。
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -513,11 +527,11 @@ describe('载体管理面板（工单A1）', () => {
   })
 })
 
-describe('配置弹窗（工单B0 · U13）', () => {
+describe('统一设置二级页（工单B0/C0 · U13）', () => {
   /**
-   * 作者裁定 U13：配置项／设置页／顶栏延伸的功能配置一律走圆润弹窗（WorkbenchModal），
-   * 核心工作区（col-center）是纯净的文档与组件展示。这一组只判弹窗行为本身：
-   * 开关（遮罩／Esc／关闭钮）与 D1 硬闸的不可关闭。
+   * 作者裁定 U13：配置项／设置页／顶栏延伸的功能配置一律走统一弹窗；工单C0 把四块内容
+   * 归一成二级页面（左栏设置分区目录＋右栏设置项，SettingsModal）。这一组只判弹窗行为本身：
+   * 开关（遮罩／Esc／关闭钮）、D1 硬闸的不可关闭、菜单落点与左栏目录切换。
    */
   function modalBridge({ handlers = new Map(), view = carrierView() } = {}) {
     const request = vi.fn(async (channel) => ({ ok: true, value: channel === IPC_CHANNELS.view ? view : {} }))
@@ -525,7 +539,30 @@ describe('配置弹窗（工单B0 · U13）', () => {
     return { request, onEvent }
   }
 
-  it('弹窗打开后点遮罩即关，Esc 也能关（dismissable 缺省开）', async () => {
+  it('统一弹窗打开后默认落在菜单指定的节，左栏点目录项即切换右栏面板', async () => {
+    const handlers = new Map()
+    const bridge = modalBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
+    await flushPromises()
+    // settings.carriers → activeSection='carriers'；别的节不渲染。
+    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(false)
+
+    // 左栏目录：点「偏好与模型」即切到偏好节，载体管理面板卸下。
+    await wrapper.find('[data-test="settings-tab-prefs"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
+    // 选中的目录项标出当前节（老版 settings-tab.active）。
+    expect(wrapper.find('[data-test="settings-tab-prefs"]').classes()).toContain('active')
+    expect(wrapper.find('[data-test="settings-tab-carriers"]').classes()).not.toContain('active')
+    wrapper.unmount()
+  })
+
+  it('统一弹窗打开后点遮罩即关，Esc 也能关（dismissable 缺省开）', async () => {
     const handlers = new Map()
     const bridge = modalBridge({ handlers })
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -534,6 +571,7 @@ describe('配置弹窗（工单B0 · U13）', () => {
 
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
     await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
     expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
 
     // 点遮罩自己（click.self）＝关闭；面板内部点击不受影响。
@@ -551,30 +589,40 @@ describe('配置弹窗（工单B0 · U13）', () => {
     wrapper.unmount()
   })
 
-  it('主载体选择是 D1 硬闸：needsPrimary 自动打开、不可关闭（无关闭钮，Esc／遮罩都不生效）', async () => {
+  it('主载体选择是 D1 硬闸：needsPrimary 自动打开、不可关闭；其它节可看但弹窗关不掉', async () => {
     const bridge = modalBridge({ view: emptyFrameworkView() })
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    const gate = wrapper.find('[aria-label="这个项目要创作什么？"]')
-    expect(gate.exists()).toBe(true)
-    expect(gate.attributes('aria-modal')).toBe('true')
-    // 不可关闭：头部没有关闭钮，背后就是空工作区。
-    expect(gate.find('.workbench-modal-close').exists()).toBe(false)
+    // 自动落在主载体节；对话框本体是「设置」这个二级页面。
+    expect(wrapper.find('[data-test="settings-panel-primary"]').exists()).toBe(true)
+    const dialog = wrapper.find('[aria-label="设置"]')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.attributes('aria-modal')).toBe('true')
+    expect(dialog.attributes('role')).toBe('dialog')
+    // 主载体选择在目录里可见。
+    expect(wrapper.find('[data-test="settings-tab-primary"]').exists()).toBe(true)
+    // 不可关闭：头部没有关闭钮。
+    expect(wrapper.find('.workbench-modal-close').exists()).toBe(false)
 
-    // 点遮罩不关。
+    // 其它节可看：切到偏好节，面板照常渲染……
+    await wrapper.find('[data-test="settings-tab-prefs"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
+
+    // ……但点遮罩不关。
     await wrapper.find('.workbench-modal').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[aria-label="这个项目要创作什么？"]').exists()).toBe(true)
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
 
     // Esc 也不关。
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await flushPromises()
-    expect(wrapper.find('[aria-label="这个项目要创作什么？"]').exists()).toBe(true)
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('新建项目弹窗走「文件 → 新建项目…」菜单事件（project.create）打开，点遮罩可关', async () => {
+  it('新建项目走「文件 → 新建项目…」菜单事件（project.create）打开，点遮罩可关', async () => {
     const handlers = new Map()
     // 还没开项目、也没被 D1 拦住（首启未尝试打开）：菜单是新建项目的唯一入口。
     const view = {
@@ -591,9 +639,10 @@ describe('配置弹窗（工单B0 · U13）', () => {
 
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.create' })
     await flushPromises()
-    const modal = wrapper.find('[aria-label="新建项目"]')
-    expect(modal.exists()).toBe(true)
-    expect(modal.attributes('role')).toBe('dialog')
+    expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(true)
+    // 对话框本体 role=dialog，右栏面板 role=tabpanel（老版设置弹窗的角色语义）。
+    expect(wrapper.find('[aria-label="设置"]').attributes('role')).toBe('dialog')
+    expect(wrapper.find('[aria-label="新建项目"]').attributes('role')).toBe('tabpanel')
 
     await wrapper.find('.workbench-modal').trigger('click')
     await flushPromises()

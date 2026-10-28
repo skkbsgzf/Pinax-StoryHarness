@@ -1,25 +1,30 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CenterSlotHost from './CenterSlotHost.vue'
 import RuntimeDock from './RuntimeDock.vue'
-import WorkbenchModal from './WorkbenchModal.vue'
+import SettingsModal from './SettingsModal.vue'
+import PrefsSection from './settings/PrefsSection.vue'
+import CarriersSection from './settings/CarriersSection.vue'
+import NewProjectSection from './settings/NewProjectSection.vue'
+import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { IPC_CHANNELS, IPC_EVENT } from './ipcContract.mjs'
 import { applyScheme, readScheme, writeScheme } from './theme.mjs'
 
 /**
- * Next 外壳根组件：Obsidian 三栏（图标竖条／索引窗／核心区）＋右栏运行时 ＋ 配置弹窗层。
+ * Next 外壳根组件：Obsidian 三栏（图标竖条／索引窗／核心区）＋右栏运行时 ＋ 统一设置二级页。
  *
  * 分工（作者口径：正文是核心，不能被别的页面挤到旁边）：
  *   - 竖条：一格＝一块板（一个载体），纯图标，44px 宽；
  *   - 索引窗：竖条右边那一栏，列这块板的目录树（会话管理／文件结构管理那件事）；
  *   - 核心区：只挂 center 槽的 pane，正文在这里，宽的那一栏就是它；
  *   - 右栏：Pi-Agent 运行时独占（一级公民，插件抢不走）；
- *   - 配置弹窗（工单B0 · U13）：偏好／载体管理／新建项目／主载体选择一律收进
- *     WorkbenchModal，核心区不再内嵌任何配置 section 与按钮。
+ *   - 设置（工单C0 · U13）：偏好／载体管理／新建项目／主载体选择一律收进
+ *     SettingsModal 这一枚统一的二级页面（左栏目录＋右栏设置项），
+ *     核心区不再内嵌任何配置 section 与按钮，目录之外的弹窗不允许存在。
  *
  * 不引 vue-router、不引 Pinia、不 import src/ 的页面——零插件时外壳仍要能起来（M1 判据）。
  * 唯一从老前端拿的是 CSS 本体与三个叶子组件（图标／提示／提示宿主），风格与控件不另起一套。
@@ -57,43 +62,56 @@ const needsPrimary = computed(() => Boolean(view.value?.needsPrimary))
 const openError = computed(() => view.value?.openError ?? null)
 const kinds = computed(() => view.value?.kernel?.kinds ?? [])
 
-/** 偏好与模型（批次8①）：应用级偏好面，菜单「设置 → 偏好与模型…」打开。 */
+/** 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项。
+ *  外壳只留挂载与 open／activeSection 两个状态；四节的内容与状态住在各自 SFC
+ *  （next/shell/settings/，照 AssistantDialog 从 AuthoringKnowledgeAssistant 抽取的同一模式）。
+ *  节的动作经事件上交：通道调用与 refresh 留在外壳（同 RuntimeDock 持桥发问的分工）。 */
 const settingsOpen = ref(false)
-const prefsDraft = ref({ modelPlaneEndpoint: '', uiZoom: 0.85 })
-const prefsBusy = ref(false)
-const prefsFeedback = ref(null)
-const probeState = ref(null)
-const probeClass = computed(() => ({ ready: 'is-ready', 'no-model': 'is-warn', unreachable: 'is-error' })[probeState.value?.state ?? ''] ?? 'is-warn')
-const probeText = computed(() => {
-  const state = probeState.value
-  if (!state) return ''
-  if (state.state === 'ready') return `模型面就绪：${state.endpoint}`
-  if (state.state === 'no-model') return `任务面可达但未配模型：请在 serve:pinax 一侧选择模型（${state.endpoint}）`
-  return `模型面不可达：${state.endpoint}${state.detail ? `（${state.detail}）` : ''}。请启动 pi-agent 任务面（serve:pinax）或修改端点。`
-})
-/** 外观主题走 theme.mjs 的 localStorage 契约（与老前端共用 app_theme），偏好面只给它一个入口。 */
-const themeDraft = ref('light')
+const activeSection = ref('prefs')
 
-/** 载体管理（工单A1）：项目打开后的启用／停用／切主载体面板，菜单「设置 → 载体管理…」打开。 */
-const carriersOpen = ref(false)
+/** 目录表：本批登记四节；未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
+const settingsSections = computed(() => [
+  { id: 'prefs', title: '偏好与模型', component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
+  { id: 'carriers', title: '载体管理', component: CarriersSection, props: { carriers: carriers.value } },
+  { id: 'newProject', title: '新建项目', component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
+  { id: 'primary', title: '主载体选择', component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } }
+])
 
-/** 新建项目（批次9 / 工单B0 弹窗化）：名字可改，目录必须经系统对话框选一个空文件夹——
- *  会话根（Documents）几乎必然非空，createProject 的空目录闸会永远拦住默认路径。
- *  弹窗只在「没有已打开的项目且装了可任主载体的板块」时摊开（与旧内嵌 section 同一闸）。 */
-const newProjectOpen = ref(false)
-const newProjectName = ref('')
-const newProjectDir = ref(null)
+function openSection(id) {
+  settingsOpen.value = true
+  activeSection.value = id
+}
+function closeSettings() {
+  settingsOpen.value = false
+}
 
-/** 菜单「文件 → 新建项目…」（id project.create）打开新建项目弹窗（工单B0 任务3）。 */
+/** 菜单接线（工单C0 任务3）：settings.preferences／settings.carriers／project.create 各自落到自己的节。 */
+function openSettings() {
+  openSection('prefs')
+}
+
+/** 载体管理面：先 refresh 拿最新 view，别让面板摊着一份上一秒的启停状态。 */
+async function openCarriers() {
+  if (!project.value) return
+  openSection('carriers')
+  await refresh()
+}
+
+/** 新建项目（批次9 的闸原样保留）：只在「没有已打开的项目且装了可任主载体的板块」时摊得开。 */
 function openNewProject() {
-  newProjectOpen.value = true
+  if (project.value || !canPickPrimary.value) return
+  openSection('newProject')
 }
 
-async function pickProjectDir() {
-  if (!props.bridge?.request) return
-  const result = await props.bridge.request(IPC_CHANNELS.projectPickDir, {})
-  if (result.ok && result.value?.picked) newProjectDir.value = result.value.path
-}
+/** D1 硬闸（工单C0）：needsPrimary 时统一弹窗自动打开、落在主载体节且不可关闭——
+ *  目录里其它节可看（可点开），但选完主载体之前弹窗关不了；needsPrimary 翻 false 即放行。 */
+watch(needsPrimary, (now) => {
+  if (now) {
+    openSection('primary')
+    return
+  }
+  if (activeSection.value === 'primary') closeSettings()
+}, { immediate: true })
 
 /**
  * 一块板＝一个载体：竖条一格、索引窗一份树、核心区一份正文。
@@ -135,6 +153,8 @@ function isReadOnlyCompanion(carrier) {
 const companions = computed(() => carriers.value.filter((item) => !item.isPrimary))
 /** 清单里声明了 primary 的板块才配当主载体：没有就明说空框架，不让作者点一个假的。 */
 const canPickPrimary = computed(() => carriers.value.some((item) => item.primary))
+/** 新建项目载荷里的主载体 id（原 createProject 内联的那一句，提出来给节经 props 注入）。 */
+const primaryCarrierId = computed(() => carriers.value.find((item) => item.primary)?.id ?? null)
 
 async function refresh() {
   if (!props.bridge?.request) return
@@ -184,74 +204,13 @@ function toggleCompanion(pluginId) {
     : [...extraEnabled.value, pluginId]
 }
 
-async function createProject() {
-  if (!props.bridge?.request || !newProjectDir.value) return
-  const primary = carriers.value.find((item) => item.primary)?.id ?? null
-  if (!primary) return
-  const result = await props.bridge.request(IPC_CHANNELS.projectCreate, {
-    name: newProjectName.value.trim() || '未命名新书',
-    primaryCarrier: primary,
-    extraEnabled: extraEnabled.value,
-    root: newProjectDir.value
-  })
-  if (result.ok) {
-    newProjectDir.value = null
-    newProjectName.value = ''
-  }
-  await refresh()
-}
-
-async function openSettings() {
-  settingsOpen.value = true
-  prefsFeedback.value = null
-  probeState.value = null
-  themeDraft.value = scheme.value
-  if (!props.bridge?.request) return
-  const result = await props.bridge.request(IPC_CHANNELS.prefsGet, {})
-  if (result.ok) {
-    prefsDraft.value = {
-      modelPlaneEndpoint: result.value.modelPlaneEndpoint ?? '',
-      uiZoom: result.value.uiZoom ?? 0.85
-    }
-  }
-}
-
-/** 载体管理面：先 refresh 拿最新 view，别让面板摊着一份上一秒的启停状态。 */
-async function openCarriers() {
-  carriersOpen.value = true
-  await refresh()
-}
-
-async function probePlane() {
-  if (!props.bridge?.request || prefsBusy.value) return
-  prefsBusy.value = true
-  probeState.value = null
-  const result = await props.bridge.request(IPC_CHANNELS.prefsProbeModelPlane, {})
-  prefsBusy.value = false
-  probeState.value = result.ok ? result.value : { state: 'unreachable', endpoint: '', detail: result.error?.message ?? '探测失败' }
-}
-
-async function savePrefs() {
-  if (!props.bridge?.request || prefsBusy.value) return
-  prefsBusy.value = true
-  prefsFeedback.value = null
-  const result = await props.bridge.request(IPC_CHANNELS.prefsSet, {
-    modelPlaneEndpoint: String(prefsDraft.value.modelPlaneEndpoint || '').trim() || null,
-    uiZoom: Number(prefsDraft.value.uiZoom)
-  })
-  prefsBusy.value = false
-  prefsFeedback.value = result.ok
-    ? { kind: 'ok', text: '已保存并生效。' }
-    : { kind: 'error', text: result.error?.message ?? '保存失败。' }
-}
-
 function toggleTheme() {
   scheme.value = writeScheme(scheme.value === 'dark' ? 'light' : 'dark')
 }
 
-/** 偏好面里的主题选择：写回同一份 localStorage 契约，竖条的明暗按钮跟着变。 */
-function applyThemeChoice() {
-  scheme.value = writeScheme(themeDraft.value)
+/** 偏好节里的主题选择：写回同一份 localStorage 契约，竖条的明暗按钮跟着变。 */
+function applyThemeChoice(value) {
+  scheme.value = writeScheme(value)
 }
 
 function startDrag(target, event) {
@@ -321,8 +280,9 @@ onMounted(() => {
         插件「{{ item.pluginId }}」未加载：{{ item.error?.message }}
       </div>
 
-      <!-- 工单B0（U13 作者裁定）：核心区是纯净的文档与组件展示——
-           偏好／载体管理／主载体选择／新建项目全部迁进 WorkbenchModal（模板尾部），这里不再内嵌任何配置 section。 -->
+      <!-- 工单B0/C0（U13 作者裁定）：核心区是纯净的文档与组件展示——
+           偏好／载体管理／主载体选择／新建项目全部收进统一的设置二级页（SettingsModal，模板尾部），
+           这里不再内嵌任何配置 section。 -->
 
       <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
 
@@ -339,161 +299,23 @@ onMounted(() => {
       <RuntimeDock :runtime="runtime" :bridge="bridge" />
     </div>
 
-    <!-- —— 配置弹窗层（工单B0 · U13）：全部走 WorkbenchModal，词汇照旧 —————————— -->
-
-    <!-- 偏好与模型（批次8①）：菜单「设置 → 偏好与模型…」打开，可关闭。 -->
-    <WorkbenchModal :open="settingsOpen" title="偏好与模型" @close="settingsOpen = false">
-      <p class="wizard-note">应用级偏好，不随项目走。模型凭据仍由任务面（serve:pinax）持有——这里只决定「任务面在哪个端点」与界面观感。</p>
-      <div class="prefs-grid">
-        <div class="prefs-row">
-          <span class="prefs-row-label">外观主题</span>
-          <label class="wizard-companion"><input v-model="themeDraft" type="radio" name="prefs-theme" value="light" @change="applyThemeChoice"> 浅色</label>
-          <label class="wizard-companion"><input v-model="themeDraft" type="radio" name="prefs-theme" value="dark" @change="applyThemeChoice"> 深色</label>
-          <span class="prefs-row-hint">与老前端共用同一份偏好，改了那边也跟着变</span>
-        </div>
-        <div class="prefs-row">
-          <span class="prefs-row-label">模型面端点</span>
-          <input v-model="prefsDraft.modelPlaneEndpoint" class="nx-field prefs-input" type="text" placeholder="http://127.0.0.1:8451（留空＝默认 8451）">
-          <button type="button" class="control-secondary" :disabled="prefsBusy" @click="probePlane">检测模型面</button>
-        </div>
-        <p v-if="probeState" class="prefs-state" :class="probeClass">{{ probeText }}</p>
-        <div class="prefs-row">
-          <span class="prefs-row-label">界面缩放</span>
-          <input v-model.number="prefsDraft.uiZoom" class="nx-field prefs-zoom" type="number" min="0.5" max="2" step="0.05">
-          <span class="prefs-row-hint">0.5–2.0，保存即生效</span>
-        </div>
-        <div class="prefs-actions">
-          <button type="button" class="control-primary" :disabled="prefsBusy" @click="savePrefs">保存并生效</button>
-          <button type="button" class="control-quiet" @click="settingsOpen = false">关闭</button>
-          <span v-if="prefsFeedback" class="prefs-state" :class="prefsFeedback.kind === 'ok' ? 'is-ready' : 'is-error'">{{ prefsFeedback.text }}</span>
-        </div>
-      </div>
-    </WorkbenchModal>
-
-    <!-- 载体管理（工单A1）：启停/切主载体是对项目合同的写入，只在该有项目时摊开（通道层同样这么闸）。 -->
-    <WorkbenchModal :open="carriersOpen && Boolean(project)" title="载体管理" @close="carriersOpen = false">
-      <p class="wizard-note">这个项目装了哪些板块（载体），在这里启用、停用或换主载体。停用不删数据：目录转只读归档，随时可以再启用。</p>
-      <div class="carriers-list">
-        <div v-for="carrier in carriers" :key="carrier.id" class="carriers-row">
-          <div class="carriers-info">
-            <span class="carriers-title">
-              {{ carrier.title }}
-              <span v-if="carrier.isPrimary" class="carriers-badge">主载体</span>
-            </span>
-            <small class="carriers-meta">
-              <span>{{ (carrier.dataDirs || []).join(' / ') || '无数据目录' }}</span>
-              <span v-if="(carrier.scopes || []).length">权限：{{ carrier.scopes.join('、') }}</span>
-              <span class="carriers-tools">工具 {{ (carrier.tools || []).length }}</span>
-            </small>
-          </div>
-          <div class="carriers-actions">
-            <button
-              type="button"
-              class="control-secondary carriers-toggle"
-              :disabled="carrier.isPrimary"
-              :title="carrier.isPrimary ? '主载体不可停用' : null"
-              @click="setCarrierEnabled(carrier)"
-            >{{ carrier.isEnabled ? '停用' : '启用' }}</button>
-            <button
-              v-if="!carrier.isPrimary && carrier.primary"
-              type="button"
-              class="control-quiet carriers-set-primary"
-              @click="pickPrimary(carrier.id)"
-            >设为主载体</button>
-            <small v-if="carrier.isPrimary" class="carriers-hint">主载体不可停用</small>
-          </div>
-        </div>
-      </div>
-      <div class="prefs-actions">
-        <button type="button" class="control-quiet" @click="carriersOpen = false">关闭</button>
-      </div>
-    </WorkbenchModal>
-
-    <!-- 主载体选择（D1 硬闸）：needsPrimary 时自动打开且不可关闭——背后空工作区即可，
-         选定主载体之前作者不离开这枚弹窗。 -->
-    <WorkbenchModal :open="needsPrimary" title="这个项目要创作什么？" :dismissable="false">
-      <p class="wizard-note">
-        主载体决定这个项目是哪一类（{{ kinds.join(' / ') }}）。
-      </p>
-      <div v-if="canPickPrimary" class="wizard-list">
-        <button
-          v-for="carrier in view.carriers.filter((item) => item.primary)"
-          :key="carrier.id"
-          type="button"
-          class="wizard-item control-secondary"
-          @click="pickPrimary(carrier.id)"
-        >
-          {{ carrier.title }} <small>{{ carrier.primary.projectKind }}</small>
-        </button>
-      </div>
-      <p v-else class="wizard-empty">
-        当前没有可担任主载体的插件板块。不装载体也能进来、能开项目、右栏能提问；
-        随框架发布的小说／设定板块从 M2 起填在这里。
-      </p>
-      <div v-if="canPickPrimary && companions.length" class="wizard-companions">
-        <p class="wizard-note is-tight">伴生板块（默认随行，只读权限——它们给正文补背景，不跟主载体抢写盘）：</p>
-        <label v-for="carrier in companions" :key="carrier.id" class="wizard-companion">
-          <input type="checkbox" :checked="extraEnabled.includes(carrier.id) || carrier.isEnabled" :disabled="carrier.isEnabled" @change="toggleCompanion(carrier.id)">
-          {{ carrier.title }}
-          <small>{{ carrier.isEnabled ? '已启用' : (carrier.dataDirs || []).join(' / ') }}</small>
-        </label>
-      </div>
-    </WorkbenchModal>
-
-    <!-- 新建项目（批次9）：菜单「文件 → 新建项目…」打开，可关闭。只要没有已打开的项目就摊得开——
-         首启打开会话根失败（非 .pinax 目录）也必须能新建，目录经系统对话框选空文件夹。 -->
-    <WorkbenchModal :open="newProjectOpen && !project && canPickPrimary" title="新建项目" @close="newProjectOpen = false">
-      <p class="wizard-note">新项目是磁盘上的一个文件夹（文件夹即数据）：选一个空目录——也可以在对话框里新建，然后在里面开写。</p>
-      <div class="prefs-grid">
-        <div class="prefs-row">
-          <span class="prefs-row-label">项目名称</span>
-          <input v-model="newProjectName" class="nx-field prefs-input" type="text" placeholder="未命名新书">
-        </div>
-        <div class="prefs-row">
-          <span class="prefs-row-label">项目文件夹</span>
-          <button type="button" class="control-secondary" @click="pickProjectDir">选择空目录…</button>
-          <span class="prefs-row-hint">{{ newProjectDir || '尚未选择' }}</span>
-        </div>
-        <div class="prefs-actions">
-          <button type="button" class="control-primary" :disabled="!newProjectDir" @click="createProject">在所选目录新建项目</button>
-        </div>
-      </div>
-    </WorkbenchModal>
+    <!-- —— 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项 ——————————
+         四节都登记在上面的目录表里；D1 硬闸（needsPrimary）时自动落在主载体节且不可关闭。 -->
+    <SettingsModal
+      :open="settingsOpen"
+      :dismissable="!needsPrimary"
+      :active-section="activeSection"
+      :sections="settingsSections"
+      @close="closeSettings"
+      @changed="refresh"
+      @theme="applyThemeChoice"
+      @set-enabled="setCarrierEnabled"
+      @set-primary="pickPrimary"
+      @toggle-companion="toggleCompanion"
+      @update:active-section="activeSection = $event"
+    />
 
     <WorkbenchTooltip />
   </div>
 </template>
 
-<style scoped>
-/* 偏好面布局层（批次8①）：颜色与字号全走 token（U9/U10），这里只补栅格与输入宽度。 */
-.prefs-grid { display: flex; flex-direction: column; gap: 14px; }
-.prefs-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.prefs-row-label { flex: 0 0 auto; min-width: 88px; font-size: var(--nx-fs-md); color: var(--archive-ink-soft); }
-.prefs-input { flex: 1 1 260px; width: auto; }
-.prefs-zoom { flex: 0 0 96px; width: 96px; }
-.prefs-row-hint { font-size: var(--nx-fs-md); color: var(--text-muted); }
-.prefs-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.prefs-state { margin: 0; padding: 8px 12px; border-radius: var(--radius-control); font-size: var(--nx-fs-md); line-height: 1.7; }
-.prefs-state.is-ready { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); }
-.prefs-state.is-warn { border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent); background: color-mix(in srgb, var(--signal-warm) 10%, transparent); color: var(--signal-warm); }
-.prefs-state.is-error { border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent); background: color-mix(in srgb, var(--control-danger) 8%, transparent); color: var(--control-danger); }
-
-/* 载体管理面（工单A1）：颜色与字号全走既有 token（视觉门禁 U9/U10），这里只补行布局与徽标。 */
-.carriers-list { display: flex; flex-direction: column; gap: 8px; }
-.carriers-row {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
-  padding: 10px 12px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control);
-  background: color-mix(in srgb, var(--surface-workbench-muted) 60%, transparent);
-}
-.carriers-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.carriers-title { font-size: var(--nx-fs-md); color: var(--archive-ink); }
-.carriers-badge {
-  display: inline-block; margin-left: 6px; padding: 1px 8px;
-  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
-  border-radius: var(--nx-radius-xs);
-  font-size: var(--nx-fs-2xs); color: var(--accent);
-}
-.carriers-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
-.carriers-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.carriers-hint { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
-</style>

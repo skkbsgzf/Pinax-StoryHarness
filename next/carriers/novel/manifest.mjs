@@ -31,7 +31,9 @@ export const NOVEL_CARRIER = Object.freeze({
   }),
 
   panes: [
-    { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'book' },
+    // 竖条图标对齐老版「书稿」那一格用的就是 outline（WorkspaceContentGroups.vue:23），
+    // 见 next-shell-alignment-inventory-20261028.md 差异表 #3（B 类）。
+    { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline' },
     { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing' }
   ],
 

@@ -311,3 +311,29 @@ test('核心区弹窗化：配置一律进 WorkbenchModal，核心区不再内�
     assert.ok(modal.includes(token), `WorkbenchModal 必须用老前端 token ${token}，不许自造弹窗形态`)
   }
 })
+
+/**
+ * 弹窗归一化门禁（工单C0 · U13 的续）：弹窗是统一的二级页面——左栏设置分区目录＋右栏设置项面板，
+ * 「任何功能弹窗必须登记进统一目录，目录外弹窗不允许存在」落成两条 grep：
+ *   1. WorkbenchModal 在 next/shell 里只允许被 SettingsModal.vue 挂载（底座不许被绕开）；
+ *   2. SettingsModal 存在，且目录词汇照抄老版设置弹窗
+ *      （settings-navigation／settings-tab／settings-section、tablist／tabpanel 角色）。
+ */
+test('目录外弹窗不允许存在：WorkbenchModal 只允许被 SettingsModal 挂载', async () => {
+  const offenders = []
+  for (const file of (await walk(shellDir)).filter((candidate) => candidate.endsWith('.vue'))) {
+    if (file.endsWith('WorkbenchModal.vue') || file.endsWith('SettingsModal.vue')) continue
+    const text = await readFile(file, 'utf-8')
+    if (text.includes('WorkbenchModal')) offenders.push(file)
+  }
+  assert.deepEqual(offenders, [], `WorkbenchModal 只能被 SettingsModal 挂载（U13：目录外弹窗不允许存在），越界文件：\n${offenders.join('\n')}`)
+})
+
+test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目录词汇', async () => {
+  const settingsPath = join(shellDir, 'SettingsModal.vue')
+  assert.equal(await exists(settingsPath), true, 'next/shell/SettingsModal.vue 必须存在（统一二级页：左栏目录＋右栏设置项）')
+  const settings = await readFile(settingsPath, 'utf-8')
+  for (const needle of ['settings-navigation', 'settings-tab', 'settings-section', 'role="tablist"', 'role="tabpanel"', 'WorkbenchModal']) {
+    assert.ok(settings.includes(needle), `SettingsModal 缺老版设置弹窗的目录词汇：${needle}`)
+  }
+})
