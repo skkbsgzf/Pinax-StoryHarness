@@ -6,12 +6,18 @@ import { NOVEL_CARRIER_ID } from './manifest.mjs'
  * 读盘一律走内核文件服务（next/fs/fileService.mjs）——归属闸、作用域闸、修订并发都在那边，
  * 载体只负责「按小说的语义把目录讲成人话」，绝不自己 open 文件句柄。
  * 三个只读工具名是从内核手里认领过来的（pinax_chapter_list / pinax_chapter_read / pinax_outline_read），
- * 第四个 pinax_chapter_save 才是载体自己的写入口：写 正文/ 必须带 expectedRevision，
+ * pinax_chapter_save 是载体自己的正文写入口：写 正文/ 必须带 expectedRevision，
  * 与运行时（一级公民）的提案轨彻底分开——提案进 .pinax/proposals/，作者按下去的保存才进正文。
+ * 构思/速记（工单B1）同一套规矩长在 构思/ 上：pinax_notes_list 列篇目（正文随手带回，速记都短），
+ * pinax_notes_save 是它的写入口——没有单独的 notes 读工具，列与读合在一把里。
+ * 大纲的写半边（工单B2）：pinax_outline_save 整份覆盖 大纲/outline.json——改名/新增都改完整 nodes 后回传，
+ * 不收增量、不做合并；大纲的层级语义住在 edges（from→to）里，保存原样落盘。
  */
 export const NOVEL_DIRS = Object.freeze({ manuscript: '正文', outline: '大纲', notes: '构思' })
 
 const MAX_TEXT_CHARS = 200_000
+/** 列表随篇带回正文的上限（与 pinax_chapter_read 的默认 maxChars 同一档）；超出截断并在条目上标注。 */
+const NOTE_LIST_TEXT_CHARS = 20_000
 const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
 
 export function createNovelTools(context = {}) {
@@ -46,6 +52,35 @@ export function createNovelTools(context = {}) {
       })
     }
     return ok({ chapters, total: chapters.length })
+  }
+
+  /** 构思目录＝速记序列：与章节同一个列法。速记是随手记的短文件，正文随条目一起带回，
+   *  省一次单独的读取；单篇超长按 NOTE_LIST_TEXT_CHARS 截断并在条目上标注（保存是覆盖式，截断时别整篇回写）。 */
+  async function listNotes() {
+    const missing = needService()
+    if (missing) return missing
+    const listed = await fileService.list({ pluginId, dir: NOVEL_DIRS.notes })
+    if (!listed.ok) return listed
+    const names = listed.value.entries
+      .filter((entry) => entry.kind === 'file' && /\.md$/iu.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => collator.compare(a, b))
+    const notes = []
+    for (const name of names) {
+      const relativePath = `${NOVEL_DIRS.notes}/${name}`
+      const read = await fileService.read({ pluginId, dir: NOVEL_DIRS.notes, file: name })
+      notes.push({
+        index: notes.length,
+        title: name.replace(/\.md$/iu, ''),
+        file: relativePath,
+        name,
+        revision: read.ok ? read.value.revision : await fileService.revisionOf(relativePath),
+        text: read.ok ? read.value.text.slice(0, NOTE_LIST_TEXT_CHARS) : '',
+        totalChars: read.ok ? read.value.text.length : 0,
+        truncated: read.ok ? read.value.text.length > NOTE_LIST_TEXT_CHARS : false
+      })
+    }
+    return ok({ notes, total: notes.length })
   }
 
   return [
@@ -213,12 +248,126 @@ export function createNovelTools(context = {}) {
           bytes: written.value.bytes
         })
       }
+    },
+    {
+      name: 'pinax_outline_save',
+      title: '保存大纲（小说载体）',
+      description: '作者确认后的大纲落盘口：整份覆盖「大纲/outline.json」——nodes 是全量（pinax_outline_read 的原样回传，改名/增删后整份写回），不收增量、不做合并；首次建档传 expectedRevision 0，改稿必须带回 read 给的修订号，不符即 PINAX_STALE_REVISION。写 大纲/ 走文件服务三道闸（归属＋file:大纲:rw＋并发）。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['nodes', 'expectedRevision'],
+        properties: {
+          nodes: {
+            type: 'array',
+            minItems: 1,
+            description: '全量节点，每条至少要有非空 id 与 title（其余字段如 type/summary 原样保留）；空数组与缺 nodes 都拒。'
+          },
+          edges: {
+            type: 'array',
+            description: '连线（from/to），可选；缺省按空数组落盘。'
+          },
+          expectedRevision: { type: 'integer', minimum: 0, description: 'pinax_outline_read 给的修订号；首次建档传 0。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (!Array.isArray(args.nodes)) return fail('INVALID_INPUT', 'nodes 必须是数组（整份覆盖，不收增量）', { got: typeof args.nodes })
+        if (!args.nodes.length) return fail('INVALID_INPUT', 'nodes 不能为空：要清空大纲请删文件，不在保存口留空文档')
+        for (const [index, node] of args.nodes.entries()) {
+          if (!node || typeof node !== 'object' || Array.isArray(node)) {
+            return fail('INVALID_INPUT', `nodes[${index}] 不是对象`, { got: node === null ? 'null' : typeof node })
+          }
+          if (typeof node.id !== 'string' || !node.id.trim()) return fail('INVALID_INPUT', `nodes[${index}] 缺非空 id`, { title: node.title ?? null })
+          if (typeof node.title !== 'string' || !node.title.trim()) return fail('INVALID_INPUT', `nodes[${index}] 缺非空 title`, { id: node.id })
+        }
+        if (args.edges !== undefined && !Array.isArray(args.edges)) {
+          return fail('INVALID_INPUT', 'edges 须是数组（每条含 from/to）', { got: typeof args.edges })
+        }
+        if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 0) {
+          return fail('INVALID_INPUT', 'expectedRevision 必填：改稿带回 pinax_outline_read 给的修订号，首次建档传 0')
+        }
+        const document = { nodes: args.nodes, edges: args.edges ?? [] }
+        const written = await fileService.write({ pluginId, dir: NOVEL_DIRS.outline, file: 'outline.json', text: JSON.stringify(document, null, 2), expectedRevision: args.expectedRevision })
+        if (!written.ok) return written
+        return ok({
+          file: written.value.relativePath,
+          revision: written.value.revision,
+          nodeTotal: args.nodes.length,
+          sha256: written.value.sha256,
+          bytes: written.value.bytes
+        })
+      }
+    },
+    {
+      name: 'pinax_notes_list',
+      title: '列出构思速记（小说载体）',
+      description: '按「构思/」文件名排序列出速记篇目（序号、标题、相对路径、修订号），并把全文一并带回——速记是随手记的短文件，省一次单独的读取；单篇超过 20000 字时截断并在条目上标注，不谎报读全了。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 500, description: '最多返回多少篇，默认 200。' }
+        }
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const all = await listNotes()
+        if (!all.ok) return all
+        const limit = args.limit === undefined ? 200 : args.limit
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+          return fail('INVALID_INPUT', 'limit 须是 1–500 的整数', { got: args.limit })
+        }
+        return ok({ total: all.value.total, truncated: all.value.total > limit, notes: all.value.notes.slice(0, limit) })
+      }
+    },
+    {
+      name: 'pinax_notes_save',
+      title: '保存构思速记（小说载体）',
+      description: '作者确认后的构思落盘口：新建传 expectedRevision 0；改稿必须带回 pinax_notes_list 给的修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。写 构思/ 走文件服务三道闸（归属＋file:构思:rw＋并发）。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text', 'expectedRevision'],
+        properties: {
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（构思/ 下），与 title 二选一。' },
+          title: { type: 'string', minLength: 1, maxLength: 120, description: '新建速记用标题，落成「构思/<标题>.md」。' },
+          text: { type: 'string', minLength: 1, maxLength: MAX_TEXT_CHARS, description: '整篇内容（覆盖式保存，故必须带修订号）。' },
+          expectedRevision: { type: 'integer', minimum: 0, description: 'pinax_notes_list 给的修订号；新建传 0。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (typeof args.text !== 'string' || !args.text.length) return fail('INVALID_INPUT', 'text 必填且非空')
+        if (args.text.length > MAX_TEXT_CHARS) return fail('INVALID_INPUT', `text 超出单篇上限 ${MAX_TEXT_CHARS} 字符`, { got: args.text.length })
+        if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 0) {
+          return fail('INVALID_INPUT', 'expectedRevision 必填（新建传 0），改稿请带回 pinax_notes_list 给的修订号')
+        }
+        const target = args.file ?? chapterFileNameFromTitle(args.title)
+        if (!target) return fail('INVALID_INPUT', '要给 file（构思/ 下的相对路径）或 title（新建速记标题）')
+        const relative = toDirRelative(NOVEL_DIRS.notes, target)
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '构思速记文件名必须以 .md 结尾', { file: target })
+
+        const written = await fileService.write({ pluginId, dir: NOVEL_DIRS.notes, file: relative, text: args.text, expectedRevision: args.expectedRevision })
+        if (!written.ok) return written
+        return ok({
+          file: written.value.relativePath,
+          revision: written.value.revision,
+          created: args.expectedRevision === 0,
+          sha256: written.value.sha256,
+          bytes: written.value.bytes
+        })
+      }
     }
   ]
 }
 
-/** 载体已认领（读）与自有（写）的工具名，供门禁核「认领面只增不减」。 */
-export const NOVEL_TOOL_NAMES = Object.freeze(['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save'])
+/** 载体已认领（读）与自有（写）的工具名，供门禁核「认领面只增不减」；大纲写半边与构思这对也是自有名字。 */
+export const NOVEL_TOOL_NAMES = Object.freeze(['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save'])
 
 async function resolveChapter(args, listManuscript) {
   const all = await listManuscript()

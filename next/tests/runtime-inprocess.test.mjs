@@ -126,6 +126,6 @@ test('工具归属核对：空注册表＝内核全量；装内置载体后认�
   assert.equal(report.kernelCount, 19)
   assert.deepEqual([...report.claimed].sort(), ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read'])
   assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须逐批缩小')
-  assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_worldbook_save'], '工单A2：设定板块也有了自有写入口（断言同步，调度方裁定 dwfq-f2369ffa-1）')
+  assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save'], '工单A2：设定板块的自有写入口；工单B1 构思这对、工单B2 大纲写半边也是自有名字（断言同步，调度方裁定 dwfq-f2369ffa-1）')
   assert.deepEqual(report.withoutImplementation, [], '声明了却没实现的工具会被面剔掉，这里必须为空')
 })

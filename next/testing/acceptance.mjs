@@ -104,11 +104,11 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：19 内核 ∪ 载体声明＝21，其中 7 个名字由载体服务（5 接管＋2 自有），端口仍为 0（工单A2 起设定板块自带 pinax_worldbook_save）',
+  record('M2 聚合工具面：19 内核 ∪ 载体声明＝24，其中 10 个名字由载体服务（5 接管＋5 自有），端口仍为 0（工单A2：pinax_worldbook_save；工单B1：构思这对；工单B2：大纲写半边 pinax_outline_save）',
     carrierStarted.ok === true
-      && carrierStarted.value.toolCount === 21
-      && carrierStarted.value.carrierTools === 7
-      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'].sort().join()
+      && carrierStarted.value.toolCount === 24
+      && carrierStarted.value.carrierTools === 10
+      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'].sort().join()
       && carrierStarted.value.portsOpened === 0,
     `toolCount=${carrierStarted.value?.toolCount} carrierTools=${carrierStarted.value?.carrierTools}`)
 

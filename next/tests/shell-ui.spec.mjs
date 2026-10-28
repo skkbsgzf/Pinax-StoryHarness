@@ -271,7 +271,10 @@ describe('Obsidian 三栏', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    await wrapper.find('.wizard-item').trigger('click')
+    // 工单B0 弹窗化：向导不再是核心区里的 section，而是 needsPrimary 时自动打开的不可关弹窗。
+    const gate = wrapper.find('[aria-label="这个项目要创作什么？"]')
+    expect(gate.exists()).toBe(true)
+    await gate.find('.wizard-item').trigger('click')
     await flushPromises()
     expect(setPrimary).toHaveBeenCalledWith({ pluginId: 'fixture.script', expectedRevision: 0 })
     wrapper.unmount()
@@ -391,6 +394,12 @@ describe('偏好与模型面板（批次8①）', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
+    // 工单B0 弹窗化：新建项目不再内嵌在核心区，入口是「文件 → 新建项目…」菜单事件。
+    expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(false)
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.create' })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(true)
+
     const createBtn = wrapper.find('[aria-label="新建项目"] .control-primary')
     expect(createBtn.attributes('disabled')).toBeDefined()
     await wrapper.find('[aria-label="新建项目"] .control-secondary').trigger('click')
@@ -500,6 +509,95 @@ describe('载体管理面板（工单A1）', () => {
     // 没有 project 就没有面板：carrierSetEnabled/carrierSetPrimary 在通道层同样要求先有项目。
     expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
     expect(bridge.request.mock.calls.every((call) => call[0] === IPC_CHANNELS.view)).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('配置弹窗（工单B0 · U13）', () => {
+  /**
+   * 作者裁定 U13：配置项／设置页／顶栏延伸的功能配置一律走圆润弹窗（WorkbenchModal），
+   * 核心工作区（col-center）是纯净的文档与组件展示。这一组只判弹窗行为本身：
+   * 开关（遮罩／Esc／关闭钮）与 D1 硬闸的不可关闭。
+   */
+  function modalBridge({ handlers = new Map(), view = carrierView() } = {}) {
+    const request = vi.fn(async (channel) => ({ ok: true, value: channel === IPC_CHANNELS.view ? view : {} }))
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent }
+  }
+
+  it('弹窗打开后点遮罩即关，Esc 也能关（dismissable 缺省开）', async () => {
+    const handlers = new Map()
+    const bridge = modalBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
+
+    // 点遮罩自己（click.self）＝关闭；面板内部点击不受影响。
+    await wrapper.find('.workbench-modal').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+
+    // 再开一次，Esc 也要能关。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('主载体选择是 D1 硬闸：needsPrimary 自动打开、不可关闭（无关闭钮，Esc／遮罩都不生效）', async () => {
+    const bridge = modalBridge({ view: emptyFrameworkView() })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const gate = wrapper.find('[aria-label="这个项目要创作什么？"]')
+    expect(gate.exists()).toBe(true)
+    expect(gate.attributes('aria-modal')).toBe('true')
+    // 不可关闭：头部没有关闭钮，背后就是空工作区。
+    expect(gate.find('.workbench-modal-close').exists()).toBe(false)
+
+    // 点遮罩不关。
+    await wrapper.find('.workbench-modal').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="这个项目要创作什么？"]').exists()).toBe(true)
+
+    // Esc 也不关。
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('[aria-label="这个项目要创作什么？"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('新建项目弹窗走「文件 → 新建项目…」菜单事件（project.create）打开，点遮罩可关', async () => {
+    const handlers = new Map()
+    // 还没开项目、也没被 D1 拦住（首启未尝试打开）：菜单是新建项目的唯一入口。
+    const view = {
+      ...emptyFrameworkView(),
+      needsPrimary: false,
+      openError: null,
+      rejected: [],
+      carriers: [{ id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }]
+    }
+    const bridge = modalBridge({ handlers, view })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(false)
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.create' })
+    await flushPromises()
+    const modal = wrapper.find('[aria-label="新建项目"]')
+    expect(modal.exists()).toBe(true)
+    expect(modal.attributes('role')).toBe('dialog')
+
+    await wrapper.find('.workbench-modal').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

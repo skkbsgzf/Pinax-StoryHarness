@@ -35,6 +35,8 @@ const treeDir = computed(() => props.board?.dataDirs?.[0] ?? props.board?.treePa
 
 const isChapterOpen = (item) => props.data.selection?.type === 'chapter' && props.data.selection.item?.file === item.file
 const isEntryOpen = (item) => props.data.selection?.type === 'entry' && props.data.selection.item?.path === item.path
+const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data.selection.item?.file === item.file
+const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-node' && props.data.selection.item?.index === index
 
 async function createChapter() {
   const title = newTitle.value.trim()
@@ -44,12 +46,14 @@ async function createChapter() {
 }
 
 // 换板＝换树：目录窗自己负责把这一板的东西列出来（核心区不替它列）。
-// 大纲随章节一起取（工单A3）：同属小说板块的索引窗，一次换板两棵树都是新的。
+// 大纲随章节一起取（工单A3）：同属小说板块的索引窗，一次换板三棵树都是新的。
+// 构思速记（工单B1）也在这一拍里列出来；它刻意不自动打开，正文仍是核心区的主角。
 watch(() => props.board?.id, () => {
   newTitle.value = ''
   if (treeKind.value === 'chapters') {
     void props.data.loadChapters()
     void props.data.loadOutline()
+    void props.data.loadNotes()
   } else if (treeKind.value === 'entries') {
     void props.data.loadEntries()
   }
@@ -96,18 +100,47 @@ watch(() => props.board?.id, () => {
         </ul>
         <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
 
-        <!-- 大纲（工单A3）：第三棵树。本批只读——节点行沿用归档清单的静态行词汇（.nx-tree-static），
-             点了不开面板；大纲还没写就给一行说明，不当成错误。 -->
+        <!-- 大纲（工单A3 只读 → 工单B2 可编辑）：行可点选——点行把节点送进中栏的大纲编辑面（改名/加节点在那里）；
+             大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
         <p class="workspace-nav-section">大纲</p>
         <ul class="nx-tree">
           <li v-for="(node, index) in data.outline" :key="node.id ?? `outline-${index}`">
-            <span class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-static is-static">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isOutlineNodeOpen(index) }"
+              :aria-current="isOutlineNodeOpen(index) ? 'page' : null"
+              @click="data.selectOutlineNode(index)"
+            >
               <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
-            </span>
+            </button>
           </li>
         </ul>
-        <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty">大纲还没有内容（大纲/outline.json）。</p>
+        <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty">
+          大纲还没有内容（大纲/outline.json）。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="data.startOutline()">新建大纲</button>
+        </p>
         <p v-if="data.outlineError" class="nx-index-error">{{ data.outlineError }}</p>
+
+        <!-- 构思速记（工单B1）：第四棵树。行可点开——正文随 pinax_notes_list 一起回来，
+             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。 -->
+        <p class="workspace-nav-section">构思</p>
+        <ul class="nx-tree">
+          <li v-for="item in data.notes" :key="item.file">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isNoteOpen(item) }"
+              :aria-current="isNoteOpen(item) ? 'page' : null"
+              @click="data.openNote(item)"
+            >
+              <span class="workspace-nav-label">{{ item.title }}</span>
+              <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!data.notes.length && !data.notesError" class="nx-index-empty">构思还没有内容（构思/）。</p>
+        <p v-if="data.notesError" class="nx-index-error">{{ data.notesError }}</p>
       </template>
 
       <template v-else-if="treeKind === 'entries'">

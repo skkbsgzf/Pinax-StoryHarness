@@ -2,8 +2,9 @@
  * 第一个真实载体（M2 · WP5）：小说。
  * 这份清单是「载体＝一块新文件夹注册」这句话的落地样本——板块＝正文/大纲/构思三块目录，
  * 权限＝只对这三块申请 rw，工具＝认领内核里本就存在的那三个只读名（pinax_chapter_list /
- * pinax_chapter_read / pinax_outline_read），外加一个载体自己的写入口 pinax_chapter_save。
- * 认领而非新增，所以 19 工具的面在启用小说后仍不虚增；接管后读盘一律过内核文件服务的三道闸，
+ * pinax_chapter_read / pinax_outline_read），外加载体自己的写入口：正文的 pinax_chapter_save、
+ * 大纲的 pinax_outline_save（工单B2，整份覆盖）与构思速记的 pinax_notes_list / pinax_notes_save（工单B1）。
+ * 认领而非新增内核名，所以 19 工具的面在启用小说后不虚增；接管后读盘一律过内核文件服务的三道闸，
  * 内核那份「按服务端注册表找项目」的实现只在没装载体的场合回落使用。
  */
 export const NOVEL_CARRIER_ID = 'pinax.carrier.novel'
@@ -37,7 +38,7 @@ export const NOVEL_CARRIER = Object.freeze({
   capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'],
   requires: [],
 
-  tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save'],
+  tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save'],
 
   context: {
     // providers 写的是「上下文块的种类名」（与 shared/agentContextProfiles.js 的 blocks 对齐），

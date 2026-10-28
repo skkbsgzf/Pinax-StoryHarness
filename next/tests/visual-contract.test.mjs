@@ -289,3 +289,25 @@ test('刻度 token 必须真的定义在布局层：--nx-fs-* 与 --nx-radius-xs
     assert.match(layout, new RegExp(`${token.replace(/-/g, '\\-')}\\s*:`), `next-shell.css 缺刻度 token ${token}`)
   }
 })
+
+/**
+ * 核心区弹窗化门禁（工单B0 · 作者裁定 U13）：
+ * 「对于所有的配置项，设置页，以及顶栏延伸下来的功能配置页面，都用圆润的弹窗做统一的处理，
+ *  不在核心工作区强插入任何按钮，核心工作区是纯净的文档和组件展示。」
+ * 这条门禁就是那句话的机器版本：
+ *   1. AppNext 的核心区不得再内嵌 class="wizard" 的配置 section
+ *      （内层布局类如 prefs-grid／wizard-note 可以留在弹窗里继续用）；
+ *   2. WorkbenchModal 存在，且形态词汇是老前端那三枚 token——圆角 --radius-surface、
+ *      遮罩 --surface-overlay、层级 --z-modal-backdrop，不自造一套弹窗皮。
+ */
+test('核心区弹窗化：配置一律进 WorkbenchModal，核心区不再内嵌 wizard section', async () => {
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  assert.ok(!app.includes('class="wizard"'), 'AppNext 核心区不得再内嵌 class="wizard" 的配置 section（U13：核心区只留文档与组件展示）')
+
+  const modalPath = join(shellDir, 'WorkbenchModal.vue')
+  assert.equal(await exists(modalPath), true, 'next/shell/WorkbenchModal.vue 必须存在（弹窗统一走这一枚原语）')
+  const modal = await readFile(modalPath, 'utf-8')
+  for (const token of ['--radius-surface', '--surface-overlay', '--z-modal-backdrop']) {
+    assert.ok(modal.includes(token), `WorkbenchModal 必须用老前端 token ${token}，不许自造弹窗形态`)
+  }
+})

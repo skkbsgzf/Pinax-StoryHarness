@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 import { IPC_CHANNELS } from './ipcContract.mjs'
 
 /**
- * 板块数据（章节／条目）的单一归属。
+ * 板块数据（章节／大纲／构思／条目）的单一归属。
  *
  * 索引窗列的是它、核心区写的也是它——分成两份就会不同步（正文存了第 2 版，索引窗还写着第 1 版）。
  * 所以外壳里凡是碰这块数据的组件都拿同一个对象，不各自取数。
@@ -21,9 +21,19 @@ export function useBoardData(bridge) {
     chapters: [],
     chapter: null,
     draft: '',
-    /** 大纲（工单A3）：索引窗的第三棵树，只读——节点来自 大纲/outline.json，本批不编辑不开面板。 */
+    /** 大纲（工单A3 只读树 → 工单B2 可编辑）：索引窗的第三棵树。
+     *  草稿是整份文档的深拷贝（大纲保存＝整份覆盖）：改名/新增都先落在 outlineDraft 上，按保存才写盘。 */
     outline: [],
+    outlineEdges: [],
+    outlineRevision: null,
+    outlineDraft: null,
+    outlineNodeIndex: null,
     outlineError: null,
+    /** 构思速记（工单B1）：索引窗的第四棵树，可点开编辑；与章节各拿各的草稿与错误位。 */
+    notes: [],
+    note: null,
+    noteDraft: '',
+    notesError: null,
     entries: [],
     entry: null,
     /** 条目编辑（工单A2）：阅读态与编辑态的开关＋草稿，与正文的 draft 分开各拿各的。 */
@@ -105,7 +115,7 @@ export function useBoardData(bridge) {
     state.busy = true
     state.error = null
     state.notice = ''
-    const saved = await tool('pinax_chapter_save', { title: name, text: '', expectedRevision: 0 })
+    const saved = await tool('pinax_chapter_save', { title: name, text: `${name}\n`, expectedRevision: 0 })
     state.busy = false
     if (!saved.ok) {
       state.error = saved.message
@@ -115,6 +125,81 @@ export function useBoardData(bridge) {
     await loadChapters({ keep: false })
     const made = state.chapters.find((item) => item.file === saved.value.file)
     if (made) await openChapter(made)
+  }
+
+  /** 构思速记（工单B1）：列篇目。与章节同走 runtimeToolCall 一条通道（pinax_notes_list）；
+   *  刻意不自动打开任何一篇——正文是核心区的主角，速记只在作者点索引窗那一行时进场。 */
+  async function loadNotes() {
+    state.notesError = null
+    const listed = await tool('pinax_notes_list', { limit: 500 })
+    if (!listed.ok) {
+      state.notes = []
+      state.notesError = listed.message
+      return
+    }
+    state.notes = listed.value.notes ?? []
+    // 换板后再回来：让打开着的那篇跟上最新修订号与正文，别摊着一份上一秒的草稿来源。
+    const current = state.note ? state.notes.find((item) => item.file === state.note.file) : null
+    if (current) {
+      state.note = { ...current }
+      state.noteDraft = current.text ?? ''
+    }
+  }
+
+  /** 打开一篇速记：正文随 pinax_notes_list 一起回来了（速记都短），这里不再发第二次读。 */
+  function openNote(item) {
+    if (!item) return
+    state.note = { ...item }
+    state.noteDraft = item.text ?? ''
+    state.error = null
+    state.notice = item.truncated
+      ? `只载入了前 ${(item.text ?? '').length} 字（全篇 ${item.totalChars} 字）：保存会覆盖未载入的部分，请先用工具读全再改。`
+      : `已载入 ${item.totalChars} 字 · 第 ${item.revision} 版`
+    state.selection = { type: 'note', item: { ...item } }
+  }
+
+  function setNoteDraft(value) {
+    state.noteDraft = value
+  }
+
+  /** 保存速记＝作者按下去的那一下：带读到的修订号走 pinax_notes_save，冲突由文件服务拒，不静默覆盖。 */
+  async function saveNote() {
+    if (!state.note || !state.noteDraft) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_notes_save', { file: state.note.file, text: state.noteDraft, expectedRevision: state.note.revision })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该篇后再改，外壳不做静默合并）' : ''}`
+      return
+    }
+    state.note = { ...state.note, revision: saved.value.revision, totalChars: state.noteDraft.length, truncated: false }
+    state.busy = false
+    state.notice = `已保存到「${saved.value.file}」· 第 ${saved.value.revision} 版`
+    // 就地推进索引窗里的版本号与正文，不为一次保存重列整个构思目录。
+    state.notes = state.notes.map((item) => (item.file === saved.value.file
+      ? { ...item, revision: saved.value.revision, text: state.noteDraft, totalChars: state.noteDraft.length, truncated: false }
+      : item))
+  }
+
+  /** 新建速记：工具拒空 text（速记也不是空文件），以标题作首行落盘，随后列一次并打开。 */
+  async function createNote(title) {
+    const name = String(title ?? '').trim()
+    if (!name) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_notes_save', { title: name, text: `${name}\n`, expectedRevision: 0 })
+    state.busy = false
+    if (!saved.ok) {
+      state.error = saved.message
+      return
+    }
+    state.notice = `已新建「${saved.value.file}」`
+    await loadNotes()
+    const made = state.notes.find((item) => item.file === saved.value.file)
+    if (made) openNote(made)
   }
 
   async function loadEntries() {
@@ -192,18 +277,102 @@ export function useBoardData(bridge) {
     state.draft = value
   }
 
-  /** 大纲树（工单A3）：小说板块把 大纲/outline.json 的节点列进索引窗，入参照工具实现的原样（默认 maxNodes）。
+  /** 大纲树（工单A3 只读 → 工单B2 起可编辑）：小说板块把 大纲/outline.json 的节点列进索引窗。
    *  大纲还没写（工具对「既没有 outline.json 也没有 大纲.md」回 INVALID_INPUT）是新建项目的常态：
-   *  清空、不报错，界面给一行「大纲还没有内容」；其余失败才进 outlineError 摊在索引窗。 */
+   *  清空、revision 记为 null（首次保存传 0 建档）、不报错，索引窗给一行说明＋「新建大纲」；
+   *  其余失败才进 outlineError 摊在索引窗。换板重列＝丢草稿，跟章节换板重读同一口径。 */
   async function loadOutline() {
     state.outlineError = null
+    state.outlineDraft = null
+    state.outlineNodeIndex = null
     const read = await tool('pinax_outline_read', {})
     if (!read.ok) {
       state.outline = []
+      state.outlineEdges = []
+      state.outlineRevision = null
       if (read.code !== 'PINAX_INVALID_INPUT') state.outlineError = read.message
       return
     }
     state.outline = read.value.nodes ?? []
+    state.outlineEdges = read.value.edges ?? []
+    state.outlineRevision = read.value.revision ?? null
+  }
+
+  /** 点索引窗的大纲行：把整份文档拷成草稿（只拷一次），选中该节点——中栏换大纲编辑面。 */
+  function selectOutlineNode(index) {
+    if (!state.outline.length) return
+    if (!state.outlineDraft) {
+      state.outlineDraft = {
+        nodes: JSON.parse(JSON.stringify(state.outline)),
+        edges: JSON.parse(JSON.stringify(state.outlineEdges ?? []))
+      }
+    }
+    state.outlineNodeIndex = index
+    const node = state.outlineDraft.nodes[index]
+    if (!node) return
+    state.error = null
+    state.notice = ''
+    state.selection = { type: 'outline-node', item: { ...node, index } }
+  }
+
+  /** 大纲还没建档时的第一笔：起一份只有一个未命名节点的草稿，改名后保存即建 outline.json。 */
+  function startOutline() {
+    if (state.outline.length || state.outlineError) return
+    state.outlineDraft = { nodes: [{ id: freshOutlineNodeId([]), title: '未命名节点' }], edges: [] }
+    state.outlineNodeIndex = 0
+    state.error = null
+    state.notice = ''
+    state.selection = { type: 'outline-node', item: { ...state.outlineDraft.nodes[0], index: 0 } }
+  }
+
+  /** 改名落草稿：行内不改，中栏的标题输入框逐字进草稿，按保存才落盘。 */
+  function setOutlineNodeTitle(index, title) {
+    const node = state.outlineDraft?.nodes[index]
+    if (node) node.title = title
+  }
+
+  /** 加节点（工单B2）：同级＝插在所选节点后；子级＝同样紧随其后，另记一条 from→to 连线
+   *  （outline.json 的层级语义住在 edges 里，树显示仍是平铺——本批不做拖拽重排）。 */
+  function addOutlineNode(kind) {
+    if (!state.outlineDraft || state.outlineNodeIndex === null) return
+    const nodes = state.outlineDraft.nodes
+    const anchor = nodes[state.outlineNodeIndex]
+    if (!anchor) return
+    const node = { id: freshOutlineNodeId(nodes), title: '未命名节点' }
+    nodes.splice(state.outlineNodeIndex + 1, 0, node)
+    if (kind === 'child') state.outlineDraft.edges.push({ from: anchor.id, to: node.id })
+    selectOutlineNode(state.outlineNodeIndex + 1)
+  }
+
+  function freshOutlineNodeId(nodes) {
+    const taken = new Set(nodes.map((node) => String(node?.id ?? '')))
+    let index = nodes.length + 1
+    while (taken.has(`node-${index}`)) index += 1
+    return `node-${index}`
+  }
+
+  /** 大纲保存＝作者按下去的那一下：整份草稿走 pinax_outline_save，冲突由文件服务拒，不静默覆盖。
+   *  成功后就地推进树与修订号（不重读、不冲掉提示），草稿继续开着——作者可以接着改。 */
+  async function saveOutline() {
+    if (!state.outlineDraft || !state.outlineDraft.nodes.length) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_outline_save', {
+      nodes: state.outlineDraft.nodes,
+      edges: state.outlineDraft.edges,
+      expectedRevision: state.outlineRevision ?? 0
+    })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新点开大纲节点后再改，外壳不做静默合并）' : ''}`
+      return
+    }
+    state.outlineRevision = saved.value.revision
+    state.outline = JSON.parse(JSON.stringify(state.outlineDraft.nodes))
+    state.outlineEdges = JSON.parse(JSON.stringify(state.outlineDraft.edges))
+    state.busy = false
+    state.notice = `已保存大纲 · 第 ${saved.value.revision} 版 · ${saved.value.nodeTotal} 个节点`
   }
 
   return Object.assign(state, {
@@ -212,6 +381,11 @@ export function useBoardData(bridge) {
     openChapter,
     save,
     createChapter,
+    loadNotes,
+    openNote,
+    setNoteDraft,
+    saveNote,
+    createNote,
     loadEntries,
     openEntry,
     editEntry,
@@ -219,6 +393,11 @@ export function useBoardData(bridge) {
     setEntryDraft,
     saveEntry,
     loadOutline,
+    selectOutlineNode,
+    startOutline,
+    setOutlineNodeTitle,
+    addOutlineNode,
+    saveOutline,
     setDraft
   })
 }

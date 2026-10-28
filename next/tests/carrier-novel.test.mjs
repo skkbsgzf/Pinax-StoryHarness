@@ -51,12 +51,12 @@ test('真清单过内核校验：认领的都是内核已有的名字，板块�
   assert.equal(NOVEL_CARRIER.primary.contextProfile, 'writing-chapter', '上下文档案名要对齐 shared/agentContextProfiles')
 })
 
-test('工具面聚合：启用小说后面是 20 个工具，三个只读名归属载体，声明无实现的绝不虚列', async () => {
+test('工具面聚合：启用小说后面是 23 个工具，三个只读名归属载体，声明无实现的绝不虚列', async () => {
   const { workspace, registry, runtime } = await novelProject('carrier-surface')
   try {
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 20, '19 内核 ＋ 载体自有的 pinax_chapter_save')
+    assert.equal(started.value.toolCount, 23, '19 内核 ＋ 载体自有四把：正文 pinax_chapter_save、大纲 pinax_outline_save（工单B2）、构思这对 pinax_notes_list/pinax_notes_save（工单B1；断言同步，裁定 dwfq-f2369ffa-1/3 口径）')
     assert.equal(started.value.aggregatedSurface, true)
     assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...NOVEL_TOOL_NAMES].sort())
 
@@ -74,8 +74,8 @@ test('工具面聚合：启用小说后面是 20 个工具，三个只读名归�
     const report = toolOwnershipReport(registry)
     assert.equal(report.claimed.length, 5, '小说 3 把只读 ＋ 设定 2 把只读（认领面按已安装的清单算，不看启用开关）')
     assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须往下走')
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_worldbook_save'], '工单A2：设定板块也有了自有写入口（断言同步，调度方裁定 dwfq-f2369ffa-1）')
-    assert.deepEqual(report.withoutImplementation, [], '小说声明的四个名字都得有实现')
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save'], '工单A2 起设定板块有了自有写入口；工单B1 构思这对、工单B2 大纲写半边也是自有名字（断言同步，调度方裁定 dwfq-f2369ffa-1）')
+    assert.deepEqual(report.withoutImplementation, [], '小说声明的名字都得有实现')
   } finally {
     await runtime.stop()
     await workspace.cleanup()
@@ -126,6 +126,64 @@ test('保存→读回→列表：修订号一路对上；既有文件不许用 0
     const byTitle = await runtime.callTool('pinax_chapter_read', { title: '入场', maxChars: 1000 })
     assert.equal(byTitle.value.payload.ok, true)
     assert.equal(byTitle.value.payload.matchedBy, 'title-contains')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('构思速记（工单B1）：列表连正文带回，保存带修订号落盘；盲写与非 .md、空 text 都拒', async () => {
+  const { workspace, root, runtime } = await novelProject('carrier-notes')
+  try {
+    await runtime.start()
+    // 空目录先列一次：0 篇，不谎报。
+    const empty = await runtime.callTool('pinax_notes_list', {})
+    assert.equal(empty.value.payload.ok, true, JSON.stringify(empty.value.payload))
+    assert.equal(empty.value.payload.total, 0)
+    assert.deepEqual(empty.value.payload.notes, [])
+
+    const created = await runtime.callTool('pinax_notes_save', {
+      title: '雨夜的表',
+      text: '袖口的表停在十二点差三分。',
+      expectedRevision: 0
+    })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+    assert.equal(created.value.payload.created, true)
+    assert.equal(created.value.payload.revision, 1)
+    assert.equal(created.value.payload.file, '构思/雨夜的表.md')
+    assert.match(await readFile(join(root, '构思', '雨夜的表.md'), 'utf-8'), /十二点差三分/)
+
+    const listed = await runtime.callTool('pinax_notes_list', {})
+    assert.equal(listed.value.payload.total, 1)
+    assert.deepEqual(listed.value.payload.notes.map((item) => [item.title, item.revision]), [['雨夜的表', 1]], '返回形状照 chapters：序号、标题、相对路径、修订号')
+    assert.equal(listed.value.payload.notes[0].file, '构思/雨夜的表.md')
+    assert.equal(listed.value.payload.notes[0].text, '袖口的表停在十二点差三分。', '速记都短：正文随篇目一起带回，省一次读')
+    assert.equal(listed.value.payload.notes[0].truncated, false)
+
+    // 修订号闸：盘上已有第 1 版，拿 0 盲写必须拒，而不是静默覆盖。
+    const blind = await runtime.callTool('pinax_notes_save', { file: '构思/雨夜的表.md', text: '被推翻的写法', expectedRevision: 0 })
+    assert.equal(blind.value.payload.ok, false)
+    assert.equal(blind.value.payload.code, NEXT_ERROR_CODES.STALE_REVISION)
+    assert.equal(blind.value.payload.details.actual, 1)
+    assert.match(await readFile(join(root, '构思', '雨夜的表.md'), 'utf-8'), /十二点差三分/, '拒绝后磁盘内容不动')
+
+    const updated = await runtime.callTool('pinax_notes_save', {
+      file: listed.value.payload.notes[0].file,
+      text: '表针重新走了起来。',
+      expectedRevision: listed.value.payload.notes[0].revision
+    })
+    assert.equal(updated.value.payload.ok, true, JSON.stringify(updated.value.payload))
+    assert.equal(updated.value.payload.revision, 2)
+    assert.equal(updated.value.payload.created, false)
+
+    // 非 .md 与空 text 都拦在载体工具的入参上。
+    const notMarkdown = await runtime.callTool('pinax_notes_save', { file: '构思/没有扩展名', text: 'x', expectedRevision: 0 })
+    assert.equal(notMarkdown.value.payload.ok, false)
+    assert.equal(notMarkdown.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    const emptyText = await runtime.callTool('pinax_notes_save', { title: '空速记', text: '', expectedRevision: 0 })
+    assert.equal(emptyText.value.payload.ok, false)
+    assert.equal(emptyText.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
   } finally {
     await runtime.stop()
     await workspace.cleanup()
@@ -206,6 +264,85 @@ test('大纲：结构化优先，只有散文稿时如实给警告，不凭空�
   }
 })
 
+test('大纲保存（工单B2）：整份覆盖落盘、修订号递增；盲写与非法结构都拒', async () => {
+  const { workspace, root, runtime, opened } = await novelProject('carrier-outline-save')
+  try {
+    await runtime.start()
+    // 先种一份大纲（修订号 1）：保存口吃的是 read 给的那份文档。
+    const seeded = await opened.value.fileService.write({
+      pluginId: NOVEL_CARRIER_ID,
+      dir: '大纲',
+      file: 'outline.json',
+      text: JSON.stringify({ nodes: [{ id: 'n1', title: '开场：雨夜进城', summary: '雪夜，柯秒进了城。' }], edges: [] }, null, 2),
+      expectedRevision: 0
+    })
+    assert.equal(seeded.ok, true, JSON.stringify(seeded.error ?? {}))
+    const read = await runtime.callTool('pinax_outline_read', {})
+    assert.equal(read.value.payload.ok, true)
+    assert.equal(read.value.payload.revision, 1)
+
+    // 成功：改名＋加一节＋一条连线，整份 nodes 原样回传（summary 等其余字段保留）。
+    const saved = await runtime.callTool('pinax_outline_save', {
+      nodes: [{ id: 'n1', title: '开场：雨夜进城（改）', summary: '雪夜，柯秒进了城。' }, { id: 'n2', title: '第一折' }],
+      edges: [{ from: 'n1', to: 'n2' }],
+      expectedRevision: read.value.payload.revision
+    })
+    assert.equal(saved.value.payload.ok, true, JSON.stringify(saved.value.payload))
+    assert.equal(saved.value.payload.revision, 2)
+    assert.equal(saved.value.payload.nodeTotal, 2)
+    assert.equal(saved.value.payload.file, '大纲/outline.json')
+    const onDisk = JSON.parse(await readFile(join(root, '大纲', 'outline.json'), 'utf-8'))
+    assert.deepEqual(onDisk.nodes.map((node) => node.title), ['开场：雨夜进城（改）', '第一折'])
+    assert.equal(onDisk.nodes[0].summary, '雪夜，柯秒进了城。', '节点上的其余字段原样保留，不洗掉')
+    assert.deepEqual(onDisk.edges, [{ from: 'n1', to: 'n2' }])
+
+    // 修订号不符：盘上第 2 版，拿 1 盲写必须拒，磁盘不动。
+    const stale = await runtime.callTool('pinax_outline_save', { nodes: [{ id: 'n1', title: '被推翻的写法' }], expectedRevision: 1 })
+    assert.equal(stale.value.payload.ok, false)
+    assert.equal(stale.value.payload.code, NEXT_ERROR_CODES.STALE_REVISION)
+    assert.equal(stale.value.payload.details.actual, 2)
+    assert.match(JSON.parse(await readFile(join(root, '大纲', 'outline.json'), 'utf-8')).nodes[0].title, /（改）/, '拒绝后磁盘内容不动')
+
+    // 非法结构：缺 nodes、空 nodes、节点缺 title、节点不是对象、edges 不是数组、缺 expectedRevision。
+    const noNodes = await runtime.callTool('pinax_outline_save', { expectedRevision: 2 })
+    assert.equal(noNodes.value.payload.ok, false)
+    assert.equal(noNodes.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    const emptyNodes = await runtime.callTool('pinax_outline_save', { nodes: [], expectedRevision: 2 })
+    assert.equal(emptyNodes.value.payload.ok, false)
+    assert.equal(emptyNodes.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    const noTitle = await runtime.callTool('pinax_outline_save', { nodes: [{ id: 'n1' }], expectedRevision: 2 })
+    assert.equal(noTitle.value.payload.ok, false)
+    assert.equal(noTitle.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    const badEdges = await runtime.callTool('pinax_outline_save', { nodes: [{ id: 'n1', title: 'x' }], edges: 'n1-n2', expectedRevision: 2 })
+    assert.equal(badEdges.value.payload.ok, false)
+    assert.equal(badEdges.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    const noRevision = await runtime.callTool('pinax_outline_save', { nodes: [{ id: 'n1', title: 'x' }] })
+    assert.equal(noRevision.value.payload.ok, false)
+    assert.equal(noRevision.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    // 首建：outline.json 还不存在时传 0 直接建档（工具对「两样都没有」回 INVALID_INPUT 之后的那条路）。
+    const freshRoot = join(workspace.projects, '无大纲靶子')
+    const registry2 = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+    for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry2.install(plugin.manifest, plugin.impl, plugin.meta)
+    await createProject({ root: freshRoot, name: '无大纲靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: registry2 })
+    const opened2 = await openProject({ root: freshRoot, registry: registry2 })
+    const runtime2 = createAgentRuntime({ registry: registry2, fileService: opened2.value.fileService, view: opened2.value.view })
+    await runtime2.start()
+    const created = await runtime2.callTool('pinax_outline_save', { nodes: [{ id: 'n1', title: '第一笔' }], expectedRevision: 0 })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+    assert.equal(created.value.payload.revision, 1)
+    assert.match(await readFile(join(freshRoot, '大纲', 'outline.json'), 'utf-8'), /第一笔/)
+    await runtime2.stop()
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
 test('停用载体后工具面回落内核：面少一个名字，同名工具回到内核实现', async () => {
   const { workspace, root, registry, opened, runtime } = await novelProject('carrier-disable', {
     primaryCarrier: FIXTURE_SCRIPT.id,
@@ -214,7 +351,7 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
   })
   try {
     await runtime.start()
-    assert.equal(runtime.listTools().length, 20)
+    assert.equal(runtime.listTools().length, 23)
     assert.ok(opened.value.view.enabled.includes(NOVEL_CARRIER_ID))
 
     const disabled = await setCarrierEnabled({ root, registry, pluginId: NOVEL_CARRIER_ID, enabled: false, expectedRevision: opened.value.document.carriers.revision })

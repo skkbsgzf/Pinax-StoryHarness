@@ -333,21 +333,11 @@ body {
   color: var(--signal-warm);
 }
 
-/* —— 建项目向导 ————————————————————————————————————————————— */
-.wizard {
-  margin: 0 24px;
-  padding: 18px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: var(--radius-surface);
-  background: var(--surface-workbench-raised);
-}
-.wizard h3 {
-  margin: 0 0 6px;
-  font-family: var(--font-display);
-  font-size: var(--nx-fs-xl);
-  font-weight: 600;
-  color: var(--archive-ink);
-}
+/* —— 弹窗内层词汇（工单B0 弹窗化后） ——————————————————————————
+   容器不再是核心区里的 .wizard section：配置一律收进 WorkbenchModal（容器形态
+   （遮罩／圆角面板）在 WorkbenchModal.vue 的 scoped 块里，走 --surface-overlay /
+   --z-modal-backdrop / --radius-surface / --surface-workbench-raised）。
+   这里只留弹窗内层仍在用的布局词汇：说明行、伴生勾选、载体按钮列与空态。 */
 .wizard-note {
   margin: 0 0 12px;
   font-size: var(--nx-fs-md);

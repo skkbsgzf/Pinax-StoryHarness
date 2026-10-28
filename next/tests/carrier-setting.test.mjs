@@ -71,8 +71,8 @@ test('设定真清单过校验：读工具是内核已有的只读名，世界�
 test('启用设定后：世界书工具归属载体，写世界书走自有 save，内核 pinax_worldbook_write 仍回落内核', async () => {
   const { workspace, registry, runtime } = await settingProject('setting-surface')
   try {
-    assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...SETTING_TOOL_NAMES, 'pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read'].sort())
-    assert.equal(runtime.listTools().length, 21, '19 内核 ＋ 载体自有的 pinax_chapter_save 与 pinax_worldbook_save')
+    assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...SETTING_TOOL_NAMES, 'pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save'].sort())
+    assert.equal(runtime.listTools().length, 24, '19 内核 ＋ 载体自有的 pinax_chapter_save、pinax_outline_save（工单B2）、构思这对 pinax_notes_list/pinax_notes_save（工单B1）与 pinax_worldbook_save（断言同步，裁定 dwfq-f2369ffa-1/3 口径）')
     assert.equal(runtime.ownerOf('pinax_worldbook_list'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_save'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_write'), 'kernel', '内核那份写工具照旧不认领，写族闸点名走自有 save')
@@ -81,7 +81,7 @@ test('启用设定后：世界书工具归属载体，写世界书走自有 save
     const report = toolOwnershipReport(registry)
     assert.equal(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2（自有写工具不在其中）')
     assert.equal(report.unclaimed.length, 14)
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_worldbook_save'])
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save'], '工单A2/B1/B2：五把自有写/列工具（断言同步，调度方裁定 dwfq-f2369ffa-1）')
     assert.deepEqual(report.withoutImplementation, [], '声明了就必须有实现，否则不许进面')
   } finally {
     await runtime.stop()
