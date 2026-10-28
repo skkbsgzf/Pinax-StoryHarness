@@ -9,6 +9,7 @@ import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
 import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
 import * as projectBackup from '../runtime/projectBackupService.mjs'
+import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
 import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 
@@ -70,7 +71,9 @@ if (pinnedAppData) app.setPath('userData', pinnedAppData)
 /**
  * 界面缩放：作者口径 0.85（1440×900 下三栏＋右栏的舒适档）。
  * 优先级：env PINAX_NEXT_ZOOM（批次7 的覆写口）＞偏好文件（批次8 偏好面，uiZoom）＞默认 0.85。
- * 菜单「视图」里另有放大/缩小/重置（重置＝100%）。越界值一律回默认，不猜。
+ * 缩放的唯一入口是偏好节（PrefsSection 的 uiZoom，保存即经 onPrefsApplied 改窗口）。
+ * 工单A 删掉「视图」组时一并删了菜单里的 native zoom（resetZoom/zoomIn/zoomOut）——
+ * 它与 zoomFactor 双轨，两边各改一份会互相覆盖。越界值一律回默认，不猜。
  */
 function resolveUiZoom({ storedZoom = null } = {}) {
   const fromEnv = Number.parseFloat(process.env.PINAX_NEXT_ZOOM ?? '')
@@ -84,6 +87,19 @@ function resolveUiZoom({ storedZoom = null } = {}) {
 function preferencesFile() {
   return join(process.env.PINAX_APP_DATA || app.getPath('userData'), 'next-preferences.json')
 }
+
+/**
+ * 编辑组五个系统级编辑命令（工单A）：页内菜单行点击走 menuInvoke → 这里落到当前窗口 webContents。
+ * 原生菜单那一半是 role（menus.mjs），由 Electron 直接办——两条路都通，互不依赖。
+ */
+const EDIT_MENU_COMMANDS = Object.freeze({
+  'edit.undo': 'undo',
+  'edit.redo': 'redo',
+  'edit.cut': 'cut',
+  'edit.copy': 'copy',
+  'edit.paste': 'paste',
+  'edit.selectAll': 'selectAll'
+})
 
 let session = null
 let dispatcher = null
@@ -201,6 +217,15 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     }
   }
 
+  // 知识服务（工单H2）：主进程单例，一个底座同时供 IPC（资料板检索/盘点）与资料载体的
+  // pinax_reference_search 使用。runtimeRoot／cacheRoot 走 env 或 createKnowledgeRuntime 的默认；
+  // 真正执行在 worker 线程里（零 HTTP、零端口），这里只等 Promise。
+  const knowledgeService = createKnowledgeService({
+    runtimeRoot: process.env.PINAX_KNOWLEDGE_RUNTIME,
+    cacheRoot: process.env.PINAX_KNOWLEDGE_CACHE_ROOT
+  })
+  setSharedKnowledgeService(knowledgeService)
+
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
   session = await createNextSession({
@@ -229,6 +254,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     history: { gitHistory, scheduler: historyScheduler },
     // 备份与恢复（G2）：整目录复制，零新依赖；服务只管文件，通道只管把当前项目根交给它。
     backupService: projectBackup,
+    // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
+    knowledgeService,
     // 导入既有稿（E1）：结构动作由作者在向导里显式按两次（计划→执行），与建项目同级走主进程；
     // dryRun≠false 一律当计划，只有显式 false 才落盘。
     importProject: ({ sourcePath, targetPath, dryRun }) => (dryRun ? planImport({ sourcePath, targetPath }) : runImport({ sourcePath, targetPath })),
@@ -247,8 +274,15 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
       }
     },
     onMenuInvoke: async (id) => {
-      if (id === 'runtime.tools' || id === 'view.focusRuntime') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'tools' })
-      if (id === 'runtime.proposals') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'proposals', dir: '.pinax/proposals/' })
+      // 工单A：「打开提案目录」从「运行时」组并入「项目」组，id 随组改名；处理方式不变。
+      if (id === 'project.proposals') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'proposals', dir: '.pinax/proposals/' })
+      // 工单A：「编辑」组补了 id，页内菜单行的撤销/剪贴板经这里落到当前窗口的编辑命令。
+      // 原生菜单那一半仍是 role（Electron 直办）；窗口可能已经关了，这里判空、不抛。
+      const editCommand = EDIT_MENU_COMMANDS[id]
+      if (editCommand) {
+        const contents = window_ && !window_.isDestroyed() ? window_.webContents : null
+        contents?.[editCommand]?.()
+      }
       // 工单F：页内菜单行里的「退出」走同一条 menuInvoke 分发（原生菜单那一半仍由 role:'quit' 直办）。
       // 放到下一拍再退：让这次 IPC 的回执先发出去，再进 before-quit 的历史兜底。
       if (id === 'app.quit') setImmediate(() => app.quit())

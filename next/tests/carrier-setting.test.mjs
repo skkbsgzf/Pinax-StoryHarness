@@ -82,7 +82,7 @@ test('启用设定＋资料后：世界书工具归属载体，写世界书走�
   const { workspace, registry, runtime } = await settingProject('setting-surface')
   try {
     assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...SETTING_TOOL_NAMES, ...REFERENCE_TOOL_NAMES, 'pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'].sort())
-    assert.equal(runtime.listTools().length, 32, '19 内核 ＋ 载体自有 13：小说七把（含工单B1/B2/A）＋ 设定五把（pinax_worldbook_save 工单A2、约束这对工单E2）＋ 资料三把（工单G1）')
+    assert.equal(runtime.listTools().length, 33, '19 内核 ＋ 载体自有 14：小说七把（含工单B1/B2/A）＋ 设定五把（pinax_worldbook_save 工单A2、约束这对工单E2）＋ 资料三把（工单G1）＋ pinax_reference_search（工单H2）')
     assert.equal(runtime.ownerOf('pinax_worldbook_list'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_save'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_write'), 'kernel', '内核那份写工具照旧不认领，写族闸点名走自有 save')
@@ -90,9 +90,9 @@ test('启用设定＋资料后：世界书工具归属载体，写世界书走�
     assert.equal(runtime.ownerOf('pinax_document_list'), REFERENCE_CARRIER_ID, '工单G1：资料板块同时启用时，资料工具归它')
 
     const report = toolOwnershipReport(registry)
-    assert.equal(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2（资料三把是自有名字，不在其中）')
+    assert.equal(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2（资料四把是自有名字，不在其中）')
     assert.equal(report.unclaimed.length, 14)
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save'], '工单A2/B1/B2/A/E2/G1：十三把自有写/列/审阅工具（断言同步）')
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'], '工单A2/B1/B2/A/E2/G1/H2：十四把自有写/列/审阅/检索工具（断言同步）')
     assert.deepEqual(report.withoutImplementation, [], '声明了就必须有实现，否则不许进面')
   } finally {
     await runtime.stop()

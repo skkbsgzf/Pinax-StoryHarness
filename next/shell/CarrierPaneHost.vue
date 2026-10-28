@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 /**
  * 核心区里的载体面板：正文的编辑面、构思速记的编辑面（工单B1）、条目的阅读与编辑面（工单A2 起条目可改）、
@@ -8,6 +8,9 @@ import { computed, ref } from 'vue'
  * 数据不在这里自己取——索引窗与核心区共用 useBoardData 的同一份对象，
  * 所以「索引窗列着第 1 版、正文存成了第 2 版」这种不同步不会发生。
  * 认不出的 pane id 不空白、不假装能编辑：如实说这块视图还没实现。
+ *
+ * 保存交互（工单H1，对齐老版）：没有常驻保存按钮——Ctrl+S／Cmd+S 触发（编辑器聚焦时生效），
+ * 结果只落在编辑面头部一枚自动消失的保存 chip 上（复刻 wall__save-chip 的度量）。
  */
 const props = defineProps({
   pane: { type: Object, default: null },
@@ -42,24 +45,149 @@ function stampOf(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
-/** 新建构思输入（工单B1）：照索引窗「新章标题」的形态，速记是随手记，行常驻在面板尾部。 */
-const newNoteTitle = ref('')
+/**
+ * 资料板检索（工单H2）：输入在面板头部，结果只走 knowledge:search 通道（主进程 knowledgeService，
+ * worker 线程、零 HTTP）。命中若指向「资料/」下的文件，点击回到 pinax_document_read 打开原文；
+ * 否则只展示片段（知识库卡／归档片段没有可直接打开的原文）。
+ */
+const knowledgeQuery = ref('')
 
-async function createNote() {
-  const title = newNoteTitle.value.trim()
-  if (!title) return
-  newNoteTitle.value = ''
-  await props.data.createNote(title)
+const knowledgeEmptyText = computed(() => {
+  const error = props.data.knowledgeError
+  if (error) {
+    if (error.code === 'KNOWLEDGE_RUNTIME_MISSING') return '知识内核未安装'
+    if (error.code === 'KNOWLEDGE_BUSY') return '知识服务忙'
+    return `检索失败：${error.message ?? '未知错误'}`
+  }
+  if (!props.data.knowledgeSearched) return ''
+  return props.data.knowledgeResults?.length ? '' : '没有命中'
+})
+
+/** readRef 指向 资料/ 下的 .md/.txt 才是可打开的原文；知识库卡与归档片段只展示。
+ *  实测内核给项目卡片的 readRef 是编译产物 cards/…，原文路径在 provenance.path（如 资料/设定集.md）；
+ *  两个都看：readRef 优先，退回 provenance.path，仍不是资料文本就只展示片段。 */
+function knowledgeHitFile(hit) {
+  for (const value of [hit?.readRef, hit?.provenance?.path]) {
+    const reference = String(value ?? '').replaceAll('\\', '/')
+    if (reference.startsWith('资料/') && /\.(?:md|txt)$/iu.test(reference)) return reference
+  }
+  return null
 }
 
-/** 新建约束输入（工单E2）：照「新构思标题」的形态，约束也是短文本，行常驻在设定面板尾部。 */
-const newRuleTitle = ref('')
+async function runKnowledgeSearch() {
+  if (props.data.knowledgeSearching) return
+  const query = knowledgeQuery.value.trim()
+  if (!query) return
+  await props.data.searchKnowledge?.(query)
+}
 
-async function createRule() {
-  const title = newRuleTitle.value.trim()
-  if (!title) return
-  newRuleTitle.value = ''
-  await props.data.createRule(title)
+async function openKnowledgeHit(hit) {
+  const file = knowledgeHitFile(hit)
+  if (!file) return
+  await props.data.openDocument({ file, title: hit.title ?? file })
+}
+
+/**
+ * 保存 chip（工单H1）：只认 useBoardData.saveFeedback 这一格。
+ * 四个编辑面共用同一条反馈状态，但每块面只显示自己 target 的那一条；
+ * saved 2.5 秒后收起，saving／error 常驻（失败带重试，STALE 换成重新载入）。
+ */
+const SAVE_TARGET_BY_VIEW = {
+  'chapter-editor': 'chapter',
+  'notes-editor': 'note',
+  'rule-editor': 'rule',
+  'document-detail': 'document'
+}
+const chipVisible = ref(false)
+let chipTimer = null
+
+const saveChip = computed(() => {
+  const feedback = props.data.saveFeedback
+  if (!feedback) return null
+  return SAVE_TARGET_BY_VIEW[viewKind.value] === feedback.target ? feedback : null
+})
+const saveChipStale = computed(() => saveChip.value?.code === 'PINAX_STALE_REVISION')
+const saveChipText = computed(() => {
+  const chip = saveChip.value
+  if (!chip) return ''
+  if (chip.status === 'saving') return '保存中…'
+  if (chip.status === 'saved') return `已保存 · 第 ${chip.revision} 版`
+  return saveChipStale.value ? '保存失败 · 版本冲突' : '保存失败'
+})
+
+watch(() => props.data.saveFeedback, (feedback) => {
+  if (chipTimer) {
+    clearTimeout(chipTimer)
+    chipTimer = null
+  }
+  if (!feedback) {
+    chipVisible.value = false
+    return
+  }
+  chipVisible.value = true
+  if (feedback.status === 'saved') {
+    chipTimer = setTimeout(() => {
+      chipVisible.value = false
+      chipTimer = null
+    }, 2500)
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (chipTimer) clearTimeout(chipTimer)
+})
+
+/** 编辑器聚焦时的 Ctrl+S／Cmd+S：只认编辑区里的事件，别处按快捷键不抢。 */
+function onPaneKeydown(event) {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+  if (String(event.key ?? '').toLowerCase() !== 's') return
+  // 只认真正的编辑器（textarea／大纲标题输入框）：提案的 pre 也挂 .editor-area，不能当编辑区。
+  if (!event.target?.matches?.('textarea.editor-area, input.outline-title')) return
+  event.preventDefault()
+  void saveCurrent()
+}
+
+function saveCurrent() {
+  switch (viewKind.value) {
+    case 'chapter-editor': return props.data.save()
+    case 'notes-editor': return props.data.saveNote()
+    case 'outline-editor': return props.data.saveOutline()
+    case 'rule-editor': return props.data.saveRule()
+    case 'document-detail': return props.data.saveDocument()
+    case 'entry-detail': return props.data.editingEntry ? props.data.saveEntry() : undefined
+    default: return undefined
+  }
+}
+
+/** 失败 chip 的「重试」：同一份草稿再走一次保存（修订号仍是读到的那一版）。 */
+function retrySaveFromChip() {
+  void saveCurrent()
+}
+
+/** STALE 的「重新载入」：丢弃本稿、按磁盘重读当前文档（文案在 chip 里说明会丢弃未保存修改）。
+ *  速记与约束的正文随 list 工具一起回来，所以先重列再打开——不能拿手里这份旧 item 当磁盘。 */
+async function reloadFromChip() {
+  const target = saveChip.value?.target
+  if (target === 'chapter' && props.data.chapter) {
+    await props.data.openChapter(props.data.chapter)
+    return
+  }
+  if (target === 'note') {
+    await props.data.loadNotes()
+    if (props.data.note) props.data.openNote(props.data.note)
+    return
+  }
+  if (target === 'rule') {
+    await props.data.loadRules()
+    if (props.data.rule) props.data.openRule(props.data.rule)
+    return
+  }
+  if (target === 'document' && props.data.document) await props.data.openDocument(props.data.document)
+}
+
+function actOnSaveChip() {
+  if (saveChipStale.value) void reloadFromChip()
+  else retrySaveFromChip()
 }
 </script>
 
@@ -68,17 +196,24 @@ async function createRule() {
     <p>没有已启用的中栏面板。竖条、索引窗和右栏对话照常可用。</p>
   </div>
 
-  <div v-else class="pane" :data-pane-id="pane.id">
+  <div v-else class="pane" :data-pane-id="pane.id" @keydown="onPaneKeydown">
     <div v-if="data.error" class="pane-error">{{ data.error }}</div>
     <div v-if="data.notice" class="pane-notice">{{ data.notice }}</div>
 
     <template v-if="viewKind === 'chapter-editor'">
       <div v-if="data.chapter" class="editor">
-        <div class="editor-head">
+        <div class="editor-head nx-pane-header">
           <h4 class="pane-sub">{{ data.chapter.title }}</h4>
           <span class="editor-meta">
             {{ data.chapter.file }} · 第 {{ data.chapter.revision }} 版 · {{ data.chapter.totalChars }} 字
             <em v-if="data.chapter.truncated">（当前只载入前段）</em>
+          </span>
+          <span v-if="chipVisible && saveChip" class="nx-pane-actions">
+            <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
           </span>
         </div>
         <textarea
@@ -88,11 +223,6 @@ async function createRule() {
           aria-label="正文编辑器"
           @input="data.setDraft($event.target.value)"
         />
-        <div class="editor-foot">
-          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.draft" @click="data.save()">
-            {{ data.busy ? '写入中…' : `保存为第 ${(data.chapter?.revision ?? 0) + 1} 版` }}
-          </button>
-        </div>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一章，或在那里新建一章。</p>
     </template>
@@ -101,11 +231,18 @@ async function createRule() {
          保存走载体自有的 pinax_notes_save（带修订号，冲突如实摊开）。 -->
     <template v-else-if="viewKind === 'notes-editor'">
       <div v-if="data.note" class="editor">
-        <div class="editor-head">
+        <div class="editor-head nx-pane-header">
           <h4 class="pane-sub">{{ data.note.title }}</h4>
           <span class="editor-meta">
             {{ data.note.file }} · 第 {{ data.note.revision }} 版 · {{ data.note.totalChars }} 字
             <em v-if="data.note.truncated">（当前只载入前段）</em>
+          </span>
+          <span v-if="chipVisible && saveChip" class="nx-pane-actions">
+            <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
           </span>
         </div>
         <textarea
@@ -115,20 +252,15 @@ async function createRule() {
           aria-label="构思编辑器"
           @input="data.setNoteDraft($event.target.value)"
         />
-        <div class="editor-foot">
-          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.noteDraft" @click="data.saveNote()">
-            {{ data.busy ? '写入中…' : `保存为第 ${(data.note?.revision ?? 0) + 1} 版` }}
-          </button>
-        </div>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇构思，或在下面新建一篇。</p>
+      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇构思，或用索引窗「构思」区的 ＋ 新建一篇。</p>
     </template>
 
     <!-- 大纲编辑面（工单B2）：改名与加节点都先落在整份草稿上，按保存才走 pinax_outline_save 整份覆盖。
          改名选中「中栏改名」这一实现（比行内编辑省一套焦点管理）；不提供拖拽重排。 -->
     <template v-else-if="viewKind === 'outline-editor'">
       <div v-if="data.outlineDraft" class="editor">
-        <div class="editor-head">
+        <div class="editor-head nx-pane-header">
           <h4 class="pane-sub">大纲 · {{ data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? '节点' }}</h4>
           <span class="editor-meta">大纲/outline.json · 第 {{ data.outlineRevision ?? 0 }} 版 · 共 {{ data.outlineDraft.nodes.length }} 个节点</span>
         </div>
@@ -142,8 +274,9 @@ async function createRule() {
         <div class="editor-foot">
           <button type="button" class="control-secondary" @click="data.addOutlineNode('sibling')">在后面加同级节点</button>
           <button type="button" class="control-secondary" @click="data.addOutlineNode('child')">加子节点</button>
+          <!-- P3：版本号不进按钮文案——版本在头部 meta 与历史面板看。 -->
           <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy" @click="data.saveOutline()">
-            {{ data.busy ? '写入中…' : `保存为第 ${(data.outlineRevision ?? 0) + 1} 版` }}
+            {{ data.busy ? '写入中…' : '保存' }}
           </button>
         </div>
         <p class="pane-hint">大纲按整份覆盖保存：改名与新增先记在草稿上，按保存才写 大纲/outline.json；层级关系记在连线上。</p>
@@ -156,7 +289,7 @@ async function createRule() {
          采纳＝按此刻的章节修订号走载体 save（写入为新一版），弃用＝删提案文件；两者都不静默合并。 -->
     <template v-else-if="viewKind === 'proposal-review'">
       <div v-if="data.proposal" class="editor proposal-review">
-        <div class="editor-head">
+        <div class="editor-head nx-pane-header">
           <h4 class="pane-sub">提案 · {{ data.proposal.target?.title ?? data.proposal.name }}</h4>
           <span class="editor-meta">
             {{ data.proposal.target?.file ?? '（没有目标章）' }} · {{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字 · {{ stampOf(data.proposal.createdAt) }}
@@ -195,30 +328,22 @@ async function createRule() {
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「提案」区选一条。</p>
     </template>
 
-    <!-- 新建构思输入（工单B1）：照索引窗「新章标题」的形态。速记讲的是随手记，
-         所以这一行常驻在小说面板尾部——还没有任何一篇构思时，第一篇也从这里起头。 -->
-    <template v-if="viewKind === 'chapter-editor' || viewKind === 'notes-editor'">
-      <div class="nx-index-new notes-new">
-        <input
-          v-model="newNoteTitle"
-          class="nx-field is-tiny"
-          placeholder="新构思标题"
-          aria-label="新构思标题"
-          @keydown.enter.prevent="createNote"
-        >
-        <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newNoteTitle.trim()" @click="createNote">新建构思</button>
-      </div>
-    </template>
-
     <!-- 约束编辑面（工单E2）：照构思速记的同一形态。正文来自 pinax_rule_list 的随手带回，
          保存走载体自有的 pinax_rule_save（带修订号，冲突如实摊开）。 -->
     <template v-else-if="viewKind === 'rule-editor'">
       <div v-if="data.rule" class="editor">
-        <div class="editor-head">
+        <div class="editor-head nx-pane-header">
           <h4 class="pane-sub">{{ data.rule.title }}</h4>
           <span class="editor-meta">
             {{ data.rule.file }} · 第 {{ data.rule.revision }} 版 · {{ data.rule.totalChars }} 字
             <em v-if="data.rule.truncated">（当前只载入前段）</em>
+          </span>
+          <span v-if="chipVisible && saveChip" class="nx-pane-actions">
+            <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
           </span>
         </div>
         <textarea
@@ -228,31 +353,18 @@ async function createRule() {
           aria-label="约束编辑器"
           @input="data.setRuleDraft($event.target.value)"
         />
-        <div class="editor-foot">
-          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.ruleDraft" @click="data.saveRule()">
-            {{ data.busy ? '写入中…' : `保存为第 ${(data.rule?.revision ?? 0) + 1} 版` }}
-          </button>
-        </div>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「约束」区选一份约束，或在下面新建一份。</p>
-      <div class="nx-index-new notes-new">
-        <input
-          v-model="newRuleTitle"
-          class="nx-field is-tiny"
-          placeholder="新约束标题"
-          aria-label="新约束标题"
-          @keydown.enter.prevent="createRule"
-        >
-        <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newRuleTitle.trim()" @click="createRule">新建约束</button>
-      </div>
+      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「约束」区选一份约束，或用那里的 ＋ 新建一份。</p>
     </template>
 
     <template v-else-if="viewKind === 'entry-detail'">
       <div v-if="data.entry" class="entry-body">
-        <div class="entry-head">
+        <div class="entry-head nx-pane-header">
           <h4 class="pane-sub">{{ data.entry.name }}</h4>
           <span class="entry-meta">{{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="!data.entry.contract">（未建档）</template></span>
-          <button v-if="!data.editingEntry" type="button" class="control-secondary entry-edit" @click="data.editEntry()">编辑</button>
+          <span v-if="!data.editingEntry" class="nx-pane-actions">
+            <button type="button" class="control-secondary entry-edit" @click="data.editEntry()">编辑</button>
+          </span>
         </div>
         <textarea
           v-if="data.editingEntry"
@@ -265,7 +377,7 @@ async function createRule() {
         <pre v-else class="entry-text">{{ data.entry.content }}</pre>
         <div v-if="data.editingEntry" class="editor-foot">
           <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.entryDraft" @click="data.saveEntry()">
-            {{ data.busy ? '写入中…' : '保存为新版本' }}
+            {{ data.busy ? '写入中…' : '保存' }}
           </button>
           <button type="button" class="control-quiet entry-cancel" :disabled="data.busy" @click="data.cancelEditEntry()">取消</button>
         </div>
@@ -278,15 +390,55 @@ async function createRule() {
       </ul>
     </template>
 
-    <!-- 资料（工单G1）：阅读态＝元信息＋pre 正文，编辑态＝textarea ＋ 保存／取消。
+    <!-- 资料（工单G1）：阅读态＝元信息＋pre 正文，编辑态＝textarea（Ctrl+S 保存）＋取消。
          读的是 pinax_document_read 的全文（列表那份最多 20000 字，不能当编辑底稿）；
          保存走载体自有的 pinax_document_save，带读到的修订号，冲突如实摊开。 -->
     <template v-else-if="viewKind === 'document-detail'">
+      <!-- 资料板检索（工单H2）：头部输入＋结果列表；三种空态分开说（未装内核／服务忙／无命中）。 -->
+      <section class="reference-search">
+        <form class="reference-search-row" @submit.prevent="runKnowledgeSearch">
+          <input
+            v-model="knowledgeQuery"
+            class="nx-field is-tiny reference-search-input"
+            placeholder="在资料里检索…"
+            aria-label="资料检索"
+            spellcheck="false"
+            @keydown.enter.prevent="runKnowledgeSearch"
+            @keydown.esc.prevent="data.clearKnowledgeSearch?.()"
+          >
+          <button type="submit" class="control-secondary reference-search-submit" :disabled="data.knowledgeSearching || !knowledgeQuery.trim()">
+            {{ data.knowledgeSearching ? '检索中…' : '检索' }}
+          </button>
+        </form>
+        <p v-if="data.knowledgeSearching" class="pane-hint reference-search-state">检索中…</p>
+        <p v-else-if="knowledgeEmptyText" class="pane-hint reference-search-state">{{ knowledgeEmptyText }}</p>
+        <ul v-if="!data.knowledgeSearching && data.knowledgeResults?.length" class="reference-search-results">
+          <li v-for="(hit, index) in data.knowledgeResults" :key="hit.id ?? hit.readRef ?? index">
+            <button v-if="knowledgeHitFile(hit)" type="button" class="nx-row reference-search-hit" @click="openKnowledgeHit(hit)">
+              <span class="reference-search-hit-title">{{ hit.title ?? hit.file }}</span>
+              <span v-if="hit.readRef" class="reference-search-hit-meta">{{ hit.provenance?.path ?? hit.readRef }}</span>
+              <span class="reference-search-hit-excerpt">{{ hit.excerpt ?? '' }}</span>
+            </button>
+            <div v-else class="reference-search-hit is-static">
+              <span class="reference-search-hit-title">{{ hit.title ?? hit.file }}</span>
+              <span v-if="hit.readRef" class="reference-search-hit-meta">{{ hit.provenance?.path ?? hit.readRef }}</span>
+              <span class="reference-search-hit-excerpt">{{ hit.excerpt ?? '' }}</span>
+            </div>
+          </li>
+        </ul>
+      </section>
       <div v-if="data.document" class="entry-body">
-        <div class="entry-head">
+        <div class="entry-head nx-pane-header">
           <h4 class="pane-sub">{{ data.document.title }}</h4>
           <span class="entry-meta">{{ data.document.file }} · 第 {{ data.document.revision }} 版 · {{ data.document.totalChars }} 字</span>
-          <button v-if="!data.editingDocument" type="button" class="control-secondary document-edit" @click="data.editDocument()">编辑</button>
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!data.editingDocument" type="button" class="control-secondary document-edit" @click="data.editDocument()">编辑</button>
+          </span>
         </div>
         <textarea
           v-if="data.editingDocument"
@@ -298,9 +450,6 @@ async function createRule() {
         />
         <pre v-else class="entry-text" aria-label="资料正文">{{ data.document.text }}</pre>
         <div v-if="data.editingDocument" class="editor-foot">
-          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.documentDraft" @click="data.saveDocument()">
-            {{ data.busy ? '写入中…' : `保存为第 ${(data.document?.revision ?? 0) + 1} 版` }}
-          </button>
           <button type="button" class="control-quiet document-cancel" :disabled="data.busy" @click="data.cancelEditDocument()">取消</button>
         </div>
         <p v-if="data.document.truncated" class="pane-notice">
@@ -355,5 +504,139 @@ async function createRule() {
   overflow: auto;
   white-space: pre-wrap;
   font-size: var(--nx-fs-lg);
+}
+
+/* 资料板检索（工单H2）：一条输入行＋结果列表；命中行仍是 .nx-row，静态片段不假装可点。 */
+.reference-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-muted);
+}
+.reference-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reference-search-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+.reference-search-submit {
+  flex: none;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: var(--nx-fs-md);
+}
+.reference-search-state {
+  font-size: var(--nx-fs-2xs);
+}
+.reference-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+.reference-search-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 0;
+  padding: 6px 10px;
+  text-align: left;
+}
+.reference-search-hit.is-static {
+  cursor: default;
+  color: var(--text-muted);
+}
+.reference-search-hit-title {
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink);
+}
+.reference-search-hit-meta {
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.reference-search-hit-excerpt {
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+</style>
+
+<style scoped>
+/* legacy-copied：保存 chip 的度量逐条抄自老版的 wall__save-chip。
+   基准在 src/pages/Writing.scoped.css:213-250（src/pages/Authoring.vue:12-17 引用的就是这一枚；
+   样式实际住在 Writing.scoped.css，不在 Authoring.vue 的 SFC 里）。
+   只换数据源：老版读 saveStatus，这里读 useBoardData.saveFeedback；视觉不另起一套。
+   颜色一律走 token；11px 字号／12px 圆角是老版原件的度量，本块按门禁的 legacy-copied 例外保留。 */
+.nx-save-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--archive-olive);
+  background: color-mix(in srgb, var(--bg-secondary) 70%, var(--archive-olive) 8%);
+  font-size: 11px;
+  color: var(--text-primary);
+  box-shadow:
+    inset 0 1px 0 var(--surface-workbench-raised),
+    inset 0 -1px 0 color-mix(in srgb, var(--archive-olive) 20%, transparent),
+    0 1px 2px color-mix(in srgb, var(--text-primary) 18%, transparent);
+  white-space: nowrap;
+}
+.nx-save-chip.is-saving {
+  border-style: dashed;
+  opacity: 0.85;
+}
+.nx-save-chip.is-saved {
+  border-color: color-mix(in srgb, var(--archive-olive) 60%, transparent);
+  background: color-mix(in srgb, var(--archive-olive) 14%, var(--bg-secondary));
+  /* 2.5 秒收起的最后 200ms 淡出（界面在 2.5s 整摘掉节点）。 */
+  animation: nx-save-chip-out 200ms ease 2300ms forwards;
+}
+@keyframes nx-save-chip-out {
+  to { opacity: 0; }
+}
+.nx-save-chip.is-error {
+  border-color: var(--archive-rose);
+  background: color-mix(in srgb, var(--archive-rose) 12%, var(--bg-secondary));
+  color: var(--archive-rose);
+}
+.nx-save-chip-state {
+  font-family: var(--font-display);
+  font-weight: 500;
+  color: var(--archive-olive);
+}
+.nx-save-chip.is-error .nx-save-chip-state {
+  color: var(--archive-rose);
+  font-weight: 600;
+}
+/* 失败常驻时的动作：chip 里的小钮，不另占一条自救条。 */
+.nx-save-chip-action {
+  width: auto;
+  min-height: 0;
+  padding: 0 6px;
+  line-height: 1.6;
+  font-size: var(--nx-fs-2xs);
+  color: inherit;
+}
+.nx-save-chip-hint {
+  font-size: var(--nx-fs-2xs);
+  color: color-mix(in srgb, var(--archive-rose) 82%, var(--archive-ink));
 }
 </style>

@@ -904,8 +904,12 @@ describe('文档历史面板（D2 · R3-3）', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
+    // 工单H1：行尾是一枚 14px 图标钮（不再用「历史…」文字占一行），aria-label 仍点名是哪一篇。
     const historyAction = wrapper.find('.nx-index-window .nx-index-history')
     expect(historyAction.exists()).toBe(true)
+    expect(historyAction.text()).toBe('')
+    expect(historyAction.find('svg').exists()).toBe(true)
+    expect(historyAction.attributes('aria-label')).toBe('「雨夜」的历史')
     await historyAction.trigger('click')
     await flushPromises()
 
@@ -1000,14 +1004,14 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 页内菜单行不是第二份清单：顶层标签就是 MENU_TEMPLATE 的那七个。
+    // 页内菜单行不是第二份清单：顶层标签就是 MENU_TEMPLATE 的那四个（工单A 精简后）。
     expect(wrapper.findAll('.nx-menu-trigger').map((node) => node.text()))
-      .toEqual(['文件', '编辑', '视图', '运行时', '窗口', '设置', '帮助'])
+      .toEqual(['项目', '编辑', '设置', '帮助'])
 
-    await wrapper.find('[data-menu="文件"]').trigger('click')
+    await wrapper.find('[data-menu="项目"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('.nx-menu-popup').exists()).toBe(true)
-    expect(wrapper.find('[data-menu="文件"]').attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('[data-menu="项目"]').attributes('aria-expanded')).toBe('true')
 
     // 打开项目文件夹…：走 menuInvoke 分发，同时选目录→projectOpen→refresh 一条链落完。
     const viewCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length
@@ -1038,16 +1042,36 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     wrapper.unmount()
   })
 
-  it('页内菜单的只读角色项是禁用态：撤销/复制这类项没有 IPC id，不假装点了有用', async () => {
-    const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
-    await flushPromises()
-    await wrapper.find('[data-menu="编辑"]').trigger('click')
+  it('编辑组的项都有 id、页内点得动；帮助组里从视图迁来的 role 项仍是禁用行', async () => {
+    const bridge = stubBridge(carrierView())
+    const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    const rows = wrapper.findAll('.nx-menu-popup .nx-menu-item')
-    expect(rows.length).toBeGreaterThan(0)
-    expect(rows.every((row) => row.attributes('disabled') !== undefined)).toBe(true)
-    expect(rows[0].text()).toContain('撤销')
+    // 工单A：编辑组补 id 后，页内菜单行不再把撤销/剪贴板画成禁用行——点了走 menuInvoke
+    // （主进程落到当前窗口 webContents 的编辑命令）。
+    await wrapper.find('[data-menu="编辑"]').trigger('click')
+    await flushPromises()
+    const editRows = wrapper.findAll('.nx-menu-popup .nx-menu-item')
+    expect(editRows).toHaveLength(6)
+    expect(editRows.every((row) => row.attributes('disabled') === undefined)).toBe(true)
+    expect(editRows.map((row) => row.attributes('data-menu-id'))).toEqual([
+      'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.selectAll'
+    ])
+    await wrapper.find('[data-menu-id="edit.undo"]').trigger('click')
+    await flushPromises()
+    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'edit.undo' })
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+
+    // 帮助组里从视图组迁来的「开发者工具/重载」是 role 项（没有 id）：原生菜单与快捷键提供，
+    // 页内仍渲染成禁用行，不假装点了有用。
+    await wrapper.find('[data-menu="帮助"]').trigger('click')
+    await flushPromises()
+    const helpRows = wrapper.findAll('.nx-menu-popup .nx-menu-item')
+    expect(helpRows).toHaveLength(4)
+    const roleRows = helpRows.filter((row) => row.attributes('data-menu-id') === undefined)
+    expect(roleRows).toHaveLength(2)
+    expect(roleRows.every((row) => row.attributes('disabled') !== undefined)).toBe(true)
+    expect(roleRows.map((row) => row.text())).toEqual(['开发者工具', '重载'])
     wrapper.unmount()
   })
 })
@@ -1254,6 +1278,81 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await wrapper.find('.workbench-modal').trigger('click')
     await flushPromises()
     expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('设置目录按组渲染（工单B）：应用／项目／文档三组标题存在，节序按归组走', async () => {
+    const handlers = new Map()
+    const bridge = modalBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
+    await flushPromises()
+
+    // 组标题来自各节的 group 字段（AppNext.settingsSections），不是写死在弹窗里的第二份清单。
+    const labels = wrapper.findAll('.settings-group-label').map((node) => node.text())
+    expect(labels.slice(0, 3)).toEqual(['应用', '项目', '文档'])
+
+    // 静态七节按组序排列：应用（偏好与模型/备份与恢复）→ 项目（载体管理/导入既有稿/新建项目/主载体选择）→ 文档（文档历史）。
+    const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
+    expect(tabs.slice(0, 7)).toEqual(['偏好与模型', '备份与恢复', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
+    wrapper.unmount()
+  })
+
+  it('目录搜索（工单B）：标题与已知描述浅匹配，输入后只剩匹配项；无命中显示「无匹配设置」', async () => {
+    const handlers = new Map()
+    const bridge = modalBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    const search = wrapper.find('[data-test="settings-search"]')
+    expect(search.exists()).toBe(true)
+
+    // 标题命中「备份」：目录只剩备份与恢复，分组标题也只剩「应用」。
+    await search.setValue('备份')
+    await flushPromises()
+    expect(wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())).toEqual(['备份与恢复'])
+    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toEqual(['应用'])
+    // 搜索只过滤目录，不把右栏当前节换掉。
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
+
+    // 说明字段的浅匹配（keywords 来自各节的标题/描述）：搜「历史仓」也命中备份与恢复。
+    await search.setValue('历史仓')
+    await flushPromises()
+    expect(wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())).toEqual(['备份与恢复'])
+
+    await search.setValue('不存在的设置项')
+    await flushPromises()
+    expect(wrapper.findAll('.settings-navigation .settings-tab')).toHaveLength(0)
+    expect(wrapper.find('[data-test="settings-empty"]').text()).toBe('无匹配设置')
+
+    // 清空：目录恢复（静态七节在前，载体占位节在后）。
+    await search.setValue('')
+    await flushPromises()
+    const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
+    expect(tabs.slice(0, 7)).toEqual(['偏好与模型', '备份与恢复', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
+    wrapper.unmount()
+  })
+
+  it('载体设置占位节（协议 P14 第一步）：每块载体在「载体」组占一格，点开是空态说明', async () => {
+    const handlers = new Map()
+    const bridge = modalBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toContain('载体')
+    const carrierTab = wrapper.findAll('.settings-navigation .settings-tab')
+      .find((node) => node.text() === '小说（夹具） 设置')
+    expect(carrierTab).toBeTruthy()
+
+    await carrierTab.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="carrier-settings-empty"]').text()).toBe('该载体的设置项还没有内容')
     wrapper.unmount()
   })
 })

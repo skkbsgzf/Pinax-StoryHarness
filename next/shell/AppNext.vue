@@ -29,7 +29,8 @@ import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs
  *   - 设置（工单C0 · U13）：偏好／载体管理／新建项目／主载体选择一律收进
  *     SettingsModal 这一枚统一的二级页面（左栏目录＋右栏设置项）；
  *     E1 导入既有稿、G2 备份与恢复也登记在这张目录里；
- *     D2 起「文档」组再收一节「文档历史」（快照列表／diff／恢复）。
+ *     D2 起「文档」组再收一节「文档历史」（快照列表／diff／恢复）；
+ *     工单B 起目录按「应用／项目／文档」分组并带搜索，载体设置占位节归「载体」组。
  *     核心区不再内嵌任何配置 section 与按钮，目录之外的弹窗不允许存在。
  *
  * 不引 vue-router、不引 Pinia、不 import src/ 的页面——零插件时外壳仍要能起来（M1 判据）。
@@ -117,17 +118,26 @@ const historyTarget = computed(() => {
 const settingsOpen = ref(false)
 const activeSection = ref('prefs')
 
-/** 目录表：两组，设置六节＋文档历史（D2/G2）。未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
+/**
+ * 目录表（工单B · 作者裁定：参照 Obsidian 设置页）。
+ * 三组：「应用」不随项目走的偏好与整目录搬运；「项目」对当前项目的载体/结构动作；「文档」文档历史。
+ * keywords 是各节标题/说明字段的浅匹配摘要——只给目录搜索用（SettingsModal 不读渲染文本，v1 不做全文深搜）。
+ * 载体设置占位节不在这张表里：SettingsModal 从 view.carriers 动态补「载体」组（协议 P14 第一步）。
+ * 未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。
+ */
 const settingsSections = computed(() => [
-  { id: 'prefs', title: '偏好与模型', group: '设置', component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
-  { id: 'carriers', title: '载体管理', group: '设置', component: CarriersSection, props: { carriers: carriers.value } },
-  { id: 'newProject', title: '新建项目', group: '设置', component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
-  // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
-  { id: 'import', title: '导入既有稿', group: '设置', component: ImportSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
+  // 应用
+  { id: 'prefs', title: '偏好与模型', group: '应用', keywords: ['外观主题', '模型面端点', '界面缩放', '应用级偏好', '明暗'], component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
   // 工单G2：备份与恢复（整目录复制，零新依赖）。导出/恢复都是主进程的结构动作，与导入同级。
-  { id: 'backup', title: '备份与恢复', group: '设置', component: BackupSection, props: { bridge: props.bridge, project: project.value } },
-  { id: 'primary', title: '主载体选择', group: '设置', component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } },
-  { id: 'history', title: '文档历史', group: '文档', component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } }
+  { id: 'backup', title: '备份与恢复', group: '应用', keywords: ['导出备份', '从备份恢复', '历史仓', '复制'], component: BackupSection, props: { bridge: props.bridge, project: project.value } },
+  // 项目
+  { id: 'carriers', title: '载体管理', group: '项目', keywords: ['板块', '载体', '启用', '停用', '主载体', '权限', '数据目录'], component: CarriersSection, props: { carriers: carriers.value } },
+  // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
+  { id: 'import', title: '导入既有稿', group: '项目', keywords: ['带稿上车', '稿子目录', '项目位置', '导入计划', '原文件只新增不修改'], component: ImportSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
+  { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹'], component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
+  { id: 'primary', title: '主载体选择', group: '项目', keywords: ['这个项目要创作什么', '创作小说还是剧本'], component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } },
+  // 文档
+  { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } }
 ])
 
 function openSection(id) {
@@ -659,12 +669,14 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- —— 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项 ——————————
-           四节都登记在上面的目录表里；D1 硬闸（needsPrimary）时自动落在主载体节且不可关闭。 -->
+           各节都登记在上面的目录表里（工单B 起按「应用／项目／文档」分组，载体占位节由弹窗补）；
+           D1 硬闸（needsPrimary）时自动落在主载体节且不可关闭。 -->
       <SettingsModal
         :open="settingsOpen"
         :dismissable="!needsPrimary"
         :active-section="activeSection"
         :sections="settingsSections"
+        :carriers="carriers"
         @close="closeSettings"
         @changed="refresh"
         @theme="applyThemeChoice"

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchTooltip.js'
 
@@ -87,11 +87,73 @@ async function createDocument() {
   await props.data.createDocument(title)
 }
 
+/**
+ * 构思／约束的新建入口（工单H1）：面板尾部那行常驻输入收进对应区标题行右侧的「＋」。
+ * 点开才在区顶出现输入行（照「新章标题」的 .nx-index-new 形态）：失焦／Enter 提交，Esc 收起。
+ * 还没有条目时也能新建——入口常驻在区标题上，不靠空态里的按钮。
+ */
+const newNoteOpen = ref(false)
+const newNoteTitle = ref('')
+const newNoteInput = ref(null)
+const newRuleOpen = ref(false)
+const newRuleTitle = ref('')
+const newRuleInput = ref(null)
+
+async function toggleNewNote() {
+  if (newNoteOpen.value) {
+    // 输入行开着时再点「＋」＝提交（mousedown.prevent 挡住 blur，避免先提交再重开）。
+    await submitNewNote()
+    return
+  }
+  newNoteOpen.value = true
+  newNoteTitle.value = ''
+  await nextTick()
+  newNoteInput.value?.focus()
+}
+
+function closeNewNote() {
+  newNoteOpen.value = false
+  newNoteTitle.value = ''
+}
+
+async function submitNewNote() {
+  const title = newNoteTitle.value.trim()
+  closeNewNote()
+  if (!title) return
+  await props.data.createNote(title)
+}
+
+async function toggleNewRule() {
+  if (newRuleOpen.value) {
+    // 输入行开着时再点「＋」＝提交（mousedown.prevent 挡住 blur，避免先提交再重开）。
+    await submitNewRule()
+    return
+  }
+  newRuleOpen.value = true
+  newRuleTitle.value = ''
+  await nextTick()
+  newRuleInput.value?.focus()
+}
+
+function closeNewRule() {
+  newRuleOpen.value = false
+  newRuleTitle.value = ''
+}
+
+async function submitNewRule() {
+  const title = newRuleTitle.value.trim()
+  closeNewRule()
+  if (!title) return
+  await props.data.createRule(title)
+}
+
 // 换板＝换树：目录窗自己负责把这一板的东西列出来（核心区不替它列）。
 // 大纲随章节一起取（工单A3）：同属小说板块的索引窗，一次换板三棵树都是新的。
 // 构思速记（工单B1）也在这一拍里列出来；它刻意不自动打开，正文仍是核心区的主角。
 watch(() => props.board?.id, () => {
   newTitle.value = ''
+  closeNewNote()
+  closeNewRule()
   if (treeKind.value === 'chapters') {
     void props.data.loadChapters()
     void props.data.loadOutline()
@@ -147,10 +209,13 @@ watch(() => props.board?.id, () => {
             </button>
             <button
               type="button"
-              class="nx-row nx-index-history"
+              class="nx-row nx-index-icon-btn nx-index-history"
               :aria-label="`「${item.title}」的历史`"
+              v-workbench-tooltip="{ text: '历史', side: 'left' }"
               @click.stop="emit('history', { type: 'chapter', item })"
-            >历史…</button>
+            >
+              <WorkbenchIcon name="history" :size="14" />
+            </button>
           </li>
         </ul>
         <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
@@ -200,10 +265,13 @@ watch(() => props.board?.id, () => {
             </button>
             <button
               type="button"
-              class="nx-row nx-index-history"
+              class="nx-row nx-index-icon-btn nx-index-history"
               :aria-label="`大纲「${node.title}」节点的历史`"
+              v-workbench-tooltip="{ text: '历史', side: 'left' }"
               @click.stop="emit('history', { type: 'outline', index })"
-            >历史…</button>
+            >
+              <WorkbenchIcon name="history" :size="14" />
+            </button>
           </li>
         </ul>
         <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty">
@@ -213,8 +281,34 @@ watch(() => props.board?.id, () => {
         <p v-if="data.outlineError" class="nx-index-error">{{ data.outlineError }}</p>
 
         <!-- 构思速记（工单B1）：第四棵树。行可点开——正文随 pinax_notes_list 一起回来，
-             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。 -->
-        <p class="workspace-nav-section">构思</p>
+             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。
+             新建（工单H1）：入口是区标题右侧的「＋」，点开才在区顶出现输入行（失焦／Enter 提交，Esc 收起）。 -->
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">构思</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            aria-label="新建构思"
+            :aria-expanded="newNoteOpen.toString()"
+            v-workbench-tooltip="{ text: '新建构思', side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewNote"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
+        </div>
+        <div v-if="newNoteOpen" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newNoteInput"
+            v-model="newNoteTitle"
+            class="nx-field is-tiny"
+            placeholder="新构思标题"
+            aria-label="新构思标题"
+            @keydown.enter.prevent="submitNewNote"
+            @keydown.esc.prevent="closeNewNote"
+            @blur="submitNewNote"
+          >
+        </div>
         <ul class="nx-tree">
           <li v-for="item in data.notes" :key="item.file" class="nx-tree-line">
             <button
@@ -229,10 +323,13 @@ watch(() => props.board?.id, () => {
             </button>
             <button
               type="button"
-              class="nx-row nx-index-history"
+              class="nx-row nx-index-icon-btn nx-index-history"
               :aria-label="`「${item.title}」的历史`"
+              v-workbench-tooltip="{ text: '历史', side: 'left' }"
               @click.stop="emit('history', { type: 'note', item })"
-            >历史…</button>
+            >
+              <WorkbenchIcon name="history" :size="14" />
+            </button>
           </li>
         </ul>
         <p v-if="!data.notes.length && !data.notesError" class="nx-index-empty">构思还没有内容（构思/）。</p>
@@ -255,17 +352,46 @@ watch(() => props.board?.id, () => {
             </button>
             <button
               type="button"
-              class="nx-row nx-index-history"
+              class="nx-row nx-index-icon-btn nx-index-history"
               :aria-label="`「${item.name}」的历史`"
+              v-workbench-tooltip="{ text: '历史', side: 'left' }"
               @click.stop="emit('history', { type: 'entry', item })"
-            >历史…</button>
+            >
+              <WorkbenchIcon name="history" :size="14" />
+            </button>
           </li>
         </ul>
         <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
 
         <!-- 约束（工单E2）：设定板的第二棵树。行可点开——正文随 pinax_rule_list 一起回来，
-             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。 -->
-        <p class="workspace-nav-section">约束</p>
+             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。
+             新建（工单H1）：与构思同一形态——区标题右侧「＋」，点开才出现输入行。 -->
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">约束</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            aria-label="新建约束"
+            :aria-expanded="newRuleOpen.toString()"
+            v-workbench-tooltip="{ text: '新建约束', side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewRule"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
+        </div>
+        <div v-if="newRuleOpen" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newRuleInput"
+            v-model="newRuleTitle"
+            class="nx-field is-tiny"
+            placeholder="新约束标题"
+            aria-label="新约束标题"
+            @keydown.enter.prevent="submitNewRule"
+            @keydown.esc.prevent="closeNewRule"
+            @blur="submitNewRule"
+          >
+        </div>
         <ul class="nx-tree">
           <li v-for="item in data.rules" :key="item.file" class="nx-tree-line">
             <button
@@ -331,8 +457,8 @@ watch(() => props.board?.id, () => {
 </template>
 
 <style scoped>
-/* 行上下文动作（D2）：每行右侧一枚小「历史…」，不挤走行本体。
-   行本体仍是老版 .workspace-nav-item 词汇；这里只摆位置与尺寸。 */
+/* 行上下文动作（D2 → 工单H1）：每行右侧一枚极小的图标钮（14px 图标），
+   不再用「历史…」文字占一行；tooltip 说明它的用途。行本体仍是老版 .workspace-nav-item 词汇。 */
 .nx-tree-line {
   display: flex;
   align-items: center;
@@ -343,19 +469,37 @@ watch(() => props.board?.id, () => {
   flex: 1 1 auto;
   min-width: 0;
 }
-.nx-index-history {
+.nx-index-icon-btn {
   flex: none;
-  width: auto;
-  min-height: 28px;
-  padding: 0 8px;
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  padding: 0;
+  justify-content: center;
+  border-radius: var(--nx-radius-xs);
   color: var(--text-muted);
-  font-size: var(--nx-fs-2xs);
   opacity: 0.75;
 }
-.nx-index-history:hover,
-.nx-index-history:focus-visible {
+.nx-index-icon-btn:hover,
+.nx-index-icon-btn:focus-visible {
   color: var(--archive-ink);
   opacity: 1;
+}
+/* 区标题行右侧的「＋」（工单H1）：不占一行，点开才在区顶露出输入行。 */
+.nx-index-section-head {
+  position: relative;
+}
+.nx-index-section-head .workspace-nav-section {
+  padding-inline-end: 30px;
+}
+.nx-index-add-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+}
+.nx-index-new-inline {
+  padding-top: 0;
 }
 /* 大纲层级记号（工单G3）：有子节点的行在标题前点一枚极轻的「·」，不引新图标、不另立一套行形态。 */
 .nx-outline-mark {

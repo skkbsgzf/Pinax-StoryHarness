@@ -58,19 +58,30 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   assert.match(injection.reason, /顶层菜单/)
 
   const ids = flattenMenuIds(MENU_TEMPLATE).map((item) => item.id)
-  for (const required of ['project.create', 'project.open', 'project.import', 'project.backup', 'project.history', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
+  for (const required of [
+    // 项目组（工单A：文件组改名；提案目录从运行时组并入）
+    'project.create', 'project.open', 'project.import', 'project.backup', 'project.history', 'project.proposals', 'app.quit',
+    // 编辑组：全部带 id，页内菜单行点得动（主进程落到 webContents 的编辑命令）
+    'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.selectAll',
+    // 设置组与帮助组
+    'settings.preferences', 'settings.carriers', 'settings.theme', 'help.spec', 'help.gate'
+  ]) {
     assert.ok(ids.includes(required), `菜单模板缺 ${required}`)
+  }
+  // 被裁掉的组：最近项目（未实现）、视图（焦点×3/缩放）、运行时（提问/工具面/提案目录改名）——id 一个都不许留下。
+  for (const removed of ['project.recent', 'view.focusLeft', 'view.focusCenter', 'view.focusRuntime', 'runtime.ask', 'runtime.tools', 'runtime.proposals']) {
+    assert.equal(ids.includes(removed), false, `菜单精简后不应再有 ${removed}`)
   }
   assert.equal(new Set(ids).size, ids.length, '菜单 id 不得重复')
 
-  // 顶部那排功能选项（作者口径①）：文件／编辑／视图／运行时／窗口／设置／帮助，一个都不能少。
-  assert.deepEqual(MENU_TEMPLATE.map((item) => item.label), ['文件', '编辑', '视图', '运行时', '窗口', '设置', '帮助'])
+  // 作者裁定（工单A）：顶部只剩四组——项目／编辑／设置／帮助。
+  assert.deepEqual(MENU_TEMPLATE.map((item) => item.label), ['项目', '编辑', '设置', '帮助'])
 
   const { dispatcher } = harness()
   const foreign = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: 'carrier.inject-my-menu' })
   assert.equal(foreign.ok, false)
   assert.equal(foreign.error.code, NEXT_ERROR_CODES.INVALID_INPUT)
-  const known = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: 'runtime.tools' })
+  const known = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: 'project.proposals' })
   assert.equal(known.ok, true)
   assert.deepEqual(dispatcher.menuIds.sort(), ids.sort())
 })
@@ -81,6 +92,13 @@ test('标题栏与页内菜单行（工单F）：overlay 留给原生窗控，�
   assert.match(mainSource, /titleBarStyle:\s*'hidden'/, '窗口必须走隐藏标题栏（渲染层自绘 .nx-titlebar）')
   assert.match(mainSource, /titleBarOverlay/, '原生窗控必须以浮层形式保留（titleBarOverlay）')
   assert.match(mainSource, /Menu\.setApplicationMenu/, '原生应用菜单不得删除：accelerator 仍由它提供')
+
+  // 工单A：编辑组的 id 要真的落到窗口的编辑命令（页内菜单行点得动；原生菜单那一半是 role）。
+  assert.match(mainSource, /EDIT_MENU_COMMANDS/, '编辑组必须有 id→webContents 命令表')
+  for (const command of ['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']) {
+    assert.match(mainSource, new RegExp(`'edit\\.${command}':\\s*'${command}'`), `编辑命令表缺 edit.${command}`)
+  }
+  assert.match(mainSource, /contents\?\.\[editCommand\]\?\.\(\)/, '编辑命令必须落到窗口 webContents（窗口已关时判空）')
 
   // 渲染层：页内菜单行用同一份模板渲染，点击走 menuInvoke 通道（与原生菜单同一条分发）。
   const appSource = await readFile(new URL('../shell/AppNext.vue', import.meta.url), 'utf-8')
@@ -414,15 +432,17 @@ test('主进程历史接线（D1）：建仓＋起表＋关窗兜底＋写入标
   assert.match(mainSource, /historyScheduler\.beforeQuit\(\)/, '兜底提交走调度器（与定时/手动同一队列）')
 })
 
-test('界面缩放是产品参数不是巧合：默认 0.85（作者口径）且 env 可覆写，菜单里有缩放入口', async () => {
+test('界面缩放是产品参数不是巧合：默认 0.85（作者口径）且 env 可覆写，唯一入口在偏好节', async () => {
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
   assert.match(mainSource, /PINAX_NEXT_ZOOM/, '缩放必须可用 PINAX_NEXT_ZOOM 覆写')
   assert.match(mainSource, /zoomFactor:\s*uiZoom/, '窗口 webPreferences 必须落 zoomFactor')
   assert.match(mainSource, /0\.85/, '默认缩放＝作者口径 0.85')
+  // 断言同步（工单A · 作者裁定）：视图组整组删掉，菜单不再提供 native zoom
+  // （它与 zoomFactor 双轨冲突，见协议 §0）；缩放入口只剩偏好节的 uiZoom（保存即经 onPrefsApplied 落窗口）。
   const menuSource = await readFile(new URL('../shell/menus.mjs', import.meta.url), 'utf-8')
-  assert.match(menuSource, /role:\s*'resetZoom'/, '视图菜单要有重置缩放')
-  assert.match(menuSource, /role:\s*'zoomIn'/, '视图菜单要有放大')
-  assert.match(menuSource, /role:\s*'zoomOut'/, '视图菜单要有缩小')
+  assert.doesNotMatch(menuSource, /resetZoom|zoomIn|zoomOut/, '菜单不得再提供 native zoom（缩放只在偏好节）')
+  const prefsSource = await readFile(new URL('../shell/settings/PrefsSection.vue', import.meta.url), 'utf-8')
+  assert.match(prefsSource, /prefs-zoom/, '偏好节必须有缩放入口（唯一入口）')
 })
 
 test('偏好通道（批次8①）：读/写/探测三分，写后生效钩子必须被调，存储未注入时如实报缺', async () => {

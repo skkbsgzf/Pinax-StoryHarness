@@ -725,6 +725,21 @@ body {
   gap: 10px;
   flex-wrap: wrap;
 }
+/* P2 pane 头部（工单C · 协议 §1）：五个视图共用的头部容器——
+   h4.pane-sub 标题＋.editor-meta/.entry-meta 元信息在左，动作位（保存 chip／编辑钮）靠右。
+   定义在 .editor-head／.entry-head 之后，作为统一布局口径覆盖两者原先的对齐差。 */
+.nx-pane-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.nx-pane-header .nx-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
 .entry-text {
   margin: 0;
   white-space: pre-wrap;

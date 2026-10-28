@@ -126,6 +126,6 @@ test('工具归属核对：空注册表＝内核全量；装内置载体后认�
   assert.equal(report.kernelCount, 19)
   assert.deepEqual([...report.claimed].sort(), ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read'])
   assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须逐批缩小')
-  assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save'], '工单A2：设定板块的自有写入口；工单B1 构思这对、工单B2 大纲写半边、工单A 提案三把、工单E2 约束这对、工单G1 资料三把也是自有名字（断言同步）')
+  assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'], '工单A2：设定板块的自有写入口；工单B1 构思这对、工单B2 大纲写半边、工单A 提案三把、工单E2 约束这对、工单G1 资料三把、工单H2 资料检索也是自有名字（断言同步）')
   assert.deepEqual(report.withoutImplementation, [], '声明了却没实现的工具会被面剔掉，这里必须为空')
 })

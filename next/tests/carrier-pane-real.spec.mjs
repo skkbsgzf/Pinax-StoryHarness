@@ -98,11 +98,14 @@ describe('载体面板接真会话', () => {
     expect(wrapper.text()).toContain('第001章-入场.md')
 
     await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。柯秒在巷口站住。')
-    await wrapper.find('.editor-foot .pane-btn.is-primary').trigger('click')
-    await waitFor(() => wrapper.find('.pane-notice').exists() && wrapper.find('.pane-notice').text().includes('第 2 版'), { note: '保存后没回到「第 2 版」' })
+    // 工单H1：常驻保存按钮已移除，编辑器聚焦时按 Ctrl+S 保存；结果落在保存 chip 上。
+    await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
+    await waitFor(() => wrapper.find('.nx-save-chip').exists() && wrapper.find('.nx-save-chip').text().includes('已保存 · 第 2 版'), { note: '保存后 chip 没回到「第 2 版」' })
 
     expect(await readFile(join(root, '正文', '第001章-入场.md'), 'utf-8')).toContain('柯秒在巷口站住')
-    expect(wrapper.find('.pane-notice').text()).toContain('第 2 版')
+    expect(wrapper.find('.nx-save-chip').text()).toContain('已保存 · 第 2 版')
+    // 打开章节不再铺「已载入 N 字 · 第 N 版」的常驻 notice。
+    expect(wrapper.find('.pane-notice').exists()).toBe(false)
     wrapper.unmount()
     await session.close()
   })

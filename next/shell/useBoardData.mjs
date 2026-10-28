@@ -16,6 +16,18 @@ export function useBoardData(bridge) {
     /** 文档级提示：读章节／读条目／保存的结果摊在核心区。 */
     error: null,
     notice: '',
+    /** 保存反馈（工单H1）：编辑面头部的保存 chip 只读这一格。
+     *  target 是 chapter／note／rule／document——chip 只在该编辑面上出现；
+     *  status 三态 saving／saved／error，只有 saved 由界面安排 2.5 秒后收起（失败常驻）。
+     *  保存语义（expectedRevision／提案链）不在这里动，这里只记「这一下按下去的结果」。 */
+    saveFeedback: null,
+    /** 资料板检索（工单H2）：走 knowledge:search 通道，主进程内部是 createKnowledgeRuntime（worker 线程）。
+     *  knowledgeSearched 只用来区分「还没检索」与「检索完没命中」；错误码留给界面翻人话。 */
+    knowledgeSearching: false,
+    knowledgeSearched: false,
+    knowledgeResults: [],
+    knowledgeCoverage: null,
+    knowledgeError: null,
     /** 树级提示：列目录失败摊在索引窗（与文档级分开，免得作者分不清是哪一步说的话）。 */
     treeError: null,
     chapters: [],
@@ -65,6 +77,9 @@ export function useBoardData(bridge) {
     selection: { type: null, item: null }
   })
 
+  /** 资料板检索的请求序号：换板/清空后旧请求晚到的结果不再覆盖新状态。 */
+  let knowledgeCallId = 0
+
   /** 只经一条通道：内核/载体返回的 {ok:false,code,message} 一律变成界面可见的话，不吞错。 */
   async function tool(name, args = {}) {
     if (!bridge?.request) return { ok: false, message: '渲染层未接主进程桥（preload 的 pinaxNext 通道）。' }
@@ -73,6 +88,18 @@ export function useBoardData(bridge) {
     const payload = result.value?.payload ?? {}
     if (payload.ok === false) return { ok: false, message: payload.message ?? `${name} 被拒绝`, code: payload.code, details: payload.details }
     return { ok: true, value: payload, owner: result.value?.owner ?? 'kernel' }
+  }
+
+  /** 保存 chip（工单H1）：保存一开始就把这一格翻成「保存中…」，
+   *  落盘结果再翻成「已保存 · 第 N 版」或「保存失败」（带 code，STALE 由界面换「重新载入」动作）。 */
+  function beginSaveFeedback(target) {
+    state.saveFeedback = { target, status: 'saving', revision: null, code: null, message: '' }
+  }
+
+  function settleSaveFeedback(target, saved) {
+    state.saveFeedback = saved.ok
+      ? { target, status: 'saved', revision: saved.value.revision ?? null, code: null, message: '' }
+      : { target, status: 'error', revision: null, code: saved.code ?? null, message: saved.message ?? '' }
   }
 
   async function loadChapters({ keep = true } = {}) {
@@ -96,7 +123,9 @@ export function useBoardData(bridge) {
     if (!item) return
     state.busy = true
     state.error = null
+    // 打开只清旧提示，不再写「已载入 N 字 · 第 N 版」（工单H1：字数与版本在编辑面头部 meta 行）。
     state.notice = ''
+    state.saveFeedback = null
     const read = await tool('pinax_chapter_read', { file: item.file, maxChars: 20000 })
     state.busy = false
     if (!read.ok) {
@@ -105,28 +134,28 @@ export function useBoardData(bridge) {
     }
     state.chapter = { ...item, revision: read.value.revision, totalChars: read.value.totalChars, truncated: read.value.truncated }
     state.draft = read.value.text ?? ''
-    state.notice = read.value.truncated
-      ? `只载入了前 ${read.value.text.length} 字（全章 ${read.value.totalChars} 字）：保存会覆盖未载入的部分，请先用工具分页读全再改。`
-      : `已载入 ${read.value.totalChars} 字 · 第 ${read.value.revision} 版`
     state.selection = { type: 'chapter', item: { ...item, revision: read.value.revision } }
   }
 
-  /** 保存＝作者按下去的那一下：带读到的修订号走 pinax_chapter_save，冲突由文件服务拒，不静默覆盖。 */
+  /** 保存＝作者按 Ctrl+S 的那一下（工单H1：常驻保存按钮已移除）：带读到的修订号走 pinax_chapter_save，
+   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip，不再写一条常驻提示。 */
   async function save() {
     if (!state.chapter || !state.draft) return
     state.busy = true
     state.error = null
     state.notice = ''
+    beginSaveFeedback('chapter')
     const saved = await tool('pinax_chapter_save', { file: state.chapter.file, text: state.draft, expectedRevision: state.chapter.revision })
     if (!saved.ok) {
       state.busy = false
       state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新载入该章后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('chapter', saved)
       return
     }
     state.chapter = { ...state.chapter, revision: saved.value.revision, totalChars: state.draft.length, truncated: false }
     state.busy = false
-    state.notice = `已保存到「${saved.value.file}」· 第 ${saved.value.revision} 版`
-    // 就地推进索引窗里的版本号，不为一次保存重读整章（重读会把「已保存」这句提示冲掉）。
+    settleSaveFeedback('chapter', saved)
+    // 就地推进索引窗里的版本号，不为一次保存重读整章（重读会把 chip 的版本号冲掉）。
     state.chapters = state.chapters.map((item) => (item.file === saved.value.file ? { ...item, revision: saved.value.revision } : item))
   }
 
@@ -173,9 +202,9 @@ export function useBoardData(bridge) {
     state.note = { ...item }
     state.noteDraft = item.text ?? ''
     state.error = null
-    state.notice = item.truncated
-      ? `只载入了前 ${(item.text ?? '').length} 字（全篇 ${item.totalChars} 字）：保存会覆盖未载入的部分，请先用工具读全再改。`
-      : `已载入 ${item.totalChars} 字 · 第 ${item.revision} 版`
+    // 打开只清旧提示：「已载入 N 字 · 第 N 版」不再占一条常驻 notice（工单H1）。
+    state.notice = ''
+    state.saveFeedback = null
     state.selection = { type: 'note', item: { ...item } }
   }
 
@@ -183,21 +212,24 @@ export function useBoardData(bridge) {
     state.noteDraft = value
   }
 
-  /** 保存速记＝作者按下去的那一下：带读到的修订号走 pinax_notes_save，冲突由文件服务拒，不静默覆盖。 */
+  /** 保存速记＝作者按 Ctrl+S 的那一下：带读到的修订号走 pinax_notes_save，
+   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip（工单H1）。 */
   async function saveNote() {
     if (!state.note || !state.noteDraft) return
     state.busy = true
     state.error = null
     state.notice = ''
+    beginSaveFeedback('note')
     const saved = await tool('pinax_notes_save', { file: state.note.file, text: state.noteDraft, expectedRevision: state.note.revision })
     if (!saved.ok) {
       state.busy = false
       state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该篇后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('note', saved)
       return
     }
     state.note = { ...state.note, revision: saved.value.revision, totalChars: state.noteDraft.length, truncated: false }
     state.busy = false
-    state.notice = `已保存到「${saved.value.file}」· 第 ${saved.value.revision} 版`
+    settleSaveFeedback('note', saved)
     // 就地推进索引窗里的版本号与正文，不为一次保存重列整个构思目录。
     state.notes = state.notes.map((item) => (item.file === saved.value.file
       ? { ...item, revision: saved.value.revision, text: state.noteDraft, totalChars: state.noteDraft.length, truncated: false }
@@ -248,9 +280,9 @@ export function useBoardData(bridge) {
     state.rule = { ...item }
     state.ruleDraft = item.text ?? ''
     state.error = null
-    state.notice = item.truncated
-      ? `只载入了前 ${(item.text ?? '').length} 字（全篇 ${item.totalChars} 字）：保存会覆盖未载入的部分，请先用工具读全再改。`
-      : `已载入 ${item.totalChars} 字 · 第 ${item.revision} 版`
+    // 打开只清旧提示：「已载入 N 字 · 第 N 版」不再占一条常驻 notice（工单H1）。
+    state.notice = ''
+    state.saveFeedback = null
     state.selection = { type: 'rule', item: { ...item } }
   }
 
@@ -258,21 +290,24 @@ export function useBoardData(bridge) {
     state.ruleDraft = value
   }
 
-  /** 保存约束＝作者按下去的那一下：带读到的修订号走 pinax_rule_save，冲突由文件服务拒，不静默覆盖。 */
+  /** 保存约束＝作者按 Ctrl+S 的那一下：带读到的修订号走 pinax_rule_save，
+   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip（工单H1）。 */
   async function saveRule() {
     if (!state.rule || !state.ruleDraft) return
     state.busy = true
     state.error = null
     state.notice = ''
+    beginSaveFeedback('rule')
     const saved = await tool('pinax_rule_save', { file: state.rule.file, text: state.ruleDraft, expectedRevision: state.rule.revision })
     if (!saved.ok) {
       state.busy = false
       state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该份约束后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('rule', saved)
       return
     }
     state.rule = { ...state.rule, revision: saved.value.revision, totalChars: state.ruleDraft.length, truncated: false }
     state.busy = false
-    state.notice = `已保存到「${saved.value.file}」· 第 ${saved.value.revision} 版`
+    settleSaveFeedback('rule', saved)
     // 就地推进索引窗里的版本号与正文，不为一次保存重列整个约束目录。
     state.rules = state.rules.map((item) => (item.file === saved.value.file
       ? { ...item, revision: saved.value.revision, text: state.ruleDraft, totalChars: state.ruleDraft.length, truncated: false }
@@ -322,7 +357,9 @@ export function useBoardData(bridge) {
     if (!item) return
     state.busy = true
     state.error = null
+    // 打开只清旧提示：「已载入 N 字 · 第 N 版」不再占一条常驻 notice（工单H1）。
     state.notice = ''
+    state.saveFeedback = null
     const read = await tool('pinax_document_read', { file: item.file, maxChars: 200000 })
     state.busy = false
     if (!read.ok) {
@@ -341,9 +378,6 @@ export function useBoardData(bridge) {
     }
     state.documentDraft = read.value.text ?? ''
     state.editingDocument = false
-    state.notice = read.value.truncated
-      ? `只载入了前 ${read.value.text.length} 字（全篇 ${read.value.totalChars} 字）：保存会覆盖未载入的部分，请先确认再改。`
-      : `已载入 ${read.value.totalChars} 字 · 第 ${read.value.revision} 版`
     state.selection = { type: 'document', item: { ...item, revision: read.value.revision } }
   }
 
@@ -365,22 +399,25 @@ export function useBoardData(bridge) {
     state.documentDraft = value
   }
 
-  /** 保存资料＝作者按下去的那一下：带读到的修订号走 pinax_document_save，冲突由文件服务拒，不静默覆盖。 */
+  /** 保存资料＝作者按 Ctrl+S 的那一下：带读到的修订号走 pinax_document_save，
+   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip（工单H1）。 */
   async function saveDocument() {
     if (!state.document || !state.documentDraft) return
     state.busy = true
     state.error = null
     state.notice = ''
+    beginSaveFeedback('document')
     const saved = await tool('pinax_document_save', { file: state.document.file, text: state.documentDraft, expectedRevision: state.document.revision })
     if (!saved.ok) {
       state.busy = false
       state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该篇资料后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('document', saved)
       return
     }
     state.busy = false
     state.editingDocument = false
     state.document = { ...state.document, text: state.documentDraft, revision: saved.value.revision, totalChars: state.documentDraft.length, truncated: false }
-    state.notice = `已保存到「${saved.value.file}」· 第 ${saved.value.revision} 版`
+    settleSaveFeedback('document', saved)
     // 就地推进索引窗里的版本号与字数，不为一次保存重列整个资料目录。
     state.documents = state.documents.map((item) => (item.file === saved.value.file
       ? { ...item, revision: saved.value.revision, text: state.documentDraft, totalChars: state.documentDraft.length, truncated: false }
@@ -573,6 +610,7 @@ export function useBoardData(bridge) {
     state.busy = true
     state.error = null
     state.notice = ''
+    state.saveFeedback = null
     const read = await tool('pinax_worldbook_read', item.id ? { id: item.id } : { name: item.name })
     state.busy = false
     if (!read.ok) {
@@ -725,15 +763,66 @@ export function useBoardData(bridge) {
     state.notice = `已保存大纲 · 第 ${saved.value.revision} 版 · ${saved.value.nodeTotal} 个节点`
   }
 
-  /** 换板时清瞬时提示：上一块板的「已载入 N 字」不该出现在这一块板上（批次18 验收修）。 */
+  /**
+   * 资料板检索（工单H2）：渲染层只说检索词，项目根由主进程从 session.projectRoot 补；
+   * 结果只收命中数组与 coverage，错误码原样留给界面（KNOWLEDGE_RUNTIME_MISSING／KNOWLEDGE_BUSY…）。
+   */
+  async function searchKnowledge(query, { k, dir = '资料' } = {}) {
+    const text = String(query ?? '').trim()
+    if (!text) return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '检索词不能为空' } }
+    const callId = ++knowledgeCallId
+    state.knowledgeSearching = true
+    state.knowledgeSearched = true
+    state.knowledgeError = null
+    state.knowledgeResults = []
+    state.knowledgeCoverage = null
+    let result
+    try {
+      result = bridge?.request
+        ? await bridge.request(IPC_CHANNELS.knowledgeSearch, {
+          q: text,
+          ...(k !== undefined ? { k } : {}),
+          ...(dir ? { dir } : {})
+        })
+        : { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '渲染层未接主进程桥（preload 的 pinaxNext 通道）。' } }
+    } catch (error) {
+      result = { ok: false, error: { code: 'PINAX_IO_FAILED', message: String(error?.message || error) } }
+    }
+    // 换板/再次检索后，旧请求的结果晚到也不覆盖新状态。
+    if (callId !== knowledgeCallId) return result
+    state.knowledgeSearching = false
+    if (!result?.ok) {
+      state.knowledgeError = result?.error ?? { code: 'KNOWLEDGE_SEARCH_FAILED', message: '知识检索失败' }
+      return result ?? { ok: false, error: state.knowledgeError }
+    }
+    const value = result.value ?? {}
+    state.knowledgeResults = Array.isArray(value.hits) ? value.hits : []
+    state.knowledgeCoverage = value.coverage ?? null
+    return result
+  }
+
+  function clearKnowledgeSearch() {
+    knowledgeCallId += 1
+    state.knowledgeSearching = false
+    state.knowledgeSearched = false
+    state.knowledgeResults = []
+    state.knowledgeCoverage = null
+    state.knowledgeError = null
+  }
+
+  /** 换板时清瞬时提示：上一块板的提示、保存 chip 与检索结果不该出现在这一块板上（批次18 验收修 / 工单H1/H2）。 */
   function clearTransient() {
     state.notice = ''
     state.error = null
+    state.saveFeedback = null
+    clearKnowledgeSearch()
   }
 
   return Object.assign(state, {
     tool,
     clearTransient,
+    searchKnowledge,
+    clearKnowledgeSearch,
     loadChapters,
     openChapter,
     save,

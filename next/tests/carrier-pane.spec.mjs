@@ -288,19 +288,30 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
-  it('保存带读到的修订号；服务端拒（版本不符）时把原话摊开，不静默覆盖', async () => {
+  it('Ctrl+S 保存带读到的修订号；服务端拒（版本不符）时保存 chip 常驻并给「重新载入」', async () => {
     const tools = fakeTools()
     const data = useBoardData(tools)
     await data.loadChapters()
     const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('novel.editor'), data } })
     await flushPromises()
 
+    // 工单H1：四个编辑面不再有常驻保存按钮，保存由编辑器聚焦时的 Ctrl+S 触发。
+    expect(wrapper.find('.editor-foot .pane-btn.is-primary').exists()).toBe(false)
+    // 工单C（P2）：编辑面头部统一进 .nx-pane-header 容器。
+    expect(wrapper.find('.nx-pane-header .pane-sub').exists()).toBe(true)
     await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。')
-    await wrapper.find('.editor-foot .pane-btn.is-primary').trigger('click')
+    await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const saved = tools.calls.find((call) => call.tool === 'pinax_chapter_save')
     expect(saved.args).toEqual({ file: '正文/第002章.md', text: '雨从檐口滴下来，巷子里没人。', expectedRevision: 1 })
-    expect(wrapper.text()).toContain('已保存到「正文/第002章.md」· 第 2 版')
+    // 保存结果只在 chip 上：不再铺一条「已保存到…」的常驻 notice。
+    expect(wrapper.find('.pane-notice').exists()).toBe(false)
+    const chip = wrapper.find('.nx-save-chip')
+    expect(chip.exists()).toBe(true)
+    expect(chip.classes()).toContain('is-saved')
+    expect(chip.text()).toContain('已保存 · 第 2 版')
+    // 工单C（P2）：保存 chip 落在头部右侧动作位（.nx-pane-actions）。
+    expect(wrapper.find('.nx-pane-header .nx-pane-actions .nx-save-chip').exists()).toBe(true)
 
     const conflict = fakeTools({ stale: true })
     const conflictData = useBoardData(conflict)
@@ -308,13 +319,101 @@ describe('小说载体', () => {
     const second = mount(CarrierPaneHost, { props: { pane: paneOf('novel.editor'), data: conflictData } })
     await flushPromises()
     await second.find('.editor-area').setValue('另一份改稿')
-    await second.find('.editor-foot .pane-btn.is-primary').trigger('click')
+    await second.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     expect(second.find('.pane-error').text()).toContain('已被改动（第 1 版）')
     expect(second.find('.pane-error').text()).toContain('外壳不做静默合并')
+    const errorChip = second.find('.nx-save-chip')
+    expect(errorChip.classes()).toContain('is-error')
+    expect(errorChip.text()).toContain('版本冲突')
+    expect(errorChip.text()).toContain('会丢弃未保存修改')
     expect(second.find('.editor-area').element.value).toBe('另一份改稿', '拒写后草稿仍在作者手里')
+
+    // 重新载入＝丢弃本稿、按磁盘重读：草稿回到盘上那一版，chip 随打开动作收掉。
+    await errorChip.find('.nx-save-chip-action').trigger('click')
+    await flushPromises()
+    expect(second.find('.editor-area').element.value).toBe('雨从檐口滴下来。')
+    expect(second.find('.nx-save-chip').exists()).toBe(false)
     wrapper.unmount()
     second.unmount()
+  })
+
+  it('保存成功的 chip 2.5 秒后自动收起（fake timers）；失败时没有计时器', async () => {
+    // 只接管 setTimeout／clearTimeout：flushPromises 走 setImmediate，不能被一起冻住。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const tools = fakeTools()
+      const data = useBoardData(tools)
+      await data.loadChapters()
+      const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('novel.editor'), data } })
+      await flushPromises()
+
+      await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。')
+      await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
+      await flushPromises()
+      const chip = () => wrapper.find('.nx-save-chip')
+      expect(chip().exists()).toBe(true)
+      expect(chip().text()).toContain('已保存 · 第 2 版')
+
+      vi.advanceTimersByTime(2400)
+      await flushPromises()
+      expect(chip().exists(), '2.4 秒时仍在').toBe(true)
+      vi.advanceTimersByTime(100)
+      await flushPromises()
+      expect(chip().exists(), '2.5 秒后收起').toBe(false)
+      wrapper.unmount()
+
+      // 失败不安排自动收起：同样的时间推进后 chip 还在。
+      const staleTools = fakeTools({ stale: true })
+      const staleData = useBoardData(staleTools)
+      await staleData.loadChapters()
+      const failed = mount(CarrierPaneHost, { props: { pane: paneOf('novel.editor'), data: staleData } })
+      await flushPromises()
+      await failed.find('.editor-area').setValue('另一份改稿')
+      await failed.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
+      await flushPromises()
+      vi.advanceTimersByTime(10_000)
+      await flushPromises()
+      expect(failed.find('.nx-save-chip').exists()).toBe(true)
+      expect(failed.find('.nx-save-chip').classes()).toContain('is-error')
+      failed.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('非 STALE 的保存失败：chip 常驻并给「重试」，重试成功后翻回「已保存」', async () => {
+    const tools = fakeTools()
+    const original = tools.request
+    let attempts = 0
+    tools.request = async (channel, payload) => {
+      if (payload?.tool === 'pinax_chapter_save') {
+        attempts += 1
+        if (attempts === 1) {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: false, code: 'PINAX_WRITE_FAILED', message: '磁盘写入失败' } } }
+        }
+      }
+      return original(channel, payload)
+    }
+    const data = useBoardData(tools)
+    await data.loadChapters()
+    const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('novel.editor'), data } })
+    await flushPromises()
+
+    await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。')
+    await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
+    await flushPromises()
+    const chip = () => wrapper.find('.nx-save-chip')
+    expect(chip().classes()).toContain('is-error')
+    expect(chip().text()).toContain('保存失败')
+    expect(chip().find('.nx-save-chip-action').text()).toBe('重试')
+
+    await chip().find('.nx-save-chip-action').trigger('click')
+    await flushPromises()
+    expect(attempts).toBe(2)
+    expect(chip().classes()).toContain('is-saved')
+    expect(chip().text()).toContain('已保存 · 第 2 版')
+    wrapper.unmount()
   })
 
   it('存完之后索引窗里的版本号跟着走（索引窗与核心区共用同一份数据）', async () => {
@@ -324,7 +423,7 @@ describe('小说载体', () => {
     await flushPromises()
 
     await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。')
-    await wrapper.find('.editor-foot .pane-btn.is-primary').trigger('click')
+    await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
 
     const rows = wrapper.findAll('.nx-index-window .nx-tree-item')
@@ -371,9 +470,12 @@ describe('小说载体', () => {
     await outlineRow.trigger('click')
     await flushPromises()
     expect(wrapper.find('[aria-label="大纲节点标题"]').exists()).toBe(true)
+    // 工单C（P2/P3）：头部是统一容器；保存按钮只写「保存」，版本号留在 meta 行。
+    expect(wrapper.find('.nx-pane-header .pane-sub').text()).toContain('大纲')
+    expect(wrapper.find('.editor-foot .control-primary').text()).toBe('保存')
 
     await wrapper.find('[aria-label="大纲节点标题"]').setValue('开场：雪夜进城')
-    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await wrapper.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
 
     const saved = tools.calls.find((call) => call.tool === 'pinax_outline_save')
@@ -398,7 +500,7 @@ describe('小说载体', () => {
     const addButtons = () => wrapper.findAll('.editor-foot .control-secondary')
     await addButtons()[0].trigger('click')
     await addButtons()[1].trigger('click')
-    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await wrapper.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
 
     const saved = tools.calls.find((call) => call.tool === 'pinax_outline_save')
@@ -585,33 +687,76 @@ describe('小说载体', () => {
     expect(noteRow.classes()).toContain('is-active')
     expect(wrapper.find('[aria-label="构思编辑器"]').exists()).toBe(true)
     expect(wrapper.find('.editor-area').element.value).toBe('袖口的表停在十二点差三分。')
-    expect(wrapper.text()).toContain('已载入 14 字 · 第 1 版')
+    // 工单H1：打开不再铺「已载入 N 字 · 第 N 版」的 notice；字数与版本在编辑面 meta 行。
+    expect(wrapper.find('.pane-notice').exists()).toBe(false)
+    expect(wrapper.find('.editor-meta').text()).toContain('14 字')
+    expect(wrapper.find('.editor-meta').text()).toContain('第 1 版')
     wrapper.unmount()
   })
 
-  it('构思保存走 pinax_notes_save 带修订号；面板尾部「新构思标题」新建走 expectedRevision 0', async () => {
+  it('构思保存走 pinax_notes_save 带修订号；索引窗「构思」区的 ＋ 新建走 expectedRevision 0', async () => {
     const tools = fakeTools({ notes: [{ index: 0, title: '雨夜的表', file: '构思/雨夜的表.md', name: '雨夜的表.md', revision: 1, text: '袖口的表停在十二点差三分。', totalChars: 14, truncated: false }] })
-    const data = useBoardData(tools)
-    await data.loadNotes()
-    data.openNote(data.notes[0])
-    const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('novel.editor'), data } })
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    const noteRow = wrapper.findAll('.nx-index-window .nx-tree-item').find((row) => row.text().includes('雨夜的表'))
+    expect(noteRow, '构思区里的行').toBeTruthy()
+    await noteRow.trigger('click')
     await flushPromises()
 
     await wrapper.find('[aria-label="构思编辑器"]').setValue('表针在雨夜重新走了起来。')
-    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await wrapper.find('[aria-label="构思编辑器"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const saved = tools.calls.find((call) => call.tool === 'pinax_notes_save' && call.args.file)
     expect(saved.args).toEqual({ file: '构思/雨夜的表.md', text: '表针在雨夜重新走了起来。', expectedRevision: 1 })
-    expect(wrapper.text()).toContain('已保存到「构思/雨夜的表.md」· 第 2 版')
+    expect(wrapper.find('.nx-save-chip').text()).toContain('已保存 · 第 2 版')
 
-    // 新建：工具拒空 text，所以以标题作首行落盘，修订号 0；随后列一次并打开新篇。
-    await wrapper.find('.notes-new .nx-field').setValue('巷尾的钟楼')
-    await wrapper.find('.notes-new .nx-index-add').trigger('click')
+    // 新建（工单H1）：入口收进索引窗「构思」区标题行右侧的 ＋；点开才出现输入行，Enter 提交。
+    // 工具拒空 text，所以以标题作首行落盘，修订号 0；随后列一次并打开新篇。
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(false)
+    await wrapper.find('[aria-label="新建构思"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[aria-label="新构思标题"]').setValue('巷尾的钟楼')
+    await wrapper.find('[aria-label="新构思标题"]').trigger('keydown', { key: 'Enter' })
     await flushPromises()
     const created = tools.calls.find((call) => call.tool === 'pinax_notes_save' && call.args.title)
     expect(created.args).toEqual({ title: '巷尾的钟楼', text: '巷尾的钟楼\n', expectedRevision: 0 })
     expect(wrapper.find('[aria-label="构思编辑器"]').element.value).toBe('巷尾的钟楼\n')
     expect(wrapper.text()).toContain('构思/巷尾的钟楼.md')
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('索引窗「构思」区的 ＋（工单H1）：输入行不常驻；Esc 收起不落盘，失焦提交', async () => {
+    const tools = fakeTools()
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 常驻输入行已移除：区标题右侧只有一枚「＋」，点了才出现输入框。
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(false)
+    const addButton = wrapper.find('[aria-label="新建构思"]')
+    expect(addButton.exists()).toBe(true)
+    await addButton.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(true)
+
+    // Esc 收起：输入行退场，一个新建请求都不发。
+    await wrapper.find('[aria-label="新构思标题"]').setValue('不要落盘的标题')
+    await wrapper.find('[aria-label="新构思标题"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(false)
+    expect(tools.calls.some((call) => call.tool === 'pinax_notes_save' && call.args.title)).toBe(false)
+
+    // 失焦提交：以标题作首行落盘（expectedRevision 0）。
+    await addButton.trigger('click')
+    await flushPromises()
+    await wrapper.find('[aria-label="新构思标题"]').setValue('巷口的灯')
+    await wrapper.find('[aria-label="新构思标题"]').trigger('blur')
+    await flushPromises()
+    const created = tools.calls.find((call) => call.tool === 'pinax_notes_save' && call.args.title)
+    expect(created.args).toEqual({ title: '巷口的灯', text: '巷口的灯\n', expectedRevision: 0 })
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -688,16 +833,21 @@ describe('设定载体', () => {
     expect(wrapper.find('.entry-text').exists()).toBe(true)
     expect(wrapper.find('.entry-edit').text()).toBe('编辑')
     expect(wrapper.find('.editor-area').exists()).toBe(false)
+    // 工单C（P2）：条目头部也是 .nx-pane-header，编辑钮在右侧动作位。
+    expect(wrapper.find('.entry-head').classes()).toContain('nx-pane-header')
+    expect(wrapper.find('.nx-pane-header .nx-pane-actions .entry-edit').exists()).toBe(true)
 
     await wrapper.find('.entry-edit').trigger('click')
     await flushPromises()
     // 编辑态：entry-text 换成 textarea，草稿从读到的正文起。
     expect(wrapper.find('.entry-text').exists()).toBe(false)
+    // 工单C（P3）：保存按钮只写「保存」（原「保存为新版本」）。
+    expect(wrapper.find('.editor-foot .control-primary').text()).toBe('保存')
     const area = wrapper.find('.editor-area')
     expect(area.element.value).toBe('冷穿越剧版主角，醒来在雪夜。')
 
     await area.setValue('冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。')
-    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await area.trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
 
     const saved = tools.calls.find((call) => call.tool === 'pinax_worldbook_save')
@@ -745,19 +895,22 @@ describe('设定载体', () => {
     expect(ruleRow.classes()).toContain('is-active')
     expect(wrapper.find('[aria-label="约束编辑器"]').exists()).toBe(true)
     expect(wrapper.find('.editor-area').element.value).toBe('- 不许出现现代词\n')
-    expect(wrapper.text()).toContain('已载入 10 字 · 第 1 版')
+    // 工单H1：打开不再铺「已载入 N 字 · 第 N 版」的 notice。
+    expect(wrapper.find('.pane-notice').exists()).toBe(false)
 
-    // 保存：带读到的修订号走 pinax_rule_save，版本号就地推进。
+    // 保存：Ctrl+S，带读到的修订号走 pinax_rule_save，版本号就地推进。
     await wrapper.find('[aria-label="约束编辑器"]').setValue('- 不许出现现代词\n- 每章 2000 字\n')
-    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await wrapper.find('[aria-label="约束编辑器"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const saved = tools.calls.find((call) => call.tool === 'pinax_rule_save' && call.args.file)
     expect(saved.args).toEqual({ file: '约束/纪律.md', text: '- 不许出现现代词\n- 每章 2000 字\n', expectedRevision: 1 })
-    expect(wrapper.text()).toContain('已保存到「约束/纪律.md」· 第 2 版')
+    expect(wrapper.find('.nx-save-chip').text()).toContain('已保存 · 第 2 版')
 
-    // 新建：面板尾部「新约束标题」走 expectedRevision 0，标题作首行落盘。
+    // 新建（工单H1）：索引窗「约束」区标题行的 ＋ 点开输入行，Enter 提交，expectedRevision 0。
+    await wrapper.find('[aria-label="新建约束"]').trigger('click')
+    await flushPromises()
     await wrapper.find('[aria-label="新约束标题"]').setValue('文风')
-    await wrapper.find('.notes-new .nx-index-add').trigger('click')
+    await wrapper.find('[aria-label="新约束标题"]').trigger('keydown', { key: 'Enter' })
     await flushPromises()
     const created = tools.calls.find((call) => call.tool === 'pinax_rule_save' && call.args.title)
     expect(created.args).toEqual({ title: '文风', text: '文风\n', expectedRevision: 0 })
@@ -813,12 +966,14 @@ describe('资料载体', () => {
     const area = pane().find('textarea.editor-area')
     expect(area.element.value).toBe('旧世界的年表。\n')
     await area.setValue('旧世界的年表，以及三条被划掉的注释。')
-    await pane().find('.editor-foot .control-primary').trigger('click')
+    await area.trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
 
     const saved = tools.calls.find((call) => call.tool === 'pinax_document_save')
     expect(saved.args).toEqual({ file: '资料/设定集.md', text: '旧世界的年表，以及三条被划掉的注释。', expectedRevision: 1 })
-    expect(wrapper.text()).toContain('已保存到「资料/设定集.md」· 第 2 版')
+    // 保存结果只在编辑面头部的 chip 上（阅读态也留着，2.5 秒后自行收起）。
+    expect(pane().find('.nx-save-chip').text()).toContain('已保存 · 第 2 版')
+    expect(pane().find('.pane-notice').exists()).toBe(false)
     // 保存成功后回到阅读态：版本号与正文以保存结果为准。
     expect(pane().find('textarea.editor-area').exists()).toBe(false)
     expect(pane().find('[aria-label="资料正文"]').text()).toContain('三条被划掉的注释')

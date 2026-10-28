@@ -104,11 +104,11 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：19 内核 ∪ 载体声明＝32，其中 18 个名字由载体服务（5 接管＋13 自有），端口仍为 0（工单A2：pinax_worldbook_save；工单B1：构思这对；工单B2：大纲写半边 pinax_outline_save；工单A：提案三把 pinax_proposal_list/read/discard；工单E2：约束这对 pinax_rule_list/save；工单G1：资料三把 pinax_document_list/read/save）',
+  record('M2 聚合工具面：19 内核 ∪ 载体声明＝33，其中 19 个名字由载体服务（5 接管＋14 自有），端口仍为 0（工单A2：pinax_worldbook_save；工单B1：构思这对；工单B2：大纲写半边 pinax_outline_save；工单A：提案三把 pinax_proposal_list/read/discard；工单E2：约束这对 pinax_rule_list/save；工单G1：资料三把 pinax_document_list/read/save；工单H2：pinax_reference_search）',
     carrierStarted.ok === true
-      && carrierStarted.value.toolCount === 32
-      && carrierStarted.value.carrierTools === 18
-      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save'].sort().join()
+      && carrierStarted.value.toolCount === 33
+      && carrierStarted.value.carrierTools === 19
+      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'].sort().join()
       && carrierStarted.value.portsOpened === 0,
     `toolCount=${carrierStarted.value?.toolCount} carrierTools=${carrierStarted.value?.carrierTools}`)
 

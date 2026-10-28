@@ -15,7 +15,8 @@ import {
   BUILT_IN_CARRIER_PLUGINS,
   REFERENCE_CARRIER,
   REFERENCE_CARRIER_ID,
-  REFERENCE_TOOL_NAMES
+  REFERENCE_TOOL_NAMES,
+  createReferenceTools
 } from '../carriers/index.mjs'
 import { createReferenceBlocks } from '../carriers/reference/context.mjs'
 import { createTempWorkspace } from '../testing/harness.mjs'
@@ -53,12 +54,12 @@ async function referenceProject(label, { documents = {}, subdirs = [], startRunt
   return { workspace, root, registry, opened, runtime }
 }
 
-test('资料真清单过校验：三把工具都是载体自有名字，资料/ 申请 rw，泛型项目可作主载体', () => {
+test('资料真清单过校验：四把工具都是载体自有名字，资料/ 申请 rw，泛型项目可作主载体', () => {
   const validated = validateCarrierManifest(REFERENCE_CARRIER, { kinds: Object.keys(PROJECT_KINDS) })
   assert.equal(validated.ok, true, JSON.stringify(validated.error ?? {}))
   const kernel = new Set(kernelToolNames())
-  assert.deepEqual(REFERENCE_CARRIER.tools, ['pinax_document_list', 'pinax_document_read', 'pinax_document_save'])
-  assert.equal(REFERENCE_CARRIER.tools.every((name) => !kernel.has(name)), true, '三把都是载体自有名字（内核没有同名工具可认领），认领面不虚增')
+  assert.deepEqual(REFERENCE_CARRIER.tools, ['pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'])
+  assert.equal(REFERENCE_CARRIER.tools.every((name) => !kernel.has(name)), true, '四把都是载体自有名字（内核没有同名工具可认领），认领面不虚增；H2 的检索不认领内核 pinax_knowledge_search')
   assert.deepEqual({ ...REFERENCE_CARRIER.dataDirs }, { documents: '资料' })
   assert.ok(PROJECT_KINDS.generic.includes('资料'), '资料/ 必须落在泛型骨架里（它是这块板块的主载体 type）')
   assert.deepEqual(REFERENCE_CARRIER.scopes, ['file:资料:rw', 'agent:ask'], '资料随编辑面申请 rw；内核写族闸仍把写入点名到自有 save')
@@ -70,12 +71,12 @@ test('资料真清单过校验：三把工具都是载体自有名字，资料/ 
   assert.equal(BUILT_IN_CARRIER_IDS.includes(REFERENCE_CARRIER_ID), true, '随框架发布：注册表默认装得上这块板块')
 })
 
-test('工具面：资料载体启用后三把工具进面、归属它；内核认领面（claimed）仍是 5 把', async () => {
+test('工具面：资料载体启用后四把工具进面、归属它；内核认领面（claimed）仍是 5 把', async () => {
   const { workspace, registry, runtime, opened } = await referenceProject('reference-surface')
   try {
     assert.equal(opened.value.view.projectKind, 'generic', '资料可以是泛型项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...REFERENCE_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 22, '19 内核 ＋ 资料自有 3')
+    assert.equal(runtime.listTools().length, 23, '19 内核 ＋ 资料自有 4（H2 加 pinax_reference_search）')
     assert.equal(runtime.ownerOf('pinax_document_list'), REFERENCE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_document_read'), REFERENCE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_document_save'), REFERENCE_CARRIER_ID)
@@ -83,7 +84,7 @@ test('工具面：资料载体启用后三把工具进面、归属它；内核�
     const report = toolOwnershipReport(registry)
     assert.deepEqual(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2；资料三把不在内核 19 里')
     assert.equal(report.unclaimed.length, 14)
-    assert.deepEqual(report.declaredOutsideKernel.slice(-REFERENCE_TOOL_NAMES.length), [...REFERENCE_TOOL_NAMES], '资料三把是自有名字，逐条留名在门禁白名单里')
+    assert.deepEqual(report.declaredOutsideKernel.slice(-REFERENCE_TOOL_NAMES.length), [...REFERENCE_TOOL_NAMES], '资料四把是自有名字，逐条留名在门禁白名单里')
     assert.deepEqual(report.withoutImplementation, [], '声明了就必须有实现，否则不许进面')
   } finally {
     await runtime.stop()
@@ -244,6 +245,75 @@ test('pinax_document_save：带修订号落盘、新建传 0；STALE／空 text�
     assert.match(noTarget.value.payload.message, /要给 file/)
   } finally {
     await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('pinax_reference_search（工单H2）：verb 固定 kb_search、q 必填、dir 恒限定 资料；mock knowledgeService 透传', async () => {
+  const { workspace, opened } = await referenceProject('reference-search', { startRuntime: false })
+  try {
+    const calls = []
+    const knowledgeService = {
+      async search(args) {
+        calls.push(args)
+        return {
+          ok: true,
+          value: {
+            total: 1,
+            hits: [{ id: 'kb/资料/设定集.md', title: '设定集', readRef: '资料/设定集.md', excerpt: '雪埋了半条街。', source: 'project' }],
+            coverage: { projectCards: 1 }
+          }
+        }
+      }
+    }
+    const tools = createReferenceTools({
+      pluginId: REFERENCE_CARRIER_ID,
+      fileService: opened.value.fileService,
+      root: opened.value.root,
+      knowledgeService
+    })
+    const search = tools.find((tool) => tool.name === 'pinax_reference_search')
+    assert.ok(search, '清单声明了就必须有实现')
+    assert.equal(search.annotations.readOnlyHint, true)
+
+    const result = await search.run({ q: ' 雪 ', k: 2 })
+    assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
+    assert.equal(result.value.hits[0].readRef, '资料/设定集.md')
+    assert.deepEqual(calls, [{ root: opened.value.root, verb: 'kb_search', q: '雪', k: 2, dir: '资料' }])
+
+    // dir 只接受 资料（尾部斜杠归一）；别的目录直接拒，不在资料板里偷偷扩大面。
+    await search.run({ q: '雪', dir: '资料/' })
+    assert.deepEqual(calls.at(-1), { root: opened.value.root, verb: 'kb_search', q: '雪', dir: '资料' })
+    const badDir = await search.run({ q: '雪', dir: '世界书' })
+    assert.equal(badDir.ok, false)
+    assert.equal(badDir.error.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(badDir.error.message, /只覆盖「资料\/」/)
+
+    const noQuery = await search.run({})
+    assert.equal(noQuery.ok, false)
+    assert.equal(noQuery.error.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(noQuery.error.message, /q 必填/)
+
+    const badK = await search.run({ q: '雪', k: 0 })
+    assert.equal(badK.ok, false)
+    assert.match(badK.error.message, /k 须是 1–30/)
+
+    // 上游码原样透传：忙就是忙，不冒充空结果。
+    const busyTool = createReferenceTools({
+      pluginId: REFERENCE_CARRIER_ID,
+      root: opened.value.root,
+      knowledgeService: { search: async () => ({ ok: false, error: { code: 'KNOWLEDGE_BUSY', message: '知识检索正在处理其他请求' } }) }
+    }).find((tool) => tool.name === 'pinax_reference_search')
+    const busy = await busyTool.run({ q: '雪' })
+    assert.equal(busy.ok, false)
+    assert.equal(busy.error.code, 'KNOWLEDGE_BUSY')
+
+    const absent = createReferenceTools({ pluginId: REFERENCE_CARRIER_ID, root: opened.value.root })
+      .find((tool) => tool.name === 'pinax_reference_search')
+    const missing = await absent.run({ q: '雪' })
+    assert.equal(missing.ok, false)
+    assert.match(missing.error.message, /知识服务未接入/)
+  } finally {
     await workspace.cleanup()
   }
 })

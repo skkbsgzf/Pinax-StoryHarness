@@ -42,6 +42,10 @@ export const NOVEL_CARRIER = Object.freeze({
   capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'],
   requires: [],
 
+  // 协议 P14 载体设置注册（工单B 第一步）：声明格式 [{ id, title, group }]，
+  // 由统一设置二级页收进「载体」组。本批先空数组——具体设置项后续批再填。
+  settings: [],
+
   tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'],
 
   context: {

@@ -1,17 +1,21 @@
 import { fail, ok } from '../../kernel/errors.mjs'
+import { getSharedKnowledgeService } from '../../runtime/knowledgeService.mjs'
 import { REFERENCE_CARRIER_ID } from './manifest.mjs'
 
 /**
- * 资料载体的工具实现（工单G1）。
+ * 资料载体的工具实现（工单G1 ＋ H2）。
  * 读盘一律走内核文件服务（next/fs/fileService.mjs）——归属闸、作用域闸、修订并发都在那边，
  * 载体只负责「按资料的语义把 资料/ 讲成人话」，绝不自己 open 文件句柄。
- * 三把工具都是载体自有名字（内核 19 里没有同名工具），所以不存在「认领＝同名接管」这件事；
+ * 四把工具都是载体自有名字（内核 19 里没有同名工具），所以不存在「认领＝同名接管」这件事；
  * 形状照已有先例：
  *   pinax_document_list  照 pinax_notes_list：列篇目并把正文随手带回（前 20000 字，超出标注），
  *                        省一次单独的读取；保存是覆盖式，截断时别整篇回写；
  *   pinax_document_read  单篇全文，maxChars 可选（1000–200000），照 pinax_chapter_read 的截断口径；
  *   pinax_document_save  照 pinax_chapter_save／pinax_notes_save：新建传 expectedRevision 0，
  *                        改稿必须带回读到的修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。
+ *   pinax_reference_search（工单H2）：资料板检索。走主进程内的 knowledgeService（createKnowledgeRuntime，
+ *                         worker 线程、零 HTTP），verb 固定 kb_search，q 必填，dir 恒限定 资料；
+ *                         内核未安装／忙／超时等码原样透传。它不认领内核的 pinax_knowledge_search。
  * 本批只认 .md 与 .txt（工单边界：不做 PDF/图片，也不做拖拽导入）。
  */
 export const REFERENCE_DIR = '资料'
@@ -24,6 +28,13 @@ const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: '
 export function createReferenceTools(context = {}) {
   const pluginId = context.pluginId ?? REFERENCE_CARRIER_ID
   const fileService = context.fileService ?? null
+  const projectRoot = context.root ?? fileService?.root ?? null
+  /** 显式注入优先（测试/其它运行时），否则取主进程挂上的单例；两者都没有时工具如实报缺。 */
+  const injectedKnowledgeService = context.knowledgeService ?? null
+
+  function knowledgeServiceOf() {
+    return injectedKnowledgeService ?? getSharedKnowledgeService()
+  }
 
   function needService() {
     return fileService
@@ -172,12 +183,54 @@ export function createReferenceTools(context = {}) {
           bytes: written.value.bytes
         })
       }
+    },
+    {
+      name: 'pinax_reference_search',
+      title: '检索资料（资料载体）',
+      description: '在本书的 RAG 输入集里检索「资料/」（进程内知识内核 kb_search，worker 线程、零 HTTP）：返回命中条目的标题、readRef、片段与覆盖信息。q 必填；dir 可选，只接受「资料」（资料板检索的边界）。首次检索会编译/刷新项目档，可能较慢；知识内核未安装、服务忙、超时等上游码原样报出，不冒充空结果。只读，不改任何文件。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['q'],
+        properties: {
+          q: { type: 'string', minLength: 1, maxLength: 2000, description: '检索词（标题/标签/正文，多词空格分隔）。' },
+          k: { type: 'integer', minimum: 1, maximum: 30, description: '命中条数上限，默认 8，最多 30。' },
+          dir: { type: 'string', minLength: 1, maxLength: 100, description: '可选；资料检索只覆盖「资料/」，因此只接受 资料。' }
+        }
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const knowledgeService = knowledgeServiceOf()
+        if (!knowledgeService || typeof knowledgeService.search !== 'function') {
+          return fail('INVALID_INPUT', '知识服务未接入（主进程未创建 knowledgeService）：资料检索现在只报缺，不检索任何资料')
+        }
+        if (!projectRoot) {
+          return fail('INVALID_INPUT', '资料检索需要已打开的项目根：entry 恒传当前项目，不做全局知识面')
+        }
+        const query = String(args.q ?? '').trim()
+        if (!query) return fail('INVALID_INPUT', 'q 必填：资料检索需要检索词')
+        if (query.length > 2000) return fail('INVALID_INPUT', 'q 过长（上限 2000 字符）', { got: query.length })
+        if (args.k !== undefined && (!Number.isSafeInteger(args.k) || args.k < 1 || args.k > 30)) {
+          return fail('INVALID_INPUT', 'k 须是 1–30 的整数', { got: args.k })
+        }
+        const dir = args.dir === undefined ? '资料' : String(args.dir).trim().replace(/\/+$/u, '')
+        if (dir && dir !== '资料') {
+          return fail('INVALID_INPUT', '资料检索只覆盖「资料/」目录：dir 只能省略或写 资料', { got: args.dir })
+        }
+        return knowledgeService.search({
+          root: projectRoot,
+          verb: 'kb_search',
+          q: query,
+          ...(args.k !== undefined ? { k: args.k } : {}),
+          dir: '资料'
+        })
+      }
     }
   ]
 }
 
-/** 载体已认领（读）与自有（写）的工具名，供门禁核「认领面只增不减」；三把都是载体自有名字。 */
-export const REFERENCE_TOOL_NAMES = Object.freeze(['pinax_document_list', 'pinax_document_read', 'pinax_document_save'])
+/** 载体自有（读/写/检索）的工具名，供门禁核「认领面只增不减」；四把都是载体自有名字。 */
+export const REFERENCE_TOOL_NAMES = Object.freeze(['pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'])
 
 async function resolveDocument(args, listDocuments) {
   const all = await listDocuments()

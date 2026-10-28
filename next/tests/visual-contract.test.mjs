@@ -226,6 +226,23 @@ test('主页面上不许摆无效模块：骨架目录、板块声明、保存�
   assert.ok(!pane.includes('editor-note'), '正文面板不该再摆保存口径的脚注')
 })
 
+test('载体面板 P2/P3（协议 §1）：头部统一进 .nx-pane-header，保存按钮不许带版本号', async () => {
+  // P3 文案门禁（协议 §6.1）：版本号不进按钮文案——版本在头部 meta 与历史面板看。
+  for (const file of ['CarrierPaneHost.vue', 'AppNext.vue']) {
+    const source = await readFile(join(shellDir, file), 'utf-8')
+    assert.ok(!source.includes('保存为第'), `${file} 出现「保存为第」：保存按钮统一叫「保存」（P3）`)
+    assert.ok(!source.includes('保存为新版本'), `${file} 出现「保存为新版本」：保存按钮统一叫「保存」（P3）`)
+  }
+
+  // P2 落地抽查：每个视图的头部是一个 .nx-pane-header 容器
+  // （chapter／notes／outline／entry(+rule)／proposal，资料面同样归入）。
+  const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
+  const headers = (pane.match(/class="[^"]*\bnx-pane-header\b/g) ?? []).length
+  assert.ok(headers >= 5, `.nx-pane-header 只落了 ${headers} 处：五个视图的头部都要归一进这个容器`)
+  const titles = (pane.match(/<h4 class="pane-sub">/g) ?? []).length
+  assert.ok(titles >= 5, `h4.pane-sub 只找到 ${titles} 处：每个视图头部都要有标题（P2）`)
+})
+
 test('选中色分级全部来自老版原件：Next 不许抄一份公式', async () => {
   const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
   const nav = await readFile(join(repoRoot, 'src', 'styles', 'workspace-navigation.css'), 'utf-8')

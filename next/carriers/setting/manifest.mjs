@@ -38,6 +38,10 @@ export const SETTING_CARRIER = Object.freeze({
 
   capabilities: ['setting.entries', 'constraint.rules'],
   requires: [],
+
+  // 协议 P14 载体设置注册（工单B 第一步）：声明格式 [{ id, title, group }]，
+  // 由统一设置二级页收进「载体」组。本批先空数组——具体设置项后续批再填。
+  settings: [],
   tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'],
 
   context: {

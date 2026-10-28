@@ -53,7 +53,7 @@ test('C2 路径规则：中文目录正常，越界与 .pinax 直写全拒', () 
  *   3) 认领的工具名必须是内核 19 里已有的（不许虚增工具面）；载体的自有工具逐条点名，加了要留名；
  *   4) 每块板块的 dataDirs 与 scopes 必须一一对应——声明了目录却没申请权限，或反过来，都算清单说谎。
  */
-const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze(['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save'])
+const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze(['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'])
 
 test('M2 口径：next/carriers 发布小说＋设定＋资料三块，目录不重叠且落在中文骨架并集里', async () => {
   const carriersDir = join(repoRoot, 'next', 'carriers')
@@ -87,7 +87,7 @@ test('M2 口径：next/carriers 发布小说＋设定＋资料三块，目录不
   // 自有工具（内核没有的新名字）逐条点名：新增必须在这里留名，防止有人偷偷扩面。
   // 工单B1 起这份名单不再只有写口：构思的 pinax_notes_list 也是载体自有（列与读合在一把里，没有内核名可认领）。
   const own = [NOVEL_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
-  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：小说的 pinax_chapter_save、pinax_outline_save（工单B2）、构思这对（工单B1）与提案三把（工单A）＋ 设定的 pinax_worldbook_save（工单A2）＋ 约束这对 pinax_rule_list/pinax_rule_save（工单E2）＋ 资料三把 pinax_document_list/read/save（工单G1；断言同步）')
+  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：小说的 pinax_chapter_save、pinax_outline_save（工单B2）、构思这对（工单B1）与提案三把（工单A）＋ 设定的 pinax_worldbook_save（工单A2）＋ 约束这对 pinax_rule_list/pinax_rule_save（工单E2）＋ 资料 pinax_document_list/read/save（工单G1）＋ pinax_reference_search（工单H2；断言同步）')
 })
 
 test('能力词表非空且每条有中文名，闭包才算得动', () => {
