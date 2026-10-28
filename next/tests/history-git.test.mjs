@@ -13,6 +13,7 @@ import {
   markDirty,
   readVersion
 } from '../history/gitHistory.mjs'
+import { createFileService } from '../fs/fileService.mjs'
 
 /**
  * D0 历史引擎（R3 裁定）：独立 git-dir `.pinax/history.git` + 内置 isomorphic-git。
@@ -173,6 +174,52 @@ test('提案进历史（工单E3）：.pinax/proposals/ 的提案随快照落库
   const dirOnly = await listFileHistory({ root, path: '.pinax/proposals' })
   assert.equal(dirOnly.ok, true)
   assert.deepEqual(dirOnly.value, [])
+})
+
+test('提案写入真链路（批次16 E3／收口包③）：fileService.writeProposal → 标脏 → 提交 → 提案在历史里查得到', async (t) => {
+  const root = await makeProject(t)
+  // 与 main.mjs 的接线同一形状：fileService 的写入钩子把 relativePath 交给 markDirty。
+  // 这里刻意不用 writeFile 造文件——提案必须从唯一的写入出口走一遍，才能钉住「writeProposal 会标脏」。
+  const fileService = createFileService({ root })
+  const hooked = []
+  fileService.setOnWrite(async ({ relativePath }) => {
+    hooked.push(relativePath)
+    const dirty = await markDirty({ root, paths: [relativePath] })
+    assert.equal(dirty.ok, true, JSON.stringify(dirty.error ?? {}))
+  })
+
+  const proposalName = '20261029T093000-ch1-abcdef12.json'
+  const proposalPath = `.pinax/proposals/${proposalName}`
+  const proposalText = `${JSON.stringify({
+    schema: 'pinax-proposal@1',
+    id: proposalName.replace(/\.json$/u, ''),
+    status: 'proposed',
+    target: { file: CHAPTER },
+    content: '雨从檐口滴下来，巷子里没人。',
+    contentChars: 14
+  }, null, 2)}\n`
+
+  const written = await fileService.writeProposal({ name: proposalName, text: proposalText })
+  assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+  assert.deepEqual(hooked, [proposalPath], 'writeProposal 必须触发写入钩子（批次16 修的就是「只写提案不标脏」）')
+
+  const dirty = JSON.parse(await readFile(join(root, HISTORY_DIRTY_FILE), 'utf-8'))
+  assert.deepEqual(dirty.paths, [proposalPath], '提案路径要真的进脏清单，下一次快照才收得到')
+
+  const committed = await commitSnapshot({ root, message: '提案写入' })
+  assert.equal(committed.ok, true, JSON.stringify(committed.error ?? {}))
+  assert.equal(committed.value.committed, true)
+  assert.ok(committed.value.files.includes(proposalPath), `.pinax/proposals/ 的提案必须进快照（实际：${committed.value.files.join(', ')}）`)
+
+  // 历史里查得到：列表给这一次提交，readVersion 读回与写入时一字不差的提案 JSON。
+  const listed = await listFileHistory({ root, path: proposalPath, limit: 10 })
+  assert.equal(listed.ok, true, JSON.stringify(listed.error ?? {}))
+  assert.equal(listed.value.length, 1)
+  assert.equal(listed.value[0].oid, committed.value.oid)
+  assert.equal(listed.value[0].message, '提案写入')
+  const version = await readVersion({ root, oid: committed.value.oid, path: proposalPath })
+  assert.equal(version.ok, true, JSON.stringify(version.error ?? {}))
+  assert.equal(version.value, proposalText)
 })
 
 test('assets/x.png 不入历史：只脏资产时没有可提交差异，文件历史为空', async (t) => {

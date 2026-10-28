@@ -129,6 +129,14 @@ const shellBundle = await readFile(SHELL_BUNDLE_PATH, 'utf-8')
 check('e 应用菜单落地：外壳产物里有 buildFromTemplate／setApplicationMenu 与通道注册',
   /buildFromTemplate/.test(shellBundle) && /setApplicationMenu/.test(shellBundle) && /ipcMain/.test(shellBundle))
 
+// 批次14 记账（收口包④）：外壳 bundle 也纳入体积断言。它与内核 bundle 是两个入口，
+// 但把内置 git 库与知识服务一起打进产物，是同一类风险；上限 2.5 MB 给足余量（当时约 1.5 MB），
+// 实际值照常打印——涨到哪儿一眼看得见，超了就先停下来问「这次新增的东西值不值这个价」。
+const shellInfo = await stat(SHELL_BUNDLE_PATH)
+check('e2 体积记账：外壳 bundle 未压缩 < 2.5 MB（含 git 库＋知识服务）',
+  shellInfo.size < 2.5 * 1024 * 1024,
+  `${(shellInfo.size / 1024).toFixed(1)} kB`)
+
 // 渲染层必须薄：只带 Vue 与外壳组件，不带内核、不带 MCP 工具面、不碰旧轨页面。
 await build({ logLevel: 'warn', configFile: join(repoRoot, 'next', 'vite.next.renderer.config.mjs') })
 const rendererDir = join(repoRoot, 'next', '.build', 'renderer-next', 'assets')

@@ -15,6 +15,8 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   modelPlaneEndpoint：null（用默认 8451）或 http(s)://… 字符串；
  *   uiZoom：null（用默认 0.85）或 0.5–2.0 的数字；
  *   historyIntervalMinutes：5（默认）或 0–120 的整数，0＝关闭定时快照（D1）；
+ *   writingFontSize：17（默认，＝--nx-fs-lg）或 14–22 的整数——正文字号（工单B 写作偏好节）；
+ *   writingLineHeight：1.9（默认）或 1.6–2.4、步进 0.05——正文行高（工单B 写作偏好节）；
  *   theme：可选迁移字段（D2）——'light' / 'dark' / null；缺省表示「还没迁过」，
  *     渲染层用老 localStorage 的值兜底并一次性迁入（老前端退役后删掉那条兜底）。
  */
@@ -22,13 +24,23 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
 export const PREFS_DEFAULTS = Object.freeze({
   modelPlaneEndpoint: null,
   uiZoom: null,
-  historyIntervalMinutes: 5
+  historyIntervalMinutes: 5,
+  // 工单B（novel.writing 写作偏好节）：正文字号与行高的应用级默认；
+  // 与 next-shell.css 里 .editor-area 的 var() 回退值（--nx-fs-lg / 1.9）保持一致。
+  writingFontSize: 17,
+  writingLineHeight: 1.9
 })
 
 const ZOOM_MIN = 0.5
 const ZOOM_MAX = 2
 const HISTORY_INTERVAL_MIN = 0
 const HISTORY_INTERVAL_MAX = 120
+const WRITING_FONT_SIZE_MIN = 14
+const WRITING_FONT_SIZE_MAX = 22
+const WRITING_LINE_HEIGHT_MIN = 1.6
+const WRITING_LINE_HEIGHT_MAX = 2.4
+/** 行高步进 0.05：用百分数判整，绕开 1.9 * 100 = 190.00000000000003 这类浮点尾巴。 */
+const WRITING_LINE_HEIGHT_STEP_HUNDREDTHS = 5
 const THEMES = new Set(['light', 'dark'])
 
 export function isValidEndpoint(value) {
@@ -69,6 +81,35 @@ export function normalizePrefs(raw) {
         return { ok: false, error: `historyIntervalMinutes 必须是 ${HISTORY_INTERVAL_MIN}–${HISTORY_INTERVAL_MAX} 的整数（0＝关闭），收到：${JSON.stringify(value ?? null)}` }
       }
       out.historyIntervalMinutes = num
+    }
+  }
+  if ('writingFontSize' in source) {
+    const value = source.writingFontSize
+    if (value === null || value === undefined || value === '') {
+      out.writingFontSize = PREFS_DEFAULTS.writingFontSize
+    } else {
+      const num = Number(value)
+      if (!Number.isInteger(num) || num < WRITING_FONT_SIZE_MIN || num > WRITING_FONT_SIZE_MAX) {
+        return { ok: false, error: `writingFontSize 必须是 ${WRITING_FONT_SIZE_MIN}–${WRITING_FONT_SIZE_MAX} 的整数，收到：${JSON.stringify(value ?? null)}` }
+      }
+      out.writingFontSize = num
+    }
+  }
+  if ('writingLineHeight' in source) {
+    const value = source.writingLineHeight
+    if (value === null || value === undefined || value === '') {
+      out.writingLineHeight = PREFS_DEFAULTS.writingLineHeight
+    } else {
+      const num = Number(value)
+      if (!Number.isFinite(num) || num < WRITING_LINE_HEIGHT_MIN || num > WRITING_LINE_HEIGHT_MAX) {
+        return { ok: false, error: `writingLineHeight 必须在 ${WRITING_LINE_HEIGHT_MIN}–${WRITING_LINE_HEIGHT_MAX} 之间，收到：${JSON.stringify(value ?? null)}` }
+      }
+      // 步进 0.05：百分数必须是 5 的倍数（1.75 ✓、1.91 ✗）；存回两位小数，避免浮点尾巴进偏好文件。
+      const hundredths = Math.round(num * 100)
+      if (hundredths % WRITING_LINE_HEIGHT_STEP_HUNDREDTHS !== 0) {
+        return { ok: false, error: `writingLineHeight 必须以 0.05 为步进（${WRITING_LINE_HEIGHT_MIN}／${WRITING_LINE_HEIGHT_MIN + 0.05}／…），收到：${JSON.stringify(value ?? null)}` }
+      }
+      out.writingLineHeight = hundredths / 100
     }
   }
   if ('theme' in source) {

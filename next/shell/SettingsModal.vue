@@ -17,8 +17,12 @@ import WorkbenchModal from './WorkbenchModal.vue'
  * 目录表 props.sections = [{ id, title, group?, keywords?, component, props? }] 注册——分三组：
  * 「应用」偏好与模型／备份与恢复；「项目」载体管理／导入既有稿／新建项目／主载体选择；「文档」文档历史。
  * 载体设置（协议 P14 第二步）：props.carriers 的每块载体按它清单里真声明的设置节
- * （settings: [{ id, title }]）在目录里出目录项（「载体」组，文案照声明的 title），右栏是该节的空态说明；
- * 声明为空数组的载体不占目录格（批次20 按载体标题伪造的占位节已删）。设置项内容组件后续批再注册。
+ * （settings: [{ id, title }]）在目录里出目录项（「载体」组，文案照声明的 title）；
+ * 声明为空数组的载体不占目录格（批次20 按载体标题伪造的占位节已删）。
+ * P14 第三步（工单B）：内容组件由外壳经 props.carrierSectionComponents 注入——
+ * 以「声明 id」为键查表（{ component, props }），查到就渲染真内容，查不到仍出空态；
+ * 合并逻辑放在这里（声明 → 目录项）而不是 AppNext：目录本来就从载体清单现算，
+ * 组件表只是同一个键上的附加物；AppNext 只负责提供组件与当前偏好 props。
  * 未登记的功能不许开弹窗（门禁：next/tests/visual-contract.test.mjs「目录外弹窗不允许存在」的机器版）。
  * 分组标签和目录项同在 tablist 里：标签是 <p>，不是 tab，不参与 roving tabindex；搜索框在 tablist 之外。
  *
@@ -36,36 +40,47 @@ const props = defineProps({
   activeSection: { type: String, default: '' },
   /** 目录表：[{ id, title, group?, keywords?, component, props? }]。 */
   sections: { type: Array, default: () => [] },
+  /** 载体声明节的内容组件表（P14 第三步）：{ [声明 id]: { component, props } }。 */
+  carrierSectionComponents: { type: Object, default: () => ({}) },
   /** 视图里的载体清单：[{ id, title, dataDirs?, settings? }]——settings 是清单里真声明的设置节（P14）。 */
   carriers: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['close', 'changed', 'theme', 'set-enabled', 'set-primary', 'toggle-companion', 'update:activeSection'])
+const emit = defineEmits(['close', 'changed', 'theme', 'set-enabled', 'set-primary', 'toggle-companion', 'writing-prefs', 'update:activeSection'])
 
 /** 目录搜索（工单B）：只过滤左栏，不换右栏当前节。 */
 const searchQuery = ref('')
 
 /**
- * 载体设置节（协议 P14 第二步）：目录格完全由清单里的 settings 声明决定——
+ * 载体设置节（协议 P14 第二步＋第三步）：目录格完全由清单里的 settings 声明决定——
  * 一条声明出的一格，文案照声明的 title；settings 为空数组（或没声明）的载体不出格。
  * 节 id 拼成 `carrier:<载体 id>:<声明 id>`：声明 id 只在载体自己的命名空间里唯一，跨载体可能同名，
  * 拼上载体前缀才能当全局目录键（DOM id／activeSection／搜索命中都用这一份）。
- * 内容组件后续批再注册；右栏先给空态说明，那是真实现（不伪造设置项）。
+ * 内容组件按「声明 id」查 props.carrierSectionComponents（工单B：novel.writing → WritingPrefsSection）：
+ * 查到就是 kind:'carrier-settings-content'（右栏渲染真内容），查不到仍是空态（不伪造设置项）。
  */
 const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
   if (!carrier?.id || !carrier?.title) return []
   const declared = Array.isArray(carrier.settings) ? carrier.settings : []
   return declared
     .filter((setting) => setting?.id && setting?.title)
-    .map((setting) => ({
-      id: `carrier:${carrier.id}:${setting.id}`,
-      title: setting.title,
-      group: '载体',
-      kind: 'carrier-settings',
-      carrierId: carrier.id,
-      settingId: setting.id,
-      // 浅匹配只用已知字段：载体标题／声明标题／「设置」／它认领的数据目录名；不做渲染文本深搜。
-      keywords: [carrier.title, setting.title, '设置', ...(Array.isArray(carrier.dataDirs) ? carrier.dataDirs : [])]
-    }))
+    .map((setting) => {
+      const mapped = props.carrierSectionComponents?.[setting.id] ?? null
+      const section = {
+        id: `carrier:${carrier.id}:${setting.id}`,
+        title: setting.title,
+        group: '载体',
+        kind: mapped?.component ? 'carrier-settings-content' : 'carrier-settings',
+        carrierId: carrier.id,
+        settingId: setting.id,
+        // 浅匹配只用已知字段：载体标题／声明标题／「设置」／它认领的数据目录名；不做渲染文本深搜。
+        keywords: [carrier.title, setting.title, '设置', ...(Array.isArray(carrier.dataDirs) ? carrier.dataDirs : [])]
+      }
+      if (mapped?.component) {
+        section.component = mapped.component
+        section.props = mapped.props ?? {}
+      }
+      return section
+    })
 }))
 
 const allSections = computed(() => [...props.sections, ...carrierSections.value])
@@ -181,7 +196,7 @@ function onTablistKeydown(event) {
           :aria-label="current.title"
           :data-test="`settings-panel-${current.id}`"
         >
-          <!-- 载体设置节（P14 第二步）：目录项来自载体清单的真声明，内容组件后续批注册——空态就是当前真实现。 -->
+          <!-- 载体设置节：查到内容组件（P14 第三步）就渲染真内容；没查到的声明仍是空态（当前真实现）。 -->
           <p
             v-if="current.kind === 'carrier-settings'"
             class="pane-hint"
@@ -194,6 +209,7 @@ function onTablistKeydown(event) {
             @close="emit('close')"
             @changed="emit('changed')"
             @theme="(value) => emit('theme', value)"
+            @writing-prefs="(value) => emit('writing-prefs', value)"
             @set-enabled="(carrier) => emit('set-enabled', carrier)"
             @set-primary="(pluginId) => emit('set-primary', pluginId)"
             @toggle-companion="(pluginId) => emit('toggle-companion', pluginId)"

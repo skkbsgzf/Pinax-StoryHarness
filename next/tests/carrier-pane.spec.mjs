@@ -54,7 +54,7 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, ou
     rules: rules.map((item) => ({ ...item })),
     documents: documents.map((item) => ({ ...item })),
     entries: [
-      { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true },
+      { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true, summary: '雪夜醒来的主角，袖中有一枚停摆的表。' },
       { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
     ]
   }
@@ -137,6 +137,12 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, ou
         }
         hit.revision += 1
         hit.savedText = payload.args.text
+        // 与真工具同一套 meta 语义（收口包②）：keys／tags 覆盖 aliases／tags，summary 原样覆盖（空串＝清空）。
+        if (payload.args.meta) {
+          if (Array.isArray(payload.args.meta.keys)) hit.aliases = payload.args.meta.keys
+          if (Array.isArray(payload.args.meta.tags)) hit.tags = payload.args.meta.tags
+          if (typeof payload.args.meta.summary === 'string') hit.summary = payload.args.meta.summary
+        }
         return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, file: hit.path, revision: hit.revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
       }
       if (payload.tool === 'pinax_rule_list') {
@@ -943,12 +949,13 @@ describe('设定载体', () => {
     await flushPromises()
 
     const saved = tools.calls.find((call) => call.tool === 'pinax_worldbook_save')
-    // 工单C：契约条目保存时把元数据一起带上（作者没改就按读到的值回写，不会把 keys/tags 洗掉）。
+    // 工单C：契约条目保存时把元数据一起带上（作者没改就按读到的值回写，不会把 keys/tags/summary 洗掉）。
+    // 收口包②：摘要与关键词／标签同一个口，没改也原样回写。
     expect(saved.args).toEqual({
       path: '世界书/人物·柯秒.md',
       text: '冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。',
       expectedRevision: 1,
-      meta: { keys: ['柯秒'], tags: ['主角'] }
+      meta: { keys: ['柯秒'], tags: ['主角'], summary: '雪夜醒来的主角，袖中有一枚停摆的表。' }
     })
     // 保存成功：退出编辑态，重读把版本号与正文一起刷新。
     expect(wrapper.find('.entry-text').exists()).toBe(true)
@@ -968,40 +975,61 @@ describe('设定载体', () => {
     wrapper.unmount()
   })
 
-  it('条目元数据（工单C）：编辑态改关键词／标签随 meta 传；阅读态展示关键词；裸 md 不出这两栏', async () => {
+  it('条目元数据（工单C／收口包②）：编辑态改关键词／标签／摘要随 meta 传；阅读态展示关键词与摘要；裸 md 不出这三栏', async () => {
     const tools = fakeTools()
     const data = useBoardData(tools)
     await data.loadEntries()
     const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('setting.entries'), data } })
     await flushPromises()
 
-    // 阅读态：既有 meta 行末尾多一格关键词（数组用顿号连），不另起一行。
+    // 阅读态：既有 meta 行末尾多一格关键词（数组用顿号连）与一格摘要（原文），不另起一行。
     expect(wrapper.find('.entry-meta').text()).toContain('关键词：柯秒')
+    expect(wrapper.find('.entry-meta').text()).toContain('摘要：雪夜醒来的主角，袖中有一枚停摆的表。')
 
     await wrapper.find('.entry-edit').trigger('click')
     await flushPromises()
     const keysInput = wrapper.find('[aria-label="条目关键词（逗号分隔）"]')
     const tagsInput = wrapper.find('[aria-label="条目标签（逗号分隔）"]')
+    const summaryInput = wrapper.find('[aria-label="条目摘要（最多 500 字）"]')
     expect(keysInput.exists()).toBe(true)
     expect(tagsInput.exists()).toBe(true)
-    // 草稿从读到的 frontmatter 起（数组 → 逗号分隔字符串）。
+    expect(summaryInput.exists()).toBe(true)
+    // 草稿从读到的 frontmatter 起（数组 → 逗号分隔字符串；摘要原样）。
     expect(keysInput.element.value).toBe('柯秒')
     expect(tagsInput.element.value).toBe('主角')
+    expect(summaryInput.element.value).toBe('雪夜醒来的主角，袖中有一枚停摆的表。')
+    // 摘要上限写在控件上（maxlength），旁边有一枚字数说明（不另铺常驻提示）。
+    expect(summaryInput.attributes('maxlength')).toBe('500')
+    expect(wrapper.find('.entry-meta-count').text()).toBe('18/500')
     // 元数据行在正文 textarea 之上。
     const row = wrapper.find('.entry-meta-edit').element
     const area = wrapper.find('.editor-area').element
     expect(row.compareDocumentPosition(area) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
-    // 中英文逗号都认；保存时拆成数组随 meta 传。
+    // 中英文逗号都认；保存时拆成数组随 meta 传；摘要原样随 meta.summary 传。
     await keysInput.setValue('柯秒，秒子')
     await tagsInput.setValue('主角, 停摆的表')
+    await summaryInput.setValue('雨夜醒来的主角，袖中的表停了。')
     await wrapper.find('.editor-foot .control-primary').trigger('click')
     await flushPromises()
     const saved = tools.calls.find((call) => call.tool === 'pinax_worldbook_save')
-    expect(saved.args.meta).toEqual({ keys: ['柯秒', '秒子'], tags: ['主角', '停摆的表'] })
+    expect(saved.args.meta).toEqual({ keys: ['柯秒', '秒子'], tags: ['主角', '停摆的表'], summary: '雨夜醒来的主角，袖中的表停了。' })
+    // 保存后回到阅读态：摘要以磁盘（工具重读）为准，不拿草稿自说自话。
+    expect(wrapper.find('.entry-text').exists()).toBe(true)
+    expect(wrapper.find('.entry-meta').text()).toContain('摘要：雨夜醒来的主角，袖中的表停了。')
+
+    // 摘要留空＝清空（空串随 meta 传，与工具 schema 同一口径）；阅读态不再显示这一格。
+    await wrapper.find('.entry-edit').trigger('click')
+    await flushPromises()
+    await wrapper.find('[aria-label="条目摘要（最多 500 字）"]').setValue('')
+    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+    const cleared = tools.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1)
+    expect(cleared.args.meta.summary).toBe('')
+    expect(wrapper.find('.entry-meta').text()).not.toContain('摘要：')
     wrapper.unmount()
 
-    // 裸 md（没有 frontmatter）：编辑态不出这两栏，只给一句话说明；保存也不带 meta。
+    // 裸 md（没有 frontmatter）：编辑态不出这三栏，只给一句话说明；保存也不带 meta。
     const bareTools = fakeTools()
     const bareData = useBoardData(bareTools)
     await bareData.loadEntries()
@@ -1010,6 +1038,7 @@ describe('设定载体', () => {
     const bare = mount(CarrierPaneHost, { props: { pane: paneOf('setting.entries'), data: bareData } })
     await flushPromises()
     expect(bare.find('[aria-label="条目关键词（逗号分隔）"]').exists()).toBe(false)
+    expect(bare.find('[aria-label="条目摘要（最多 500 字）"]').exists()).toBe(false)
     expect(bare.find('[data-test="entry-meta-bare"]').text()).toContain('没有 frontmatter')
     await bare.find('.editor-area').setValue('裸 md 的新正文。')
     await bare.find('.editor-foot .control-primary').trigger('click')

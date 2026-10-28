@@ -12,6 +12,7 @@ import ImportSection from './settings/ImportSection.vue'
 import BackupSection from './settings/BackupSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import HistorySection from './settings/HistorySection.vue'
+import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { IPC_CHANNELS, IPC_EVENT } from './ipcContract.mjs'
@@ -58,6 +59,10 @@ const dragging = ref(null)
 const extraEnabled = ref([])
 /** 明暗主题：键与 class 契约跟老前端 themeStore 一致，两边共用一份偏好。 */
 const scheme = ref(readScheme())
+/** 写作偏好（工单B）：字号／行高的兜底值与 appPreferences.PREFS_DEFAULTS 一致（17／1.9）。 */
+const WRITING_FONT_SIZE_DEFAULT = 17
+const WRITING_LINE_HEIGHT_DEFAULT = 1.9
+const writingPrefs = ref({ fontSize: WRITING_FONT_SIZE_DEFAULT, lineHeight: WRITING_LINE_HEIGHT_DEFAULT })
 
 const project = computed(() => view.value?.project ?? null)
 const runtime = computed(() => view.value?.runtime ?? { tools: [], started: false, title: 'Pi-Agent', budgetPriority: 0, writeSurface: '.pinax/proposals/', reservedSlotReason: '' })
@@ -117,6 +122,22 @@ const historyTarget = computed(() => {
  *  节的动作经事件上交：通道调用与 refresh 留在外壳（同 RuntimeDock 持桥发问的分工）。 */
 const settingsOpen = ref(false)
 const activeSection = ref('prefs')
+
+/**
+ * 载体声明节的内容组件表（工单B · P14 第三步）：键是「声明 id」（不是载体 id）。
+ * 第一个真内容＝novel.writing → WritingPrefsSection；props 里是当前偏好值。
+ * 合并（声明 → 目录项 → 组件）在 SettingsModal.carrierSections 里做：没有映射的声明仍出空态。
+ */
+const carrierSectionComponents = computed(() => ({
+  'novel.writing': {
+    component: WritingPrefsSection,
+    props: {
+      bridge: props.bridge,
+      fontSize: writingPrefs.value.fontSize,
+      lineHeight: writingPrefs.value.lineHeight
+    }
+  }
+}))
 
 /**
  * 目录表（工单B · 作者裁定：参照 Obsidian 设置页）。
@@ -514,6 +535,48 @@ async function syncThemeFromPrefs() {
   }
 }
 
+/**
+ * 写作偏好的生效方式（工单B）：把字号／行高写到根节点的 CSS 变量上。
+ * next-shell.css 的 .editor-area 只读 --writing-font-size／--writing-line-height，
+ * 没写变量时用 var() 回退（--nx-fs-lg／1.9）——首帧与「桥不在」都不空。
+ * 变量名与 .editor-area 的 var() 一一对应，改一边必须改另一边（视觉/界面测试钉着）。
+ */
+function applyWritingPrefs({ fontSize, lineHeight } = {}) {
+  const root = globalThis.document?.documentElement
+  if (!root?.style?.setProperty) return
+  const size = Number.isFinite(fontSize) ? fontSize : WRITING_FONT_SIZE_DEFAULT
+  const height = Number.isFinite(lineHeight) ? lineHeight : WRITING_LINE_HEIGHT_DEFAULT
+  root.style.setProperty('--writing-font-size', `${size}px`)
+  root.style.setProperty('--writing-line-height', String(height))
+}
+
+/** 挂载时读一次偏好（应用级、不随项目走），把写作偏好落到根节点。读不到就保留默认值。 */
+async function loadWritingPrefs() {
+  if (!props.bridge?.request) return
+  try {
+    const stored = await props.bridge.request(IPC_CHANNELS.prefsGet, {})
+    if (!stored?.ok) return
+    writingPrefs.value = {
+      fontSize: Number.isFinite(stored.value?.writingFontSize) ? stored.value.writingFontSize : WRITING_FONT_SIZE_DEFAULT,
+      lineHeight: Number.isFinite(stored.value?.writingLineHeight) ? stored.value.writingLineHeight : WRITING_LINE_HEIGHT_DEFAULT
+    }
+    applyWritingPrefs(writingPrefs.value)
+  } catch {
+    // 偏好读失败不拦外壳：CSS 变量没设时 .editor-area 走 var() 回退。
+  }
+}
+
+/** 写作偏好节保存成功后的落地：更新组件 props 源并立即改根节点变量（不再读一次偏好）。 */
+function applyWritingPrefsFromSection(value) {
+  const fontSize = Number(value?.fontSize)
+  const lineHeight = Number(value?.lineHeight)
+  writingPrefs.value = {
+    fontSize: Number.isFinite(fontSize) ? fontSize : WRITING_FONT_SIZE_DEFAULT,
+    lineHeight: Number.isFinite(lineHeight) ? lineHeight : WRITING_LINE_HEIGHT_DEFAULT
+  }
+  applyWritingPrefs(writingPrefs.value)
+}
+
 function startDrag(target, event) {
   dragging.value = target
   const startX = event.clientX
@@ -538,6 +601,7 @@ function startDrag(target, event) {
 onMounted(() => {
   applyScheme(scheme.value)
   void syncThemeFromPrefs()
+  void loadWritingPrefs()
   void refresh()
   // 视口跨过 860px：窄屏收起索引窗（它会盖住正文），宽屏展开（桌面形态）。
   narrowQuery?.addEventListener?.('change', (event) => {
@@ -677,9 +741,11 @@ onBeforeUnmount(() => {
         :active-section="activeSection"
         :sections="settingsSections"
         :carriers="carriers"
+        :carrier-section-components="carrierSectionComponents"
         @close="closeSettings"
         @changed="refresh"
         @theme="applyThemeChoice"
+        @writing-prefs="applyWritingPrefsFromSection"
         @set-enabled="setCarrierEnabled"
         @set-primary="pickPrimary"
         @toggle-companion="toggleCompanion"

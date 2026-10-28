@@ -73,9 +73,10 @@ export function useBoardData(bridge) {
     /** 条目编辑（工单A2）：阅读态与编辑态的开关＋草稿，与正文的 draft 分开各拿各的。 */
     editingEntry: false,
     entryDraft: '',
-    /** 条目元数据草稿（工单C）：frontmatter 的 keys／tags 在界面上是逗号分隔字符串，
-     *  保存时再拆成数组随 pinax_worldbook_save 的 meta 传（裸 md 没有 frontmatter，不进这两栏）。 */
-    entryMetaDraft: { keys: '', tags: '' },
+    /** 条目元数据草稿（工单C／收口包②）：frontmatter 的 keys／tags 在界面上是逗号分隔字符串，
+     *  保存时再拆成数组随 pinax_worldbook_save 的 meta 传（裸 md 没有 frontmatter，不进这三栏）。
+     *  summary 是原样的字符串：空串＝清空（与工具 schema 的「传空串清空」同一口径），不在这里做截断。 */
+    entryMetaDraft: { keys: '', tags: '', summary: '' },
     listWarnings: [],
     entryWarnings: [],
     selection: { type: null, item: null }
@@ -628,13 +629,15 @@ export function useBoardData(bridge) {
 
   /** 条目编辑（工单A2）：「编辑」进草稿，「取消」原样退回，保存走设定载体自有的 pinax_worldbook_save
    *  ——带读到的修订号，冲突由文件服务拒，与正文保存同一套并发规矩。
-   *  工单C：契约条目的 frontmatter 关键词／标签一起进草稿（entryMetaDraft），保存时随 meta 落盘。 */
+   *  工单C：契约条目的 frontmatter 关键词／标签一起进草稿（entryMetaDraft），保存时随 meta 落盘。
+   *  收口包②：摘要（summary）与关键词／标签同进同出——空串在保存时按「清空」传。 */
   function editEntry() {
     if (!state.entry) return
     state.entryDraft = state.entry.content ?? ''
     state.entryMetaDraft = {
       keys: joinMetaList(state.entry.keys),
-      tags: joinMetaList(state.entry.tags)
+      tags: joinMetaList(state.entry.tags),
+      summary: typeof state.entry.summary === 'string' ? state.entry.summary : ''
     }
     state.editingEntry = true
     state.error = null
@@ -643,7 +646,7 @@ export function useBoardData(bridge) {
   function cancelEditEntry() {
     state.editingEntry = false
     state.entryDraft = ''
-    state.entryMetaDraft = { keys: '', tags: '' }
+    state.entryMetaDraft = { keys: '', tags: '', summary: '' }
     state.error = null
   }
 
@@ -651,9 +654,10 @@ export function useBoardData(bridge) {
     state.entryDraft = value
   }
 
-  /** 元数据草稿的逐字写入（工单C）：field 只认 keys／tags，值原样保留（逗号在保存时才切）。 */
+  /** 元数据草稿的逐字写入（工单C／收口包②）：field 只认 keys／tags／summary，
+   *  值原样保留（逗号在保存时才切，摘要不截断——上限由输入框 maxlength 与工具 schema 两头守）。 */
   function setEntryMeta(field, value) {
-    if (field !== 'keys' && field !== 'tags') return
+    if (field !== 'keys' && field !== 'tags' && field !== 'summary') return
     state.entryMetaDraft = { ...state.entryMetaDraft, [field]: String(value ?? '') }
   }
 
@@ -667,7 +671,9 @@ export function useBoardData(bridge) {
     if (state.entry.contract) {
       payload.meta = {
         keys: splitMetaList(state.entryMetaDraft.keys),
-        tags: splitMetaList(state.entryMetaDraft.tags)
+        tags: splitMetaList(state.entryMetaDraft.tags),
+        // 摘要按原话落盘；首尾空白不算内容，整栏留空＝空串＝清空。
+        summary: String(state.entryMetaDraft.summary ?? '').trim()
       }
     }
     const saved = await tool('pinax_worldbook_save', payload)

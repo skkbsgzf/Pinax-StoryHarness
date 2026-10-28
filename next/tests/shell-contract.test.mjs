@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
@@ -16,7 +17,7 @@ import {
 } from '../shell/ipcContract.mjs'
 import { MENU_TEMPLATE, canCarrierInjectMenu, flattenMenuIds } from '../shell/menus.mjs'
 import { OPEN_SLOTS, RESERVED_SLOTS, isReservedSlot, orderActivityItems, slotReason } from '../shell/slots.mjs'
-import { PREFS_DEFAULTS, normalizePrefs } from '../runtime/appPreferences.mjs'
+import { PREFS_DEFAULTS, createAppPreferences, normalizePrefs } from '../runtime/appPreferences.mjs'
 
 /** D1 历史五通道：名字与顺序都钉在门禁里，UI 与主进程共用同一份常量。 */
 const HISTORY_CHANNELS = [
@@ -116,6 +117,61 @@ test('标题栏与页内菜单行（工单F）：overlay 留给原生窗控，�
   assert.match(railSource, /aria-disabled="true"/, '无项目时的载体格必须是禁用态')
   assert.match(railSource, /打开项目后可用/, '无项目时的载体格必须说明原因')
   assert.match(appSource, /:carriers="carriers"/, 'AppNext 必须把 carriers 传给竖条')
+})
+
+test('主题通知与原生窗控浮层（收口包⑤）：prefs:theme 通道存在且只做副作用，浮层随主题与缩放重设', async () => {
+  // 通道在合同表里（渲染层经同一张表拿到白名单），命名与其它通道同一命名空间。
+  assert.equal(IPC_CHANNELS.prefsTheme, 'pinax:agent:prefs:theme')
+
+  const applied = []
+  const dispatcher = createIpcDispatcher({ session: harness().session, onThemeChanged: async (theme) => applied.push(theme) })
+  const notified = await dispatcher.dispatch(IPC_CHANNELS.prefsTheme, { theme: 'dark' })
+  assert.equal(notified.ok, true, JSON.stringify(notified.error ?? {}))
+  assert.deepEqual(applied, ['dark'], 'prefs:theme 必须把主题交给主进程的副作用钩子')
+  assert.equal(notified.value.applied, true)
+  assert.equal(notified.value.theme, 'dark')
+
+  // 通知不是请求：不是 light／dark 的载荷按参数错误拒（不让一条坏消息把浮层设成非法色）。
+  const bad = await dispatcher.dispatch(IPC_CHANNELS.prefsTheme, { theme: 'blue' })
+  assert.equal(bad.ok, false)
+  assert.equal(bad.error.code, NEXT_ERROR_CODES.INVALID_INPUT)
+  // 未注入钩子：通知语义下不当作数据请求失败，如实返回 applied:false。
+  const bare = await createIpcDispatcher({ session: harness().session }).dispatch(IPC_CHANNELS.prefsTheme, { theme: 'light' })
+  assert.equal(bare.ok, true)
+  assert.equal(bare.value.applied, false)
+
+  // 主进程：浮层常量的两档 --text-muted、height 按缩放折算、三个触发点都在 main.mjs。
+  const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
+  assert.match(mainSource, /setTitleBarOverlay\(/, '必须调用 window.setTitleBarOverlay 重设浮层')
+  assert.match(mainSource, /light:\s*'#6b6b6b'/, 'light 档 symbolColor 要落常量表')
+  assert.match(mainSource, /dark:\s*'#9b9b9b'/, 'dark 档 symbolColor 要落常量表')
+  assert.match(mainSource, /Math\.round\(TITLEBAR_OVERLAY\.height \* scale\)/, 'height 必须按 Math.round(36 * zoom) 折算（DIP）')
+  const triggers = mainSource.match(/updateTitleBarOverlay\(\{ theme: currentScheme, zoom: currentUiZoom \}\)/g) ?? []
+  assert.ok(triggers.length >= 2, '启动与 onPrefsApplied 两处都必须重设浮层')
+  assert.match(mainSource, /onThemeChanged:\s*async \(theme\)/, 'prefs:theme 通知必须接到同一个重设函数')
+  assert.match(mainSource, /titleBarOverlay:\s*titleBarOverlayOptions\(\{ theme, zoom: uiZoom \}\)/, '建窗首帧就按主题/缩放给浮层')
+
+  // 渲染层：writeScheme 落完主题就发通知（fire-and-forget，不是请求-应答）。
+  const themeSource = await readFile(new URL('../shell/theme.mjs', import.meta.url), 'utf-8')
+  assert.match(themeSource, /import \{ IPC_CHANNELS \} from '\.\/ipcContract\.mjs'/, '主题模块从通道合同取名字，不自造字符串')
+  assert.match(themeSource, /applyScheme\(next\)\s*\n\s*notifyThemeChanged\(next\)/, 'writeScheme 落完主题必须通知主进程')
+  assert.match(themeSource, /globalThis\.pinaxNext\?\.request\?\.\(IPC_CHANNELS\.prefsTheme, \{ theme: scheme \}\)/, '通知走现有 request 桥（preload 白名单随通道表自动放行）')
+  assert.match(themeSource, /sent\?\.catch\?\.\(\(\) => \{\}\)/, '通知失败必须静默：主题已落地，不因桥不在而回滚')
+
+  // 行为侧：writeScheme 真调一次桥（node 里没有 document/localStorage，applyScheme/双写各自走自己的空路径）。
+  const { writeScheme } = await import('../shell/theme.mjs')
+  const sent = []
+  globalThis.pinaxNext = { request: (channel, payload) => { sent.push([channel, payload]); return Promise.resolve({ ok: true }) } }
+  try {
+    assert.equal(writeScheme('dark'), 'dark')
+    assert.deepEqual(sent, [[IPC_CHANNELS.prefsTheme, { theme: 'dark' }]], 'writeScheme 必须把主题经 prefs:theme 发给主进程')
+    sent.length = 0
+    // 非法主题回默认 light，通知里也必须是落地的那个值（不是原始输入）。
+    assert.equal(writeScheme('blue'), 'light')
+    assert.deepEqual(sent, [[IPC_CHANNELS.prefsTheme, { theme: 'light' }]])
+  } finally {
+    delete globalThis.pinaxNext
+  }
 })
 
 test('IPC 通道全在 pinax:agent: 命名空间内，未注册通道直接拒', async () => {
@@ -429,6 +485,40 @@ test('主题偏好字段（D2）：只认 light／dark／null；prefs:set 单写
   const written = await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { theme: 'dark' })
   assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
   assert.deepEqual(captured, { theme: 'dark' }, '只写 theme：端点/缩放/历史间隔不得被 undefined 顺手重置')
+})
+
+test('写作偏好通道（工单B）：prefs:set 把 writingFontSize／writingLineHeight 透传到真偏好存储，patch 语义不重置其它字段', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'pinax-prefs-ipc-'))
+  try {
+    // 真 appPreferences 实例（不是 mock store）：证明 IPC 层的白名单真的把两个字段抄进去了。
+    const prefs = createAppPreferences({ file: join(dir, 'next-preferences.json') })
+    const dispatcher = createIpcDispatcher({ session: harness().session, prefs })
+    const written = await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { writingFontSize: 20, writingLineHeight: 2 })
+    assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+    assert.equal(written.value.writingFontSize, 20)
+    assert.equal(written.value.writingLineHeight, 2, '2 是 0.05 的整步进，落盘应归一为 2')
+
+    const reread = await prefs.read()
+    assert.equal(reread.value.writingFontSize, 20)
+    assert.equal(reread.value.writingLineHeight, 2)
+    const onDisk = JSON.parse(await readFile(join(dir, 'next-preferences.json'), 'utf-8'))
+    assert.equal(onDisk.writingFontSize, 20, '偏好文件里必须真的有这个字段')
+    assert.equal(onDisk.writingLineHeight, 2)
+
+    // 「载荷带哪个字段才写哪个」：只改缩放不得把写作偏好重置回默认（批次21 修的关键行为）。
+    const zoomed = await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { uiZoom: 0.95 })
+    assert.equal(zoomed.ok, true, JSON.stringify(zoomed.error ?? {}))
+    assert.equal(zoomed.value.writingFontSize, 20)
+    assert.equal(zoomed.value.writingLineHeight, 2)
+
+    // 白名单不绕过值域：越界在真存储层被拒，已存值不被污染。
+    const bad = await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { writingFontSize: 99 })
+    assert.equal(bad.ok, false)
+    assert.match(String(bad.error?.message), /14–22/)
+    assert.equal((await prefs.read()).value.writingFontSize, 20)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test('主进程历史接线（D1）：建仓＋起表＋关窗兜底＋写入标脏钩子都落在 main.mjs', async () => {

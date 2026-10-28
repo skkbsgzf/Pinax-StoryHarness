@@ -117,6 +117,9 @@ export async function readSettingEntries({ pluginId = SETTING_CARRIER_ID, fileSe
         type: parsed.entry.type || 'general',
         keys: [...(parsed.entry.keys ?? [])],
         tags: Array.isArray(parsed.entry.tags) ? parsed.entry.tags : [],
+        // 收口包②（调度方裁定 dwfq-5c79bf4a-1）：摘要随条目一起透出，阅读态才「有值才显示」。
+        // 只加字段，不改解析/序列化语义。
+        summary: typeof parsed.entry.summary === 'string' ? parsed.entry.summary : '',
         relations: Array.isArray(parsed.entry.relations) ? parsed.entry.relations : [],
         content,
         path: read.value.relativePath,

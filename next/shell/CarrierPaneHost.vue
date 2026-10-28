@@ -48,6 +48,14 @@ function stampOf(value) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+/** 条目摘要的阅读态预览（收口包②）：meta 行只占一行，超过 80 字就截断并加省略号。
+ *  截断只发生在这里（显示），保存与磁盘上的摘要始终是全文。 */
+const SUMMARY_PREVIEW_CHARS = 80
+function clipSummary(value) {
+  const text = String(value ?? '').trim()
+  return text.length > SUMMARY_PREVIEW_CHARS ? `${text.slice(0, SUMMARY_PREVIEW_CHARS)}…` : text
+}
+
 /**
  * 资料板检索（工单H2）：输入在面板头部，结果只走 knowledge:search 通道（主进程 knowledgeService，
  * worker 线程、零 HTTP）。命中若指向「资料/」下的文件，点击回到 pinax_document_read 打开原文；
@@ -150,7 +158,8 @@ function onPaneKeydown(event) {
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return
   if (String(event.key ?? '').toLowerCase() !== 's') return
   // 只认真正的编辑器（textarea／大纲标题输入框）：提案的 pre 也挂 .editor-area，不能当编辑区。
-  if (!event.target?.matches?.('textarea.editor-area, input.outline-title')) return
+  // 收口包②：条目摘要也是编辑面的一部分，在摘要栏里按 Ctrl+S 同样落这次保存。
+  if (!event.target?.matches?.('textarea.editor-area, textarea.entry-meta-summary, input.outline-title')) return
   event.preventDefault()
   void saveCurrent()
 }
@@ -390,7 +399,7 @@ function actOnSaveChip() {
       <div v-if="data.entry" class="entry-body">
         <div class="entry-head nx-pane-header">
           <h4 class="pane-sub">{{ data.entry.name }}</h4>
-          <span class="entry-meta">{{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="data.entry.keys?.length"> · 关键词：{{ data.entry.keys.join('、') }}</template><template v-if="!data.entry.contract">（未建档）</template></span>
+          <span class="entry-meta">{{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="data.entry.keys?.length"> · 关键词：{{ data.entry.keys.join('、') }}</template><template v-if="clipSummary(data.entry.summary)"> · 摘要：{{ clipSummary(data.entry.summary) }}</template><template v-if="!data.entry.contract">（未建档）</template></span>
           <span v-if="(chipVisible && saveChip) || !data.editingEntry" class="nx-pane-actions">
             <!-- 保存 chip（批次19 H1 收尾）：Ctrl+S 与下方「保存」按钮同一格反馈；阅读态留着让结果看得见。 -->
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
@@ -402,7 +411,9 @@ function actOnSaveChip() {
           </span>
         </div>
         <!-- 条目元数据（工单C）：契约条目的 frontmatter 关键词／标签在这里改，随保存一起走 meta；
-             裸 md 没有 frontmatter，只给一句话说明（保存仍按原样整份写正文）。 -->
+             裸 md 没有 frontmatter，只给一句话说明（保存仍按原样整份写正文）。
+             收口包②：关键词／标签之下补「摘要」一栏——textarea 走 .nx-field 词汇，500 字上限由
+             maxlength 与工具 schema 两头守，旁边一枚字数说明（不另起常驻提示）。 -->
         <div v-if="data.editingEntry && data.entry.contract" class="entry-meta-edit">
           <label class="entry-meta-field">
             <span class="entry-meta-label">关键词</span>
@@ -424,9 +435,22 @@ function actOnSaveChip() {
               @input="data.setEntryMeta('tags', $event.target.value)"
             >
           </label>
+          <label class="entry-meta-field is-summary">
+            <span class="entry-meta-label">摘要</span>
+            <textarea
+              class="nx-field entry-meta-summary"
+              :value="data.entryMetaDraft.summary"
+              maxlength="500"
+              rows="2"
+              spellcheck="false"
+              aria-label="条目摘要（最多 500 字）"
+              @input="data.setEntryMeta('summary', $event.target.value)"
+            />
+            <span class="entry-meta-count" aria-hidden="true">{{ data.entryMetaDraft.summary.length }}/500</span>
+          </label>
         </div>
         <p v-else-if="data.editingEntry" class="pane-hint entry-meta-bare" data-test="entry-meta-bare">
-          这篇没有 frontmatter（未按世界书文件契约建档），关键词／标签改不了；保存仍按原样整份写正文。
+          这篇没有 frontmatter（未按世界书文件契约建档），关键词／标签／摘要改不了；保存仍按原样整份写正文。
         </p>
         <textarea
           v-if="data.editingEntry"
@@ -667,6 +691,27 @@ function actOnSaveChip() {
 }
 .entry-meta-bare {
   margin: 0 0 8px;
+}
+
+/* 摘要一栏（收口包②）：独占整行——label 顶对齐，textarea 占满剩余宽度，右侧一枚字数说明。
+   输入仍是 .nx-field primitive（颜色／圆角／字号都由它带），这里只调排布与高度。 */
+.entry-meta-field.is-summary {
+  flex-basis: 100%;
+  align-items: flex-start;
+}
+.entry-meta-field.is-summary .entry-meta-label {
+  padding-top: 8px;
+}
+.entry-meta-summary {
+  min-height: 56px;
+  line-height: 1.6;
+}
+.entry-meta-count {
+  flex: none;
+  padding-top: 8px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
 }
 </style>
 

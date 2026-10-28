@@ -210,6 +210,9 @@ export function createSettingTools(context = {}) {
             type: hit.type,
             tags: hit.tags,
             keys: hit.keys,
+            // 收口包②（调度方裁定 dwfq-5c79bf4a-1）：摘要随读返回，阅读态 meta 行才有东西可显示。
+            // 裸 md 没有 frontmatter，按空串返回（不是「没读到」）。
+            summary: typeof hit.summary === 'string' ? hit.summary : '',
             relations: hit.relations,
             path: hit.path,
             revision: hit.revision,

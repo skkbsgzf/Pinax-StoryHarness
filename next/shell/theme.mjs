@@ -2,8 +2,10 @@
  * Next 外壳的明暗主题。
  *
  * 权威来源（D2 · R3-1）：偏好 JSON 的 theme 字段（next-preferences.json，经 prefs:get／prefs:set 通道）。
- * 本模块只做三件事：把 scheme 落到 html class（theme-legacy theme-light／theme-dark）、
- * 提供合法性判断、以及**只写不读地**维护老前端那枚 localStorage 键。
+ * 本模块只做四件事：把 scheme 落到 html class（theme-legacy theme-light／theme-dark）、
+ * 提供合法性判断、**只写不读地**维护老前端那枚 localStorage 键、以及把主题变更通知主进程。
+ * 最后一件是收口包⑤（调度方裁定 dwfq-5c79bf4a-1）：原生窗控浮层（titleBarOverlay）只吃真实颜色值，
+ * 取不到 CSS token，所以每次 writeScheme 都发一次 prefs:theme 通知（fire-and-forget，不 await）。
  *
  * legacy-localstorage-bridge：老前端（src/stores/themeStore.js）还认 app_theme。
  * 在它退役前，Next 每次切主题都双写一次这个键——**但不从它读**：
@@ -14,6 +16,8 @@
  *
  * 这里不引 pinia：Next 渲染层不引老前端的 store（薄渲染层门禁）。
  */
+import { IPC_CHANNELS } from './ipcContract.mjs'
+
 const LS_COLOR = 'app_theme'
 const VALID_SCHEMES = ['light', 'dark']
 const DEFAULT_SCHEME = 'light'
@@ -44,5 +48,20 @@ export function writeScheme(scheme) {
     // 存储不可用时内存里的主题照样生效（跟老前端 themeStore 同一口径）。
   }
   applyScheme(next)
+  notifyThemeChanged(next)
   return next
+}
+
+/**
+ * 通知主进程「主题已经变了」（收口包⑤）：主进程据此重设原生窗控浮层的 symbolColor。
+ * 这是通知不是请求——不 await、失败静默：主题已经落在 documentElement 上，桥不在（纯浏览器预览、
+ * jsdom 单测、prefs 写失败）都不影响主题本身生效。
+ */
+function notifyThemeChanged(scheme) {
+  try {
+    const sent = globalThis.pinaxNext?.request?.(IPC_CHANNELS.prefsTheme, { theme: scheme })
+    sent?.catch?.(() => {})
+  } catch {
+    // 桥不可用时静默：下一条同主题的通知由下一次 writeScheme 再发。
+  }
 }

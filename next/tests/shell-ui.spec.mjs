@@ -427,6 +427,53 @@ describe('偏好与模型面板（批次8①）', () => {
     wrapper.unmount()
   })
 
+  it('写作偏好节（工单B · P14 第一个真内容）：改字号／行高保存时偏好载荷带 writingFontSize／writingLineHeight，根节点变量跟着变', async () => {
+    const handlers = new Map()
+    const save = vi.fn(async (patch) => ({
+      ok: true,
+      value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light', ...patch }
+    }))
+    handlers.set(IPC_CHANNELS.prefsSet, save)
+    const bridge = prefsBridge({
+      handlers,
+      prefsValue: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light', writingFontSize: 18, writingLineHeight: 2 }
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 挂载即读偏好在根节点写 CSS 变量（.editor-area 的 font-size／line-height 只读这两个变量）。
+    expect(document.documentElement.style.getPropertyValue('--writing-font-size')).toBe('18px')
+    expect(document.documentElement.style.getPropertyValue('--writing-line-height')).toBe('2')
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    const writingTab = wrapper.findAll('.settings-navigation .settings-tab')
+      .find((node) => node.text() === '写作偏好')
+    await writingTab.trigger('click')
+    await flushPromises()
+
+    const panel = wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]')
+    expect(panel.exists()).toBe(true)
+    const fontInput = panel.find('.writing-font-size')
+    const lineInput = panel.find('.writing-line-height')
+    expect(Number(fontInput.element.value)).toBe(18)
+    expect(Number(lineInput.element.value)).toBe(2)
+
+    await fontInput.setValue('20')
+    await lineInput.setValue('2.1')
+    await panel.find('.control-primary').trigger('click')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalledWith({ writingFontSize: 20, writingLineHeight: 2.1 })
+    expect(panel.find('.prefs-state.is-ready').text()).toContain('已保存并生效')
+    // 保存后的生效路径：偏好回写 → 外壳写根节点变量（不重开窗口、不重读偏好）。
+    expect(document.documentElement.style.getPropertyValue('--writing-font-size')).toBe('20px')
+    expect(document.documentElement.style.getPropertyValue('--writing-line-height')).toBe('2.1')
+    wrapper.unmount()
+    document.documentElement.style.removeProperty('--writing-font-size')
+    document.documentElement.style.removeProperty('--writing-line-height')
+  })
+
   it('新建项目走「选目录」：未选目录时新建钮禁用，选后载荷带 root 与名字', async () => {
     const view = { ...emptyFrameworkView(), needsPrimary: true, carriers: [{ id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }] }
     const handlers = new Map()
@@ -1336,7 +1383,7 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     wrapper.unmount()
   })
 
-  it('载体设置节读真声明（协议 P14 第二步）：有声明的载体按声明 title 出目录项，空声明载体不出格', async () => {
+  it('载体设置节读真声明（P14 第二／三步）：有声明的载体出目录项，novel.writing 渲染真内容，未映射声明仍空态', async () => {
     const handlers = new Map()
     const bridge = modalBridge({ handlers })
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -1356,9 +1403,33 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
       .find((node) => node.text() === '写作偏好')
     await carrierTab.trigger('click')
     await flushPromises()
-    // 节 id 拼了载体前缀（声明 id 只在载体命名空间里唯一）；内容组件后续批——空态就是当前真实现。
-    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="carrier-settings-empty"]').text()).toBe('该载体的设置项还没有内容')
+    // 节 id 拼了载体前缀（声明 id 只在载体命名空间里唯一）；
+    // 工单B：novel.writing 在组件表里，右栏是真内容（字号/行高），不再是空态。
+    const panel = wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]')
+    expect(panel.exists()).toBe(true)
+    expect(wrapper.find('[data-test="carrier-settings-empty"]').exists()).toBe(false)
+    // prefsGet 没带写作字段（modalBridge 返回 {}）→ 组件按默认 17／1.9 起。
+    expect(Number(panel.find('.writing-font-size').element.value)).toBe(17)
+    expect(Number(panel.find('.writing-line-height').element.value)).toBe(1.9)
     wrapper.unmount()
+
+    // 没有组件映射的声明（novel.unknown）仍出空态——注册制不伪造设置项。
+    const unknownHandlers = new Map()
+    const novel = carrierView().carriers[0]
+    const unknownView = {
+      ...carrierView(),
+      carriers: [{ ...novel, settings: [{ id: 'novel.unknown', title: '未实现节' }] }]
+    }
+    const unknown = mount(AppNext, { props: { bridge: modalBridge({ handlers: unknownHandlers, view: unknownView }) } })
+    await flushPromises()
+    unknownHandlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    const unknownTab = unknown.findAll('.settings-navigation .settings-tab')
+      .find((node) => node.text() === '未实现节')
+    await unknownTab.trigger('click')
+    await flushPromises()
+    expect(unknown.find('[data-test="settings-panel-carrier:fixture.novel:novel.unknown"]').exists()).toBe(true)
+    expect(unknown.find('[data-test="carrier-settings-empty"]').text()).toBe('该载体的设置项还没有内容')
+    unknown.unmount()
   })
 })

@@ -701,8 +701,10 @@ body {
   background: var(--surface-workbench);
   color: var(--archive-ink);
   font-family: var(--font-writing);
-  font-size: var(--nx-fs-lg);
-  line-height: 1.9;
+  /* 工单B 写作偏好：字号/行高由 AppNext 读到偏好后在根节点写 --writing-*；没写时回退到刻度默认
+     （17px＝--nx-fs-lg、1.9），与 next/runtime/appPreferences.mjs 的 PREFS_DEFAULTS 一致。 */
+  font-size: var(--writing-font-size, var(--nx-fs-lg));
+  line-height: var(--writing-line-height, 1.9);
   resize: vertical;
 }
 .editor-area:focus-visible {

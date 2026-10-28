@@ -12,7 +12,19 @@ import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
  */
 export const IPC_NAMESPACE = 'pinax:agent:'
 
+/**
+ * 渲染层 → 主进程的通知通道（收口包⑤）：语义是「这件事已经发生了」，不是请求-应答。
+ * 渲染层发完就走、不等业务数据；主进程侧只做副作用（重设原生窗控浮层），不写偏好、不进 onPrefsApplied。
+ *
+ * 为什么仍收进 IPC_CHANNELS：preload 的请求白名单只从这一张表取（preload.mjs 的 ALLOWED_REQUEST），
+ * 而本工单的文件面不含 preload；放进同一张表＝不需要动桥就能发。名字与注释把语义钉在「通知」上。
+ */
+export const IPC_NOTIFY = Object.freeze({
+  prefsTheme: 'pinax:agent:prefs:theme'
+})
+
 export const IPC_CHANNELS = Object.freeze({
+  ...IPC_NOTIFY,
   kernelInfo: 'pinax:agent:kernel-info',
   view: 'pinax:agent:view',
   projectCreate: 'pinax:agent:project:create',
@@ -179,7 +191,9 @@ export function shellView(session) {
  *
  * deps 扩展（批次 8①）：
  *   prefs            —— 应用级偏好存储（next/runtime/appPreferences）；不注入时 prefs:* 通道如实报缺。
- *   onPrefsApplied   —— 偏好落盘后的生效钩子（主进程：改任务面端点 + 改窗口缩放）；
+ *   onPrefsApplied   —— 偏好落盘后的生效钩子（主进程：改任务面端点 + 改窗口缩放 + 重设原生窗控浮层）；
+ *   onThemeChanged   —— 主题通知（prefs:theme，收口包⑤）的副作用钩子（主进程：按新主题重设窗控浮层）。
+ *                       通知语义：不写偏好、不进 onPrefsApplied；不注入时只记 applied:false，不当作数据请求失败。
  *   probeModelPlane  —— 模型面三态探测（next/runtime/modelPlaneProbe）；不注入时探测通道如实报缺。
  * deps 扩展（D1 历史）：
  *   history          —— { gitHistory, scheduler }；不注入时 history:* 五条通道如实报缺。
@@ -199,7 +213,7 @@ export function shellView(session) {
  *                       都在主进程内跑（worker 线程检索，零 HTTP）。不注入时 knowledge:* 两条通道如实报缺；
  *                       两条通道都只认 session.projectRoot，entry 恒传当前项目，不接受渲染层指定别的根。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
@@ -300,6 +314,10 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         if ('modelPlaneEndpoint' in input) patch.modelPlaneEndpoint = input.modelPlaneEndpoint
         if ('uiZoom' in input) patch.uiZoom = input.uiZoom
         if ('historyIntervalMinutes' in input) patch.historyIntervalMinutes = input.historyIntervalMinutes
+        // 工单B 写作偏好（调度方裁定）：正文字号／行高也是 prefs:set 的合法载荷，
+        // 与上面四个字段同一套「带了才写」语义——漏抄就等于保存链路在 IPC 层断掉。
+        if ('writingFontSize' in input) patch.writingFontSize = input.writingFontSize
+        if ('writingLineHeight' in input) patch.writingLineHeight = input.writingLineHeight
         if ('theme' in input) patch.theme = input.theme
         const written = await prefs.write(patch)
         if (!written.ok) return written
@@ -308,6 +326,15 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
       }
       case IPC_CHANNELS.prefsProbeModelPlane:
         return probeModelPlane ? await probeModelPlane() : fail('INVALID_INPUT', '模型面探测未接入')
+      // 收口包⑤：主题通知（不是请求）。渲染层 writeScheme 落完主题就发一次；
+      // 主进程只重设原生窗控浮层的 symbolColor／height，不写偏好、不碰项目。
+      case IPC_CHANNELS.prefsTheme: {
+        if (input.theme !== 'light' && input.theme !== 'dark') {
+          return fail('INVALID_INPUT', 'theme 必须是 light／dark', { theme: input.theme ?? null })
+        }
+        if (onThemeChanged) await onThemeChanged(input.theme)
+        return ok({ theme: input.theme, applied: Boolean(onThemeChanged) })
+      }
       case IPC_CHANNELS.historyList:
         if (!history?.gitHistory) return fail('INVALID_INPUT', '历史引擎未接入（主进程未创建历史服务）')
         if (!session.projectRoot) return fail('INVALID_INPUT', '历史查询需要先打开一个项目')

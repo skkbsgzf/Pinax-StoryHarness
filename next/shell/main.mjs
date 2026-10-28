@@ -31,18 +31,50 @@ const currentDir = dirname(fileURLToPath(import.meta.url))
  * 在主进程里取不到，所以这里落一份常量，写明它与 token 的对应关系：
  *   - color: '#00000000'：透明底，让渲染层 .nx-titlebar 的 --workbench-chrome 透上来
  *     （明暗两套主题里这枚 token 分别是 #f3f3f2 / #1b1c1e，见 src/styles/themes/legacy.css:65/764）；
- *   - symbolColor: '#999999'：窗控符号取明暗两档 --text-muted（legacy.css:14 #6b7078 / :714 #969ba3）
- *     的中间值，两个主题下都看得清；
- *   - height: 36 与 next-shell.css 的 --nx-titlebar-height 一致（overlay 只能给 DIP）。
+ *   - symbolColor：窗控符号取 --text-muted 的两档——light: '#6b6b6b'（legacy.css:14 #6b7078 的
+ *     窗控安全档）/ dark: '#9b9b9b'（legacy.css:714 #969ba3）；由 updateTitleBarOverlay 随主题重设；
+ *   - height: 36 与 next-shell.css 的 --nx-titlebar-height 一致（overlay 只能给 DIP），
+ *     实际值按界面缩放折算：height = Math.round(36 * zoom)，与渲染层 CSS px 对齐。
  *
- * 已知记账项：作者在应用里切明暗主题时，这层原生浮层不会跟着改色（overlay 只在建窗时生效）。
- * 要让窗控符号跟主题走，得在主题切换的偏好回调里再调 window.setTitleBarOverlay——不在本工单范围内。
+ * 收口包⑤：主题/缩放变化时经 updateTitleBarOverlay 重设（启动、onPrefsApplied、prefs:theme 通知三处触发）。
  */
 const TITLEBAR_OVERLAY = Object.freeze({
   color: '#00000000',
-  symbolColor: '#999999',
   height: 36
 })
+const TITLEBAR_SYMBOL_COLOR = Object.freeze({
+  light: '#6b6b6b',
+  dark: '#9b9b9b'
+})
+
+/** 当前主题与缩放：窗控浮层的重设只依赖这两个状态（缩放以偏好节为准，主题以偏好/通知为准）。 */
+let currentUiZoom = 0.85
+let currentScheme = 'light'
+
+/** 浮层参数：symbolColor 随主题、height 随缩放（DIP 对齐渲染层 CSS px）。 */
+function titleBarOverlayOptions({ theme, zoom }) {
+  const scheme = theme === 'dark' ? 'dark' : 'light'
+  const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : 1
+  return {
+    color: TITLEBAR_OVERLAY.color,
+    symbolColor: TITLEBAR_SYMBOL_COLOR[scheme],
+    height: Math.round(TITLEBAR_OVERLAY.height * scale)
+  }
+}
+
+/**
+ * 重设原生窗控浮层（收口包⑤）：窗口没了、或平台不提供 setTitleBarOverlay（非 Windows）时静默跳过。
+ * 三个触发点：启动建窗后、偏好保存回调（uiZoom/theme 变化）、渲染层的 prefs:theme 通知。
+ */
+function updateTitleBarOverlay({ theme, zoom } = {}) {
+  const scheme = theme === 'dark' ? 'dark' : theme === 'light' ? 'light' : currentScheme
+  const scale = Number.isFinite(zoom) && zoom > 0 ? zoom : currentUiZoom
+  currentScheme = scheme
+  currentUiZoom = scale
+  const win = window_
+  if (!win || win.isDestroyed() || typeof win.setTitleBarOverlay !== 'function') return
+  win.setTitleBarOverlay(titleBarOverlayOptions({ theme: scheme, zoom: scale }))
+}
 
 /**
  * 系统目录对话框的标题按用途分支（工单G2 扩到备份／恢复三种）。
@@ -129,7 +161,7 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-function createWindow(preloadPath, uiZoom) {
+function createWindow(preloadPath, uiZoom, theme) {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -139,8 +171,9 @@ function createWindow(preloadPath, uiZoom) {
     backgroundColor: '#101014',
     // 工单F：标题栏交给渲染层自绘（AppNext 的 .nx-titlebar 行），原生窗控以浮层形式保留在右上角。
     // 原生应用菜单不删：accelerator（Ctrl+O / Ctrl+Q 等）仍由 Menu.setApplicationMenu 提供。
+    // 收口包⑤：首帧就按已存主题与缩放给浮层，随后 updateTitleBarOverlay 再对齐一次（幂等）。
     titleBarStyle: 'hidden',
-    titleBarOverlay: { ...TITLEBAR_OVERLAY },
+    titleBarOverlay: titleBarOverlayOptions({ theme, zoom: uiZoom }),
     show: false,
     webPreferences: {
       preload: preloadPath,
@@ -185,6 +218,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   const stored = storedPrefs.ok ? storedPrefs.value : { modelPlaneEndpoint: null, uiZoom: null, historyIntervalMinutes: 5 }
   if (stored.modelPlaneEndpoint) applyModelPlaneEndpoint(stored.modelPlaneEndpoint)
   const uiZoom = resolveUiZoom({ storedZoom: stored.uiZoom })
+  // 收口包⑤：窗控浮层的启动态＝已存主题（未迁移过就按渲染层同一个默认值 light）＋实际缩放。
+  currentUiZoom = uiZoom
+  currentScheme = stored.theme === 'dark' ? 'dark' : 'light'
 
   /**
    * 项目打开/刷新后的历史接线（D1）：建独立 git 仓库 → 给新 fileService 挂「写成功→标脏」→ 起定时器。
@@ -256,6 +292,10 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     backupService: projectBackup,
     // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
     knowledgeService,
+    // 收口包⑤：渲染层的 prefs:theme 通知——事件不是请求，只重设原生窗控浮层。
+    onThemeChanged: async (theme) => {
+      updateTitleBarOverlay({ theme, zoom: currentUiZoom })
+    },
     // 导入既有稿（E1）：结构动作由作者在向导里显式按两次（计划→执行），与建项目同级走主进程；
     // dryRun≠false 一律当计划，只有显式 false 才落盘。
     importProject: ({ sourcePath, targetPath, dryRun }) => (dryRun ? planImport({ sourcePath, targetPath }) : runImport({ sourcePath, targetPath })),
@@ -264,9 +304,13 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     // 不重启窗口也能让「关掉项目后不再有新快照」成立。
     onProjectClosed: async () => { historyScheduler.stop() },
     onPrefsApplied: async (value) => {
-      // 保存即生效：端点改网关（null 回默认来源），缩放改当前窗口（无需重开）。
+      // 保存即生效：端点改网关（null 回默认来源），缩放改当前窗口与原生窗控浮层（无需重开）。
       applyModelPlaneEndpoint(value.modelPlaneEndpoint ?? null)
-      window_?.webContents.setZoomFactor(value.uiZoom ?? 0.85)
+      if (value.theme === 'light' || value.theme === 'dark') currentScheme = value.theme
+      currentUiZoom = value.uiZoom ?? 0.85
+      window_?.webContents.setZoomFactor(currentUiZoom)
+      // 收口包⑤：偏好保存这条路也会改主题/缩放，浮层跟着走（与 prefs:theme 通知同一个函数）。
+      updateTitleBarOverlay({ theme: currentScheme, zoom: currentUiZoom })
       // 历史间隔同样保存即生效：已绑定项目时按新间隔重起（0＝关闭定时器）。
       const current = historyScheduler.status()
       if (current.ok && current.value.root) {
@@ -298,7 +342,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     ipcMain.handle(channel, async (_event, payload) => slimForIpc(await dispatcher.dispatch(channel, payload)))
   }
 
-  window_ = createWindow(preloadPath || join(currentDir, 'preload.mjs'), uiZoom)
+  window_ = createWindow(preloadPath || join(currentDir, 'preload.mjs'), uiZoom, currentScheme)
+  // 收口包⑤：启动触发点——首帧浮层已按常量给过，这里再按实际状态对齐一次（幂等）。
+  updateTitleBarOverlay({ theme: currentScheme, zoom: currentUiZoom })
   window_.on('closed', () => { window_ = null })
   await loadRenderer(window_, env)
   sendToRenderer(IPC_EVENT.viewChanged, shellView(session))
