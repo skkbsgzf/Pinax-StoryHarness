@@ -70,8 +70,10 @@ export async function createNextSession({ root, plugins, builtInCarriers = true,
     view: null,
     lastFailure: null,
 
-    async create({ name, primaryCarrier, extraEnabled = [] }) {
-      const created = await createProject({ root, name, primaryCarrier, registry, extraEnabled })
+    async create({ name, primaryCarrier, extraEnabled = [], root: projectRootOverride } = {}) {
+      // root 覆写（批次9）：渲染层经系统对话框选定的空目录优先于会话根——
+      // 会话根（Documents）几乎必然非空，createProject 的「目标目录必须为空」闸会永远拦住。
+      const created = await createProject({ root: projectRootOverride ?? root, name, primaryCarrier, registry, extraEnabled })
       if (!created.ok) return recordFailure(created)
       return session.open(created.value.root)
     },

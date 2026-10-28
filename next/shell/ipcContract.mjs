@@ -17,6 +17,7 @@ export const IPC_CHANNELS = Object.freeze({
   view: 'pinax:agent:view',
   projectCreate: 'pinax:agent:project:create',
   projectCreateBare: 'pinax:agent:project:create-bare',
+  projectPickDir: 'pinax:agent:project:pick-dir',
   projectOpen: 'pinax:agent:project:open',
   projectClose: 'pinax:agent:project:close',
   carrierSetEnabled: 'pinax:agent:carrier:set-enabled',
@@ -119,7 +120,7 @@ export function shellView(session) {
  *   onPrefsApplied   —— 偏好落盘后的生效钩子（主进程：改任务面端点 + 改窗口缩放）；
  *   probeModelPlane  —— 模型面三态探测（next/runtime/modelPlaneProbe）；不注入时探测通道如实报缺。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
 
   async function dispatch(channel, payload) {
@@ -140,7 +141,9 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
       case IPC_CHANNELS.view:
         return ok(shellView(session))
       case IPC_CHANNELS.projectCreate:
-        return session.create({ name: input.name, primaryCarrier: input.primaryCarrier, extraEnabled: input.extraEnabled ?? [] })
+        return session.create({ name: input.name, primaryCarrier: input.primaryCarrier, extraEnabled: input.extraEnabled ?? [], root: input.root ?? null })
+      case IPC_CHANNELS.projectPickDir:
+        return pickProjectDir ? pickProjectDir(input) : fail('INVALID_INPUT', '目录选择未接入（主进程系统对话框不可用）')
       case IPC_CHANNELS.projectCreateBare:
         return session.createBare({ name: input.name })
       case IPC_CHANNELS.projectOpen:

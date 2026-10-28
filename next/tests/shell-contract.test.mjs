@@ -334,12 +334,39 @@ test('主进程把偏好真正接到网关与窗口：端点 setter、启动即�
   assert.match(mainSource, /applyModelPlaneEndpoint\(stored\.modelPlaneEndpoint\)/, '启动时必须应用已存端点')
   assert.match(mainSource, /prefs,\s*\n\s*probeModelPlane/, '分发器必须注入偏好与探测')
   assert.match(mainSource, /onPrefsApplied/, '保存后的生效钩子必须接上')
+  assert.match(mainSource, /showOpenDialog/, '选目录必须走系统对话框（批次9：新项目落点）')
   assert.doesNotMatch(mainSource, /\.\.\/\.\.\/server\//, '外壳不得直接 import server/——端点收在 runtime 层（modelPlaneProbe）')
   const probeSource = await readFile(new URL('../runtime/modelPlaneProbe.mjs', import.meta.url), 'utf-8')
   assert.match(probeSource, /setTaskPlaneEndpoint/, 'runtime 层必须包住网关端点 setter')
   const gatewaySource = await readFile(new URL('../../server/services/kitModelGateway.js', import.meta.url), 'utf-8')
   assert.match(gatewaySource, /export function setTaskPlaneEndpoint/, '网关必须暴露运行时端点 setter')
   assert.match(gatewaySource, /export function getTaskPlaneEndpoint/, '网关必须暴露当前端点 getter（探测与偏好面显示用）')
+})
+
+test('选目录通道（批次9）：注入即通、未注入报缺；projectCreate 把 root 透传给会话', async () => {
+  let captured = null
+  const session = {
+    ...harness().session,
+    create: async (args) => { captured = args; return { ok: true, value: {} } }
+  }
+  const withPick = createIpcDispatcher({ session, pickProjectDir: async () => ({ ok: true, value: { picked: true, path: 'D:/books/new-book' } }) })
+  const picked = await withPick.dispatch(IPC_CHANNELS.projectPickDir, {})
+  assert.equal(picked.ok, true)
+  assert.deepEqual(picked.value, { picked: true, path: 'D:/books/new-book' })
+
+  const created = await withPick.dispatch(IPC_CHANNELS.projectCreate, { name: '新书', primaryCarrier: 'fixture.novel', root: 'D:/books/new-book' })
+  assert.equal(created.ok, true)
+  assert.equal(captured.root, 'D:/books/new-book', '渲染层选定的目录必须原样到 session.create')
+  assert.equal(captured.name, '新书')
+
+  const bare = createIpcDispatcher({ session: harness().session })
+  const denied = await bare.dispatch(IPC_CHANNELS.projectPickDir, {})
+  assert.equal(denied.ok, false)
+  assert.match(String(denied.error?.message), /目录选择未接入/)
+
+  const noRoot = createIpcDispatcher({ session: { ...harness().session, create: async (args) => { captured = args; return { ok: true, value: {} } } } })
+  await noRoot.dispatch(IPC_CHANNELS.projectCreate, { name: '旧路径', primaryCarrier: 'fixture.novel' })
+  assert.equal(captured.root, null, '不选目录时 root 以 null 透传（会话根兜底语义保持在 index.mjs）')
 })
 
 function harness() {

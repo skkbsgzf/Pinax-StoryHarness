@@ -356,4 +356,52 @@ describe('偏好与模型面板（批次8①）', () => {
     expect(wrapper.find('.prefs-state.is-ready').text()).toContain('已保存并生效')
     wrapper.unmount()
   })
+
+  it('外观主题段：偏好面里的单选写回同一份 localStorage 契约', async () => {
+    globalThis.localStorage?.setItem('app_theme', 'light')
+    const handlers = new Map()
+    const bridge = prefsBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    const darkRadio = wrapper.find('input[name="prefs-theme"][value="dark"]')
+    await darkRadio.setValue()
+    await flushPromises()
+    expect(globalThis.localStorage.getItem('app_theme')).toBe('dark')
+    expect(document.documentElement.className).toContain('theme-dark')
+    wrapper.unmount()
+  })
+
+  it('新建项目走「选目录」：未选目录时新建钮禁用，选后载荷带 root 与名字', async () => {
+    const view = { ...emptyFrameworkView(), needsPrimary: true, carriers: [{ id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }] }
+    const handlers = new Map()
+    const pick = vi.fn(async () => ({ ok: true, value: { picked: true, path: 'D:/books/new-book' } }))
+    const create = vi.fn(async () => ({ ok: true, value: {} }))
+    handlers.set(IPC_CHANNELS.projectPickDir, pick)
+    handlers.set(IPC_CHANNELS.projectCreate, create)
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: view }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const bridge = { request, onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) } }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const createBtn = wrapper.find('[aria-label="新建项目"] .control-primary')
+    expect(createBtn.attributes('disabled')).toBeDefined()
+    await wrapper.find('[aria-label="新建项目"] .control-secondary').trigger('click')
+    await flushPromises()
+    expect(pick).toHaveBeenCalledTimes(1)
+    expect(createBtn.attributes('disabled')).toBeUndefined()
+
+    await wrapper.find('[aria-label="新建项目"] .prefs-input').setValue('我的新书')
+    await createBtn.trigger('click')
+    await flushPromises()
+    expect(create).toHaveBeenCalledWith({ name: '我的新书', primaryCarrier: 'fixture.script', extraEnabled: [], root: 'D:/books/new-book' })
+    wrapper.unmount()
+  })
 })

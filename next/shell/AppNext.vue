@@ -68,6 +68,19 @@ const probeText = computed(() => {
   if (state.state === 'no-model') return `任务面可达但未配模型：请在 serve:pinax 一侧选择模型（${state.endpoint}）`
   return `模型面不可达：${state.endpoint}${state.detail ? `（${state.detail}）` : ''}。请启动 pi-agent 任务面（serve:pinax）或修改端点。`
 })
+/** 外观主题走 theme.mjs 的 localStorage 契约（与老前端共用 app_theme），偏好面只给它一个入口。 */
+const themeDraft = ref('light')
+
+/** 新建项目（批次9）：名字可改，目录必须经系统对话框选一个空文件夹——
+ *  会话根（Documents）几乎必然非空，createProject 的空目录闸会永远拦住默认路径。 */
+const newProjectName = ref('')
+const newProjectDir = ref(null)
+
+async function pickProjectDir() {
+  if (!props.bridge?.request) return
+  const result = await props.bridge.request(IPC_CHANNELS.projectPickDir, {})
+  if (result.ok && result.value?.picked) newProjectDir.value = result.value.path
+}
 
 /**
  * 一块板＝一个载体：竖条一格、索引窗一份树、核心区一份正文。
@@ -145,11 +158,20 @@ function toggleCompanion(pluginId) {
     : [...extraEnabled.value, pluginId]
 }
 
-async function createProject(name) {
-  if (!props.bridge?.request) return
+async function createProject() {
+  if (!props.bridge?.request || !newProjectDir.value) return
   const primary = carriers.value.find((item) => item.primary)?.id ?? null
   if (!primary) return
-  await props.bridge.request(IPC_CHANNELS.projectCreate, { name, primaryCarrier: primary, extraEnabled: extraEnabled.value })
+  const result = await props.bridge.request(IPC_CHANNELS.projectCreate, {
+    name: newProjectName.value.trim() || '未命名新书',
+    primaryCarrier: primary,
+    extraEnabled: extraEnabled.value,
+    root: newProjectDir.value
+  })
+  if (result.ok) {
+    newProjectDir.value = null
+    newProjectName.value = ''
+  }
   await refresh()
 }
 
@@ -157,6 +179,7 @@ async function openSettings() {
   settingsOpen.value = true
   prefsFeedback.value = null
   probeState.value = null
+  themeDraft.value = scheme.value
   if (!props.bridge?.request) return
   const result = await props.bridge.request(IPC_CHANNELS.prefsGet, {})
   if (result.ok) {
@@ -192,6 +215,11 @@ async function savePrefs() {
 
 function toggleTheme() {
   scheme.value = writeScheme(scheme.value === 'dark' ? 'light' : 'dark')
+}
+
+/** 偏好面里的主题选择：写回同一份 localStorage 契约，竖条的明暗按钮跟着变。 */
+function applyThemeChoice() {
+  scheme.value = writeScheme(themeDraft.value)
 }
 
 function startDrag(target, event) {
@@ -264,6 +292,12 @@ onMounted(() => {
         <p class="wizard-note">应用级偏好，不随项目走。模型凭据仍由任务面（serve:pinax）持有——这里只决定「任务面在哪个端点」与界面观感。</p>
         <div class="prefs-grid">
           <div class="prefs-row">
+            <span class="prefs-row-label">外观主题</span>
+            <label class="wizard-companion"><input v-model="themeDraft" type="radio" name="prefs-theme" value="light" @change="applyThemeChoice"> 浅色</label>
+            <label class="wizard-companion"><input v-model="themeDraft" type="radio" name="prefs-theme" value="dark" @change="applyThemeChoice"> 深色</label>
+            <span class="prefs-row-hint">与老前端共用同一份偏好，改了那边也跟着变</span>
+          </div>
+          <div class="prefs-row">
             <span class="prefs-row-label">模型面端点</span>
             <input v-model="prefsDraft.modelPlaneEndpoint" class="nx-field prefs-input" type="text" placeholder="http://127.0.0.1:8451（留空＝默认 8451）">
             <button type="button" class="control-secondary" :disabled="prefsBusy" @click="probePlane">检测模型面</button>
@@ -310,8 +344,26 @@ onMounted(() => {
             <small>{{ carrier.isEnabled ? '已启用' : (carrier.dataDirs || []).join(' / ') }}</small>
           </label>
         </div>
-        <div v-if="!project" class="wizard-bare">
-          <button type="button" class="wizard-item control-secondary" @click="createProject('未命名新书')">用第一个可用载体新建项目</button>
+      </section>
+
+      <!-- 新建项目（批次9）：只要没有已打开的项目就可见——首启打开会话根失败（非 .pinax 目录）也必须能新建，
+           不然作者卡死在错误横幅上。目录经系统对话框选空文件夹，createProject 的空目录闸靠它过。 -->
+      <section v-if="!project && canPickPrimary" class="wizard" aria-label="新建项目">
+        <h3>新建项目</h3>
+        <p class="wizard-note">新项目是磁盘上的一个文件夹（文件夹即数据）：选一个空目录——也可以在对话框里新建，然后在里面开写。</p>
+        <div class="prefs-grid">
+          <div class="prefs-row">
+            <span class="prefs-row-label">项目名称</span>
+            <input v-model="newProjectName" class="nx-field prefs-input" type="text" placeholder="未命名新书">
+          </div>
+          <div class="prefs-row">
+            <span class="prefs-row-label">项目文件夹</span>
+            <button type="button" class="control-secondary" @click="pickProjectDir">选择空目录…</button>
+            <span class="prefs-row-hint">{{ newProjectDir || '尚未选择' }}</span>
+          </div>
+          <div class="prefs-actions">
+            <button type="button" class="control-primary" :disabled="!newProjectDir" @click="createProject">在所选目录新建项目</button>
+          </div>
         </div>
       </section>
 

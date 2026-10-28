@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { createNextSession } from '../index.mjs'
@@ -119,6 +119,16 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     session,
     prefs,
     probeModelPlane: () => probeModelPlane(),
+    pickProjectDir: async () => {
+      // 新项目落点（批次9）：createProject 只吃空目录，Documents 这种会话根永远非空——
+      // 必须让作者经系统对话框选/建一个空文件夹（createDirectory 允许就地新建）。
+      const result = await dialog.showOpenDialog(window_, {
+        title: '选择新项目文件夹（需要空目录，可在对话框里新建）',
+        properties: ['openDirectory', 'createDirectory']
+      })
+      if (result.canceled || !result.filePaths?.length) return { ok: true, value: { picked: false, path: null } }
+      return { ok: true, value: { picked: true, path: result.filePaths[0] } }
+    },
     onPrefsApplied: async (value) => {
       // 保存即生效：端点改网关（null 回默认来源），缩放改当前窗口（无需重开）。
       applyModelPlaneEndpoint(value.modelPlaneEndpoint ?? null)
