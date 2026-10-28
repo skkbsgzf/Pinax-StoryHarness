@@ -12,6 +12,8 @@ export const MENU_TEMPLATE = Object.freeze([
       // 工单E1：老作者带稿上车的一次性门槛。入口只负责摊开统一二级页（导入既有稿），
       // 真正的计划/落盘在主进程的 project:import-run 通道里（不经模型侧写族闸）。
       { id: 'project.import', label: '导入既有稿…' },
+      // 工单G2：整目录复制到作者选定的位置／从备份复制回空目录（零新依赖，不做 zip）。
+      { id: 'project.backup', label: '备份与恢复…' },
       { id: 'project.history', label: '当前文档历史…', accelerator: 'CmdOrCtrl+Shift+H' },
       { type: 'separator' },
       { id: 'project.recent', label: '最近项目', role: null, submenu: [] },

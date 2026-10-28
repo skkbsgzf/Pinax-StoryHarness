@@ -10,7 +10,7 @@ import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { kernelToolNames, toolOwnershipReport } from '../runtime/mcpSurface.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, SETTING_CARRIER, SETTING_CARRIER_ID, SETTING_TOOL_NAMES } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, REFERENCE_CARRIER_ID, REFERENCE_TOOL_NAMES, SETTING_CARRIER, SETTING_CARRIER_ID, SETTING_TOOL_NAMES } from '../carriers/index.mjs'
 import { serializeWorldbookEntryFile } from '../../shared/worldbookFileContract.js'
 import { createTempWorkspace } from '../testing/harness.mjs'
 
@@ -21,7 +21,9 @@ import { createTempWorkspace } from '../testing/harness.mjs'
  * 世界书写走带修订号的自有 save，约束仍写不出一个字节。
  */
 
-async function settingProject(label, { extraEnabled = [SETTING_CARRIER_ID], fill = false, rules = null } = {}) {
+async function settingProject(label, { extraEnabled = [SETTING_CARRIER_ID, REFERENCE_CARRIER_ID], fill = false, rules = null } = {}) {
+  // 工单G1 起默认同时启用资料板块：三载体全开是聚合面 32 个工具的靶子场景
+  // （资料三把自有工具也进面）；资料目录在小说骨架里，所以不改变这些用例的设定目录夹具。
   const workspace = await createTempWorkspace(label)
   const root = join(workspace.projects, '设定载体靶子')
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
@@ -76,20 +78,21 @@ test('设定真清单过校验：读工具是内核已有的只读名，世界�
   }
 })
 
-test('启用设定后：世界书工具归属载体，写世界书走自有 save，内核 pinax_worldbook_write 仍回落内核', async () => {
+test('启用设定＋资料后：世界书工具归属载体，写世界书走自有 save，内核 pinax_worldbook_write 仍回落内核', async () => {
   const { workspace, registry, runtime } = await settingProject('setting-surface')
   try {
-    assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...SETTING_TOOL_NAMES, 'pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'].sort())
-    assert.equal(runtime.listTools().length, 29, '19 内核 ＋ 载体自有 10：pinax_chapter_save、pinax_outline_save（工单B2）、构思这对（工单B1）、提案三把（工单A）、pinax_worldbook_save（工单A2）与约束这对 pinax_rule_list/pinax_rule_save（工单E2；断言同步）')
+    assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...SETTING_TOOL_NAMES, ...REFERENCE_TOOL_NAMES, 'pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'].sort())
+    assert.equal(runtime.listTools().length, 32, '19 内核 ＋ 载体自有 13：小说七把（含工单B1/B2/A）＋ 设定五把（pinax_worldbook_save 工单A2、约束这对工单E2）＋ 资料三把（工单G1）')
     assert.equal(runtime.ownerOf('pinax_worldbook_list'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_save'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_write'), 'kernel', '内核那份写工具照旧不认领，写族闸点名走自有 save')
     assert.equal(runtime.ownerOf('pinax_chapter_read'), NOVEL_CARRIER_ID)
+    assert.equal(runtime.ownerOf('pinax_document_list'), REFERENCE_CARRIER_ID, '工单G1：资料板块同时启用时，资料工具归它')
 
     const report = toolOwnershipReport(registry)
-    assert.equal(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2（自有写工具不在其中）')
+    assert.equal(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2（资料三把是自有名字，不在其中）')
     assert.equal(report.unclaimed.length, 14)
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'], '工单A2/B1/B2/A/E2：十把自有写/列/审阅工具（断言同步）')
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save'], '工单A2/B1/B2/A/E2/G1：十三把自有写/列/审阅工具（断言同步）')
     assert.deepEqual(report.withoutImplementation, [], '声明了就必须有实现，否则不许进面')
   } finally {
     await runtime.stop()

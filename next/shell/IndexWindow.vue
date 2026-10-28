@@ -22,21 +22,46 @@ const emit = defineEmits(['collapse', 'history'])
 
 const newTitle = ref('')
 
-/** 树的口径由板块声明的目录窗 pane 决定（novel.* 列章节，setting.* 列世界书条目）。 */
+/** 树的口径由板块声明的目录窗 pane 决定（novel.* 列章节，setting.* 列世界书条目，reference.* 列资料）。 */
 const treeKind = computed(() => {
   const paneId = String(props.board?.treePaneId ?? '')
   if (paneId.startsWith('novel.')) return 'chapters'
   if (paneId.startsWith('setting.')) return 'entries'
+  if (paneId.startsWith('reference.')) return 'documents'
   return 'none'
 })
 
-/** 树所在的目录名：取板块认领的第一个目录（小说＝正文，设定＝世界书）。 */
+/** 树所在的目录名：取板块认领的第一个目录（小说＝正文，设定＝世界书，资料＝资料）。 */
 const treeDir = computed(() => props.board?.dataDirs?.[0] ?? props.board?.treePaneTitle ?? '目录')
 
 const isChapterOpen = (item) => props.data.selection?.type === 'chapter' && props.data.selection.item?.file === item.file
 const isEntryOpen = (item) => props.data.selection?.type === 'entry' && props.data.selection.item?.path === item.path
 const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data.selection.item?.file === item.file
 const isRuleOpen = (item) => props.data.selection?.type === 'rule' && props.data.selection.item?.file === item.file
+const isDocumentOpen = (item) => props.data.selection?.type === 'document' && props.data.selection.item?.file === item.file
+
+/**
+ * 哪些大纲行有子节点（工单G3）：只看 edges，两种字段名都认（{from,to} / {source,target}）；
+ * 端点缺失或指向不存在的节点的连线不算——不拿断链给行头加记号。
+ * depth（缩进层级）由 useBoardData 的 loadOutline／saveOutline 贴上，这里只负责画。
+ */
+const outlineParentIds = computed(() => {
+  const nodes = props.data.outline ?? []
+  const known = new Set()
+  for (const node of nodes) {
+    if (typeof node?.id === 'string' && node.id.trim()) known.add(node.id)
+  }
+  const parents = new Set()
+  for (const edge of props.data.outlineEdges ?? []) {
+    const from = edge?.from ?? edge?.source
+    const to = edge?.to ?? edge?.target
+    if (typeof from !== 'string' || typeof to !== 'string') continue
+    if (!known.has(from) || !known.has(to) || from === to) continue
+    parents.add(from)
+  }
+  return parents
+})
+const hasOutlineChildren = (node) => typeof node?.id === 'string' && outlineParentIds.value.has(node.id)
 const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-node' && props.data.selection.item?.index === index
 const isProposalOpen = (item) => props.data.selection?.type === 'proposal' && props.data.selection.item?.name === item.name
 
@@ -55,6 +80,13 @@ async function createChapter() {
   await props.data.createChapter(title)
 }
 
+async function createDocument() {
+  const title = newTitle.value.trim()
+  if (!title) return
+  newTitle.value = ''
+  await props.data.createDocument(title)
+}
+
 // 换板＝换树：目录窗自己负责把这一板的东西列出来（核心区不替它列）。
 // 大纲随章节一起取（工单A3）：同属小说板块的索引窗，一次换板三棵树都是新的。
 // 构思速记（工单B1）也在这一拍里列出来；它刻意不自动打开，正文仍是核心区的主角。
@@ -70,6 +102,9 @@ watch(() => props.board?.id, () => {
     void props.data.loadEntries()
     // 约束（工单E2）：设定板的第二棵树，随条目一起列——换板一次，两棵树都是新的。
     void props.data.loadRules()
+  } else if (treeKind.value === 'documents') {
+    // 资料（工单G1）：资料板只有这一棵树；泛型项目里它也是主树。
+    void props.data.loadDocuments()
   }
 }, { immediate: true })
 </script>
@@ -147,7 +182,8 @@ watch(() => props.board?.id, () => {
           </ul>
         </template>
 
-        <!-- 大纲（工单A3 只读 → 工单B2 可编辑）：行可点选——点行把节点送进中栏的大纲编辑面（改名/加节点在那里）；
+        <!-- 大纲（工单A3 只读 → 工单B2 可编辑 → 工单G3 按 edges 缩进）：行可点选——点行把节点送进中栏的大纲编辑面
+             （改名/加节点在那里）；depth 由 edges 现算（断链/无 edges 全是一级），行头「·」只标有子节点的行。
              大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
         <p class="workspace-nav-section">大纲</p>
         <ul class="nx-tree">
@@ -157,9 +193,10 @@ watch(() => props.board?.id, () => {
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
               :class="{ 'is-active': isOutlineNodeOpen(index) }"
               :aria-current="isOutlineNodeOpen(index) ? 'page' : null"
+              :style="{ paddingInlineStart: (10 + (node.depth ?? 0) * 14) + 'px' }"
               @click="data.selectOutlineNode(index)"
             >
-              <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
+              <span class="workspace-nav-label"><span v-if="hasOutlineChildren(node)" class="nx-outline-mark" aria-hidden="true">·</span>{{ index + 1 }}. {{ node.title }}</span>
             </button>
             <button
               type="button"
@@ -247,6 +284,33 @@ watch(() => props.board?.id, () => {
         <p v-if="data.rulesError" class="nx-index-error">{{ data.rulesError }}</p>
       </template>
 
+      <!-- 资料（工单G1）：资料板的树。行可点开——点行进中栏的阅读面（编辑在那里按）；
+           行文＝篇名＋字数＋版本号；目录还没写就给一行说明，不当成错误。
+           这里不摆「历史…」：资料的历史还没接（工单边界），给一个点了没东西的按钮更糟。 -->
+      <template v-else-if="treeKind === 'documents'">
+        <div class="nx-index-new">
+          <input v-model="newTitle" class="nx-field is-tiny" placeholder="新资料标题" @keydown.enter.prevent="createDocument">
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newTitle.trim()" @click="createDocument">新建</button>
+        </div>
+        <p class="workspace-nav-section">{{ treeDir }}</p>
+        <ul class="nx-tree">
+          <li v-for="item in data.documents" :key="item.file" class="nx-tree-line">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isDocumentOpen(item) }"
+              :aria-current="isDocumentOpen(item) ? 'page' : null"
+              @click="data.openDocument(item)"
+            >
+              <span class="workspace-nav-label">{{ item.title }}</span>
+              <span class="workspace-nav-meta">{{ item.totalChars }} 字 · 第 {{ item.revision }} 版</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容（资料/）。</p>
+        <p v-if="data.documentsError" class="nx-index-error">{{ data.documentsError }}</p>
+      </template>
+
       <ul v-if="data.listWarnings.length" class="nx-index-warn">
         <li v-for="(warning, index) in data.listWarnings" :key="`l-${index}`">{{ warning }}</li>
       </ul>
@@ -292,5 +356,11 @@ watch(() => props.board?.id, () => {
 .nx-index-history:focus-visible {
   color: var(--archive-ink);
   opacity: 1;
+}
+/* 大纲层级记号（工单G3）：有子节点的行在标题前点一枚极轻的「·」，不引新图标、不另立一套行形态。 */
+.nx-outline-mark {
+  margin-inline-end: 4px;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
 }
 </style>

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 
 /**
  * 核心区里的载体面板：正文的编辑面、构思速记的编辑面（工单B1）、条目的阅读与编辑面（工单A2 起条目可改）、
- * 约束的编辑面（工单E2）。
+ * 约束的编辑面（工单E2）、资料的阅读与编辑面（工单G1）。
  *
  * 数据不在这里自己取——索引窗与核心区共用 useBoardData 的同一份对象，
  * 所以「索引窗列着第 1 版、正文存成了第 2 版」这种不同步不会发生。
@@ -29,6 +29,8 @@ const viewKind = computed(() => {
   if (paneId.value === 'setting.entries') {
     return props.data.selection?.type === 'rule' ? 'rule-editor' : 'entry-detail'
   }
+  // 资料板（工单G1）：阅读面与编辑面在同一块面板上切换（照条目详情的形态）。
+  if (paneId.value === 'reference.documents') return 'document-detail'
   return 'placeholder'
 })
 
@@ -274,6 +276,38 @@ async function createRule() {
       <ul v-if="data.entryWarnings.length" class="pane-warn">
         <li v-for="(warning, index) in data.entryWarnings" :key="`e-${index}`">{{ warning }}</li>
       </ul>
+    </template>
+
+    <!-- 资料（工单G1）：阅读态＝元信息＋pre 正文，编辑态＝textarea ＋ 保存／取消。
+         读的是 pinax_document_read 的全文（列表那份最多 20000 字，不能当编辑底稿）；
+         保存走载体自有的 pinax_document_save，带读到的修订号，冲突如实摊开。 -->
+    <template v-else-if="viewKind === 'document-detail'">
+      <div v-if="data.document" class="entry-body">
+        <div class="entry-head">
+          <h4 class="pane-sub">{{ data.document.title }}</h4>
+          <span class="entry-meta">{{ data.document.file }} · 第 {{ data.document.revision }} 版 · {{ data.document.totalChars }} 字</span>
+          <button v-if="!data.editingDocument" type="button" class="control-secondary document-edit" @click="data.editDocument()">编辑</button>
+        </div>
+        <textarea
+          v-if="data.editingDocument"
+          class="editor-area"
+          :value="data.documentDraft"
+          spellcheck="false"
+          aria-label="资料编辑器"
+          @input="data.setDocumentDraft($event.target.value)"
+        />
+        <pre v-else class="entry-text" aria-label="资料正文">{{ data.document.text }}</pre>
+        <div v-if="data.editingDocument" class="editor-foot">
+          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.documentDraft" @click="data.saveDocument()">
+            {{ data.busy ? '写入中…' : `保存为第 ${(data.document?.revision ?? 0) + 1} 版` }}
+          </button>
+          <button type="button" class="control-quiet document-cancel" :disabled="data.busy" @click="data.cancelEditDocument()">取消</button>
+        </div>
+        <p v-if="data.document.truncated" class="pane-notice">
+          只载入了前 {{ data.document.text?.length ?? 0 }} 字，全篇 {{ data.document.totalChars }} 字：保存会覆盖未载入的部分。
+        </p>
+      </div>
+      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇资料，或在那里新建一篇。</p>
     </template>
 
     <!-- 只在真的没有对应视图时才显示（批次15 验收修：原来挂在第二条链的 v-else 上，

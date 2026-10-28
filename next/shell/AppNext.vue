@@ -9,6 +9,7 @@ import PrefsSection from './settings/PrefsSection.vue'
 import CarriersSection from './settings/CarriersSection.vue'
 import NewProjectSection from './settings/NewProjectSection.vue'
 import ImportSection from './settings/ImportSection.vue'
+import BackupSection from './settings/BackupSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import HistorySection from './settings/HistorySection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
@@ -27,6 +28,7 @@ import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs
  *   - 右栏：Pi-Agent 运行时独占（一级公民，插件抢不走）；
  *   - 设置（工单C0 · U13）：偏好／载体管理／新建项目／主载体选择一律收进
  *     SettingsModal 这一枚统一的二级页面（左栏目录＋右栏设置项）；
+ *     E1 导入既有稿、G2 备份与恢复也登记在这张目录里；
  *     D2 起「文档」组再收一节「文档历史」（快照列表／diff／恢复）。
  *     核心区不再内嵌任何配置 section 与按钮，目录之外的弹窗不允许存在。
  *
@@ -115,13 +117,15 @@ const historyTarget = computed(() => {
 const settingsOpen = ref(false)
 const activeSection = ref('prefs')
 
-/** 目录表：两组，设置五节＋文档历史（D2）。未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
+/** 目录表：两组，设置六节＋文档历史（D2/G2）。未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
 const settingsSections = computed(() => [
   { id: 'prefs', title: '偏好与模型', group: '设置', component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
   { id: 'carriers', title: '载体管理', group: '设置', component: CarriersSection, props: { carriers: carriers.value } },
   { id: 'newProject', title: '新建项目', group: '设置', component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
   // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
   { id: 'import', title: '导入既有稿', group: '设置', component: ImportSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
+  // 工单G2：备份与恢复（整目录复制，零新依赖）。导出/恢复都是主进程的结构动作，与导入同级。
+  { id: 'backup', title: '备份与恢复', group: '设置', component: BackupSection, props: { bridge: props.bridge, project: project.value } },
   { id: 'primary', title: '主载体选择', group: '设置', component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } },
   { id: 'history', title: '文档历史', group: '文档', component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } }
 ])
@@ -152,13 +156,19 @@ function openNewProject() {
   openSection('newProject')
 }
 
-/**
- * 导入既有稿（工单E1）：菜单「文件 → 导入既有稿…」的落点。
+/** 导入既有稿（工单E1）：菜单「文件 → 导入既有稿…」的落点。
  * 不做「有项目就不给开」的闸——恰恰是老作者带着稿子上车时才需要它；
  * 向导里会明示「导入会切换到新项目」，避免误切时没看见。
  */
 function openImport() {
   openSection('import')
+}
+
+/** 备份与恢复（工单G2）：菜单「文件 → 备份与恢复…」的落点。
+ *  与导入同一口径——不拦「有项目才给开」：恢复本来就是在别处打开面之前先把项目弄出来；
+ *  导出按钮在没有项目时自己会说「先打开一个项目」（备份的是当前项目）。 */
+function openBackup() {
+  openSection('backup')
 }
 
 /** 当前文档历史（D2）：菜单「文件 → 当前文档历史…」与索引窗行动作的共同落点。 */
@@ -245,6 +255,7 @@ const menuActions = {
   'project.create': () => openNewProject(),
   'project.open': () => void openProjectFolder(),
   'project.import': () => openImport(),
+  'project.backup': () => openBackup(),
   'project.history': () => openHistory(),
   'settings.theme': () => toggleTheme(),
   'settings.preferences': () => void openSettings(),
@@ -416,6 +427,7 @@ async function refresh() {
 
 /** 点竖条：换板就换索引窗与正文；再点同一格＝收起索引窗（Obsidian 的行为）。 */
 function selectBoard(id) {
+  data.clearTransient?.()
   if (activeBoardId.value === id) {
     indexOpen.value = !indexOpen.value
     return

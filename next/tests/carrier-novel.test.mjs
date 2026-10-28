@@ -74,7 +74,7 @@ test('工具面聚合：启用小说后面是 26 个工具，三个只读名归�
     const report = toolOwnershipReport(registry)
     assert.equal(report.claimed.length, 5, '小说 3 把只读 ＋ 设定 2 把只读（认领面按已安装的清单算，不看启用开关）')
     assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须往下走')
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'], '工单A2 起设定板块有了自有写入口；工单B1 构思这对、工单B2 大纲写半边、工单A 提案三把、工单E2 约束这对（内核没有同名）也是自有名字（断言同步）')
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save'], '工单A2 起设定板块有了自有写入口；工单B1 构思这对、工单B2 大纲写半边、工单A 提案三把、工单E2 约束这对、工单G1 资料三把（内核没有同名）也是自有名字（断言同步）')
     assert.deepEqual(report.withoutImplementation, [], '小说声明的名字都得有实现')
   } finally {
     await runtime.stop()

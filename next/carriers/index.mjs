@@ -4,11 +4,16 @@ import { createNovelBlocks } from './novel/context.mjs'
 import { SETTING_CARRIER, SETTING_CARRIER_ID } from './setting/manifest.mjs'
 import { SETTING_TOOL_NAMES, createSettingTools } from './setting/tools.mjs'
 import { createSettingBlocks, readSettingEntries } from './setting/context.mjs'
+import { REFERENCE_CARRIER, REFERENCE_CARRIER_ID } from './reference/manifest.mjs'
+import { REFERENCE_TOOL_NAMES, createReferenceTools } from './reference/tools.mjs'
+import { createReferenceBlocks } from './reference/context.mjs'
 
 /**
  * 随框架发布的载体清单（M2 起）。
  * M1 的口径是「carriers/ 目录为空，任何插件都不随框架发布」；M2 第一批放进两块：
- * 小说（正文/大纲/构思，认领 3 把只读＋1 把自有写入口）与设定（世界书/约束，只认领 2 把只读）。
+ * 小说（正文/大纲/构思，认领 3 把只读＋1 把自有写入口）与设定（世界书/约束）。
+ * 工单G1 加第三块：资料（资料/，三把自有工具）——它补的是「资料/ 在骨架里却没人认领」的缺口，
+ * 让这个目录从只读归档变回可读可改的板块；三把工具名内核都没有，所以认领面（claimed）不因此增长。
  * 每个包＝一份清单 ＋ 一个 impl，impl 只有两个可选工厂：
  *   impl.tools(projectCtx)   —— 进运行时工具面的工具（项目打开后调用，要的是这个项目的文件服务）；
  *   impl.blocks(projectCtx)  —— 运行时组上下文信封时的素材块构建器（{ kind: async (askCtx) => 素材包 }）。
@@ -17,6 +22,7 @@ import { createSettingBlocks, readSettingEntries } from './setting/context.mjs'
  */
 export const NOVEL_CARRIER_TRUST = 't1'
 export const SETTING_CARRIER_TRUST = 't1'
+export const REFERENCE_CARRIER_TRUST = 't1'
 
 export function novelCarrierPlugin() {
   return {
@@ -44,11 +50,25 @@ export function settingCarrierPlugin() {
   }
 }
 
-export const BUILT_IN_CARRIER_PLUGINS = Object.freeze([novelCarrierPlugin(), settingCarrierPlugin()])
+export function referenceCarrierPlugin() {
+  return {
+    manifest: REFERENCE_CARRIER,
+    impl: {
+      source: 'next/carriers/reference',
+      // 三把自有工具（列／读／写）＋一个上下文块提供者：资料/ 的权限由这块板块自己申请，
+      // 运行时不越过去开文件（与小说／设定同一条规矩）。
+      tools: (context = {}) => createReferenceTools({ ...context, pluginId: context.pluginId ?? REFERENCE_CARRIER_ID }),
+      blocks: (context = {}) => createReferenceBlocks({ ...context, pluginId: context.pluginId ?? REFERENCE_CARRIER_ID })
+    },
+    meta: { trust: REFERENCE_CARRIER_TRUST, source: 'next/carriers/reference' }
+  }
+}
+
+export const BUILT_IN_CARRIER_PLUGINS = Object.freeze([novelCarrierPlugin(), settingCarrierPlugin(), referenceCarrierPlugin()])
 export const BUILT_IN_CARRIER_IDS = Object.freeze(BUILT_IN_CARRIER_PLUGINS.map((item) => item.manifest.id))
 
 /** 随框架发布的载体认领面（门禁核「只增不减」和「认领的都是内核已有的名字」时用）。 */
-export const BUILT_IN_CLAIMED_TOOLS = Object.freeze([...NOVEL_TOOL_NAMES, ...SETTING_TOOL_NAMES])
+export const BUILT_IN_CLAIMED_TOOLS = Object.freeze([...NOVEL_TOOL_NAMES, ...SETTING_TOOL_NAMES, ...REFERENCE_TOOL_NAMES])
 
 export {
   NOVEL_CARRIER,
@@ -61,5 +81,10 @@ export {
   SETTING_TOOL_NAMES,
   createSettingTools,
   createSettingBlocks,
-  readSettingEntries
+  readSettingEntries,
+  REFERENCE_CARRIER,
+  REFERENCE_CARRIER_ID,
+  REFERENCE_TOOL_NAMES,
+  createReferenceTools,
+  createReferenceBlocks
 }

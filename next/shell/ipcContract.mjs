@@ -34,6 +34,8 @@ export const IPC_CHANNELS = Object.freeze({
   historyDiff: 'pinax:agent:history:diff',
   historyCommitNow: 'pinax:agent:history:commit-now',
   historyProbe: 'pinax:agent:history:probe',
+  backupExport: 'pinax:agent:backup:export',
+  backupRestore: 'pinax:agent:backup:restore',
   menuInvoke: 'pinax:agent:menu:invoke'
 })
 
@@ -182,8 +184,12 @@ export function shellView(session) {
  * deps 扩展（E1 导入既有稿）：
  *   importProject    —— ({ sourcePath, targetPath, dryRun }) => { ok, value|error }（next/runtime/projectImportAdapter）；
  *                       不注入时 project:import-run 如实报缺，界面把这句话原样摊开，不假装导入过。
+ * deps 扩展（G2 备份与恢复）：
+ *   backupService    —— next/runtime/projectBackupService（exportProject／restoreProject／readBackupManifest）；
+ *                       不注入时 backup:export／backup:restore 如实报缺，界面不假装备份过。
+ *                       backup:restore 只带 backupDir 时是「预检」：返回 manifest 摘要，不写一个字节。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
@@ -301,6 +307,25 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return history?.scheduler
           ? history.scheduler.probe()
           : fail('INVALID_INPUT', '历史探测未接入（主进程未创建历史服务）')
+      case IPC_CHANNELS.backupExport: {
+        if (!backupService?.exportProject) return fail('INVALID_INPUT', '备份服务未接入（主进程未注入 projectBackupService）：这条通道现在只报缺，不复制任何文件')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '备份需要先打开一个项目：备份的是当前打开的项目目录')
+        return backupService.exportProject({
+          root: session.projectRoot,
+          targetParent: input.targetParent,
+          includeHistory: input.includeHistory === true
+        })
+      }
+      case IPC_CHANNELS.backupRestore: {
+        if (!backupService?.restoreProject) return fail('INVALID_INPUT', '备份服务未接入（主进程未注入 projectBackupService）：这条通道现在只报缺，不写任何文件')
+        // 恢复区的预检（工单G2）：只给 backupDir 时先把 manifest 摘要摊给作者，不要求 targetRoot、不写盘。
+        if (!input.targetRoot) {
+          return backupService.readBackupManifest
+            ? backupService.readBackupManifest({ backupDir: input.backupDir })
+            : fail('INVALID_INPUT', '备份服务未提供 readBackupManifest：恢复区的预检不可用')
+        }
+        return backupService.restoreProject({ backupDir: input.backupDir, targetRoot: input.targetRoot })
+      }
       case IPC_CHANNELS.menuInvoke: {
         if (!menuIds.has(input.id)) {
           return fail('INVALID_INPUT', `菜单项 ${String(input.id)} 不在应用菜单模板里；载体不得注入顶层菜单（C5）`, { id: input.id })

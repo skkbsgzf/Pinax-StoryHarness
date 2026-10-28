@@ -11,7 +11,7 @@ import WorkbenchModal from './WorkbenchModal.vue'
  *
  * 底座是 WorkbenchModal（遮罩／圆角／Esc／过渡原样沿用，props open/dismissable/title 透传）。
  * 目录表 props.sections = [{ id, title, group?, component, props? }] 注册——D2 起两组：
- * 「设置」偏好与模型／载体管理／新建项目／导入既有稿（E1）／主载体选择；「文档」文档历史。
+ * 「设置」偏好与模型／载体管理／新建项目／导入既有稿（E1）／备份与恢复（G2）／主载体选择；「文档」文档历史。
  * 未登记的功能不许开弹窗（门禁：next/tests/visual-contract.test.mjs「目录外弹窗不允许存在」的机器版）。
  * 分组标签和目录项同在 tablist 里：标签是 <p>，不是 tab，不参与 roving tabindex。
  *

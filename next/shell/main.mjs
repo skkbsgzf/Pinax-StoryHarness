@@ -8,6 +8,7 @@ import { createAppPreferences } from '../runtime/appPreferences.mjs'
 import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
 import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
+import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 
@@ -40,6 +41,23 @@ const TITLEBAR_OVERLAY = Object.freeze({
   color: '#00000000',
   symbolColor: '#999999',
   height: 36
+})
+
+/**
+ * 系统目录对话框的标题按用途分支（工单G2 扩到备份／恢复三种）。
+ * 每个 purpose 都把「这个目录会被怎么用」写在标题里——目录选择是不可撤销的一步，
+ * 作者在对话框里就该知道选中的是不是项目落点、会不会被写。
+ */
+const PICK_DIR_TITLES = Object.freeze({
+  default: '选择新项目文件夹（需要空目录，可在对话框里新建）',
+  // E1 导入向导：源目录只读。
+  'import-source': '选择要导入的稿子目录（只读：导入不会改、不会删这里任何文件）',
+  // G2 备份：选的是「放到哪儿」，真正的备份是它下面的一个新子目录。
+  'backup-target': '选择备份保存位置（会在其中新建 <项目名>-backup-<时间戳> 子文件夹）',
+  // G2 恢复：选的是已有的备份目录（凭 backup-manifest.json 认）。
+  'backup-source': '选择要恢复的备份文件夹（需含 backup-manifest.json）',
+  // G2 恢复：选的是恢复后的新项目位置（必须是空目录）。
+  'restore-target': '选择恢复后的新项目位置（需要空目录，可在对话框里新建）'
 })
 
 // 数据/缓存目录跟随 PINAX_APP_DATA（批次16 验收修）。
@@ -199,9 +217,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
       // 必须让作者经系统对话框选/建一个空文件夹（createDirectory 允许就地新建）。
       // E1 导入向导复用同一枚对话框：purpose=import-source 时标题要如实说「这是只读的稿子目录」，
       // 别让作者以为选中的稿子目录会被当成新项目落点。
-      const title = input?.purpose === 'import-source'
-        ? '选择要导入的稿子目录（只读：导入不会改、不会删这里任何文件）'
-        : '选择新项目文件夹（需要空目录，可在对话框里新建）'
+      // G2 备份／恢复也复用：backup-target／backup-source／restore-target 三种标题见 PICK_DIR_TITLES。
+      const title = PICK_DIR_TITLES[input?.purpose] ?? PICK_DIR_TITLES.default
       const result = await dialog.showOpenDialog(window_, {
         title,
         properties: ['openDirectory', 'createDirectory']
@@ -210,6 +227,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
       return { ok: true, value: { picked: true, path: result.filePaths[0] } }
     },
     history: { gitHistory, scheduler: historyScheduler },
+    // 备份与恢复（G2）：整目录复制，零新依赖；服务只管文件，通道只管把当前项目根交给它。
+    backupService: projectBackup,
     // 导入既有稿（E1）：结构动作由作者在向导里显式按两次（计划→执行），与建项目同级走主进程；
     // dryRun≠false 一律当计划，只有显式 false 才落盘。
     importProject: ({ sourcePath, targetPath, dryRun }) => (dryRun ? planImport({ sourcePath, targetPath }) : runImport({ sourcePath, targetPath })),

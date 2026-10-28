@@ -596,6 +596,135 @@ describe('导入既有稿向导（工单E1）', () => {
   })
 })
 
+describe('备份与恢复（工单G2）', () => {
+  function backupBridge({ handlers = new Map(), view = carrierView() } = {}) {
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: view }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent }
+  }
+
+  const MANIFEST = {
+    schema: 'pinax-backup@1',
+    projectName: '大梦',
+    projectId: 'proj_fixture',
+    exportedAt: '2026-10-28T15:04:05.000Z',
+    sourceRoot: 'D:/books/大梦',
+    includesHistory: false,
+    fileCount: 7
+  }
+
+  it('备份节：导出走 backup:export；恢复先预检 manifest，再恢复到新目录并经 projectOpen 打开', async () => {
+    const handlers = new Map()
+    const picks = [
+      { ok: true, value: { picked: true, path: 'D:/备份' } },
+      { ok: true, value: { picked: true, path: 'D:/备份/大梦-backup-20261028-150405' } },
+      { ok: true, value: { picked: true, path: 'D:/books/恢复出来的大梦' } }
+    ]
+    const pick = vi.fn(async () => picks.shift())
+    const exportFn = vi.fn(async () => ({ ok: true, value: { path: 'D:/备份/大梦-backup-20261028-150405', fileCount: 7, bytes: 2048 } }))
+    const restoreFn = vi.fn(async (payload) => (payload.targetRoot
+      ? { ok: true, value: { root: payload.targetRoot, manifest: MANIFEST } }
+      : { ok: true, value: { manifest: MANIFEST } }))
+    const open = vi.fn(async () => ({ ok: true, value: {} }))
+    handlers.set(IPC_CHANNELS.projectPickDir, pick)
+    handlers.set(IPC_CHANNELS.backupExport, exportFn)
+    handlers.set(IPC_CHANNELS.backupRestore, restoreFn)
+    handlers.set(IPC_CHANNELS.projectOpen, open)
+
+    const bridge = backupBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="备份与恢复"]').exists()).toBe(false)
+
+    // 文件 → 备份与恢复…：统一二级页落在 backup 节。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.backup' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="备份与恢复"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.attributes('role')).toBe('tabpanel')
+    expect(wrapper.find('[data-test="settings-tab-backup"]').exists()).toBe(true)
+
+    // ① 导出：pick(backup-target) → backup:export（includeHistory 默认 false）。
+    const toolCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeToolCall).length
+    await panel.find('[data-test="backup-pick-target"]').trigger('click')
+    await flushPromises()
+    expect(pick).toHaveBeenCalledTimes(1)
+    expect(exportFn).toHaveBeenCalledWith({ targetParent: 'D:/备份', includeHistory: false })
+    expect(panel.find('[data-test="backup-target"]').text()).toBe('D:/备份')
+    const done = panel.find('[data-test="backup-done"]')
+    expect(done.text()).toContain('D:/备份/大梦-backup-20261028-150405')
+    expect(done.text()).toContain('7 个文件')
+    expect(done.text()).toContain('2.0 KB')
+
+    // ② 选备份目录：pick(backup-source) → backup:restore 只带 backupDir（预检），摘要先摊开。
+    await panel.find('[data-test="backup-pick-source"]').trigger('click')
+    await flushPromises()
+    expect(pick).toHaveBeenCalledTimes(2)
+    expect(restoreFn).toHaveBeenLastCalledWith({ backupDir: 'D:/备份/大梦-backup-20261028-150405' })
+    const summary = panel.find('[data-test="backup-manifest"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toContain('项目 大梦')
+    expect(summary.text()).toContain('7 个文件')
+    expect(summary.text()).toContain('不含历史仓')
+
+    // ③ 选恢复位置 → 恢复：backup:restore 带 targetRoot → projectOpen 打开 → refresh。
+    await panel.find('[data-test="backup-pick-restore-target"]').trigger('click')
+    await flushPromises()
+    expect(pick).toHaveBeenCalledTimes(3)
+    expect(panel.find('[data-test="backup-restore-target"]').text()).toBe('D:/books/恢复出来的大梦')
+
+    const viewCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length
+    await panel.find('[data-test="backup-restore"]').trigger('click')
+    await flushPromises()
+    expect(restoreFn).toHaveBeenLastCalledWith({ backupDir: 'D:/备份/大梦-backup-20261028-150405', targetRoot: 'D:/books/恢复出来的大梦' })
+    expect(open).toHaveBeenCalledWith({ root: 'D:/books/恢复出来的大梦' })
+    expect(panel.find('[data-test="backup-restored"]').text()).toContain('项目已打开')
+    expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length).toBeGreaterThan(viewCallsBefore)
+
+    // 备份/恢复走 shell 通道，不经内核写族那条 runtimeToolCall（挂载时的章节列表不算数，按前后计数比）。
+    expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeToolCall)).toHaveLength(toolCallsBefore)
+    wrapper.unmount()
+  })
+
+  it('失败原样摊开 typed error：BACKUP_TARGET_NOT_EMPTY 显示 code 与 message，不假装成功', async () => {
+    const handlers = new Map()
+    const picks = [
+      { ok: true, value: { picked: true, path: 'D:/备份/大梦-backup-20261028-150405' } },
+      { ok: true, value: { picked: true, path: 'D:/books/非空目录' } }
+    ]
+    handlers.set(IPC_CHANNELS.projectPickDir, vi.fn(async () => picks.shift()))
+    handlers.set(IPC_CHANNELS.backupRestore, vi.fn(async (payload) => (payload.targetRoot
+      ? { ok: false, error: { code: 'BACKUP_TARGET_NOT_EMPTY', message: '目标目录非空：D:/books/非空目录。恢复只支持空目录（防止覆盖现稿），请另选一个位置' } }
+      : { ok: true, value: { manifest: MANIFEST } })))
+    const bridge = backupBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.backup' })
+    await flushPromises()
+
+    const panel = wrapper.find('[aria-label="备份与恢复"]')
+    await panel.find('[data-test="backup-pick-source"]').trigger('click')
+    await flushPromises()
+    await panel.find('[data-test="backup-pick-restore-target"]').trigger('click')
+    await flushPromises()
+    await panel.find('[data-test="backup-restore"]').trigger('click')
+    await flushPromises()
+
+    const failure = panel.find('[data-test="backup-restore-error"]')
+    expect(failure.exists()).toBe(true)
+    expect(failure.text()).toContain('BACKUP_TARGET_NOT_EMPTY')
+    expect(failure.text()).toContain('恢复只支持空目录')
+    expect(panel.find('[data-test="backup-restored"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
 describe('载体管理面板（工单A1）', () => {
   function carriersBridge({ handlers = new Map(), view = carrierView() } = {}) {
     const request = vi.fn(async (channel, payload) => {

@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 import { IPC_CHANNELS } from './ipcContract.mjs'
 
 /**
- * 板块数据（章节／大纲／构思／条目／约束）的单一归属。
+ * 板块数据（章节／大纲／构思／条目／约束／资料）的单一归属。
  *
  * 索引窗列的是它、核心区写的也是它——分成两份就会不同步（正文存了第 2 版，索引窗还写着第 1 版）。
  * 所以外壳里凡是碰这块数据的组件都拿同一个对象，不各自取数。
@@ -39,6 +39,14 @@ export function useBoardData(bridge) {
     rule: null,
     ruleDraft: '',
     rulesError: null,
+    /** 资料（工单G1）：资料板的树（泛型项目里它就是主树）。列表只带回前 20000 字，
+     *  点开时再走 pinax_document_read 取全文——资料可能很长，草稿不能建立在一份截断文本上。
+     *  编辑态与条目一样是显式开关（阅读态 pre／编辑态 textarea），取消原样退回。 */
+    documents: [],
+    document: null,
+    documentDraft: '',
+    documentsError: null,
+    editingDocument: false,
     /** 提案审阅（工单A）：.pinax/proposals/ 里的模型改稿。
      *  proposals＝列表摘要；proposal＝点开的那份整份 JSON；proposalChapter＝目标章此刻的正文（左右对照用）。
      *  采纳仍走载体 save（带当前修订号），外壳不自己拼一份「采纳后」的正文。 */
@@ -291,6 +299,114 @@ export function useBoardData(bridge) {
   }
 
   /**
+   * 资料（工单G1）：列 资料/ 篇目。与构思速记同一个列法——pinax_document_list 把正文随手带回
+   * （前 20000 字，超出标注）；失败摊在索引窗自己的错误位。
+   * 换板后再回来：打开着的那篇重读一次（pinax_document_read 取全文），
+   * 不拿列表里那份截断文本去顶替作者手上的草稿。
+   */
+  async function loadDocuments() {
+    state.documentsError = null
+    const listed = await tool('pinax_document_list', { limit: 500 })
+    if (!listed.ok) {
+      state.documents = []
+      state.documentsError = listed.message
+      return
+    }
+    state.documents = listed.value.documents ?? []
+    const current = state.document ? state.documents.find((item) => item.file === state.document.file) : null
+    if (current) await openDocument(current)
+  }
+
+  /** 点开一篇资料：走 pinax_document_read 取全文（列表那份最多 20000 字，不足以做编辑底稿）。 */
+  async function openDocument(item) {
+    if (!item) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const read = await tool('pinax_document_read', { file: item.file, maxChars: 200000 })
+    state.busy = false
+    if (!read.ok) {
+      state.error = read.message
+      return
+    }
+    state.document = {
+      ...item,
+      title: read.value.document?.title ?? item.title,
+      // text 是读回来的全文（列表那份最多 20000 字）：阅读态显示它，编辑态另拿 draft，
+      // 取消编辑时 draft 丢掉、正文原样退回——与条目详情的 content／entryDraft 同一套。
+      text: read.value.text ?? '',
+      revision: read.value.revision,
+      totalChars: read.value.totalChars,
+      truncated: read.value.truncated
+    }
+    state.documentDraft = read.value.text ?? ''
+    state.editingDocument = false
+    state.notice = read.value.truncated
+      ? `只载入了前 ${read.value.text.length} 字（全篇 ${read.value.totalChars} 字）：保存会覆盖未载入的部分，请先确认再改。`
+      : `已载入 ${read.value.totalChars} 字 · 第 ${read.value.revision} 版`
+    state.selection = { type: 'document', item: { ...item, revision: read.value.revision } }
+  }
+
+  /** 资料编辑（工单G1）：与条目同一套开关——「编辑」把正文拷进草稿，「取消」原样退回。 */
+  function editDocument() {
+    if (!state.document) return
+    state.documentDraft = state.document.text ?? ''
+    state.editingDocument = true
+    state.error = null
+  }
+
+  function cancelEditDocument() {
+    state.editingDocument = false
+    state.documentDraft = state.document?.text ?? ''
+    state.error = null
+  }
+
+  function setDocumentDraft(value) {
+    state.documentDraft = value
+  }
+
+  /** 保存资料＝作者按下去的那一下：带读到的修订号走 pinax_document_save，冲突由文件服务拒，不静默覆盖。 */
+  async function saveDocument() {
+    if (!state.document || !state.documentDraft) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_document_save', { file: state.document.file, text: state.documentDraft, expectedRevision: state.document.revision })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该篇资料后再改，外壳不做静默合并）' : ''}`
+      return
+    }
+    state.busy = false
+    state.editingDocument = false
+    state.document = { ...state.document, text: state.documentDraft, revision: saved.value.revision, totalChars: state.documentDraft.length, truncated: false }
+    state.notice = `已保存到「${saved.value.file}」· 第 ${saved.value.revision} 版`
+    // 就地推进索引窗里的版本号与字数，不为一次保存重列整个资料目录。
+    state.documents = state.documents.map((item) => (item.file === saved.value.file
+      ? { ...item, revision: saved.value.revision, text: state.documentDraft, totalChars: state.documentDraft.length, truncated: false }
+      : item))
+  }
+
+  /** 新建资料：工具拒空 text，以标题作首行落盘，随后列一次并打开新篇（打开时取全文与修订号）。 */
+  async function createDocument(title) {
+    const name = String(title ?? '').trim()
+    if (!name) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_document_save', { title: name, text: `${name}\n`, expectedRevision: 0 })
+    state.busy = false
+    if (!saved.ok) {
+      state.error = saved.message
+      return
+    }
+    state.notice = `已新建「${saved.value.file}」`
+    await loadDocuments()
+    const made = state.documents.find((item) => item.file === saved.value.file)
+    if (made) await openDocument(made)
+  }
+
+  /**
    * 提案（工单A）：列 .pinax/proposals/。
    * 失败摊在索引窗自己的错误位（不发到文档级），提案是索引窗这一栏的东西；
    * 打开着的那份若已不在列表里（被外面删了），状态一并清掉，不留一份点不开的「当前提案」。
@@ -523,8 +639,10 @@ export function useBoardData(bridge) {
       if (read.code !== 'PINAX_INVALID_INPUT') state.outlineError = read.message
       return
     }
-    state.outline = read.value.nodes ?? []
+    // 工单G3：edges 也留在状态里——索引窗按它算层级缩进与「有子节点」的记号。
+    // depth 由 outlineDepths() 现算（不写进文档：草稿与保存都不带这个界面字段）。
     state.outlineEdges = read.value.edges ?? []
+    state.outline = decorateOutlineNodes(read.value.nodes ?? [], state.outlineEdges)
     state.outlineRevision = read.value.revision ?? null
   }
 
@@ -533,7 +651,8 @@ export function useBoardData(bridge) {
     if (!state.outline.length) return
     if (!state.outlineDraft) {
       state.outlineDraft = {
-        nodes: JSON.parse(JSON.stringify(state.outline)),
+        // 草稿是「要落盘的文档」：界面用的 depth 不进草稿，否则保存会把 depth 写进 outline.json。
+        nodes: JSON.parse(JSON.stringify(plainOutlineNodes(state.outline))),
         edges: JSON.parse(JSON.stringify(state.outlineEdges ?? []))
       }
     }
@@ -562,7 +681,7 @@ export function useBoardData(bridge) {
   }
 
   /** 加节点（工单B2）：同级＝插在所选节点后；子级＝同样紧随其后，另记一条 from→to 连线
-   *  （outline.json 的层级语义住在 edges 里，树显示仍是平铺——本批不做拖拽重排）。 */
+   *  （outline.json 的层级语义住在 edges 里；工单G3 起索引窗按 depth 缩进显示，仍不做拖拽重排）。 */
   function addOutlineNode(kind) {
     if (!state.outlineDraft || state.outlineNodeIndex === null) return
     const nodes = state.outlineDraft.nodes
@@ -599,14 +718,22 @@ export function useBoardData(bridge) {
       return
     }
     state.outlineRevision = saved.value.revision
-    state.outline = JSON.parse(JSON.stringify(state.outlineDraft.nodes))
+    // 就地推进树（不重读、不冲掉提示）：depth 按新 edges 现算，草稿继续开着。
+    state.outline = decorateOutlineNodes(JSON.parse(JSON.stringify(state.outlineDraft.nodes)), state.outlineDraft.edges)
     state.outlineEdges = JSON.parse(JSON.stringify(state.outlineDraft.edges))
     state.busy = false
     state.notice = `已保存大纲 · 第 ${saved.value.revision} 版 · ${saved.value.nodeTotal} 个节点`
   }
 
+  /** 换板时清瞬时提示：上一块板的「已载入 N 字」不该出现在这一块板上（批次18 验收修）。 */
+  function clearTransient() {
+    state.notice = ''
+    state.error = null
+  }
+
   return Object.assign(state, {
     tool,
+    clearTransient,
     loadChapters,
     openChapter,
     save,
@@ -621,6 +748,13 @@ export function useBoardData(bridge) {
     setRuleDraft,
     saveRule,
     createRule,
+    loadDocuments,
+    openDocument,
+    editDocument,
+    cancelEditDocument,
+    setDocumentDraft,
+    saveDocument,
+    createDocument,
     loadProposals,
     openProposal,
     adoptProposal,
@@ -638,5 +772,84 @@ export function useBoardData(bridge) {
     addOutlineNode,
     saveOutline,
     setDraft
+  })
+}
+
+/**
+ * 大纲层级（工单G3）：edges 决定每个节点的 depth，索引窗据此缩进。
+ * 只有「每条连线的两端都在节点表里、且从根节点出发能把整片森林走完」时才给层级：
+ * 无入边的节点是根（depth 0），BFS 向下逐层 +1（同一子节点被多条线指向时取最先到达的最浅一层）。
+ * 以下任一情况整份大纲按一级平铺（全部 depth 0）——宁可不缩进，也不给作者编一层不存在的结构：
+ *   • 没有 edges（还没连线的草稿是常态）；
+ *   • 连线端点缺失／指向不存在的节点（断链）；
+ *   • 自环、重复 id、或存在从根到不了的环（整片森林走不完）。
+ * edges 两种字段名都认：{ from, to }（本仓 outline.json 的既有形状）与 { source, target }。
+ */
+function outlineDepths(nodes, edges) {
+  const list = Array.isArray(nodes) ? nodes : []
+  const flat = list.map(() => 0)
+  const links = Array.isArray(edges) ? edges : []
+  if (!list.length || !links.length) return flat
+
+  // id → 下标；缺 id 的节点只能是独立根（连线引用不到它，depth 恒为 0）。
+  const indexById = new Map()
+  for (const [index, node] of list.entries()) {
+    const id = typeof node?.id === 'string' && node.id.trim() ? node.id : null
+    if (!id) continue
+    if (indexById.has(id)) return flat // 重复 id：连线指向谁都不确定
+    indexById.set(id, index)
+  }
+  if (!indexById.size) return flat
+
+  const children = new Map()
+  const indegree = list.map(() => 0)
+  for (const edge of links) {
+    const from = edge?.from ?? edge?.source
+    const to = edge?.to ?? edge?.target
+    if (typeof from !== 'string' || typeof to !== 'string') return flat
+    const parent = indexById.get(from)
+    const child = indexById.get(to)
+    if (parent === undefined || child === undefined || parent === child) return flat
+    if (!children.has(parent)) children.set(parent, [])
+    children.get(parent).push(child)
+    indegree[child] += 1
+  }
+
+  const depths = list.map(() => 0)
+  const visited = list.map(() => false)
+  const queue = []
+  for (let index = 0; index < list.length; index += 1) {
+    if (indegree[index] !== 0) continue
+    visited[index] = true
+    queue.push(index)
+  }
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor]
+    for (const child of children.get(current) ?? []) {
+      if (visited[child]) continue
+      visited[child] = true
+      depths[child] = depths[current] + 1
+      queue.push(child)
+    }
+  }
+  // 有 id 的节点里有走不到的（环）：整份平铺，不给半棵树编层级。
+  for (const index of indexById.values()) if (!visited[index]) return flat
+  return depths
+}
+
+/** 给每个节点贴上 depth（新对象，不改状态里那份文档数据）。 */
+function decorateOutlineNodes(nodes, edges) {
+  const list = Array.isArray(nodes) ? nodes : []
+  const depths = outlineDepths(list, edges)
+  return list.map((node, index) => ({ ...node, depth: depths[index] ?? 0 }))
+}
+
+/** 摘掉界面用的 depth：草稿与保存载荷只带文档里的字段。 */
+function plainOutlineNodes(nodes) {
+  return (Array.isArray(nodes) ? nodes : []).map((node) => {
+    if (!node || typeof node !== 'object') return node
+    const copy = { ...node }
+    delete copy.depth
+    return copy
   })
 }

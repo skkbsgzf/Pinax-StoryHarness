@@ -58,7 +58,7 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   assert.match(injection.reason, /顶层菜单/)
 
   const ids = flattenMenuIds(MENU_TEMPLATE).map((item) => item.id)
-  for (const required of ['project.create', 'project.open', 'project.import', 'project.history', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
+  for (const required of ['project.create', 'project.open', 'project.import', 'project.backup', 'project.history', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
     assert.ok(ids.includes(required), `菜单模板缺 ${required}`)
   }
   assert.equal(new Set(ids).size, ids.length, '菜单 id 不得重复')
@@ -566,6 +566,46 @@ test('导入既有稿通道（E1）：适配器注入即通、dryRun 默认走�
   const missing = await bare.dispatch(IPC_CHANNELS.projectImportRun, { sourcePath: 'D:/稿子', targetPath: 'D:/books' })
   assert.equal(missing.ok, false)
   assert.match(String(missing.error?.message), /导入适配器未接入/)
+})
+
+test('备份两通道（G2）：未注入如实报缺；注入后导出用当前项目根、恢复缺 targetRoot 时按预检返回 manifest', async () => {
+  const { session, dispatcher } = harness()
+  for (const channel of [IPC_CHANNELS.backupExport, IPC_CHANNELS.backupRestore]) {
+    const missing = await dispatcher.dispatch(channel, {})
+    assert.equal(missing.ok, false, channel)
+    assert.equal(missing.error.code, NEXT_ERROR_CODES.INVALID_INPUT, channel)
+    assert.match(missing.error.message, /备份服务未接入/, channel)
+  }
+
+  const calls = []
+  const backupService = {
+    exportProject: async (args) => { calls.push(['export', args]); return ok({ path: 'D:/备份/大梦-backup-20261028-150405', fileCount: 2, bytes: 10 }) },
+    restoreProject: async (args) => { calls.push(['restore', args]); return ok({ root: args.targetRoot }) },
+    readBackupManifest: async (args) => { calls.push(['inspect', args]); return ok({ manifest: { schema: 'pinax-backup@1' } }) }
+  }
+  const wired = createIpcDispatcher({ session, backupService })
+
+  // 没有打开项目：导出无从谈起（备份的是当前项目），也不去碰备份服务。
+  const noProject = await wired.dispatch(IPC_CHANNELS.backupExport, { targetParent: 'D:/备份' })
+  assert.equal(noProject.ok, false)
+  assert.match(noProject.error.message, /先打开一个项目/)
+  assert.equal(calls.length, 0)
+
+  session.projectRoot = 'D:/books/大梦'
+  const exported = await wired.dispatch(IPC_CHANNELS.backupExport, { targetParent: 'D:/备份', includeHistory: true })
+  assert.equal(exported.ok, true)
+  assert.deepEqual(calls.at(-1), ['export', { root: 'D:/books/大梦', targetParent: 'D:/备份', includeHistory: true }], '备份根由通道从会话取，渲染层给不了第二个项目路径')
+
+  const preview = await wired.dispatch(IPC_CHANNELS.backupRestore, { backupDir: 'D:/备份/大梦-backup-20261028-150405' })
+  assert.equal(preview.ok, true)
+  assert.deepEqual(calls.at(-1), ['inspect', { backupDir: 'D:/备份/大梦-backup-20261028-150405' }], '只有 backupDir＝预检（恢复区显示摘要），不写盘')
+
+  const restored = await wired.dispatch(IPC_CHANNELS.backupRestore, {
+    backupDir: 'D:/备份/大梦-backup-20261028-150405',
+    targetRoot: 'D:/books/恢复出来的大梦'
+  })
+  assert.equal(restored.ok, true)
+  assert.deepEqual(calls.at(-1), ['restore', { backupDir: 'D:/备份/大梦-backup-20261028-150405', targetRoot: 'D:/books/恢复出来的大梦' }])
 })
 
 function harness() {
