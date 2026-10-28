@@ -11,14 +11,15 @@ import WorkbenchModal from './WorkbenchModal.vue'
  *
  * 底座是 WorkbenchModal（遮罩／圆角／Esc／过渡原样沿用，props open/dismissable/title 透传）。
  * 目录表 props.sections = [{ id, title, group?, component, props? }] 注册——D2 起两组：
- * 「设置」偏好与模型／载体管理／新建项目／主载体选择；「文档」文档历史。
+ * 「设置」偏好与模型／载体管理／新建项目／导入既有稿（E1）／主载体选择；「文档」文档历史。
  * 未登记的功能不许开弹窗（门禁：next/tests/visual-contract.test.mjs「目录外弹窗不允许存在」的机器版）。
  * 分组标签和目录项同在 tablist 里：标签是 <p>，不是 tab，不参与 roving tabindex。
  *
  * 键盘语义取老版 tablist 的那半：目录 roving tabindex＋方向键换节（SettingsPopup.vue:489-501）。
- * 老版 C07 的 trapFocusWithin 焦点陷阱不在 Next 落地——它是 src/ 的 composable，
- * 薄渲染层门禁（next/tests/shell-contract.test.mjs「外壳引旧轨叶子件只引这三个」）不许引；
- * Tab 走浏览器默认顺序。
+ * 焦点陷阱（批次15 B · 差异表 #10）：打开时由底座 WorkbenchModal 对面板根起 next/shell/focusTrap.mjs
+ * 的陷阱——焦点先收进面板、Tab 在面板内可聚焦元素之间循环、关闭/卸载时摘监听并归还打开前的焦点；
+ * Esc 仍归 WorkbenchModal。老版 src/ 的 trapFocusWithin 是 composable，薄渲染层门禁不许引，
+ * 这里是 next/ 内的纯 DOM 重写（同一行为，不引旧轨）。
  */
 const props = defineProps({
   open: { type: Boolean, default: false },

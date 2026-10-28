@@ -17,7 +17,7 @@ import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 function carrierCarriers() {
   return [
     { id: 'pinax.carrier.novel', title: '小说', isPrimary: true, isEnabled: true, dataDirs: ['正文', '大纲', '构思'], scopes: ['file:正文:rw', 'file:大纲:rw', 'file:构思:rw', 'agent:ask'], tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'], context: { providers: ['selection', 'outline'], budgetChars: 24000 }, capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'], panes: [{ slot: 'left-dock', id: 'novel.shelf' }, { slot: 'center', id: 'novel.editor' }] },
-    { id: 'pinax.carrier.setting', title: '设定', isPrimary: false, isEnabled: true, dataDirs: ['世界书', '约束'], scopes: ['file:世界书:rw', 'file:约束:r', 'agent:ask'], tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], context: { providers: ['rules', 'style', 'worldbook'], budgetChars: 20000 }, capabilities: ['setting.entries', 'constraint.rules'], panes: [{ slot: 'left-dock', id: 'setting.board' }, { slot: 'center', id: 'setting.entries' }] }
+    { id: 'pinax.carrier.setting', title: '设定', isPrimary: false, isEnabled: true, dataDirs: ['世界书', '约束'], scopes: ['file:世界书:rw', 'file:约束:rw', 'agent:ask'], tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'], context: { providers: ['rules', 'style', 'worldbook'], budgetChars: 20000 }, capabilities: ['setting.entries', 'constraint.rules'], panes: [{ slot: 'left-dock', id: 'setting.board' }, { slot: 'center', id: 'setting.entries' }] }
   ]
 }
 
@@ -36,7 +36,7 @@ const PROPOSAL = {
   createdAt: '2026-10-28T14:00:00'
 }
 
-function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, notes = [], proposals = [] } = {}) {
+function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, notes = [], proposals = [], rules = [] } = {}) {
   const state = {
     revision: 1,
     text: '雨从檐口滴下来。',
@@ -50,6 +50,7 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, no
     outlineEdges: [{ from: 'n1', to: 'n2' }],
     outlineRevision: 1,
     notes,
+    rules: rules.map((item) => ({ ...item })),
     entries: [
       { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true },
       { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
@@ -136,6 +137,28 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, no
         hit.savedText = payload.args.text
         return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, file: hit.path, revision: hit.revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
       }
+      if (payload.tool === 'pinax_rule_list') {
+        // 工单E2：与真工具同一形状——列表把全文随手带回（判据：点开不再发第二次读）。
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, total: state.rules.length, truncated: false, projectRoot: 'D:/tmp/大梦', rules: state.rules } } }
+      }
+      if (payload.tool === 'pinax_rule_save') {
+        const file = payload.args.file ?? `约束/${payload.args.title}.md`
+        const hit = state.rules.find((item) => item.file === file)
+        const actual = hit?.revision ?? 0
+        if (stale || payload.args.expectedRevision !== actual) {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${file}」已被改动（第 ${actual} 版）`, details: { actual } } } }
+        }
+        const revision = actual + 1
+        if (hit) {
+          hit.revision = revision
+          hit.text = payload.args.text
+          hit.totalChars = payload.args.text.length
+          hit.truncated = false
+        } else {
+          state.rules.push({ index: state.rules.length, title: String(payload.args.title ?? '').replace(/\.md$/iu, ''), file, name: `${payload.args.title}.md`, revision, text: payload.args.text, totalChars: payload.args.text.length, truncated: false })
+        }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
+      }
       if (payload.tool === 'pinax_outline_read') {
         // 与真工具同一条口径：大纲目录空着（既没有 outline.json 也没有 大纲.md）就按 INVALID_INPUT 拒。
         if (outlineMissing) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「大纲/」下既没有 outline.json 也没有 大纲.md' } } }
@@ -186,7 +209,7 @@ function shellView(extra = {}) {
       title: RUNTIME_CONTRACT.title, builtIn: true, disableable: false, ownsSlot: 'right', budgetPriority: 100,
       writeSurface: RUNTIME_CONTRACT.writeSurface, reservedSlotReason: '右栏归运行时',
       started: true,
-      surface: { carrierTools: 12, carrierToolNames: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], aggregated: true, missingImplementations: [] },
+      surface: { carrierTools: 14, carrierToolNames: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'], aggregated: true, missingImplementations: [] },
       tools: [
         { name: 'pinax_chapter_read', title: 'pinax_chapter_read', owner: 'pinax.carrier.novel' },
         { name: 'pinax_worldbook_list', title: 'pinax_worldbook_list', owner: 'pinax.carrier.setting' },
@@ -604,6 +627,51 @@ describe('设定载体', () => {
     expect(wrapper.find('.editor-area').exists()).toBe(false)
     expect(wrapper.find('.entry-text').exists()).toBe(true)
     expect(tools.calls.length, '取消不落盘').toBe(callsBefore)
+    wrapper.unmount()
+  })
+
+  it('约束（工单E2）：索引窗「约束」区列篇目，点开进约束编辑面；保存与新建都走 pinax_rule_save', async () => {
+    const tools = fakeTools({
+      rules: [{ index: 0, title: '纪律', file: '约束/纪律.md', name: '纪律.md', revision: 1, text: '- 不许出现现代词\n', totalChars: 10, truncated: false }]
+    })
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 切到「设定」那块板：条目树之后是约束区，换板一次列两棵树。
+    await wrapper.findAll('.nx-ribbon-item')[1].trigger('click')
+    await flushPromises()
+    expect(tools.calls.some((call) => call.tool === 'pinax_rule_list')).toBe(true)
+    const indexWindow = wrapper.find('.nx-index-window')
+    expect(indexWindow.text()).toContain('约束')
+    const ruleRow = indexWindow.findAll('.nx-tree-item').find((row) => row.text().includes('纪律'))
+    expect(ruleRow, '约束区里的行').toBeTruthy()
+
+    // 点行开篇：正文随列表回来，不再发第二次读；核心区换约束编辑面。
+    const callsBeforeOpen = tools.calls.length
+    await ruleRow.trigger('click')
+    await flushPromises()
+    expect(tools.calls.length).toBe(callsBeforeOpen)
+    expect(ruleRow.classes()).toContain('is-active')
+    expect(wrapper.find('[aria-label="约束编辑器"]').exists()).toBe(true)
+    expect(wrapper.find('.editor-area').element.value).toBe('- 不许出现现代词\n')
+    expect(wrapper.text()).toContain('已载入 10 字 · 第 1 版')
+
+    // 保存：带读到的修订号走 pinax_rule_save，版本号就地推进。
+    await wrapper.find('[aria-label="约束编辑器"]').setValue('- 不许出现现代词\n- 每章 2000 字\n')
+    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+    const saved = tools.calls.find((call) => call.tool === 'pinax_rule_save' && call.args.file)
+    expect(saved.args).toEqual({ file: '约束/纪律.md', text: '- 不许出现现代词\n- 每章 2000 字\n', expectedRevision: 1 })
+    expect(wrapper.text()).toContain('已保存到「约束/纪律.md」· 第 2 版')
+
+    // 新建：面板尾部「新约束标题」走 expectedRevision 0，标题作首行落盘。
+    await wrapper.find('[aria-label="新约束标题"]').setValue('文风')
+    await wrapper.find('.notes-new .nx-index-add').trigger('click')
+    await flushPromises()
+    const created = tools.calls.find((call) => call.tool === 'pinax_rule_save' && call.args.title)
+    expect(created.args).toEqual({ title: '文风', text: '文风\n', expectedRevision: 0 })
+    expect(wrapper.find('[aria-label="约束编辑器"]').element.value).toBe('文风\n')
     wrapper.unmount()
   })
 })

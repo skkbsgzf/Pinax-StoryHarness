@@ -465,6 +465,137 @@ describe('偏好与模型面板（批次8①）', () => {
   })
 })
 
+describe('导入既有稿向导（工单E1）', () => {
+  function importBridge({ handlers = new Map(), view = carrierView() } = {}) {
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: view }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent }
+  }
+
+  const PLAN = {
+    mode: 'plan',
+    sourceRoot: 'D:/稿子/大梦',
+    targetRoot: 'D:/books/大梦',
+    importable: 3,
+    skippedCount: 1,
+    collapsedCount: 0,
+    decisions: { chapter: 2, worldbook: 1 },
+    skipped: [{ file: '杂件/笔记.md', reason: 'unmapped', detail: '顶层目录与文件名都没有固定类别' }],
+    warnings: ['当前是计划模式（dryRun）：未写入任何文件', '源目录只读：本次导入不写、不改、不删源目录下的任何文件。']
+  }
+  const APPLIED = { ...PLAN, mode: 'apply', createdCount: 3, reusedCount: 0, failedCount: 0, written: [], warnings: [] }
+
+  it('菜单打开→选目录→生成计划走导入通道（dryRun:true）→执行（dryRun:false）→projectOpen 打开新项目', async () => {
+    const handlers = new Map()
+    const picks = [
+      { ok: true, value: { picked: true, path: 'D:/稿子/大梦' } },
+      { ok: true, value: { picked: true, path: 'D:/books/大梦' } }
+    ]
+    const pick = vi.fn(async () => picks.shift())
+    const create = vi.fn(async () => ({ ok: true, value: { root: 'D:/books/大梦' } }))
+    const importRun = vi.fn(async (payload) => ({ ok: true, value: payload.dryRun ? PLAN : APPLIED }))
+    const open = vi.fn(async () => ({ ok: true, value: {} }))
+    handlers.set(IPC_CHANNELS.projectPickDir, pick)
+    handlers.set(IPC_CHANNELS.projectCreate, create)
+    handlers.set(IPC_CHANNELS.projectImportRun, importRun)
+    handlers.set(IPC_CHANNELS.projectOpen, open)
+
+    // 还没开项目：主载体仍由板块清单给出（导入要先能建项目骨架）。
+    const view = { ...carrierView(), project: null, needsPrimary: false, openError: null }
+    const bridge = importBridge({ handlers, view })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="导入既有稿"]').exists()).toBe(false)
+
+    // 文件 → 导入既有稿…：统一二级页落在 import 节。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.import' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="导入既有稿"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.attributes('role')).toBe('tabpanel')
+    expect(wrapper.find('[data-test="settings-tab-import"]').exists()).toBe(true)
+
+    // ① 选稿子目录 → ② 选空目录当项目位置（两次都走同一枚系统对话框通道）。
+    await panel.find('[data-test="import-pick-source"]').trigger('click')
+    await flushPromises()
+    expect(panel.find('[data-test="import-source"]').text()).toBe('D:/稿子/大梦')
+    expect(panel.find('.prefs-input').element.value).toBe('大梦')
+    await panel.find('[data-test="import-pick-target"]').trigger('click')
+    await flushPromises()
+    expect(panel.find('[data-test="import-target"]').text()).toBe('D:/books/大梦')
+
+    // ③ 生成计划：先建 @2 骨架（session.create），再走导入通道的 dryRun。
+    await panel.find('[data-test="import-plan"]').trigger('click')
+    await flushPromises()
+    expect(create).toHaveBeenCalledWith({ name: '大梦', primaryCarrier: 'fixture.novel', extraEnabled: [], root: 'D:/books/大梦' })
+    expect(importRun.mock.calls.at(-1)[0]).toEqual({ sourcePath: 'D:/稿子/大梦', targetPath: 'D:/books/大梦', dryRun: true })
+
+    const planView = panel.find('[data-test="import-plan-view"]')
+    expect(planView.exists()).toBe(true)
+    const categories = planView.findAll('[data-test="import-category"]').map((node) => node.text())
+    expect(categories).toEqual(['正文：2', '世界书：1'])
+    expect(planView.text()).toContain('跳过 1 个')
+    expect(planView.find('[data-test="import-skipped"]').text()).toContain('杂件/笔记.md')
+
+    // 执行导入：dryRun:false 落盘 → 再经 projectOpen 打开新项目 → refresh。
+    const viewCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length
+    await panel.find('[data-test="import-apply"]').trigger('click')
+    await flushPromises()
+    expect(importRun.mock.calls.at(-1)[0]).toEqual({ sourcePath: 'D:/稿子/大梦', targetPath: 'D:/books/大梦', dryRun: false })
+    expect(open).toHaveBeenCalledWith({ root: 'D:/books/大梦' })
+    expect(wrapper.find('[data-test="import-done"]').text()).toContain('已导入 3 个文件')
+    expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length).toBeGreaterThan(viewCallsBefore)
+
+    // 结构动作走 shell 通道，不经内核写族那条 runtimeToolCall——那条路上 kernelWriteGuard 把
+    // pinax_project_import 定性为 structural 整组拒（next/tests/kernel-write-guard.test.mjs:111-117）。
+    const toolCalls = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeToolCall)
+    expect(toolCalls.some(([, payload]) => payload?.tool === 'pinax_project_import')).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('导入失败原样摊开 typed error：code 与 message 都显示，不假装成功', async () => {
+    const handlers = new Map()
+    const picks = [
+      { ok: true, value: { picked: true, path: 'D:/稿子/旧项目' } },
+      { ok: true, value: { picked: true, path: 'D:/books/旧项目' } }
+    ]
+    handlers.set(IPC_CHANNELS.projectPickDir, vi.fn(async () => picks.shift()))
+    handlers.set(IPC_CHANNELS.projectCreate, vi.fn(async () => ({ ok: true, value: {} })))
+    handlers.set(IPC_CHANNELS.projectImportRun, vi.fn(async () => ({
+      ok: false,
+      error: { code: 'PINAX_INVALID_INPUT', message: '该目录已是或曾是 Pinax 项目（含 .pinax/project.json）：D:/稿子/旧项目' }
+    })))
+    const view = { ...carrierView(), project: null, needsPrimary: false, openError: null }
+    const bridge = importBridge({ handlers, view })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.import' })
+    await flushPromises()
+
+    const panel = wrapper.find('[aria-label="导入既有稿"]')
+    await panel.find('[data-test="import-pick-source"]').trigger('click')
+    await flushPromises()
+    await panel.find('[data-test="import-pick-target"]').trigger('click')
+    await flushPromises()
+    await panel.find('[data-test="import-plan"]').trigger('click')
+    await flushPromises()
+
+    const failure = panel.find('[data-test="import-error"]')
+    expect(failure.exists()).toBe(true)
+    expect(failure.text()).toContain('PINAX_INVALID_INPUT')
+    expect(failure.text()).toContain('已是或曾是 Pinax 项目')
+    expect(panel.find('[data-test="import-plan-view"]').exists()).toBe(false)
+    expect(handlers.get(IPC_CHANNELS.projectOpen)).toBeUndefined()
+    wrapper.unmount()
+  })
+})
+
 describe('载体管理面板（工单A1）', () => {
   function carriersBridge({ handlers = new Map(), view = carrierView() } = {}) {
     const request = vi.fn(async (channel, payload) => {

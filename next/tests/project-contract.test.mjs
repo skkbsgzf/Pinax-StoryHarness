@@ -212,3 +212,41 @@ test('D2：kind 缺失又带主载体的坏合同直接拒，不回落 novel', a
     await workspace.cleanup()
   }
 })
+
+test('legacy @1 文档（MCP 时代，无 carriers）：打开时按 kind 确定性推导主载体并升 @2（批次16 验收修）', async () => {
+  const ws = await createTempWorkspace('legacy')
+  const root = join(ws.projects, '大梦')
+  await mkdir(join(root, '.pinax'), { recursive: true })
+  await mkdir(join(root, '正文'), { recursive: true })
+  // MCP 时代的形态：spec @1、kind 明确、没有任何 carriers 字段
+  await writeFile(join(root, '.pinax', 'project.json'), JSON.stringify({
+    schemaVersion: 1,
+    spec: 'pinax-project@1',
+    projectId: 'proj_legacy_dameng',
+    name: '大梦',
+    kind: 'novel',
+    createdAt: '2026-10-26T16:54:39.645Z',
+    updatedAt: '2026-10-26T16:54:39.645Z'
+  }, null, 2), 'utf-8')
+
+  const registry = registryWith(FIXTURE_NOVEL, FIXTURE_WORLDBOOK)
+  const opened = await openProject({ root, registry })
+  assert.equal(opened.ok, true, JSON.stringify(opened.error ?? {}))
+  assert.equal(opened.value.document.carriers.primary, FIXTURE_NOVEL.id, '按 kind=novel 推导出小说主载体')
+  assert.equal(opened.value.document.spec, 'pinax-project@2', '打开即升 @2')
+  assert.equal(opened.value.document.needsPrimary, false)
+
+  // 升级落盘：重读磁盘文档，carriers 已持久化
+  const reread = JSON.parse(await readFile(join(root, '.pinax', 'project.json'), 'utf-8'))
+  assert.equal(reread.spec, 'pinax-project@2')
+  assert.equal(reread.carriers.primary, FIXTURE_NOVEL.id)
+
+  // kind 无匹配载体时：仍停在主载体闸，不猜
+  await writeFile(join(root, '.pinax', 'project.json'), JSON.stringify({
+    schemaVersion: 1, spec: 'pinax-project@1', projectId: 'proj_x', name: '未知类型稿', kind: 'poetry',
+    createdAt: '2026-10-26T16:54:39.645Z', updatedAt: '2026-10-26T16:54:39.645Z'
+  }, null, 2), 'utf-8')
+  const stopped = await openProject({ root, registry })
+  assert.equal(stopped.ok, false)
+  assert.equal(stopped.error.code, 'PINAX_PRIMARY_CARRIER_MISSING')
+})

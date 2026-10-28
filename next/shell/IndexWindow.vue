@@ -36,6 +36,7 @@ const treeDir = computed(() => props.board?.dataDirs?.[0] ?? props.board?.treePa
 const isChapterOpen = (item) => props.data.selection?.type === 'chapter' && props.data.selection.item?.file === item.file
 const isEntryOpen = (item) => props.data.selection?.type === 'entry' && props.data.selection.item?.path === item.path
 const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data.selection.item?.file === item.file
+const isRuleOpen = (item) => props.data.selection?.type === 'rule' && props.data.selection.item?.file === item.file
 const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-node' && props.data.selection.item?.index === index
 const isProposalOpen = (item) => props.data.selection?.type === 'proposal' && props.data.selection.item?.name === item.name
 
@@ -67,6 +68,8 @@ watch(() => props.board?.id, () => {
     void props.data.loadProposals()
   } else if (treeKind.value === 'entries') {
     void props.data.loadEntries()
+    // 约束（工单E2）：设定板的第二棵树，随条目一起列——换板一次，两棵树都是新的。
+    void props.data.loadRules()
   }
 }, { immediate: true })
 </script>
@@ -222,6 +225,26 @@ watch(() => props.board?.id, () => {
           </li>
         </ul>
         <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+
+        <!-- 约束（工单E2）：设定板的第二棵树。行可点开——正文随 pinax_rule_list 一起回来，
+             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。 -->
+        <p class="workspace-nav-section">约束</p>
+        <ul class="nx-tree">
+          <li v-for="item in data.rules" :key="item.file" class="nx-tree-line">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isRuleOpen(item) }"
+              :aria-current="isRuleOpen(item) ? 'page' : null"
+              @click="data.openRule(item)"
+            >
+              <span class="workspace-nav-label">{{ item.title }}</span>
+              <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容（约束/）。</p>
+        <p v-if="data.rulesError" class="nx-index-error">{{ data.rulesError }}</p>
       </template>
 
       <ul v-if="data.listWarnings.length" class="nx-index-warn">

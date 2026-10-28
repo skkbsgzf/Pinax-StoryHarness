@@ -8,6 +8,7 @@ import SettingsModal from './SettingsModal.vue'
 import PrefsSection from './settings/PrefsSection.vue'
 import CarriersSection from './settings/CarriersSection.vue'
 import NewProjectSection from './settings/NewProjectSection.vue'
+import ImportSection from './settings/ImportSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import HistorySection from './settings/HistorySection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
@@ -113,11 +114,13 @@ const historyTarget = computed(() => {
 const settingsOpen = ref(false)
 const activeSection = ref('prefs')
 
-/** 目录表：两组，设置四节＋文档历史（D2）。未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
+/** 目录表：两组，设置五节＋文档历史（D2）。未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
 const settingsSections = computed(() => [
   { id: 'prefs', title: '偏好与模型', group: '设置', component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
   { id: 'carriers', title: '载体管理', group: '设置', component: CarriersSection, props: { carriers: carriers.value } },
   { id: 'newProject', title: '新建项目', group: '设置', component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
+  // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
+  { id: 'import', title: '导入既有稿', group: '设置', component: ImportSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
   { id: 'primary', title: '主载体选择', group: '设置', component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } },
   { id: 'history', title: '文档历史', group: '文档', component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } }
 ])
@@ -146,6 +149,15 @@ async function openCarriers() {
 function openNewProject() {
   if (project.value || !canPickPrimary.value) return
   openSection('newProject')
+}
+
+/**
+ * 导入既有稿（工单E1）：菜单「文件 → 导入既有稿…」的落点。
+ * 不做「有项目就不给开」的闸——恰恰是老作者带着稿子上车时才需要它；
+ * 向导里会明示「导入会切换到新项目」，避免误切时没看见。
+ */
+function openImport() {
+  openSection('import')
 }
 
 /** 当前文档历史（D2）：菜单「文件 → 当前文档历史…」与索引窗行动作的共同落点。 */
@@ -405,6 +417,7 @@ onMounted(() => {
   // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
   props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => {
     if (payload?.id === 'project.create') openNewProject()
+    if (payload?.id === 'project.import') openImport()
     if (payload?.id === 'project.history') openHistory()
     if (payload?.id === 'settings.theme') toggleTheme()
     if (payload?.id === 'settings.preferences') void openSettings()

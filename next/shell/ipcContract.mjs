@@ -19,6 +19,7 @@ export const IPC_CHANNELS = Object.freeze({
   projectCreateBare: 'pinax:agent:project:create-bare',
   projectPickDir: 'pinax:agent:project:pick-dir',
   projectOpen: 'pinax:agent:project:open',
+  projectImportRun: 'pinax:agent:project:import-run',
   projectClose: 'pinax:agent:project:close',
   carrierSetEnabled: 'pinax:agent:carrier:set-enabled',
   carrierSetPrimary: 'pinax:agent:carrier:set-primary',
@@ -175,8 +176,14 @@ export function shellView(session) {
  * deps 扩展（D1 历史）：
  *   history          —— { gitHistory, scheduler }；不注入时 history:* 五条通道如实报缺。
  *   onProjectOpened  —— 项目打开/刷新成功后的接线钩子（主进程：建历史仓库 + 起定时器 + 给新 fileService 挂标脏钩子）。
+ *   onProjectClosed  —— 项目关闭后的旁路钩子（工单E3：主进程用它停历史定时器）。
+ *                       session.close 不清 projectRoot（既有语义不动），所以「停表」这个动作放在外壳层；
+ *                       不注入时行为与旧版一致，钩子抛错也不把「已关闭」翻成失败。
+ * deps 扩展（E1 导入既有稿）：
+ *   importProject    —— ({ sourcePath, targetPath, dryRun }) => { ok, value|error }（next/runtime/projectImportAdapter）；
+ *                       不注入时 project:import-run 如实报缺，界面把这句话原样摊开，不假装导入过。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
@@ -215,13 +222,30 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return pickProjectDir ? pickProjectDir(input) : fail('INVALID_INPUT', '目录选择未接入（主进程系统对话框不可用）')
       case IPC_CHANNELS.projectCreateBare:
         return session.createBare({ name: input.name })
+      // E1 导入既有稿：结构动作与 projectCreate 同级——作者在统一二级页里显式按下，
+      // 不经写族闸（那条闸拦的是模型侧的内核写族），也不碰 server/mcp 的导入语义。
+      case IPC_CHANNELS.projectImportRun:
+        return importProject
+          ? importProject({ sourcePath: input.sourcePath, targetPath: input.targetPath, dryRun: input.dryRun !== false })
+          : fail('INVALID_INPUT', '导入适配器未接入（主进程未注入 projectImportAdapter）：这条通道现在只报缺，不落盘')
       case IPC_CHANNELS.projectOpen: {
         const opened = await session.open(input.root)
         if (opened.ok) await notifyProjectOpened(opened)
         return opened
       }
-      case IPC_CHANNELS.projectClose:
-        return session.close()
+      case IPC_CHANNELS.projectClose: {
+        const closed = await session.close()
+        // 工单E3：关项目后停历史定时器。session.close 不清 projectRoot（既有语义不动），
+        // 停表只能由外壳做；回调是旁路——抛错也不把「已关闭」翻成失败（probe 会如实显示不可用）。
+        if (onProjectClosed) {
+          try {
+            await onProjectClosed()
+          } catch {
+            // 历史是旁路：停表失败不该挡住关项目。
+          }
+        }
+        return closed
+      }
       case IPC_CHANNELS.carrierSetEnabled: {
         const result = await session.setEnabled(input.pluginId, input.enabled, input.expectedRevision)
         // 启停会重建 fileService（session.refresh）：新实例必须重新挂上标脏钩子，否则之后的写入不进历史。

@@ -116,10 +116,13 @@ describe('载体面板接真会话', () => {
     const board = wrapper.find('.nx-ribbon-item[aria-label="设定"]')
     expect(board.exists(), '图标竖条应有设定板块的入口').toBe(true)
     await board.trigger('click')
-    await waitFor(() => wrapper.find('[data-pane-id="setting.entries"]').exists() && wrapper.findAll('.nx-index-window .nx-tree-item').length === 1 && wrapper.find('.entry-text').exists(), { note: '设定面板没从磁盘读出世界书条目' })
+    // 工单E2 起设定板是两棵树：世界书条目 ＋ 约束。靶子目录里各有一份，所以是 2 行。
+    await waitFor(() => wrapper.find('[data-pane-id="setting.entries"]').exists() && wrapper.findAll('.nx-index-window .nx-tree-item').length === 2 && wrapper.find('.entry-text').exists(), { note: '设定面板没从磁盘读出世界书条目／约束' })
 
     expect(wrapper.find('[data-pane-id="setting.entries"]').exists()).toBe(true)
-    expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(1)
+    expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(2)
+    expect(wrapper.find('.nx-index-window').text()).toContain('约束')
+    expect(wrapper.find('.nx-index-window').text()).toContain('文风')
     expect(wrapper.find('.entry-text').text()).toContain('醒来在雪夜')
 
     // 界面上没有任何写入通道：面板存在前后，世界书目录的文件清单一个字都没变。

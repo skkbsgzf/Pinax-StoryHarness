@@ -12,7 +12,8 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   <root>/.pinax/state/history-dirty.json  ← 脏清单
  *
  * 机制：写入只标脏；提交时把允许前缀整棵目录逐个 `git add` 后提交一次快照。
- *   - 允许前缀：正文/ 大纲/ 世界书/ 构思/ 约束/ 资料/ 与 .pinax/project.json（D0 工单口径）；
+ *   - 允许前缀：正文/ 大纲/ 世界书/ 构思/ 约束/ 资料/、.pinax/project.json（D0 工单口径）
+ *     与 .pinax/proposals/（工单E3：模型改稿的提案也是作者要能回溯的留痕）；
  *   - `assets/` 与 `.pinax/` 的其余部分不进历史（体积与噪声控制，见设计 §4）；
  *   - 脏清单只是「要不要提交」的触发闸，不是增量补丁清单：一次快照永远是允许前缀的完整状态，
  *     这样删除、改名、以及不经 fileService 的 `.pinax/project.json` 变更都不会漏。
@@ -43,6 +44,9 @@ export const HISTORY_IDENTITY = Object.freeze({ name: 'pinax', email: 'pinax@loc
 export const HISTORY_ALLOWED_DIRS = Object.freeze(['正文', '大纲', '世界书', '构思', '约束', '资料'])
 /** D0 允许进历史的单文件。 */
 export const HISTORY_ALLOWED_FILES = Object.freeze(['.pinax/project.json'])
+/** 允许进历史的嵌套目录（相对路径，至少再有一层文件名）——工单E3：提案留痕。
+ *  `.pinax/` 整目录仍被 info/exclude 忽略，落库靠 commitLocked 的 force add（与 project.json 同法）。 */
+export const HISTORY_ALLOWED_NESTED_DIRS = Object.freeze(['.pinax/proposals'])
 
 const DEFAULT_HISTORY_LIMIT = 50
 const MAX_HISTORY_LIMIT = 500
@@ -170,7 +174,7 @@ export async function readVersion({ root, oid, path } = {}) {
   const checked = normalizeProjectRelativePath(path)
   if (!checked.ok) return checked
   if (!isHistoryPath(checked.value)) {
-    return historyFail('INVALID_INPUT', `「${checked.value}」不在历史版本化范围（正文／大纲／世界书／构思／约束／资料／.pinax/project.json）`, { path: checked.value })
+    return historyFail('INVALID_INPUT', `「${checked.value}」不在历史版本化范围（正文／大纲／世界书／构思／约束／资料／.pinax/project.json／.pinax/proposals/）`, { path: checked.value })
   }
   const repo = await requireRepo(rootPath)
   if (!repo.ok) return repo
@@ -196,7 +200,7 @@ export async function diffVersions({ root, a, b, path } = {}) {
   if (!checked.ok) return checked
   const filepath = checked.value
   if (!isHistoryPath(filepath)) {
-    return historyFail('INVALID_INPUT', `「${filepath}」不在历史版本化范围（正文／大纲／世界书／构思／约束／资料／.pinax/project.json）`, { path: filepath })
+    return historyFail('INVALID_INPUT', `「${filepath}」不在历史版本化范围（正文／大纲／世界书／构思／约束／资料／.pinax/project.json／.pinax/proposals/）`, { path: filepath })
   }
   const repo = await requireRepo(rootPath)
   if (!repo.ok) return repo
@@ -268,6 +272,10 @@ export function isHistoryPath(relativePath) {
   if (typeof relativePath !== 'string') return false
   const normalized = relativePath.replaceAll('\\', '/')
   if (HISTORY_ALLOWED_FILES.includes(normalized)) return true
+  // 嵌套目录只收它下面的文件：目录条目本身不是快照对象。
+  for (const nested of HISTORY_ALLOWED_NESTED_DIRS) {
+    if (normalized.startsWith(`${nested}/`) && normalized.length > nested.length + 1) return true
+  }
   const segments = normalized.split('/')
   if (segments.length < 2) return false
   return HISTORY_ALLOWED_DIRS.includes(segments[0])
@@ -389,6 +397,13 @@ async function collectSnapshotFiles(rootPath) {
     const info = await lstat(dirPath).catch(() => null)
     if (!info?.isDirectory() || info.isSymbolicLink()) continue
     await walk(dirPath)
+  }
+  // 嵌套目录（工单E3：.pinax/proposals/）：与顶格目录同一条走法，文件仍逐个过 isHistoryPath。
+  for (const nested of HISTORY_ALLOWED_NESTED_DIRS) {
+    const nestedPath = join(rootPath, nested)
+    const info = await lstat(nestedPath).catch(() => null)
+    if (!info?.isDirectory() || info.isSymbolicLink()) continue
+    await walk(nestedPath)
   }
   for (const filepath of HISTORY_ALLOWED_FILES) {
     const info = await lstat(join(rootPath, filepath)).catch(() => null)

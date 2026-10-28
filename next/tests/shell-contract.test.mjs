@@ -58,7 +58,7 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   assert.match(injection.reason, /顶层菜单/)
 
   const ids = flattenMenuIds(MENU_TEMPLATE).map((item) => item.id)
-  for (const required of ['project.create', 'project.open', 'project.history', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
+  for (const required of ['project.create', 'project.open', 'project.import', 'project.history', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
     assert.ok(ids.includes(required), `菜单模板缺 ${required}`)
   }
   assert.equal(new Set(ids).size, ids.length, '菜单 id 不得重复')
@@ -523,6 +523,24 @@ test('选目录通道（批次9）：注入即通、未注入报缺；projectCre
   const noRoot = createIpcDispatcher({ session: { ...harness().session, create: async (args) => { captured = args; return { ok: true, value: {} } } } })
   await noRoot.dispatch(IPC_CHANNELS.projectCreate, { name: '旧路径', primaryCarrier: 'fixture.novel' })
   assert.equal(captured.root, null, '不选目录时 root 以 null 透传（会话根兜底语义保持在 index.mjs）')
+})
+
+test('导入既有稿通道（E1）：适配器注入即通、dryRun 默认走计划；未注入如实报缺', async () => {
+  const calls = []
+  const adapter = async (input) => { calls.push(input); return { ok: true, value: { mode: input.dryRun ? 'plan' : 'apply' } } }
+  const injected = createIpcDispatcher({ session: harness().session, importProject: adapter })
+
+  const planned = await injected.dispatch(IPC_CHANNELS.projectImportRun, { sourcePath: 'D:/稿子', targetPath: 'D:/books' })
+  assert.equal(planned.ok, true)
+  assert.deepEqual(calls.at(-1), { sourcePath: 'D:/稿子', targetPath: 'D:/books', dryRun: true }, '缺省必须是计划模式（dryRun:true）')
+
+  await injected.dispatch(IPC_CHANNELS.projectImportRun, { sourcePath: 'D:/稿子', targetPath: 'D:/books', dryRun: false })
+  assert.equal(calls.at(-1).dryRun, false, '显式 false 才落盘')
+
+  const bare = createIpcDispatcher({ session: harness().session })
+  const missing = await bare.dispatch(IPC_CHANNELS.projectImportRun, { sourcePath: 'D:/稿子', targetPath: 'D:/books' })
+  assert.equal(missing.ok, false)
+  assert.match(String(missing.error?.message), /导入适配器未接入/)
 })
 
 function harness() {

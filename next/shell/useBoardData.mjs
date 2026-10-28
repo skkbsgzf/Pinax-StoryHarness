@@ -2,7 +2,7 @@ import { reactive } from 'vue'
 import { IPC_CHANNELS } from './ipcContract.mjs'
 
 /**
- * 板块数据（章节／大纲／构思／条目）的单一归属。
+ * 板块数据（章节／大纲／构思／条目／约束）的单一归属。
  *
  * 索引窗列的是它、核心区写的也是它——分成两份就会不同步（正文存了第 2 版，索引窗还写着第 1 版）。
  * 所以外壳里凡是碰这块数据的组件都拿同一个对象，不各自取数。
@@ -34,6 +34,11 @@ export function useBoardData(bridge) {
     note: null,
     noteDraft: '',
     notesError: null,
+    /** 约束（工单E2）：设定板的第二棵树，与构思速记同一形态（列表带回全文、自有 save 带修订号）。 */
+    rules: [],
+    rule: null,
+    ruleDraft: '',
+    rulesError: null,
     /** 提案审阅（工单A）：.pinax/proposals/ 里的模型改稿。
      *  proposals＝列表摘要；proposal＝点开的那份整份 JSON；proposalChapter＝目标章此刻的正文（左右对照用）。
      *  采纳仍走载体 save（带当前修订号），外壳不自己拼一份「采纳后」的正文。 */
@@ -208,6 +213,81 @@ export function useBoardData(bridge) {
     await loadNotes()
     const made = state.notes.find((item) => item.file === saved.value.file)
     if (made) openNote(made)
+  }
+
+  /** 约束（工单E2）：列 约束/ 篇目。与构思速记同一个列法——pinax_rule_list 把全文随手带回，
+   *  设定板换进来时与条目一起列；失败摊在索引窗自己的错误位。 */
+  async function loadRules() {
+    state.rulesError = null
+    const listed = await tool('pinax_rule_list', { limit: 500 })
+    if (!listed.ok) {
+      state.rules = []
+      state.rulesError = listed.message
+      return
+    }
+    state.rules = listed.value.rules ?? []
+    // 换板后再回来：让打开着的那份跟上最新修订号与正文，别摊着一份上一秒的草稿来源。
+    const current = state.rule ? state.rules.find((item) => item.file === state.rule.file) : null
+    if (current) {
+      state.rule = { ...current }
+      state.ruleDraft = current.text ?? ''
+    }
+  }
+
+  /** 打开一份约束：正文随 pinax_rule_list 一起回来了，这里不再发第二次读。 */
+  function openRule(item) {
+    if (!item) return
+    state.rule = { ...item }
+    state.ruleDraft = item.text ?? ''
+    state.error = null
+    state.notice = item.truncated
+      ? `只载入了前 ${(item.text ?? '').length} 字（全篇 ${item.totalChars} 字）：保存会覆盖未载入的部分，请先用工具读全再改。`
+      : `已载入 ${item.totalChars} 字 · 第 ${item.revision} 版`
+    state.selection = { type: 'rule', item: { ...item } }
+  }
+
+  function setRuleDraft(value) {
+    state.ruleDraft = value
+  }
+
+  /** 保存约束＝作者按下去的那一下：带读到的修订号走 pinax_rule_save，冲突由文件服务拒，不静默覆盖。 */
+  async function saveRule() {
+    if (!state.rule || !state.ruleDraft) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_rule_save', { file: state.rule.file, text: state.ruleDraft, expectedRevision: state.rule.revision })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该份约束后再改，外壳不做静默合并）' : ''}`
+      return
+    }
+    state.rule = { ...state.rule, revision: saved.value.revision, totalChars: state.ruleDraft.length, truncated: false }
+    state.busy = false
+    state.notice = `已保存到「${saved.value.file}」· 第 ${saved.value.revision} 版`
+    // 就地推进索引窗里的版本号与正文，不为一次保存重列整个约束目录。
+    state.rules = state.rules.map((item) => (item.file === saved.value.file
+      ? { ...item, revision: saved.value.revision, text: state.ruleDraft, totalChars: state.ruleDraft.length, truncated: false }
+      : item))
+  }
+
+  /** 新建约束：工具拒空 text，以标题作首行落盘，随后列一次并打开。 */
+  async function createRule(title) {
+    const name = String(title ?? '').trim()
+    if (!name) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_rule_save', { title: name, text: `${name}\n`, expectedRevision: 0 })
+    state.busy = false
+    if (!saved.ok) {
+      state.error = saved.message
+      return
+    }
+    state.notice = `已新建「${saved.value.file}」`
+    await loadRules()
+    const made = state.rules.find((item) => item.file === saved.value.file)
+    if (made) openRule(made)
   }
 
   /**
@@ -536,6 +616,11 @@ export function useBoardData(bridge) {
     setNoteDraft,
     saveNote,
     createNote,
+    loadRules,
+    openRule,
+    setRuleDraft,
+    saveRule,
+    createRule,
     loadProposals,
     openProposal,
     adoptProposal,

@@ -168,6 +168,9 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
       const target = join(projectRoot, '.pinax', 'proposals', safeName)
       await io.mkdir(dirname(target), { recursive: true })
       await io.atomicWrite(target, text)
+      // 批次16 E3 余账：提案也要进历史——标脏让下一次定时快照收编（批次14 记账：原来不标脏，
+      // 只写提案不写别的时，快照永远不会落这笔）。
+      await notifyWrite({ relativePath: '.pinax/proposals/' + safeName, revision: 0 })
       return ok({ path: target, bytes: Buffer.byteLength(text, 'utf-8') })
     },
 

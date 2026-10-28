@@ -2,7 +2,8 @@
 import { computed, ref } from 'vue'
 
 /**
- * 核心区里的载体面板：正文的编辑面、构思速记的编辑面（工单B1）、条目的阅读与编辑面（工单A2 起条目可改）。
+ * 核心区里的载体面板：正文的编辑面、构思速记的编辑面（工单B1）、条目的阅读与编辑面（工单A2 起条目可改）、
+ * 约束的编辑面（工单E2）。
  *
  * 数据不在这里自己取——索引窗与核心区共用 useBoardData 的同一份对象，
  * 所以「索引窗列着第 1 版、正文存成了第 2 版」这种不同步不会发生。
@@ -24,7 +25,10 @@ const viewKind = computed(() => {
     if (props.data.selection?.type === 'proposal') return 'proposal-review'
     return props.data.selection?.type === 'note' ? 'notes-editor' : 'chapter-editor'
   }
-  if (paneId.value === 'setting.entries') return 'entry-detail'
+  // 设定板（工单E2）：点名约束（索引窗「约束」区）换约束编辑面，其余时候是条目详情。
+  if (paneId.value === 'setting.entries') {
+    return props.data.selection?.type === 'rule' ? 'rule-editor' : 'entry-detail'
+  }
   return 'placeholder'
 })
 
@@ -44,6 +48,16 @@ async function createNote() {
   if (!title) return
   newNoteTitle.value = ''
   await props.data.createNote(title)
+}
+
+/** 新建约束输入（工单E2）：照「新构思标题」的形态，约束也是短文本，行常驻在设定面板尾部。 */
+const newRuleTitle = ref('')
+
+async function createRule() {
+  const title = newRuleTitle.value.trim()
+  if (!title) return
+  newRuleTitle.value = ''
+  await props.data.createRule(title)
 }
 </script>
 
@@ -191,6 +205,43 @@ async function createNote() {
           @keydown.enter.prevent="createNote"
         >
         <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newNoteTitle.trim()" @click="createNote">新建构思</button>
+      </div>
+    </template>
+
+    <!-- 约束编辑面（工单E2）：照构思速记的同一形态。正文来自 pinax_rule_list 的随手带回，
+         保存走载体自有的 pinax_rule_save（带修订号，冲突如实摊开）。 -->
+    <template v-else-if="viewKind === 'rule-editor'">
+      <div v-if="data.rule" class="editor">
+        <div class="editor-head">
+          <h4 class="pane-sub">{{ data.rule.title }}</h4>
+          <span class="editor-meta">
+            {{ data.rule.file }} · 第 {{ data.rule.revision }} 版 · {{ data.rule.totalChars }} 字
+            <em v-if="data.rule.truncated">（当前只载入前段）</em>
+          </span>
+        </div>
+        <textarea
+          class="editor-area"
+          :value="data.ruleDraft"
+          spellcheck="false"
+          aria-label="约束编辑器"
+          @input="data.setRuleDraft($event.target.value)"
+        />
+        <div class="editor-foot">
+          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.ruleDraft" @click="data.saveRule()">
+            {{ data.busy ? '写入中…' : `保存为第 ${(data.rule?.revision ?? 0) + 1} 版` }}
+          </button>
+        </div>
+      </div>
+      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「约束」区选一份约束，或在下面新建一份。</p>
+      <div class="nx-index-new notes-new">
+        <input
+          v-model="newRuleTitle"
+          class="nx-field is-tiny"
+          placeholder="新约束标题"
+          aria-label="新约束标题"
+          @keydown.enter.prevent="createRule"
+        >
+        <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newRuleTitle.trim()" @click="createRule">新建约束</button>
       </div>
     </template>
 

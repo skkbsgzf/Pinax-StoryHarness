@@ -104,11 +104,11 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：19 内核 ∪ 载体声明＝27，其中 13 个名字由载体服务（5 接管＋8 自有），端口仍为 0（工单A2：pinax_worldbook_save；工单B1：构思这对；工单B2：大纲写半边 pinax_outline_save；工单A：提案三把 pinax_proposal_list/read/discard）',
+  record('M2 聚合工具面：19 内核 ∪ 载体声明＝29，其中 15 个名字由载体服务（5 接管＋10 自有），端口仍为 0（工单A2：pinax_worldbook_save；工单B1：构思这对；工单B2：大纲写半边 pinax_outline_save；工单A：提案三把 pinax_proposal_list/read/discard；工单E2：约束这对 pinax_rule_list/save）',
     carrierStarted.ok === true
-      && carrierStarted.value.toolCount === 27
-      && carrierStarted.value.carrierTools === 13
-      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'].sort().join()
+      && carrierStarted.value.toolCount === 29
+      && carrierStarted.value.carrierTools === 15
+      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'].sort().join()
       && carrierStarted.value.portsOpened === 0,
     `toolCount=${carrierStarted.value?.toolCount} carrierTools=${carrierStarted.value?.carrierTools}`)
 
@@ -127,18 +127,27 @@ try {
     `盲写=${blindWrite.value.payload?.code} 正写=${goodWrite.value.payload?.revision ?? '-'}`)
 
   const worldbookList = await carrierRuntime.callTool('pinax_worldbook_list', {})
-  const constraintWrite = await carrierOpened.value.fileService.write({ pluginId: SETTING_CARRIER_ID, dir: '约束', file: '载体想偷写.md', text: 'x', expectedRevision: 0 })
-  const smuggled = await readdir(join(carrierRoot, '约束'))
+  // 工单E2（断言同步）：约束/ 升 rw 后，读写全走两把自有工具——list 把全文随手带回，save 带修订号落盘；
+  // 覆写种子文件（expectedRevision 1→2，不新建文件），后面的写族闸 record 靠目录清单不变继续成立。
+  const ruleList = await carrierRuntime.callTool('pinax_rule_list', {})
+  const ruleSaved = await carrierRuntime.callTool('pinax_rule_save', {
+    file: '约束/纪律.md',
+    text: '- 不许出现现代词\n- 每章 2000 字\n- 作者在面板改的一笔',
+    expectedRevision: 1
+  })
+  const rulesOnDisk = await readdir(join(carrierRoot, '约束'))
   // 工单A2（断言同步，调度方裁定 dwfq-f2369ffa-3）：世界书 rw 后，写经自有 pinax_worldbook_save 落盘——
   // 覆写种子文件（expectedRevision 1→2，不新建文件），后面的写族闸 record 靠目录清单不变继续成立。
   const worldbookSaved = await carrierRuntime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '冷穿越剧版主角，醒来在雪夜。作者在面板改的一笔。', expectedRevision: 1 })
-  record('M2 设定板块：世界书条目读得到（1 条），正文经自有 pinax_worldbook_save 落盘（revision 1→2）；约束仍 SCOPE_NOT_GRANTED 且磁盘无新文件',
+  record('M2 设定板块：世界书 1 条读得到、经自有 save 落盘（1→2）；约束 2 份经自有 list 读回全文、save 落盘（1→2），不多建文件',
     worldbookList.value.payload.ok === true && worldbookList.value.payload.total === 1
       && worldbookList.value.owner === SETTING_CARRIER_ID
-      && constraintWrite.ok === false && constraintWrite.error.code === NEXT_ERROR_CODES.SCOPE_NOT_GRANTED
-      && !smuggled.includes('载体想偷写.md')
+      && ruleList.value.payload.ok === true && ruleList.value.payload.total === 2
+      && ruleList.value.payload.rules.every((rule) => typeof rule.text === 'string' && rule.text.length > 0)
+      && ruleSaved.value.payload.ok === true && ruleSaved.value.payload.revision === 2
+      && !rulesOnDisk.includes('载体想偷写.md')
       && worldbookSaved.value.payload.ok === true && worldbookSaved.value.payload.revision === 2,
-    `条目=${worldbookList.value.payload?.total ?? '-'} 拒写=${constraintWrite.error?.code} 存=${worldbookSaved.value.payload?.revision ?? '-'}`)
+    `条目=${worldbookList.value.payload?.total ?? '-'} 约束=${ruleList.value.payload?.total ?? '-'} 存=${ruleSaved.value.payload?.revision ?? '-'}/${worldbookSaved.value.payload?.revision ?? '-'}`)
 
   const envelope = await buildRuntimeEnvelope({
     registry: carrierRegistry,
@@ -168,6 +177,8 @@ try {
   const byId = await carrierRuntime.callTool('pinax_worldbook_write', { projectId: 'nope', name: '按id找项目', content: 'x' })
   const claimedDir = await carrierRuntime.callTool('pinax_worldbook_write', { projectPath: carrierRoot, name: '面板偷写', content: 'x' })
   const claimedManuscript = await carrierRuntime.callTool('pinax_chapter_write', { projectPath: carrierRoot, title: '第002章-闸门', text: 'x' })
+  // 工单E2：约束/ 有主人之后，内核 pinax_rule_write 必须被点名到载体自有的 pinax_rule_save。
+  const claimedRule = await carrierRuntime.callTool('pinax_rule_write', { projectPath: carrierRoot, name: '纪律·闸门', content: 'x' })
   const structural = await carrierRuntime.callTool('pinax_project_init', { projectPath: join(workspace, 'projects', '闸门外的新项目'), name: '闸门外的新项目' })
   const dirsAfter = `${(await readdir(join(carrierRoot, '世界书'))).join()}|${(await readdir(join(carrierRoot, '约束'))).join()}`
   const outsideOnDisk = await stat(join(workspace, 'projects', '闸门外的新项目')).then(() => true, () => false)
@@ -177,9 +188,11 @@ try {
       && byId.value.owner === 'kernel' && byId.value.payload.ok === false && byId.value.payload.code === NEXT_ERROR_CODES.INVALID_INPUT
       && claimedDir.value.payload.ok === false && claimedDir.value.payload.code === NEXT_ERROR_CODES.SCOPE_NOT_GRANTED
       && claimedManuscript.value.payload.ok === false && /pinax_chapter_save/.test(String(claimedManuscript.value.payload.message || ''))
+      && claimedRule.value.payload.ok === false && claimedRule.value.payload.code === NEXT_ERROR_CODES.SCOPE_NOT_GRANTED
+      && /pinax_rule_save/.test(String(claimedRule.value.payload.message || ''))
       && structural.value.payload.ok === false && structural.value.payload.code === NEXT_ERROR_CODES.SCOPE_NOT_GRANTED
       && dirsAfter === dirsBefore && outsideOnDisk === false,
-    `闸=${guardSurface.tools.length} 把 · 拒=${byId.value.payload?.code}/${claimedDir.value.payload?.code}/${structural.value.payload?.code} · 世界书+约束=${dirsAfter}`)
+    `闸=${guardSurface.tools.length} 把 · 拒=${byId.value.payload?.code}/${claimedDir.value.payload?.code}/${claimedRule.value.payload?.code}/${structural.value.payload?.code} · 世界书+约束=${dirsAfter}`)
   await carrierRuntime.stop()
   record('M2 全程零端口：载体工具服务过一轮后 39551 与 3001 仍无监听',
     (await probePort(39551)) === false && (await probePort(3001)) === false)

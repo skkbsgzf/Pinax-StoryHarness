@@ -7,6 +7,7 @@ import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
 import { createAppPreferences } from '../runtime/appPreferences.mjs'
 import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
+import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
 import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 
@@ -20,6 +21,13 @@ import { MENU_TEMPLATE } from './menus.mjs'
  * 窗口文件由打包侧注入：dev 走 vite dev server，prod 走打包后的 renderer html。
  */
 const currentDir = dirname(fileURLToPath(import.meta.url))
+
+// 数据/缓存目录跟随 PINAX_APP_DATA（批次16 验收修）。
+// 默认 userData（%APPDATA%/Electron）被所有实例共享：一个实例被强杀后残留的缓存锁，
+// 会把下一个实例卡死在 renderer 出生之前（症状＝主进程活、无 renderer 子进程、无窗口）。
+// setPath 必须在 whenReady 之前：Cache/GPUCache/锁文件全部跟着走，实例之间彻底隔离。
+const pinnedAppData = process.env.PINAX_APP_DATA
+if (pinnedAppData) app.setPath('userData', pinnedAppData)
 
 /**
  * 界面缩放：作者口径 0.85（1440×900 下三栏＋右栏的舒适档）。
@@ -84,7 +92,12 @@ function createWindow(preloadPath, uiZoom) {
       zoomFactor: uiZoom
     }
   })
-  win.once('ready-to-show', () => win.show())
+  win.once('ready-to-show', () => {
+    win.show()
+    // 启动器（launch-next-dameng.mjs）轮询这行标记判断「窗口真的出来了」——
+    // 本机裸 spawn electron 约一半概率丢 renderer，重试是这个启动器的自愈手段。
+    console.error('[pinax-next] 窗口已显示')
+  })
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url).catch(() => {})
     return { action: 'deny' }
@@ -156,18 +169,29 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     session,
     prefs,
     probeModelPlane: () => probeModelPlane(),
-    pickProjectDir: async () => {
+    pickProjectDir: async (input = {}) => {
       // 新项目落点（批次9）：createProject 只吃空目录，Documents 这种会话根永远非空——
       // 必须让作者经系统对话框选/建一个空文件夹（createDirectory 允许就地新建）。
+      // E1 导入向导复用同一枚对话框：purpose=import-source 时标题要如实说「这是只读的稿子目录」，
+      // 别让作者以为选中的稿子目录会被当成新项目落点。
+      const title = input?.purpose === 'import-source'
+        ? '选择要导入的稿子目录（只读：导入不会改、不会删这里任何文件）'
+        : '选择新项目文件夹（需要空目录，可在对话框里新建）'
       const result = await dialog.showOpenDialog(window_, {
-        title: '选择新项目文件夹（需要空目录，可在对话框里新建）',
+        title,
         properties: ['openDirectory', 'createDirectory']
       })
       if (result.canceled || !result.filePaths?.length) return { ok: true, value: { picked: false, path: null } }
       return { ok: true, value: { picked: true, path: result.filePaths[0] } }
     },
     history: { gitHistory, scheduler: historyScheduler },
+    // 导入既有稿（E1）：结构动作由作者在向导里显式按两次（计划→执行），与建项目同级走主进程；
+    // dryRun≠false 一律当计划，只有显式 false 才落盘。
+    importProject: ({ sourcePath, targetPath, dryRun }) => (dryRun ? planImport({ sourcePath, targetPath }) : runImport({ sourcePath, targetPath })),
     onProjectOpened: beginHistory,
+    // 工单E3：关项目即停历史定时器。session.close 不清 projectRoot，停表只能在外壳这一层做；
+    // 不重启窗口也能让「关掉项目后不再有新快照」成立。
+    onProjectClosed: async () => { historyScheduler.stop() },
     onPrefsApplied: async (value) => {
       // 保存即生效：端点改网关（null 回默认来源），缩放改当前窗口（无需重开）。
       applyModelPlaneEndpoint(value.modelPlaneEndpoint ?? null)
@@ -223,8 +247,11 @@ app.on('before-quit', (event) => {
 // 只有作为 Forge/Node 的直接入口运行时才自启，单测与 bundle 构建 import 它不应拉起 Electron。
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (invokedDirectly) {
-  // PINAX_NEXT_ROOT：直接打开指定项目（演示/验收用），不设则停在首页向导。
-  startNextShell({ root: process.env.PINAX_NEXT_ROOT || null }).catch((error) => {
+  // 直开项目的两个入口（取先到）：位置参数（启动器传绝对路径，UTF-16 传递不吃编码）或
+  // PINAX_NEXT_ROOT env。位置参数必须长得像绝对路径才认——argv 形态随打包方式变，宁缺毋滥。
+  const cliRootArg = process.argv[2]
+  const cliRoot = typeof cliRootArg === 'string' && /^[A-Za-z]:[\\/]/.test(cliRootArg) ? cliRootArg : null
+  startNextShell({ root: cliRoot || process.env.PINAX_NEXT_ROOT || null }).catch((error) => {
     // eslint-disable-next-line no-console -- 启动阶段的崩溃必须留在 stdout/日志里，这里是主进程，没有渲染层可报
     console.error('[pinax-next] 外壳启动失败：', error)
     app.quit()

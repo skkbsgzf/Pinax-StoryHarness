@@ -128,6 +128,53 @@ test('写文件→标脏→提交→改→再提交：listFileHistory 出两版�
   assert.match(markerVersion.value, /"spec":"pinax-project@2"/)
 })
 
+test('提案进历史（工单E3）：.pinax/proposals/ 的提案随快照落库，改版有两条历史，提案目录本身不是对象', async (t) => {
+  const root = await makeProject(t)
+  await mkdir(join(root, '.pinax', 'proposals'), { recursive: true })
+  const proposal = '.pinax/proposals/20261028T140000-ch1-abcdef12.json'
+  const firstProposal = `${JSON.stringify({
+    schema: 'pinax-proposal@1',
+    id: '20261028T140000-ch1-abcdef12',
+    target: { file: '正文/001-第一章 延迟.md' },
+    content: '雨从檐口滴下来。'
+  }, null, 2)}\n`
+  await writeFile(join(root, proposal), firstProposal, 'utf-8')
+  await writeFile(join(root, CHAPTER), '第一章正文\n', 'utf-8')
+
+  assert.equal((await markDirty({ root, paths: [CHAPTER, proposal] })).ok, true)
+  const first = await commitSnapshot({ root, message: '提案入库' })
+  assert.equal(first.ok, true, JSON.stringify(first.error ?? {}))
+  assert.equal(first.value.committed, true)
+  assert.ok(first.value.files.includes(proposal), '.pinax/proposals/ 的提案必须进快照（info/exclude 里的 /.pinax/ 靠 force add 绕过，与 project.json 同法）')
+
+  const listed = await listFileHistory({ root, path: proposal, limit: 10 })
+  assert.equal(listed.ok, true, JSON.stringify(listed.error ?? {}))
+  assert.equal(listed.value.length, 1)
+  assert.equal(listed.value[0].oid, first.value.oid)
+  const version = await readVersion({ root, oid: first.value.oid, path: proposal })
+  assert.equal(version.ok, true, JSON.stringify(version.error ?? {}))
+  assert.equal(version.value, firstProposal)
+
+  // 模型改写一版提案：同一路径两条历史，diff 看得到新句子。
+  const secondProposal = firstProposal.replace('雨从檐口滴下来。', '雨从檐口滴下来，巷子里没人。')
+  await writeFile(join(root, proposal), secondProposal, 'utf-8')
+  assert.equal((await markDirty({ root, paths: [proposal] })).ok, true)
+  const second = await commitSnapshot({ root, message: '提案改版' })
+  assert.equal(second.ok, true, JSON.stringify(second.error ?? {}))
+  assert.equal(second.value.committed, true)
+  const afterEdit = await listFileHistory({ root, path: proposal, limit: 10 })
+  assert.equal(afterEdit.ok, true)
+  assert.deepEqual(afterEdit.value.map((entry) => entry.message), ['提案改版', '提案入库'])
+  const diff = await diffVersions({ root, a: first.value.oid, b: second.value.oid, path: proposal })
+  assert.equal(diff.ok, true, JSON.stringify(diff.error ?? {}))
+  assert.ok(diff.value.hunks.some((hunk) => hunk.type === 'add' && hunk.text.includes('巷子里没人')))
+
+  // 目录本身不是快照对象；也不因此被当成「不在范围内」的错误。
+  const dirOnly = await listFileHistory({ root, path: '.pinax/proposals' })
+  assert.equal(dirOnly.ok, true)
+  assert.deepEqual(dirOnly.value, [])
+})
+
 test('assets/x.png 不入历史：只脏资产时没有可提交差异，文件历史为空', async (t) => {
   const root = await makeProject(t)
   await writeFile(join(root, CHAPTER), '第一章正文\n', 'utf-8')
