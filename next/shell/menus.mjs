@@ -53,7 +53,8 @@ export const MENU_TEMPLATE = Object.freeze([
     label: '设置',
     submenu: [
       { id: 'settings.theme', label: '切换明暗主题' },
-      { id: 'settings.preferences', label: '偏好与模型…' }
+      { id: 'settings.preferences', label: '偏好与模型…' },
+      { id: 'settings.carriers', label: '载体管理…' }
     ]
   },
   {

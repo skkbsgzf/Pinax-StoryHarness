@@ -71,6 +71,9 @@ const probeText = computed(() => {
 /** 外观主题走 theme.mjs 的 localStorage 契约（与老前端共用 app_theme），偏好面只给它一个入口。 */
 const themeDraft = ref('light')
 
+/** 载体管理（工单A1）：项目打开后的启用／停用／切主载体面板，菜单「设置 → 载体管理…」打开。 */
+const carriersOpen = ref(false)
+
 /** 新建项目（批次9）：名字可改，目录必须经系统对话框选一个空文件夹——
  *  会话根（Documents）几乎必然非空，createProject 的空目录闸会永远拦住默认路径。 */
 const newProjectName = ref('')
@@ -152,6 +155,19 @@ async function pickPrimary(pluginId) {
   await refresh()
 }
 
+/** 启用／停用一个载体：翻转 enabled；主载体行不可停用自己（按钮已禁用，函数再闸一道）。
+ *  revision 用当前 view 的值——陈旧写入内核会以 STALE_REVISION 拒掉，refresh 后如实呈现。 */
+async function setCarrierEnabled(carrier) {
+  if (!props.bridge?.request || carrier.isPrimary) return
+  const revision = project.value?.revision ?? 0
+  await props.bridge.request(IPC_CHANNELS.carrierSetEnabled, {
+    pluginId: carrier.id,
+    enabled: !carrier.isEnabled,
+    expectedRevision: revision
+  })
+  await refresh()
+}
+
 function toggleCompanion(pluginId) {
   extraEnabled.value = extraEnabled.value.includes(pluginId)
     ? extraEnabled.value.filter((id) => id !== pluginId)
@@ -188,6 +204,12 @@ async function openSettings() {
       uiZoom: result.value.uiZoom ?? 0.85
     }
   }
+}
+
+/** 载体管理面：先 refresh 拿最新 view，别让面板摊着一份上一秒的启停状态。 */
+async function openCarriers() {
+  carriersOpen.value = true
+  await refresh()
 }
 
 async function probePlane() {
@@ -252,6 +274,7 @@ onMounted(() => {
   props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => {
     if (payload?.id === 'settings.theme') toggleTheme()
     if (payload?.id === 'settings.preferences') void openSettings()
+    if (payload?.id === 'settings.carriers') void openCarriers()
   })
 })
 </script>
@@ -313,6 +336,46 @@ onMounted(() => {
             <button type="button" class="control-quiet" @click="settingsOpen = false">关闭</button>
             <span v-if="prefsFeedback" class="prefs-state" :class="prefsFeedback.kind === 'ok' ? 'is-ready' : 'is-error'">{{ prefsFeedback.text }}</span>
           </div>
+        </div>
+      </section>
+
+      <!-- 载体管理（工单A1）：启停/切主载体是对项目合同的写入，只在该有项目时渲染（通道层同样这么闸）。 -->
+      <section v-if="carriersOpen && project" class="wizard" aria-label="载体管理">
+        <h3>载体管理</h3>
+        <p class="wizard-note">这个项目装了哪些板块（载体），在这里启用、停用或换主载体。停用不删数据：目录转只读归档，随时可以再启用。</p>
+        <div class="carriers-list">
+          <div v-for="carrier in carriers" :key="carrier.id" class="carriers-row">
+            <div class="carriers-info">
+              <span class="carriers-title">
+                {{ carrier.title }}
+                <span v-if="carrier.isPrimary" class="carriers-badge">主载体</span>
+              </span>
+              <small class="carriers-meta">
+                <span>{{ (carrier.dataDirs || []).join(' / ') || '无数据目录' }}</span>
+                <span v-if="(carrier.scopes || []).length">权限：{{ carrier.scopes.join('、') }}</span>
+                <span class="carriers-tools">工具 {{ (carrier.tools || []).length }}</span>
+              </small>
+            </div>
+            <div class="carriers-actions">
+              <button
+                type="button"
+                class="control-secondary carriers-toggle"
+                :disabled="carrier.isPrimary"
+                :title="carrier.isPrimary ? '主载体不可停用' : null"
+                @click="setCarrierEnabled(carrier)"
+              >{{ carrier.isEnabled ? '停用' : '启用' }}</button>
+              <button
+                v-if="!carrier.isPrimary && carrier.primary"
+                type="button"
+                class="control-quiet carriers-set-primary"
+                @click="pickPrimary(carrier.id)"
+              >设为主载体</button>
+              <small v-if="carrier.isPrimary" class="carriers-hint">主载体不可停用</small>
+            </div>
+          </div>
+        </div>
+        <div class="prefs-actions">
+          <button type="button" class="control-quiet" @click="carriersOpen = false">关闭</button>
         </div>
       </section>
 
@@ -399,4 +462,23 @@ onMounted(() => {
 .prefs-state.is-ready { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); }
 .prefs-state.is-warn { border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent); background: color-mix(in srgb, var(--signal-warm) 10%, transparent); color: var(--signal-warm); }
 .prefs-state.is-error { border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent); background: color-mix(in srgb, var(--control-danger) 8%, transparent); color: var(--control-danger); }
+
+/* 载体管理面（工单A1）：颜色与字号全走既有 token（视觉门禁 U9/U10），这里只补行布局与徽标。 */
+.carriers-list { display: flex; flex-direction: column; gap: 8px; }
+.carriers-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-workbench-muted) 60%, transparent);
+}
+.carriers-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.carriers-title { font-size: var(--nx-fs-md); color: var(--archive-ink); }
+.carriers-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--nx-radius-xs);
+  font-size: var(--nx-fs-2xs); color: var(--accent);
+}
+.carriers-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.carriers-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.carriers-hint { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
 </style>

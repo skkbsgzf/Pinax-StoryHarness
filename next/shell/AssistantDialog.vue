@@ -155,6 +155,9 @@ watch(() => props.messages.length, async () => {
 .authoring-knowledge__body { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .authoring-knowledge__intro { width: 100%; flex: none; margin: 0 auto 32px; text-align: center; }
 .authoring-knowledge__intro h3 { margin: 0; color: var(--archive-ink); font: 500 21px/1.45 var(--font-interface, var(--font-sans)); letter-spacing: -.025em; }
+/* 起始态那句引导语是老版左对齐的，老版靠 body 的 gutter（--assistant-gutter: 16px）让它离边；
+   这份拷贝少了那条 gutter，手机上那句会贴着屏幕边。 */
+.authoring-knowledge.is-starting .authoring-knowledge__body { padding-inline: 16px; }
 .authoring-knowledge.is-starting .authoring-knowledge__intro { margin-bottom: 20px; }
 .authoring-knowledge.is-starting .authoring-knowledge__intro h3 { line-height: 1.55; text-align: start; }
 .authoring-knowledge__thread { position: relative; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 20px 16px 28px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }

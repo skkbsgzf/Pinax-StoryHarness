@@ -94,7 +94,7 @@ try {
     carrierMade.ok === true && (await readdir(carrierRoot)).includes('世界书'),
     carrierMade.ok ? '' : String(carrierMade.error?.message || ''))
 
-  // 素材直接落盘（隔离目录）：设定板块是只读板块，种数据只能从文件系统侧写。
+  // 种数据直接落盘（隔离目录）：这些是项目的种子文件，不是面板写入；设定板块批次 11 起有自有写入口（pinax_worldbook_save）。
   await writeFile(join(carrierRoot, '正文', '第001章-入场.md'), '雨从檐口滴下来，巷子里没人。', 'utf-8')
   await writeFile(join(carrierRoot, '大纲', 'outline.json'), JSON.stringify({ nodes: [{ id: 'n1', title: '开场：雨夜进城' }], edges: [] }), 'utf-8')
   await writeFile(join(carrierRoot, '约束', '纪律.md'), '- 不许出现现代词\n- 每章 2000 字', 'utf-8')
@@ -104,11 +104,11 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：19 内核 ∪ 载体声明＝20，其中 6 个名字由载体服务（5 接管＋1 自有），端口仍为 0',
+  record('M2 聚合工具面：19 内核 ∪ 载体声明＝21，其中 7 个名字由载体服务（5 接管＋2 自有），端口仍为 0（工单A2 起设定板块自带 pinax_worldbook_save）',
     carrierStarted.ok === true
-      && carrierStarted.value.toolCount === 20
-      && carrierStarted.value.carrierTools === 6
-      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read'].sort().join()
+      && carrierStarted.value.toolCount === 21
+      && carrierStarted.value.carrierTools === 7
+      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'].sort().join()
       && carrierStarted.value.portsOpened === 0,
     `toolCount=${carrierStarted.value?.toolCount} carrierTools=${carrierStarted.value?.carrierTools}`)
 
@@ -127,14 +127,18 @@ try {
     `盲写=${blindWrite.value.payload?.code} 正写=${goodWrite.value.payload?.revision ?? '-'}`)
 
   const worldbookList = await carrierRuntime.callTool('pinax_worldbook_list', {})
-  const settingWrite = await carrierOpened.value.fileService.write({ pluginId: SETTING_CARRIER_ID, dir: '世界书', file: '载体想偷写.md', text: 'x', expectedRevision: 0 })
-  const smuggled = await readdir(join(carrierRoot, '世界书'))
-  record('M2 只读板块：世界书条目读得到（1 条），板块写盘被 SCOPE_NOT_GRANTED 拒且磁盘无新文件',
+  const constraintWrite = await carrierOpened.value.fileService.write({ pluginId: SETTING_CARRIER_ID, dir: '约束', file: '载体想偷写.md', text: 'x', expectedRevision: 0 })
+  const smuggled = await readdir(join(carrierRoot, '约束'))
+  // 工单A2（断言同步，调度方裁定 dwfq-f2369ffa-3）：世界书 rw 后，写经自有 pinax_worldbook_save 落盘——
+  // 覆写种子文件（expectedRevision 1→2，不新建文件），后面的写族闸 record 靠目录清单不变继续成立。
+  const worldbookSaved = await carrierRuntime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '冷穿越剧版主角，醒来在雪夜。作者在面板改的一笔。', expectedRevision: 1 })
+  record('M2 设定板块：世界书条目读得到（1 条），正文经自有 pinax_worldbook_save 落盘（revision 1→2）；约束仍 SCOPE_NOT_GRANTED 且磁盘无新文件',
     worldbookList.value.payload.ok === true && worldbookList.value.payload.total === 1
       && worldbookList.value.owner === SETTING_CARRIER_ID
-      && settingWrite.ok === false && settingWrite.error.code === NEXT_ERROR_CODES.SCOPE_NOT_GRANTED
-      && !smuggled.includes('载体想偷写.md'),
-    `条目=${worldbookList.value.payload?.total ?? '-'} 拒写=${settingWrite.error?.code}`)
+      && constraintWrite.ok === false && constraintWrite.error.code === NEXT_ERROR_CODES.SCOPE_NOT_GRANTED
+      && !smuggled.includes('载体想偷写.md')
+      && worldbookSaved.value.payload.ok === true && worldbookSaved.value.payload.revision === 2,
+    `条目=${worldbookList.value.payload?.total ?? '-'} 拒写=${constraintWrite.error?.code} 存=${worldbookSaved.value.payload?.revision ?? '-'}`)
 
   const envelope = await buildRuntimeEnvelope({
     registry: carrierRegistry,

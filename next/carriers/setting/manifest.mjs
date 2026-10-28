@@ -2,9 +2,11 @@
  * 设定载体（M2 第一批的第二块板块）：世界书 ＋ 约束。
  * 它存在的理由很具体——运行时要给模型装「约束」「世界书」两块上下文，而文件服务只让插件读自己认领的目录；
  * 没有这块板块，运行时就只能空着手问模型「这本书的规矩是什么」。
- * 第一批只申请只读（file:<目录>:r）：它贡献上下文块，并从内核手里认领世界书的两把只读工具
- * （pinax_worldbook_list / pinax_worldbook_read）供设定面板取数；写世界书仍是内核的 pinax_worldbook_write，
- * 权限不提前占坑——清单里没有 rw，文件服务就不会让这块板块写出一个字节。
+ * 世界书这一个目录申请 rw（工单A2，作者批准的合同变更）：面板与模型从内核手里认领的两把只读工具
+ * （pinax_worldbook_list / pinax_worldbook_read）取数，写走载体自有的 pinax_worldbook_save
+ * （与小说的 pinax_chapter_save 同一条规矩：expectedRevision 乐观并发，先例在 next/carriers/novel/tools.mjs）；
+ * 约束仍只申请 r——改动只能以提案形式落 .pinax/proposals/。
+ * 内核的 pinax_worldbook_write 照旧不认领：写族闸会把「世界书/」的写入点名到自有工具上。
  */
 export const SETTING_CARRIER_ID = 'pinax.carrier.setting'
 
@@ -12,7 +14,7 @@ export const SETTING_CARRIER = Object.freeze({
   spec: 'pinax-carrier@1',
   id: SETTING_CARRIER_ID,
   title: '设定',
-  version: '0.2.0',
+  version: '0.3.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -34,14 +36,14 @@ export const SETTING_CARRIER = Object.freeze({
 
   capabilities: ['setting.entries', 'constraint.rules'],
   requires: [],
-  tools: ['pinax_worldbook_list', 'pinax_worldbook_read'],
+  tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'],
 
   context: {
     providers: ['rules', 'style', 'worldbook'],
     budgetChars: 20000
   },
 
-  scopes: ['file:世界书:r', 'file:约束:r', 'agent:ask']
+  scopes: ['file:世界书:rw', 'file:约束:r', 'agent:ask']
 })
 
 export default SETTING_CARRIER

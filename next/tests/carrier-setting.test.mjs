@@ -15,9 +15,10 @@ import { serializeWorldbookEntryFile } from '../../shared/worldbookFileContract.
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**
- * M2 批次 1：设定载体（世界书 ＋ 约束）的两把认领工具。
- * 证的四件事：认领的都是内核已有的名字；读盘走文件服务的三道闸；
- * 读回的形状与内核同名工具兼容（面板与模型两头同一份字节）；这块板块写不出一个字节。
+ * M2 批次 1：设定载体（世界书 ＋ 约束）的认领工具；工单A2 起带自有写入口 pinax_worldbook_save。
+ * 证的四件事：读工具认领的都是内核已有的名字；读盘走文件服务的三道闸；
+ * 读回的形状与内核同名工具兼容（面板与模型两头同一份字节）；
+ * 世界书写走带修订号的自有 save，约束仍写不出一个字节。
  */
 
 async function settingProject(label, { extraEnabled = [SETTING_CARRIER_ID], fill = false } = {}) {
@@ -31,8 +32,8 @@ async function settingProject(label, { extraEnabled = [SETTING_CARRIER_ID], fill
   const created = await createProject({ root, name: '设定载体靶子', primaryCarrier: NOVEL_CARRIER_ID, registry, extraEnabled })
   assert.equal(created.ok, true, JSON.stringify(created.error ?? {}))
   if (fill) {
-    // 素材直接落盘（工装目录，不碰作者原稿）：设定板块是只读板块，用它自己的权限种不了数据，
-    // 而这恰好是要证的事——未记账的既有文件按第 1 版采纳，载体读得到、写不进。
+    // 素材直接落盘（工装目录，不碰作者原稿）：此刻项目还没打开、文件服务还没影，只能用 raw writeFile 种数据。
+    // 未记账的既有文件按第 1 版采纳——载体读得到；要再写就必带这个修订号。
     const dir = join(root, '世界书')
     await mkdir(dir, { recursive: true })
     const book = [
@@ -52,32 +53,35 @@ async function settingProject(label, { extraEnabled = [SETTING_CARRIER_ID], fill
   return { workspace, root, registry, opened, runtime }
 }
 
-test('设定真清单过校验：认领的两把都是内核已有的只读名，且只申请 r', () => {
+test('设定真清单过校验：读工具是内核已有的只读名，世界书 rw、约束仍 r', () => {
   const validated = validateCarrierManifest(SETTING_CARRIER, { kinds: Object.keys(PROJECT_KINDS) })
   assert.equal(validated.ok, true, JSON.stringify(validated.error ?? {}))
   const kernel = new Set(kernelToolNames())
-  assert.deepEqual(SETTING_CARRIER.tools, ['pinax_worldbook_list', 'pinax_worldbook_read'])
-  assert.equal(SETTING_CARRIER.tools.every((name) => kernel.has(name)), true, '设定板块只接管内核名字，不虚增工具面')
+  assert.deepEqual(SETTING_CARRIER.tools, ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'])
+  const claimedFromKernel = SETTING_CARRIER.tools.filter((name) => name !== 'pinax_worldbook_save')
+  assert.equal(claimedFromKernel.every((name) => kernel.has(name)), true, '读工具只接管内核名字，不虚增工具面')
+  assert.equal(kernel.has('pinax_worldbook_save'), false, 'save 是载体自有写入口（先例：小说的 pinax_chapter_save）')
   assert.deepEqual(validated.value.context.providers, ['rules', 'style', 'worldbook'], 'providers 是上下文块种类名')
-  assert.equal(SETTING_CARRIER.scopes.filter((scope) => scope.endsWith(':rw')).length, 0, '第一批只读：清单里不许出现 rw')
+  assert.deepEqual(SETTING_CARRIER.scopes, ['file:世界书:rw', 'file:约束:r', 'agent:ask'], '工单A2：世界书 rw，约束仍只读')
   for (const dir of Object.values(SETTING_CARRIER.dataDirs)) {
     assert.ok(PROJECT_KINDS.novel.includes(dir), `载体目录「${dir}」必须落在固化小说骨架里`)
   }
 })
 
-test('启用设定后：世界书两把工具归属载体，写世界书仍归内核，工具面仍是 20', async () => {
+test('启用设定后：世界书工具归属载体，写世界书走自有 save，内核 pinax_worldbook_write 仍回落内核', async () => {
   const { workspace, registry, runtime } = await settingProject('setting-surface')
   try {
     assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...SETTING_TOOL_NAMES, 'pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read'].sort())
-    assert.equal(runtime.listTools().length, 20, '19 内核 ＋ 载体自有的 pinax_chapter_save，认领不增名')
+    assert.equal(runtime.listTools().length, 21, '19 内核 ＋ 载体自有的 pinax_chapter_save 与 pinax_worldbook_save')
     assert.equal(runtime.ownerOf('pinax_worldbook_list'), SETTING_CARRIER_ID)
-    assert.equal(runtime.ownerOf('pinax_worldbook_write'), 'kernel', '没认领的写工具不抢，回落内核')
+    assert.equal(runtime.ownerOf('pinax_worldbook_save'), SETTING_CARRIER_ID)
+    assert.equal(runtime.ownerOf('pinax_worldbook_write'), 'kernel', '内核那份写工具照旧不认领，写族闸点名走自有 save')
     assert.equal(runtime.ownerOf('pinax_chapter_read'), NOVEL_CARRIER_ID)
 
     const report = toolOwnershipReport(registry)
-    assert.equal(report.claimed.length, 5, '小说 3 ＋ 设定 2')
+    assert.equal(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2（自有写工具不在其中）')
     assert.equal(report.unclaimed.length, 14)
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save'])
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_worldbook_save'])
     assert.deepEqual(report.withoutImplementation, [], '声明了就必须有实现，否则不许进面')
   } finally {
     await runtime.stop()
@@ -166,19 +170,9 @@ test('本地化轨口径：只服务当前打开的项目，第二个路径与�
   }
 })
 
-test('只读板块写不出字节：载体 scope 里没有 rw，文件服务直接拒', async () => {
+test('约束目录仍写不出字节：scope 只有 r，文件服务直接拒；世界书经自有 save 落盘', async () => {
   const { workspace, opened, runtime } = await settingProject('setting-readonly')
   try {
-    const write = await opened.value.fileService.write({
-      pluginId: SETTING_CARRIER_ID,
-      dir: '世界书',
-      file: '载体想偷写.md',
-      text: '不该落盘',
-      expectedRevision: 0
-    })
-    assert.equal(write.ok, false)
-    assert.equal(write.error.code, NEXT_ERROR_CODES.SCOPE_NOT_GRANTED)
-
     const constraintWrite = await opened.value.fileService.write({
       pluginId: SETTING_CARRIER_ID,
       dir: '约束',
@@ -189,10 +183,129 @@ test('只读板块写不出字节：载体 scope 里没有 rw，文件服务直�
     assert.equal(constraintWrite.ok, false)
     assert.equal(constraintWrite.error.code, NEXT_ERROR_CODES.SCOPE_NOT_GRANTED)
 
-    // 载体面上没有任何写工具：两把名字都是 readOnlyHint。
+    // 面上三把工具的读写定性：两把读是 readOnlyHint，save 不是（写族闸据此点名）。
     const tools = new Map(runtime.listTools().map((tool) => [tool.name, tool]))
     assert.equal(tools.get('pinax_worldbook_list').annotations.readOnlyHint, true)
     assert.equal(tools.get('pinax_worldbook_read').annotations.readOnlyHint, true)
+    assert.equal(tools.get('pinax_worldbook_save').annotations.readOnlyHint, false)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书保存（工单A2）：带上读到的修订号落盘，revision 递增且磁盘真的变了', async () => {
+  const { workspace, root, opened, runtime } = await settingProject('setting-save', { fill: true })
+  try {
+    const read = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(read.value.payload.ok, true, JSON.stringify(read.value.payload))
+    assert.equal(read.value.payload.entry.revision, 1, '未记账的既有文件按第 1 版采纳')
+    assert.equal(read.value.payload.entry.path, '世界书/人物·柯秒.md')
+
+    const saved = await runtime.callTool('pinax_worldbook_save', {
+      path: read.value.payload.entry.path,
+      text: '冷穿越剧版的主角，随身带着一枚停摆的表。表针在雨夜重新走了起来。',
+      expectedRevision: 1
+    })
+    assert.equal(saved.value.owner, SETTING_CARRIER_ID, '写走载体自有的 save，不落回内核')
+    assert.equal(saved.value.payload.ok, true, JSON.stringify(saved.value.payload))
+    assert.equal(saved.value.payload.file, '世界书/人物·柯秒.md')
+    assert.equal(saved.value.payload.revision, 2, '第 1 版上保存，递增到第 2 版')
+    assert.equal(saved.value.payload.created, false)
+
+    const reread = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(reread.value.payload.entry.revision, 2)
+    assert.match(reread.value.payload.entry.content, /表针在雨夜重新走了起来/)
+
+    // 新建：expectedRevision 0，落一个世界书/ 下没有的新文件。
+    const created = await runtime.callTool('pinax_worldbook_save', { path: '地点·钟楼.md', text: '巷尾的钟楼，钟停在雨夜。', expectedRevision: 0 })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+    assert.equal(created.value.payload.file, '世界书/地点·钟楼.md')
+    assert.equal(created.value.payload.revision, 1)
+    assert.equal(created.value.payload.created, true)
+    // 磁盘取证：文件服务读得回来（读走的是同一个项目的真实文件）。
+    const direct = await opened.value.fileService.read({ pluginId: SETTING_CARRIER_ID, dir: '世界书', file: '地点·钟楼.md' })
+    assert.equal(direct.ok, true, JSON.stringify(direct.error ?? {}))
+    assert.equal(direct.value.revision, 1)
+    assert.match(direct.value.text, /钟停在雨夜/)
+    assert.ok(join(root, '世界书'))
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书保存：expectedRevision 不符按 STALE_REVISION 拒，不覆盖不合并', async () => {
+  const { workspace, runtime } = await settingProject('setting-save-stale', { fill: true })
+  try {
+    // 拿「新建」的修订号写既有文件：第 1 版就在那里，盲写必须被拒。
+    const stale = await runtime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '基于旧版的一笔', expectedRevision: 0 })
+    assert.equal(stale.value.payload.ok, false)
+    assert.equal(stale.value.payload.code, NEXT_ERROR_CODES.STALE_REVISION)
+    assert.match(stale.value.payload.message, /已被改动/)
+
+    const saved = await runtime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '正确的一笔', expectedRevision: 1 })
+    assert.equal(saved.value.payload.ok, true, JSON.stringify(saved.value.payload))
+    // 保存后的重放：第 1 版已经作废，同一修订号再写一次照样拒。
+    const replayed = await runtime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '重放的一笔', expectedRevision: 1 })
+    assert.equal(replayed.value.payload.ok, false)
+    assert.equal(replayed.value.payload.code, NEXT_ERROR_CODES.STALE_REVISION)
+
+    const reread = await runtime.callTool('pinax_worldbook_read', { name: '人物·柯秒' })
+    assert.match(reread.value.payload.entry.content, /正确的一笔/, '拒掉的两次都没落盘，盘上是成功的那次')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书保存：空 text 与缺 expectedRevision 一律 INVALID_INPUT', async () => {
+  const { workspace, runtime } = await settingProject('setting-save-invalid', { fill: true })
+  try {
+    const empty = await runtime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '', expectedRevision: 1 })
+    assert.equal(empty.value.payload.ok, false)
+    assert.equal(empty.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(empty.value.payload.message, /text 必填且非空/)
+
+    const noRevision = await runtime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '没有修订号的一笔' })
+    assert.equal(noRevision.value.payload.ok, false)
+    assert.equal(noRevision.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(noRevision.value.payload.message, /expectedRevision 必填/)
+
+    const noPath = await runtime.callTool('pinax_worldbook_save', { text: '没有路径的一笔', expectedRevision: 1 })
+    assert.equal(noPath.value.payload.ok, false)
+    assert.equal(noPath.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(noPath.value.payload.message, /path 必填/)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书保存（调度方裁定 dwfq-f2369ffa-2）：契约条目只换正文，frontmatter 逐项不变', async () => {
+  const { workspace, runtime } = await settingProject('setting-save-frontmatter', { fill: true })
+  try {
+    const before = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(before.value.payload.ok, true, JSON.stringify(before.value.payload))
+    const entry = before.value.payload.entry
+    assert.equal(entry.contract, true, '夹具是契约条目（有 frontmatter），这条裁定才有意义')
+
+    const saved = await runtime.callTool('pinax_worldbook_save', { path: entry.path, text: '全新的正文，只有这一句。', expectedRevision: entry.revision })
+    assert.equal(saved.value.payload.ok, true, JSON.stringify(saved.value.payload))
+
+    const after = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(after.value.payload.ok, true, '按 id 还读得到：frontmatter 没被保存洗掉')
+    const afterEntry = after.value.payload.entry
+    // frontmatter 逐项对照：id/名称/类型/别名/标签/关系/建档标记全部原样，只有正文与版本号变了。
+    assert.equal(afterEntry.id, entry.id)
+    assert.equal(afterEntry.name, entry.name)
+    assert.equal(afterEntry.type, entry.type)
+    assert.deepEqual(afterEntry.keys, entry.keys)
+    assert.deepEqual(afterEntry.tags, entry.tags)
+    assert.deepEqual(afterEntry.relations, entry.relations)
+    assert.equal(afterEntry.contract, true)
+    assert.equal(afterEntry.revision, entry.revision + 1)
+    assert.equal(afterEntry.content, '全新的正文，只有这一句。')
   } finally {
     await runtime.stop()
     await workspace.cleanup()

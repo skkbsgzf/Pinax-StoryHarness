@@ -35,8 +35,8 @@ export function settingCarrierPlugin() {
     manifest: SETTING_CARRIER,
     impl: {
       source: 'next/carriers/setting',
-      // 两把从内核认领的只读工具（世界书清单/读取）＋三个上下文块提供者；写盘工具一个都不声明——
-      // 清单里只有 file:世界书:r / file:约束:r，写世界书仍走内核的 pinax_worldbook_write。
+      // 两把从内核认领的只读工具（世界书清单/读取）＋三个上下文块提供者；
+      // 批次 11 起合同升级：file:世界书:rw ＋自有写入口 pinax_worldbook_save（契约条目保留 frontmatter，裁定 dwfq-f2369ffa-2）；约束/仍只读。
       tools: (context = {}) => createSettingTools({ ...context, pluginId: context.pluginId ?? SETTING_CARRIER_ID }),
       blocks: (context = {}) => createSettingBlocks({ ...context, pluginId: context.pluginId ?? SETTING_CARRIER_ID })
     },

@@ -74,7 +74,7 @@ test('工具面聚合：启用小说后面是 20 个工具，三个只读名归�
     const report = toolOwnershipReport(registry)
     assert.equal(report.claimed.length, 5, '小说 3 把只读 ＋ 设定 2 把只读（认领面按已安装的清单算，不看启用开关）')
     assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须往下走')
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save'])
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_worldbook_save'], '工单A2：设定板块也有了自有写入口（断言同步，调度方裁定 dwfq-f2369ffa-1）')
     assert.deepEqual(report.withoutImplementation, [], '小说声明的四个名字都得有实现')
   } finally {
     await runtime.stop()

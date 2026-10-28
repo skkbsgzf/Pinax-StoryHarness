@@ -17,16 +17,20 @@ import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 function carrierCarriers() {
   return [
     { id: 'pinax.carrier.novel', title: '小说', isPrimary: true, isEnabled: true, dataDirs: ['正文', '大纲', '构思'], scopes: ['file:正文:rw', 'file:大纲:rw', 'file:构思:rw', 'agent:ask'], tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save'], context: { providers: ['selection', 'outline'], budgetChars: 24000 }, capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'], panes: [{ slot: 'left-dock', id: 'novel.shelf' }, { slot: 'center', id: 'novel.editor' }] },
-    { id: 'pinax.carrier.setting', title: '设定', isPrimary: false, isEnabled: true, dataDirs: ['世界书', '约束'], scopes: ['file:世界书:r', 'file:约束:r', 'agent:ask'], tools: ['pinax_worldbook_list', 'pinax_worldbook_read'], context: { providers: ['rules', 'style', 'worldbook'], budgetChars: 20000 }, capabilities: ['setting.entries', 'constraint.rules'], panes: [{ slot: 'left-dock', id: 'setting.board' }, { slot: 'center', id: 'setting.entries' }] }
+    { id: 'pinax.carrier.setting', title: '设定', isPrimary: false, isEnabled: true, dataDirs: ['世界书', '约束'], scopes: ['file:世界书:rw', 'file:约束:r', 'agent:ask'], tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], context: { providers: ['rules', 'style', 'worldbook'], budgetChars: 20000 }, capabilities: ['setting.entries', 'constraint.rules'], panes: [{ slot: 'left-dock', id: 'setting.board' }, { slot: 'center', id: 'setting.entries' }] }
   ]
 }
 
-function fakeTools({ stale = false, chapterCount = 2 } = {}) {
+function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false } = {}) {
   const state = {
     revision: 1,
     text: '雨从檐口滴下来。',
     saved: null,
     chapters: Array.from({ length: chapterCount }, (_item, index) => ({ index, title: `第00${index + 1}章`, file: `正文/第00${index + 1}章.md`, name: `第00${index + 1}章.md`, revision: 1 })),
+    outlineNodes: [
+      { id: 'n1', title: '开场：雨夜进城' },
+      { id: 'n2', title: '第一折：停摆的表' }
+    ],
     entries: [
       { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true },
       { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
@@ -51,7 +55,23 @@ function fakeTools({ stale = false, chapterCount = 2 } = {}) {
       if (payload.tool === 'pinax_worldbook_read') {
         const hit = state.entries.find((item) => (item.id && item.id === payload.args.id) || item.name === payload.args.name || item.name.includes(payload.args.name ?? ''))
         if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「世界书/」里没有 查无此人' } } }
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, entry: { ...hit, relations: [], keys: hit.aliases, content: hit.name === '随手记' ? '一些还没整理的设定碎句。' : '冷穿越剧版主角，醒来在雪夜。', contentChars: 14, contentTruncated: false }, warnings: hit.contract ? [] : ['条目「随手记」未按世界书文件契约建档（未找到 frontmatter），返回的是整篇正文。'] } } }
+        const content = hit.savedText ?? (hit.name === '随手记' ? '一些还没整理的设定碎句。' : '冷穿越剧版主角，醒来在雪夜。')
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, entry: { ...hit, relations: [], keys: hit.aliases, content, contentChars: content.length, contentTruncated: false }, warnings: hit.contract ? [] : ['条目「随手记」未按世界书文件契约建档（未找到 frontmatter），返回的是整篇正文。'] } } }
+      }
+      if (payload.tool === 'pinax_worldbook_save') {
+        const hit = state.entries.find((item) => item.path === payload.args.path)
+        const actual = hit?.revision ?? 0
+        if (!hit || payload.args.expectedRevision !== actual) {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${payload.args.path}」已被改动（第 ${actual} 版）`, details: { actual } } } }
+        }
+        hit.revision += 1
+        hit.savedText = payload.args.text
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, file: hit.path, revision: hit.revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
+      }
+      if (payload.tool === 'pinax_outline_read') {
+        // 与真工具同一条口径：大纲目录空着（既没有 outline.json 也没有 大纲.md）就按 INVALID_INPUT 拒。
+        if (outlineMissing) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「大纲/」下既没有 outline.json 也没有 大纲.md' } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, source: '大纲/outline.json', nodes: state.outlineNodes, edges: [], nodeTotal: state.outlineNodes.length, truncated: false, revision: 1, warning: null } } }
       }
       return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的工具：${payload.tool}` } }
     }
@@ -84,7 +104,7 @@ function shellView(extra = {}) {
       title: RUNTIME_CONTRACT.title, builtIn: true, disableable: false, ownsSlot: 'right', budgetPriority: 100,
       writeSurface: RUNTIME_CONTRACT.writeSurface, reservedSlotReason: '右栏归运行时',
       started: true,
-      surface: { carrierTools: 6, carrierToolNames: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read'], aggregated: true, missingImplementations: [] },
+      surface: { carrierTools: 7, carrierToolNames: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], aggregated: true, missingImplementations: [] },
       tools: [
         { name: 'pinax_chapter_read', title: 'pinax_chapter_read', owner: 'pinax.carrier.novel' },
         { name: 'pinax_worldbook_list', title: 'pinax_worldbook_list', owner: 'pinax.carrier.setting' },
@@ -168,6 +188,36 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
+  it('索引窗第三棵树（工单A3）：大纲节点静态列出，空大纲给说明不报错', async () => {
+    const tools = fakeTools()
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 换板 watch 随 loadChapters 一起取了大纲。
+    expect(tools.calls.some((call) => call.tool === 'pinax_outline_read')).toBe(true)
+    const indexWindow = wrapper.find('.nx-index-window')
+    const sections = indexWindow.findAll('.workspace-nav-section').map((node) => node.text())
+    expect(sections).toContain('大纲')
+    // 节点一行一个（序号＋标题）；本夹具归档为空，静态行全部来自大纲树。
+    const rows = indexWindow.findAll('.nx-tree-static')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('开场：雨夜进城')
+    expect(rows[1].text()).toContain('第一折：停摆的表')
+    // 本批只读：行是静态 span 不是按钮，点了不开面板。
+    expect(rows[0].element.tagName).toBe('SPAN')
+    wrapper.unmount()
+
+    // 空大纲（工具对「两样都没有」回 INVALID_INPUT）：给一行说明，不当成错误摊在索引窗。
+    const missing = fakeTools({ outlineMissing: true })
+    const missingBridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : missing.request(channel, payload)) }
+    const second = mount(AppNext, { props: { bridge: missingBridge } })
+    await flushPromises()
+    expect(second.find('.nx-index-window').text()).toContain('大纲还没有内容（大纲/outline.json）')
+    expect(second.find('.nx-index-error').exists()).toBe(false)
+    second.unmount()
+  })
+
   it('新建章节走 expectedRevision 0', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
@@ -241,6 +291,49 @@ describe('设定载体', () => {
     await flushPromises()
     expect(wrapper.find('.pane-error').text()).toContain('没有 查无此人')
     expect(wrapper.find('.entry-text').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('条目编辑切换与保存走工具通道（工单A2）：textarea 换下阅读态，保存带修订号并刷新版本', async () => {
+    const tools = fakeTools()
+    const data = useBoardData(tools)
+    await data.loadEntries()
+    const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('setting.entries'), data } })
+    await flushPromises()
+
+    // 阅读态：entry-text 摊开正文，entry-head 里有「编辑」；还没有 textarea。
+    expect(wrapper.find('.entry-text').exists()).toBe(true)
+    expect(wrapper.find('.entry-edit').text()).toBe('编辑')
+    expect(wrapper.find('.editor-area').exists()).toBe(false)
+
+    await wrapper.find('.entry-edit').trigger('click')
+    await flushPromises()
+    // 编辑态：entry-text 换成 textarea，草稿从读到的正文起。
+    expect(wrapper.find('.entry-text').exists()).toBe(false)
+    const area = wrapper.find('.editor-area')
+    expect(area.element.value).toBe('冷穿越剧版主角，醒来在雪夜。')
+
+    await area.setValue('冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。')
+    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+
+    const saved = tools.calls.find((call) => call.tool === 'pinax_worldbook_save')
+    expect(saved.args).toEqual({ path: '世界书/人物·柯秒.md', text: '冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。', expectedRevision: 1 })
+    // 保存成功：退出编辑态，重读把版本号与正文一起刷新。
+    expect(wrapper.find('.entry-text').exists()).toBe(true)
+    expect(wrapper.find('.entry-meta').text()).toContain('第 2 版')
+    expect(wrapper.find('.entry-text').text()).toContain('停摆的表')
+
+    // 取消：原样退回阅读态，一个工具都不调。
+    const callsBefore = tools.calls.length
+    await wrapper.find('.entry-edit').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.editor-area').exists()).toBe(true)
+    await wrapper.find('.entry-cancel').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.editor-area').exists()).toBe(false)
+    expect(wrapper.find('.entry-text').exists()).toBe(true)
+    expect(tools.calls.length, '取消不落盘').toBe(callsBefore)
     wrapper.unmount()
   })
 })

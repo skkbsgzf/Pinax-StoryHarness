@@ -43,6 +43,54 @@ export const IPC_EVENT = Object.freeze({
 
 export const IPC_EVENTS = Object.freeze(Object.values(IPC_EVENT))
 
+const SLIM_MAX_DEPTH = 8
+
+function pruneValue(value, depth) {
+  if (typeof value === 'function') return undefined
+  if (value === null || typeof value !== 'object') return value
+  if (depth >= SLIM_MAX_DEPTH) return undefined
+  if (Array.isArray(value)) {
+    const out = []
+    for (const item of value) {
+      const pruned = pruneValue(item, depth + 1)
+      if (pruned !== undefined) out.push(pruned)
+    }
+    return out
+  }
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) {
+    // 非 plain object（Date/Map/类实例）：Date 转 ISO，其余丢弃——IPC 面只该有数据。
+    return value instanceof Date ? value.toISOString() : undefined
+  }
+  const out = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === 'function') continue
+    const pruned = pruneValue(item, depth + 1)
+    if (pruned !== undefined) out[key] = pruned
+  }
+  return out
+}
+
+/**
+ * IPC 边界净值裁剪（批次11 验收修复）。
+ *
+ * session.* 的成功结果（projectCreate/projectOpen/carrierSet* 等）原样带着 fileService 这类
+ * 含函数属性的内核对象：进程内分发器与单测从不克隆，所以批次1 起一直没暴露；走真
+ * ipcMain.handle 时 Electron 要结构化克隆返回值，函数一进去就「An object could not be cloned」。
+ * 这里深剪成功结果的 value（丢函数与不可克隆对象，只留数据），失败载荷与 ok/error 外形原样保留。
+ * 只用在主进程 ipcMain.handle 的出线上；进程内分发器与单测保持全值（carrier-pane-real 靠 fileService 走真链路）。
+ */
+export function slimForIpc(result) {
+  if (!result || typeof result !== 'object') return result
+  if (result.ok !== true) return result
+  const value = pruneValue(result.value, 0)
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    // fileService 是内核内部对象（渲染层没有任何合法用途）：顶层显式剪掉，不做「剪掉函数后的空壳」。
+    delete value.fileService
+  }
+  return { ...result, value }
+}
+
 // 启停/切主载体是对项目合同的写入，必须先有一个「已经落在某个文件夹上的项目」；
 // 注意判据是 projectRoot 而不是 project——裸项目（还没主载体）打开会失败，但主载体向导必须能写这一笔，
 // 否则空框架就死在「要先有主载体才能选主载体」上。

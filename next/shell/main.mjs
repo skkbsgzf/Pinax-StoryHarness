@@ -5,7 +5,7 @@ import { createNextSession } from '../index.mjs'
 import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
 import { createAppPreferences } from '../runtime/appPreferences.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
-import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView } from './ipcContract.mjs'
+import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 
 /**
@@ -141,7 +141,7 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   })
 
   for (const channel of Object.values(IPC_CHANNELS)) {
-    ipcMain.handle(channel, async (_event, payload) => dispatcher.dispatch(channel, payload))
+    ipcMain.handle(channel, async (_event, payload) => slimForIpc(await dispatcher.dispatch(channel, payload)))
   }
 
   window_ = createWindow(preloadPath || join(currentDir, 'preload.mjs'), uiZoom)

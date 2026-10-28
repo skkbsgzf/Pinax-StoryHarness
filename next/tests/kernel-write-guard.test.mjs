@@ -96,7 +96,7 @@ test('一目录一主人：认领过的目录内核写不进，未认领的目�
   const book = guardKernelToolCall({ tool: 'pinax_worldbook_write', args: { projectPath: root, name: '人物·新角', content: 'x' }, root, registry })
   assert.equal(book.ok, false)
   assert.equal(book.error.details.owner, SETTING_CARRIER_ID)
-  assert.match(book.error.message, /出提案/, '只读板块的目录：改动只能以提案形式出')
+  assert.match(book.error.message, /pinax_worldbook_save/, '世界书的主人自有写工具了（工单A2）：拒时点名那条带修订号的路（断言同步，调度方裁定 dwfq-f2369ffa-1）')
 
   // 把设定板块停掉后，「世界书/」在注册表里仍是它认领的目录（认领关系不随开关消失），所以照旧拒。
   const disabled = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
@@ -143,7 +143,7 @@ test('真运行时里闸是生效的：内核写族被拒，带修订号的载�
   const started = await runtime.start()
   assert.equal(started.ok, true)
   try {
-    assert.equal(started.value.toolCount, 20, '闸不改面的形状：内核 19 ∪ 载体自有 1')
+    assert.equal(started.value.toolCount, 21, '闸不改面的形状：内核 19 ∪ 载体自有 2（工单A2：设定板块自带 pinax_worldbook_save；断言同步，调度方裁定 dwfq-f2369ffa-1）')
     const guard = runtime.surfaceInfo().writeGuard
     assert.deepEqual([...guard.tools].sort(), [...WRITE_FAMILY].sort(), '右栏要能读出此刻受约束的是哪几把')
     assert.equal(guard.projectRoot, opened.value.fileService.root)

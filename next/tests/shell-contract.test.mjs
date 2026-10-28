@@ -4,14 +4,15 @@ import { readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
-import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
+import { NEXT_ERROR_CODES, fail, ok } from '../kernel/errors.mjs'
 import { createTempWorkspace } from '../testing/harness.mjs'
 import { FIXTURE_NOVEL, FIXTURE_WORLDBOOK, withMutation } from '../testing/fixtures.mjs'
 import { createNextSession } from '../index.mjs'
 import {
   IPC_CHANNELS,
   IPC_EVENTS,
-  createIpcDispatcher
+  createIpcDispatcher,
+  slimForIpc
 } from '../shell/ipcContract.mjs'
 import { MENU_TEMPLATE, canCarrierInjectMenu, flattenMenuIds } from '../shell/menus.mjs'
 import { OPEN_SLOTS, RESERVED_SLOTS, isReservedSlot, orderActivityItems, slotReason } from '../shell/slots.mjs'
@@ -47,7 +48,7 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   assert.match(injection.reason, /顶层菜单/)
 
   const ids = flattenMenuIds(MENU_TEMPLATE).map((item) => item.id)
-  for (const required of ['project.create', 'project.open', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme']) {
+  for (const required of ['project.create', 'project.open', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
     assert.ok(ids.includes(required), `菜单模板缺 ${required}`)
   }
   assert.equal(new Set(ids).size, ids.length, '菜单 id 不得重复')
@@ -341,6 +342,30 @@ test('主进程把偏好真正接到网关与窗口：端点 setter、启动即�
   const gatewaySource = await readFile(new URL('../../server/services/kitModelGateway.js', import.meta.url), 'utf-8')
   assert.match(gatewaySource, /export function setTaskPlaneEndpoint/, '网关必须暴露运行时端点 setter')
   assert.match(gatewaySource, /export function getTaskPlaneEndpoint/, '网关必须暴露当前端点 getter（探测与偏好面显示用）')
+})
+
+test('IPC 边界净值裁剪（批次11 真窗口克隆 bug）：成功结果的函数被剪掉、数据保留，失败载荷原样', () => {
+  const fat = ok({
+    root: 'x',
+    fileService: { write: () => {}, root: 'x' },
+    view: { panes: { center: [{ id: 'p', slots: ['center'] }] } },
+    nested: { fn: function fat() {}, list: [1, 'a', () => {}, { deep: { ok: 1 } }] }
+  })
+  const slim = slimForIpc(fat)
+  assert.equal(slim.ok, true)
+  assert.equal(slim.value.root, 'x')
+  assert.equal(slim.value.fileService, undefined, 'fileService 是内核内部对象，顶层显式剪掉')
+  assert.deepEqual(slim.value.view.panes.center, [{ id: 'p', slots: ['center'] }])
+  assert.deepEqual(slim.value.nested.list, [1, 'a', { deep: { ok: 1 } }], '数组里的函数剪掉、数据保留')
+
+  const failure = fail('INVALID_INPUT', '失败载荷原样保留')
+  assert.deepEqual(slimForIpc(failure), failure)
+  assert.equal(slimForIpc('裸值原样'), '裸值原样')
+
+  const mainSource = readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8').then((text) => {
+    assert.match(text, /slimForIpc\(await dispatcher\.dispatch/, '主进程 ipcMain.handle 出线必须过净值裁剪')
+  })
+  return mainSource
 })
 
 test('选目录通道（批次9）：注入即通、未注入报缺；projectCreate 把 root 透传给会话', async () => {

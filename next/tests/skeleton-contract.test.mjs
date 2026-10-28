@@ -53,7 +53,7 @@ test('C2 路径规则：中文目录正常，越界与 .pinax 直写全拒', () 
  *   3) 认领的工具名必须是内核 19 里已有的（不许虚增工具面）；载体的自有工具逐条点名，加了要留名；
  *   4) 每块板块的 dataDirs 与 scopes 必须一一对应——声明了目录却没申请权限，或反过来，都算清单说谎。
  */
-const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze(['pinax_chapter_save'])
+const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze(['pinax_chapter_save', 'pinax_worldbook_save'])
 
 test('M2 口径：next/carriers 发布小说＋设定两块，目录不重叠且落在中文骨架并集里', async () => {
   const carriersDir = join(repoRoot, 'next', 'carriers')
@@ -86,7 +86,7 @@ test('M2 口径：next/carriers 发布小说＋设定两块，目录不重叠且
   }
   // 自有工具（内核没有的新名字）逐条点名：新增必须在这里留名，防止有人偷偷扩面。
   const own = [NOVEL_CARRIER, SETTING_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
-  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, 'M2 批次 1 只允许小说那一个自有的写入口')
+  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有写入口逐条留名：小说的 pinax_chapter_save ＋ 设定的 pinax_worldbook_save（工单A2；断言同步，调度方裁定 dwfq-f2369ffa-3）')
 })
 
 test('能力词表非空且每条有中文名，闭包才算得动', () => {

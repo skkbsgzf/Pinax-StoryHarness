@@ -44,10 +44,15 @@ async function createChapter() {
 }
 
 // 换板＝换树：目录窗自己负责把这一板的东西列出来（核心区不替它列）。
+// 大纲随章节一起取（工单A3）：同属小说板块的索引窗，一次换板两棵树都是新的。
 watch(() => props.board?.id, () => {
   newTitle.value = ''
-  if (treeKind.value === 'chapters') void props.data.loadChapters()
-  else if (treeKind.value === 'entries') void props.data.loadEntries()
+  if (treeKind.value === 'chapters') {
+    void props.data.loadChapters()
+    void props.data.loadOutline()
+  } else if (treeKind.value === 'entries') {
+    void props.data.loadEntries()
+  }
 }, { immediate: true })
 </script>
 
@@ -90,6 +95,19 @@ watch(() => props.board?.id, () => {
           </li>
         </ul>
         <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+
+        <!-- 大纲（工单A3）：第三棵树。本批只读——节点行沿用归档清单的静态行词汇（.nx-tree-static），
+             点了不开面板；大纲还没写就给一行说明，不当成错误。 -->
+        <p class="workspace-nav-section">大纲</p>
+        <ul class="nx-tree">
+          <li v-for="(node, index) in data.outline" :key="node.id ?? `outline-${index}`">
+            <span class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-static is-static">
+              <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
+            </span>
+          </li>
+        </ul>
+        <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty">大纲还没有内容（大纲/outline.json）。</p>
+        <p v-if="data.outlineError" class="nx-index-error">{{ data.outlineError }}</p>
       </template>
 
       <template v-else-if="treeKind === 'entries'">

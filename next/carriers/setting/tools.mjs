@@ -1,20 +1,26 @@
 import { fail, ok } from '../../kernel/errors.mjs'
 import { isSameProjectRoot, normalizeProjectRoot } from '../../fs/projectPath.mjs'
+import { parseWorldbookEntryFile, serializeWorldbookEntryFile } from '../../../shared/worldbookFileContract.js'
 import { readSettingEntries } from './context.mjs'
-import { SETTING_CARRIER_ID } from './manifest.mjs'
+import { SETTING_CARRIER, SETTING_CARRIER_ID } from './manifest.mjs'
 
 /**
- * 设定载体的工具实现（M2 批次 1 的第二块板块）。
- * 只认领内核里本就存在的两个只读名字：pinax_worldbook_list / pinax_worldbook_read。
+ * 设定载体的工具实现（M2 批次 1 的第二块板块；工单A2 起带自有写入口）。
+ * 两把从内核认领的只读名字：pinax_worldbook_list / pinax_worldbook_read。
  * 认领的理由很具体——内核那份实现是「按服务端注册表找项目根、再自己递归读盘」，
- * 而 Next 的项目根就是当前打开的这个文件夹，世界书的权限由本板块的 file:世界书:r 逐条申请；
+ * 而 Next 的项目根就是当前打开的这个文件夹，世界书的权限由本板块的 file:世界书:rw 逐条申请；
  * 装载体后走内核文件服务的三道闸，装载体前内核兜底，工具面不因开关少一个名字。
  * 输出形状与内核同名工具保持一致（total/truncated/warnings/entries、entry/contentChars/contentTruncated），
  * 只额外给出 path 与 revision：面板要按文件定位，作者要能看到这条是从哪个文件、第几版读来的。
- * 这块板块没有写工具：清单里只申请了只读作用域。写世界书的内核那份（pinax_worldbook_write）
- * 在 Next 运行时里被写族闸拒掉——「世界书/」的主人是本板块，而板块只有 r，所以设定侧的改动只能以提案形式出。
+ * 写入口 pinax_worldbook_save 是载体自有工具（工单A2，作者批准的合同变更）：
+ * 写 世界书/ 必须带 expectedRevision（先例与返回形状照 novel 的 pinax_chapter_save），
+ * 与运行时（一级公民）的提案轨彻底分开——约束/ 仍只有 r，改动只能以提案形式出。
+ * text 的语义（调度方裁定 dwfq-f2369ffa-2）：保存的是正文；现有文件能解析出 frontmatter 的
+ * （契约条目），id/type/keys/tags/relations 原样保留、只把正文换成 text——否则面板一保存
+ * 就把条目建档信息洗掉，openEntry 按 id 重读的链路也会断；裸 md 与新建文件按原样整份写。
  */
 const MAX_CONTENT_CHARS = 200_000
+const WORLDBOOK_DIR = SETTING_CARRIER.dataDirs.entries
 
 export function createSettingTools(context = {}) {
   const pluginId = context.pluginId ?? SETTING_CARRIER_ID
@@ -169,11 +175,61 @@ export function createSettingTools(context = {}) {
           warnings
         })
       }
+    },
+    {
+      name: 'pinax_worldbook_save',
+      title: '保存世界书条目（设定载体）',
+      description: '作者确认后的设定落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。保存的是条目正文：契约条目保留既有 frontmatter（id/type/keys/relations 不变），裸 md 与新建文件按原样整份写。写 世界书/ 走文件服务三道闸（归属＋file:世界书:rw＋并发），约束目录不在其列。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['path', 'text', 'expectedRevision'],
+        properties: {
+          path: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（世界书/ 下），与读取工具给回的 path 同一形状，如「世界书/人物·柯秒.md」或「人物·柯秒.md」。' },
+          text: { type: 'string', minLength: 1, maxLength: MAX_CONTENT_CHARS, description: '条目正文（契约条目只换正文、frontmatter 原样保留；裸 md 与新建按原样整份写），故必须带修订号。' },
+          expectedRevision: { type: 'integer', minimum: 0, description: '读取时拿到的修订号；新建传 0。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (typeof args.path !== 'string' || !args.path.trim()) return fail('INVALID_INPUT', 'path 必填（世界书/ 下的相对路径）')
+        if (typeof args.text !== 'string' || !args.text.length) return fail('INVALID_INPUT', 'text 必填且非空')
+        if (args.text.length > MAX_CONTENT_CHARS) return fail('INVALID_INPUT', `text 超出单条上限 ${MAX_CONTENT_CHARS} 字符`, { got: args.text.length })
+        if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 0) {
+          return fail('INVALID_INPUT', 'expectedRevision 必填（新建传 0），改稿请带回 pinax_worldbook_read 给的修订号')
+        }
+        const relative = toDirRelative(WORLDBOOK_DIR, args.path)
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '世界书条目文件名必须以 .md 结尾', { path: args.path })
+
+        // 契约条目只换正文（调度方裁定 dwfq-f2369ffa-2）：写前读现文件，能解析出 frontmatter 就
+        // 用同一对 parse/serialize 原样带回（不许自造第二套 frontmatter 格式）；裸 md 与新建原样写。
+        const current = await fileService.read({ pluginId, dir: WORLDBOOK_DIR, file: relative })
+        const parsed = current.ok ? parseWorldbookEntryFile(current.value.text) : null
+        const body = parsed?.ok ? serializeWorldbookEntryFile({ ...parsed.entry, content: args.text }) : args.text
+
+        const written = await fileService.write({ pluginId, dir: WORLDBOOK_DIR, file: relative, text: body, expectedRevision: args.expectedRevision })
+        if (!written.ok) return written
+        return ok({
+          file: written.value.relativePath,
+          revision: written.value.revision,
+          created: args.expectedRevision === 0,
+          sha256: written.value.sha256,
+          bytes: written.value.bytes
+        })
+      }
     }
   ]
 }
 
-/** 设定板块已认领的工具名（都是内核本就存在的只读名），供门禁核「认领面只增不减」。 */
-export const SETTING_TOOL_NAMES = Object.freeze(['pinax_worldbook_list', 'pinax_worldbook_read'])
+/** 作者给的是「世界书/xxx.md」还是「xxx.md」都接得住：文件服务那侧的入参是板块目录内的相对路径。 */
+function toDirRelative(dir, path) {
+  const normalized = String(path).replaceAll('\\', '/')
+  return normalized.startsWith(`${dir}/`) ? normalized.slice(dir.length + 1) : normalized
+}
+
+/** 设定板块已认领的工具名（两把内核只读名＋一把自有写入口），供门禁核「认领面只增不减」。 */
+export const SETTING_TOOL_NAMES = Object.freeze(['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'])
 
 export default createSettingTools

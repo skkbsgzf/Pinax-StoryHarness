@@ -21,8 +21,14 @@ export function useBoardData(bridge) {
     chapters: [],
     chapter: null,
     draft: '',
+    /** 大纲（工单A3）：索引窗的第三棵树，只读——节点来自 大纲/outline.json，本批不编辑不开面板。 */
+    outline: [],
+    outlineError: null,
     entries: [],
     entry: null,
+    /** 条目编辑（工单A2）：阅读态与编辑态的开关＋草稿，与正文的 draft 分开各拿各的。 */
+    editingEntry: false,
+    entryDraft: '',
     listWarnings: [],
     entryWarnings: [],
     selection: { type: null, item: null }
@@ -114,6 +120,9 @@ export function useBoardData(bridge) {
   async function loadEntries() {
     state.busy = true
     state.treeError = null
+    // 设定板块没有大纲树（工单A3）：换到这块板就把大纲清空，别让上一块板的节点挂在状态里。
+    state.outline = []
+    state.outlineError = null
     const listed = await tool('pinax_worldbook_list', { limit: 500 })
     state.busy = false
     if (!listed.ok) {
@@ -144,8 +153,57 @@ export function useBoardData(bridge) {
     state.selection = { type: 'entry', item }
   }
 
+  /** 条目编辑（工单A2）：「编辑」进草稿，「取消」原样退回，保存走设定载体自有的 pinax_worldbook_save
+   *  ——带读到的修订号，冲突由文件服务拒，与正文保存同一套并发规矩。 */
+  function editEntry() {
+    if (!state.entry) return
+    state.entryDraft = state.entry.content ?? ''
+    state.editingEntry = true
+    state.error = null
+  }
+
+  function cancelEditEntry() {
+    state.editingEntry = false
+    state.entryDraft = ''
+    state.error = null
+  }
+
+  function setEntryDraft(value) {
+    state.entryDraft = value
+  }
+
+  async function saveEntry() {
+    if (!state.entry || !state.entryDraft) return
+    state.busy = true
+    state.error = null
+    const saved = await tool('pinax_worldbook_save', { path: state.entry.path, text: state.entryDraft, expectedRevision: state.entry.revision })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该条目后再改，外壳不做静默合并）' : ''}`
+      return
+    }
+    // 退出编辑态后重新 openEntry：版本号与全文以重读为准，不就地拼一份「自以为保存成功」的条目。
+    state.editingEntry = false
+    state.entryDraft = ''
+    await openEntry(state.entry)
+  }
+
   function setDraft(value) {
     state.draft = value
+  }
+
+  /** 大纲树（工单A3）：小说板块把 大纲/outline.json 的节点列进索引窗，入参照工具实现的原样（默认 maxNodes）。
+   *  大纲还没写（工具对「既没有 outline.json 也没有 大纲.md」回 INVALID_INPUT）是新建项目的常态：
+   *  清空、不报错，界面给一行「大纲还没有内容」；其余失败才进 outlineError 摊在索引窗。 */
+  async function loadOutline() {
+    state.outlineError = null
+    const read = await tool('pinax_outline_read', {})
+    if (!read.ok) {
+      state.outline = []
+      if (read.code !== 'PINAX_INVALID_INPUT') state.outlineError = read.message
+      return
+    }
+    state.outline = read.value.nodes ?? []
   }
 
   return Object.assign(state, {
@@ -156,6 +214,11 @@ export function useBoardData(bridge) {
     createChapter,
     loadEntries,
     openEntry,
+    editEntry,
+    cancelEditEntry,
+    setEntryDraft,
+    saveEntry,
+    loadOutline,
     setDraft
   })
 }

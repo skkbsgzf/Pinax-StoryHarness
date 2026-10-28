@@ -6,7 +6,7 @@ import { SETTING_CARRIER_ID } from './manifest.mjs'
  * 与小说载体同一套约定：`createSettingBlocks(projectCtx)` 返回 `{ kind: async (askCtx) => 素材包 }`，
  * 素材包 = { blocks:[{kind, content, sourceRefs}], warnings:[] }；读不到只记账，不硬失败。
  * 读盘一律走文件服务并带自己的 pluginId——「约束」「世界书」这两个目录的读权限是这块板块
- * 在清单里逐条申请来的（file:约束:r / file:世界书:r），运行时自己没有。
+ * 在清单里逐条申请来的（file:约束:r / file:世界书:rw，批次 11 起写半边升级），运行时自己没有。
  * 三条如实的限制写在这里，不假装覆盖面比这更大：
  *   1) 只看目录一级（世界书的 伏笔/、编年/ 等子目录会被记账跳过，文件服务当前不提供更深的列举）；
  *   2) 世界书条目按文件契约 v2 的 frontmatter 解析，解析不了的按整篇正文收录并留 warning；

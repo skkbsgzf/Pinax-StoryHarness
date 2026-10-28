@@ -405,3 +405,101 @@ describe('偏好与模型面板（批次8①）', () => {
     wrapper.unmount()
   })
 })
+
+describe('载体管理面板（工单A1）', () => {
+  function carriersBridge({ handlers = new Map(), view = carrierView() } = {}) {
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: view }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent }
+  }
+
+  it('载体管理面板：菜单打开、停用按钮走 carrierSetEnabled（带 expectedRevision）', async () => {
+    const handlers = new Map()
+    const setEnabled = vi.fn(async () => ({ ok: true, value: {} }))
+    handlers.set(IPC_CHANNELS.carrierSetEnabled, setEnabled)
+    const view = carrierView()
+    // scopes/tools 在真 shellView 里永远是清单原话（不缺省），夹具也照这个形状给。
+    view.carriers = view.carriers.map((carrier) => ({
+      ...carrier,
+      scopes: carrier.id === 'fixture.novel' ? ['正文:rw'] : ['分场:r'],
+      tools: [{ name: `${carrier.id}.t1` }, { name: `${carrier.id}.t2` }]
+    }))
+    view.carriers[1] = { ...view.carriers[1], isEnabled: true }
+    const bridge = carriersBridge({ handlers, view })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="载体管理"]')
+    expect(panel.exists()).toBe(true)
+
+    const rows = panel.findAll('.carriers-row')
+    expect(rows).toHaveLength(2)
+    // 主载体徽标 + 清单摊开：dataDirs／scopes／工具数都是 view 里的原话。
+    expect(rows[0].text()).toContain('小说（夹具）')
+    expect(rows[0].text()).toContain('主载体')
+    expect(rows[0].text()).toContain('正文')
+    expect(rows[0].text()).toContain('正文:rw')
+    expect(rows[0].find('.carriers-tools').text()).toBe('工具 2')
+    // 主载体行不可停用自己：按钮禁用并说明原因。
+    expect(rows[0].find('.carriers-toggle').attributes('disabled')).toBeDefined()
+    expect(rows[0].find('.carriers-hint').text()).toBe('主载体不可停用')
+    expect(rows[0].find('.carriers-set-primary').exists()).toBe(false)
+
+    // 非主载体且声明了 primary：既有「停用」也有「设为主载体」。
+    expect(rows[1].find('.carriers-toggle').text()).toBe('停用')
+    expect(rows[1].find('.carriers-set-primary').exists()).toBe(true)
+
+    await rows[1].find('.carriers-toggle').trigger('click')
+    await flushPromises()
+    // expectedRevision 用 view.project.revision（夹具里是 1）。
+    expect(setEnabled).toHaveBeenCalledTimes(1)
+    expect(setEnabled).toHaveBeenCalledWith({ pluginId: 'fixture.script', enabled: false, expectedRevision: 1 })
+    wrapper.unmount()
+  })
+
+  it('主载体行的「启用/停用」钮不会发出请求；切换主载体复用 set-primary 通道', async () => {
+    const handlers = new Map()
+    const setEnabled = vi.fn(async () => ({ ok: true, value: {} }))
+    const setPrimary = vi.fn(async () => ({ ok: true, value: {} }))
+    handlers.set(IPC_CHANNELS.carrierSetEnabled, setEnabled)
+    handlers.set(IPC_CHANNELS.carrierSetPrimary, setPrimary)
+    const bridge = carriersBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
+    await flushPromises()
+
+    const rows = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
+    // 主载体行的钮是禁用的：点了也不发通道。
+    await rows[0].find('.carriers-toggle').trigger('click')
+    await flushPromises()
+    expect(setEnabled).not.toHaveBeenCalled()
+
+    await rows[1].find('.carriers-set-primary').trigger('click')
+    await flushPromises()
+    expect(setPrimary).toHaveBeenCalledWith({ pluginId: 'fixture.script', expectedRevision: 1 })
+    wrapper.unmount()
+  })
+
+  it('没有项目时菜单事件不渲染面板：启停是对项目合同的写入', async () => {
+    const handlers = new Map()
+    const bridge = carriersBridge({ handlers, view: emptyFrameworkView() })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
+    await flushPromises()
+    // 没有 project 就没有面板：carrierSetEnabled/carrierSetPrimary 在通道层同样要求先有项目。
+    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
+    expect(bridge.request.mock.calls.every((call) => call[0] === IPC_CHANNELS.view)).toBe(true)
+    wrapper.unmount()
+  })
+})
