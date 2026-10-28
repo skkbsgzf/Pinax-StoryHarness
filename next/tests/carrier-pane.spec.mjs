@@ -16,16 +16,32 @@ import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 
 function carrierCarriers() {
   return [
-    { id: 'pinax.carrier.novel', title: '小说', isPrimary: true, isEnabled: true, dataDirs: ['正文', '大纲', '构思'], scopes: ['file:正文:rw', 'file:大纲:rw', 'file:构思:rw', 'agent:ask'], tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save'], context: { providers: ['selection', 'outline'], budgetChars: 24000 }, capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'], panes: [{ slot: 'left-dock', id: 'novel.shelf' }, { slot: 'center', id: 'novel.editor' }] },
+    { id: 'pinax.carrier.novel', title: '小说', isPrimary: true, isEnabled: true, dataDirs: ['正文', '大纲', '构思'], scopes: ['file:正文:rw', 'file:大纲:rw', 'file:构思:rw', 'agent:ask'], tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'], context: { providers: ['selection', 'outline'], budgetChars: 24000 }, capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'], panes: [{ slot: 'left-dock', id: 'novel.shelf' }, { slot: 'center', id: 'novel.editor' }] },
     { id: 'pinax.carrier.setting', title: '设定', isPrimary: false, isEnabled: true, dataDirs: ['世界书', '约束'], scopes: ['file:世界书:rw', 'file:约束:r', 'agent:ask'], tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], context: { providers: ['rules', 'style', 'worldbook'], budgetChars: 20000 }, capabilities: ['setting.entries', 'constraint.rules'], panes: [{ slot: 'left-dock', id: 'setting.board' }, { slot: 'center', id: 'setting.entries' }] }
   ]
 }
 
-function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, notes = [] } = {}) {
+/**
+ * 提案夹具（工单A）：形状照 server/mcp/chapterProposals.js 的 pinax-proposal@1。
+ * createdAt 用本地时刻（不带 Z），索引窗的短格式在哪种时区下都该显示 10-28 14:00。
+ */
+const PROPOSAL = {
+  name: '20261028T140000-ch1-abcdef12.json',
+  id: '20261028T140000-ch1-abcdef12',
+  status: 'proposed',
+  target: { index: 1, title: '第002章-雨夜', file: '正文/第002章.md', chars: 8 },
+  content: '雨从檐口滴下来，巷子里没人。',
+  contentChars: 14,
+  note: '把雨提前一段',
+  createdAt: '2026-10-28T14:00:00'
+}
+
+function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, notes = [], proposals = [] } = {}) {
   const state = {
     revision: 1,
     text: '雨从檐口滴下来。',
     saved: null,
+    proposals: proposals.map((item) => ({ ...item })),
     chapters: Array.from({ length: chapterCount }, (_item, index) => ({ index, title: `第00${index + 1}章`, file: `正文/第00${index + 1}章.md`, name: `第00${index + 1}章.md`, revision: 1 })),
     outlineNodes: [
       { id: 'n1', title: '开场：雨夜进城' },
@@ -52,7 +68,36 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, no
         state.revision += 1
         state.saved = { file: payload.args.file ?? `正文/${payload.args.title}.md`, text: payload.args.text, revision: state.revision }
         state.text = payload.args.text
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, file: state.saved.file, revision: state.revision, created: payload.args.expectedRevision === 0, bytes: state.saved.text.length } } }
+        // 与真工具同一口径：带 proposal 的保存成功后，把那份提案标成 adopted（元数据写回，不删文件）。
+        const adopted = payload.args.proposal ? state.proposals.find((item) => item.name === payload.args.proposal) : null
+        if (adopted) adopted.status = 'adopted'
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, file: state.saved.file, revision: state.revision, created: payload.args.expectedRevision === 0, bytes: state.saved.text.length, ...(adopted ? { proposal: { name: adopted.name, status: adopted.status } } : {}) } } }
+      }
+      if (payload.tool === 'pinax_proposal_list') {
+        // 列表只给摘要（不含 content）：审阅面的正文必须真的走一次 read。
+        const summaries = state.proposals.map((item) => ({
+          name: item.name,
+          kind: 'proposal',
+          schema: 'pinax-proposal@1',
+          id: item.id ?? item.name.replace(/\.json$/iu, ''),
+          status: item.status ?? 'proposed',
+          target: item.target ?? { index: null, title: null, file: null },
+          contentChars: item.contentChars ?? item.content?.length ?? 0,
+          createdAt: item.createdAt ?? null,
+          note: item.note ?? null
+        }))
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, total: summaries.length, rawTotal: 0, raw: [], warnings: [], proposals: summaries } } }
+      }
+      if (payload.tool === 'pinax_proposal_read') {
+        const hit = state.proposals.find((item) => item.name === payload.args.name)
+        if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: `提案不存在：${payload.args.name}` } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, name: hit.name, path: `.pinax/proposals/${hit.name}`, proposal: { schema: 'pinax-proposal@1', id: hit.id, status: hit.status ?? 'proposed', target: hit.target, content: hit.content, contentChars: hit.contentChars ?? hit.content.length, note: hit.note ?? null, createdAt: hit.createdAt ?? null } } } }
+      }
+      if (payload.tool === 'pinax_proposal_discard') {
+        const index = state.proposals.findIndex((item) => item.name === payload.args.name)
+        if (index < 0) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: `提案不存在：${payload.args.name}` } } }
+        state.proposals.splice(index, 1)
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, discarded: true, name: payload.args.name } } }
       }
       if (payload.tool === 'pinax_notes_list') return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, total: state.notes.length, truncated: false, notes: state.notes } } }
       if (payload.tool === 'pinax_notes_save') {
@@ -141,7 +186,7 @@ function shellView(extra = {}) {
       title: RUNTIME_CONTRACT.title, builtIn: true, disableable: false, ownsSlot: 'right', budgetPriority: 100,
       writeSurface: RUNTIME_CONTRACT.writeSurface, reservedSlotReason: '右栏归运行时',
       started: true,
-      surface: { carrierTools: 9, carrierToolNames: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], aggregated: true, missingImplementations: [] },
+      surface: { carrierTools: 12, carrierToolNames: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], aggregated: true, missingImplementations: [] },
       tools: [
         { name: 'pinax_chapter_read', title: 'pinax_chapter_read', owner: 'pinax.carrier.novel' },
         { name: 'pinax_worldbook_list', title: 'pinax_worldbook_list', owner: 'pinax.carrier.setting' },
@@ -306,6 +351,90 @@ describe('小说载体', () => {
     expect(saved.args.expectedRevision).toBe(1)
     expect(wrapper.text()).toContain('已保存大纲 · 第 2 版 · 4 个节点')
     wrapper.unmount()
+  })
+
+  it('提案区（工单A）：行文＝目标章＋创建时刻；点开进中栏，采纳走 chapter_save 带当前修订号', async () => {
+    const tools = fakeTools({ proposals: [{ ...PROPOSAL }] })
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 提案区在章节树之后；行文是目标章标题＋createdAt 短格式。
+    expect(tools.calls.some((call) => call.tool === 'pinax_proposal_list')).toBe(true)
+    const indexWindow = wrapper.find('.nx-index-window')
+    expect(indexWindow.findAll('.workspace-nav-section').map((node) => node.text())).toContain('提案')
+    const proposalRow = indexWindow.findAll('.nx-tree-item').find((row) => row.text().includes('第002章-雨夜'))
+    expect(proposalRow, '提案行在索引窗里').toBeTruthy()
+    expect(proposalRow.text()).toContain('10-28 14:00')
+
+    await proposalRow.trigger('click')
+    await flushPromises()
+    expect(proposalRow.classes()).toContain('is-active')
+    expect(tools.calls.some((call) => call.tool === 'pinax_proposal_read')).toBe(true)
+
+    // 中栏：头部给目标章／字数／createdAt／note，正文两段上下堆叠（当前正文＋提案新文）。
+    const pane = wrapper.find('[data-pane-id="novel.editor"]')
+    expect(pane.text()).toContain('提案 · 第002章-雨夜')
+    expect(pane.text()).toContain('提案说明：把雨提前一段')
+    expect(pane.text()).toContain('当前正文')
+    expect(pane.text()).toContain('提案新文')
+    expect(pane.find('.entry-text').text()).toBe('雨从檐口滴下来。')
+    expect(pane.find('[aria-label="提案新文"]').text()).toBe('雨从檐口滴下来，巷子里没人。')
+    expect(pane.text()).toContain('14 字')
+
+    await pane.find('.editor-foot .pane-btn.is-primary').trigger('click')
+    await flushPromises()
+    const saved = tools.calls.filter((call) => call.tool === 'pinax_chapter_save').at(-1)
+    expect(saved.args).toEqual({ file: '正文/第002章.md', text: '雨从檐口滴下来，巷子里没人。', expectedRevision: 1, proposal: PROPOSAL.name })
+    expect(wrapper.text()).toContain('已采纳提案，写入「正文/第002章.md」· 第 2 版')
+    expect(tools.state.proposals[0].status).toBe('adopted')
+    // 状态以重列回来的磁盘 JSON 为准：行上标出「已采纳」，提案仍在（采纳不是删除）。
+    const adoptedRow = wrapper.findAll('.nx-tree-item').find((row) => row.text().includes('第002章-雨夜'))
+    expect(adoptedRow.text()).toContain('已采纳')
+    expect(tools.state.text).toBe('雨从檐口滴下来，巷子里没人。')
+    wrapper.unmount()
+  })
+
+  it('提案弃用走 pinax_proposal_discard；STALE 时错误条摊开、按钮仍可重试', async () => {
+    // 弃用：删提案文件，正文不动；索引窗那一区随「没有提案」收掉。
+    const tools = fakeTools({ proposals: [{ ...PROPOSAL }] })
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    const row = wrapper.findAll('.nx-tree-item').find((item) => item.text().includes('第002章-雨夜'))
+    await row.trigger('click')
+    await flushPromises()
+
+    const discardButton = wrapper.find('[data-pane-id="novel.editor"] .editor-foot .control-quiet')
+    expect(discardButton.text()).toBe('弃用')
+    await discardButton.trigger('click')
+    await flushPromises()
+    const discarded = tools.calls.filter((call) => call.tool === 'pinax_proposal_discard').at(-1)
+    expect(discarded.args).toEqual({ name: PROPOSAL.name })
+    expect(tools.state.proposals).toHaveLength(0)
+    expect(tools.state.text, '弃用不动正文').toBe('雨从檐口滴下来。')
+    expect(wrapper.find('.nx-index-window').text()).not.toContain('提案')
+    wrapper.unmount()
+
+    // STALE：修订号对不上时原话摊开，按钮不被禁用（重开章节后可以再试）。
+    const staleTools = fakeTools({ stale: true, proposals: [{ ...PROPOSAL }] })
+    const staleBridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : staleTools.request(channel, payload)) }
+    const second = mount(AppNext, { props: { bridge: staleBridge } })
+    await flushPromises()
+    const staleRow = second.findAll('.nx-tree-item').find((item) => item.text().includes('第002章-雨夜'))
+    await staleRow.trigger('click')
+    await flushPromises()
+    await second.find('[data-pane-id="novel.editor"] .editor-foot .control-primary').trigger('click')
+    await flushPromises()
+
+    const error = second.find('.pane-error')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toContain('已被改动（第 1 版）')
+    expect(error.text()).toContain('提案已过期')
+    expect(staleTools.state.proposals[0].status, '拒写不推进提案状态').toBe('proposed')
+    const retry = second.find('[data-pane-id="novel.editor"] .editor-foot .control-primary')
+    expect(retry.attributes('disabled')).toBeUndefined()
+    second.unmount()
   })
 
   it('新建章节走 expectedRevision 0', async () => {

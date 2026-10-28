@@ -17,14 +17,24 @@ const props = defineProps({
 const paneId = computed(() => props.pane?.id ?? '')
 const viewKind = computed(() => {
   // 小说板块的中栏只有 editor 一块：选中大纲节点就是大纲编辑面（工单B2），
-  // 点名速记（索引窗构思区）换构思编辑面，其余时候是正文编辑面。
+  // 点名速记（索引窗构思区）换构思编辑面，点开提案（索引窗提案区）换审阅面，
+  // 其余时候是正文编辑面。
   if (paneId.value === 'novel.editor') {
     if (props.data.selection?.type === 'outline-node') return 'outline-editor'
+    if (props.data.selection?.type === 'proposal') return 'proposal-review'
     return props.data.selection?.type === 'note' ? 'notes-editor' : 'chapter-editor'
   }
   if (paneId.value === 'setting.entries') return 'entry-detail'
   return 'placeholder'
 })
+
+/** 提案头部的时刻：模型写这一版提案的时间（精确到分钟），解析不了就退回原话。 */
+function stampOf(value) {
+  const date = new Date(String(value ?? ''))
+  if (Number.isNaN(date.getTime())) return String(value ?? '')
+  const pad = (part) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
 
 /** 新建构思输入（工单B1）：照索引窗「新章标题」的形态，速记是随手记，行常驻在面板尾部。 */
 const newNoteTitle = ref('')
@@ -125,6 +135,50 @@ async function createNote() {
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一个大纲节点。</p>
     </template>
 
+    <!-- 提案审阅面（工单A）：模型改稿落在 .pinax/proposals/，这里做最后一道人审。
+         上下两段是同一章的两个版本（当前正文／提案新文），不逐句 diff——历史面板已有 diff 能力，后续复用。
+         采纳＝按此刻的章节修订号走载体 save（写入为新一版），弃用＝删提案文件；两者都不静默合并。 -->
+    <template v-else-if="viewKind === 'proposal-review'">
+      <div v-if="data.proposal" class="editor proposal-review">
+        <div class="editor-head">
+          <h4 class="pane-sub">提案 · {{ data.proposal.target?.title ?? data.proposal.name }}</h4>
+          <span class="editor-meta">
+            {{ data.proposal.target?.file ?? '（没有目标章）' }} · {{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字 · {{ stampOf(data.proposal.createdAt) }}
+          </span>
+        </div>
+        <p v-if="data.proposal.note" class="pane-hint proposal-note">提案说明：{{ data.proposal.note }}</p>
+        <div class="proposal-stack">
+          <section class="proposal-panel">
+            <h5 class="proposal-label">
+              当前正文
+              <span class="editor-meta">{{ data.proposalChapter?.totalChars ?? 0 }} 字<template v-if="data.proposalChapter"> · 第 {{ data.proposalChapter.revision }} 版</template></span>
+            </h5>
+            <pre class="entry-text proposal-text">{{ data.proposalChapter?.text ?? '（目标章还没读到）' }}</pre>
+          </section>
+          <section class="proposal-panel">
+            <h5 class="proposal-label">
+              提案新文
+              <span class="editor-meta">{{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字</span>
+            </h5>
+            <pre class="editor-area proposal-text" aria-label="提案新文">{{ data.proposal.content ?? '' }}</pre>
+          </section>
+        </div>
+        <div class="editor-foot">
+          <button
+            type="button"
+            class="pane-btn is-primary control-primary"
+            :disabled="data.busy || !data.proposal.content"
+            @click="data.adoptProposal()"
+          >
+            {{ data.busy ? '写入中…' : '采纳（写入为新一版）' }}
+          </button>
+          <button type="button" class="control-quiet" :disabled="data.busy" @click="data.discardProposal()">弃用</button>
+        </div>
+        <p v-if="data.proposal.status === 'adopted'" class="pane-hint">这条提案已经采纳过；再采纳会按当前章节版本重新写入一版。</p>
+      </div>
+      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「提案」区选一条。</p>
+    </template>
+
     <!-- 新建构思输入（工单B1）：照索引窗「新章标题」的形态。速记讲的是随手记，
          所以这一行常驻在小说面板尾部——还没有任何一篇构思时，第一篇也从这里起头。 -->
     <template v-if="viewKind === 'chapter-editor' || viewKind === 'notes-editor'">
@@ -171,8 +225,50 @@ async function createNote() {
       </ul>
     </template>
 
-    <p v-else class="pane-note">
+    <!-- 只在真的没有对应视图时才显示（批次15 验收修：原来挂在第二条链的 v-else 上，
+         提案审阅态会误把占位文案渲染在审阅面之下）。 -->
+    <p v-else-if="viewKind === 'placeholder'" class="pane-note">
       「{{ pane.pluginTitle }}」这块板块的面板视图还没做出来。它的工具和上下文块照常可用——先在右栏问 Pi-Agent。
     </p>
   </div>
 </template>
+
+<style scoped>
+/* 提案审阅（工单A）：两段上下堆叠，各自独立滚动——长章不会把「采纳」按钮顶到看不见的地方。
+   颜色／字号／圆角一律走老前端 token（门禁见 next/tests/visual-contract.test.mjs）。 */
+.proposal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.proposal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-muted);
+}
+.proposal-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--nx-fs-md);
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.proposal-note {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+.proposal-text {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: var(--nx-fs-lg);
+}
+</style>

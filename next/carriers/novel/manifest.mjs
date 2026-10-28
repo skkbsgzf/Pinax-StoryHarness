@@ -6,6 +6,8 @@
  * 大纲的 pinax_outline_save（工单B2，整份覆盖）与构思速记的 pinax_notes_list / pinax_notes_save（工单B1）。
  * 认领而非新增内核名，所以 19 工具的面在启用小说后不虚增；接管后读盘一律过内核文件服务的三道闸，
  * 内核那份「按服务端注册表找项目」的实现只在没装载体的场合回落使用。
+ * 工单A 起再添三把载体自有工具（pinax_proposal_list / read / discard）：提案审阅面读的是
+ * .pinax/proposals/ 这份内核元数据，内核没有同名工具，所以由载体声明并实现（聚合面记在 declaredOutsideKernel）。
  */
 export const NOVEL_CARRIER_ID = 'pinax.carrier.novel'
 
@@ -40,7 +42,7 @@ export const NOVEL_CARRIER = Object.freeze({
   capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'],
   requires: [],
 
-  tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save'],
+  tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'],
 
   context: {
     // providers 写的是「上下文块的种类名」（与 shared/agentContextProfiles.js 的 blocks 对齐），

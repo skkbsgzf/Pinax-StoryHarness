@@ -37,6 +37,15 @@ const isChapterOpen = (item) => props.data.selection?.type === 'chapter' && prop
 const isEntryOpen = (item) => props.data.selection?.type === 'entry' && props.data.selection.item?.path === item.path
 const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data.selection.item?.file === item.file
 const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-node' && props.data.selection.item?.index === index
+const isProposalOpen = (item) => props.data.selection?.type === 'proposal' && props.data.selection.item?.name === item.name
+
+/** 提案行的 createdAt 短格式（模型写提案的时刻，精确到分钟就够认了；解析不了就原样退回空串）。 */
+function shortStamp(value) {
+  const date = new Date(String(value ?? ''))
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = (part) => String(part).padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
 
 async function createChapter() {
   const title = newTitle.value.trim()
@@ -54,6 +63,8 @@ watch(() => props.board?.id, () => {
     void props.data.loadChapters()
     void props.data.loadOutline()
     void props.data.loadNotes()
+    // 提案（工单A）跟着一起列：模型改稿落 .pinax/proposals/ 后，这一栏要马上看得见。
+    void props.data.loadProposals()
   } else if (treeKind.value === 'entries') {
     void props.data.loadEntries()
   }
@@ -105,6 +116,33 @@ watch(() => props.board?.id, () => {
           </li>
         </ul>
         <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+
+        <!-- 提案（工单A）：模型改稿落在 .pinax/proposals/，这里接住它——
+             行文＝目标章标题＋创建时刻；点开进中栏审阅（采纳／弃用在那边）。
+             没有提案就不摆这一区；列不出来时把原话摊在这里，不假装「没有提案」。 -->
+        <template v-if="data.proposals.length || data.proposalsError || data.proposalWarnings.length">
+          <p class="workspace-nav-section">提案</p>
+          <ul v-if="data.proposals.length" class="nx-tree">
+            <li v-for="item in data.proposals" :key="item.name" class="nx-tree-line">
+              <button
+                type="button"
+                class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+                :class="{ 'is-active': isProposalOpen(item) }"
+                :aria-current="isProposalOpen(item) ? 'page' : null"
+                @click="data.openProposal(item)"
+              >
+                <span class="workspace-nav-label">{{ item.target?.title ?? item.name }}</span>
+                <span class="workspace-nav-meta">
+                  {{ shortStamp(item.createdAt) }}<template v-if="item.status === 'adopted'"> · 已采纳</template>
+                </span>
+              </button>
+            </li>
+          </ul>
+          <p v-if="!data.proposals.length && data.proposalsError" class="nx-index-error">{{ data.proposalsError }}</p>
+          <ul v-if="data.proposalWarnings.length" class="nx-index-warn">
+            <li v-for="(warning, index) in data.proposalWarnings" :key="`p-${index}`">{{ warning }}</li>
+          </ul>
+        </template>
 
         <!-- 大纲（工单A3 只读 → 工单B2 可编辑）：行可点选——点行把节点送进中栏的大纲编辑面（改名/加节点在那里）；
              大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->

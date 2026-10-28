@@ -378,10 +378,12 @@ function startDrag(target, event) {
   const startX = event.clientX
   const startValue = target === 'index' ? indexWidth.value : dockWidth.value
   // 两条把手都在各自面板的右缘：往左拖＝变宽。
+  // 右栏的钳制对齐老版参考区 320–680（src/composables/useWorkspaceHost.js:286 的 resize()）；
+  // 索引窗仍是老版目录窗的 200–360，不动。
   const move = (moveEvent) => {
     const next = startValue - (moveEvent.clientX - startX)
     if (target === 'index') indexWidth.value = Math.min(360, Math.max(200, next))
-    else dockWidth.value = Math.min(640, Math.max(260, next))
+    else dockWidth.value = Math.min(680, Math.max(320, next))
   }
   const up = () => {
     dragging.value = null

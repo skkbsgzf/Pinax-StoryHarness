@@ -1,9 +1,9 @@
-import { mkdir, readFile, stat } from 'node:fs/promises'
+import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { fail, ok } from '../kernel/errors.mjs'
 import { canPerform } from '../kernel/scopeGrant.mjs'
-import { recoverInterruptedWrites, writeFileAtomic } from './atomicWrite.mjs'
+import { recoverInterruptedWrites, TMP_PREFIX, writeFileAtomic } from './atomicWrite.mjs'
 import { assertNoSymlinkEscape, joinContained } from './projectPath.mjs'
 
 /**
@@ -14,6 +14,10 @@ import { assertNoSymlinkEscape, joinContained } from './projectPath.mjs'
  * 元数据只进 .pinax/（状态 revisions、提案 proposals），正文永远是人打开资源管理器看得懂的那份。
  */
 const REVISIONS_FILE = join('state', 'revisions.json')
+/** 提案是内核元数据（不是任何载体的板块目录）：目录固定，作用域闸与归属闸都不适用。 */
+const PROPOSALS_DIR = join('.pinax', 'proposals')
+/** 提案状态只认这三档：运行时写出来的是 proposed，采纳与弃用各占一档。 */
+const PROPOSAL_STATUSES = Object.freeze(['proposed', 'adopted', 'discarded'])
 
 export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
   const projectRoot = resolve(String(root || '.'))
@@ -21,6 +25,8 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
     readFile: fsImpl?.readFile || readFile,
     mkdir: fsImpl?.mkdir || mkdir,
     stat: fsImpl?.stat || stat,
+    readdir: fsImpl?.readdir || readdir,
+    unlink: fsImpl?.unlink || unlink,
     atomicWrite: fsImpl?.writeFileAtomic || writeFileAtomic,
     recover: fsImpl?.recover || recoverInterruptedWrites,
     realpath: fsImpl?.realpath,
@@ -165,6 +171,164 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
       return ok({ path: target, bytes: Buffer.byteLength(text, 'utf-8') })
     },
 
+    /**
+     * 提案审阅（工单A）：.pinax/proposals/ 是内核元数据，不走载体 scope 闸。
+     * 列的是「目录里此刻真有什么」：JSON 提案解析成可读的摘要，坏 JSON 跳过并记账，
+     * 运行时轨写下的纯文本提案以 kind:'raw' 只给名字与大小（不冒充可审阅的提案）。
+     */
+    async listProposals() {
+      const dir = join(projectRoot, PROPOSALS_DIR)
+      let entries
+      try {
+        entries = await io.readdir(dir, { withFileTypes: true })
+      } catch (error) {
+        if (error?.code === 'ENOENT') {
+          return ok({ dir: '.pinax/proposals', proposals: [], raw: [], warnings: [], total: 0, rawTotal: 0 })
+        }
+        return fail('IO_FAILED', '读取提案目录失败：.pinax/proposals', { cause: String(error?.message || error) })
+      }
+      const proposals = []
+      const raw = []
+      const warnings = []
+      for (const entry of entries) {
+        if (!entry.isFile()) continue
+        if (entry.name.startsWith(TMP_PREFIX)) continue
+        const full = join(dir, entry.name)
+        let info
+        try {
+          info = await io.stat(full)
+        } catch (error) {
+          warnings.push(`「${entry.name}」读不到大小，已跳过：${String(error?.message || error)}`)
+          continue
+        }
+        if (!/\.json$/iu.test(entry.name)) {
+          raw.push({ name: entry.name, kind: 'raw', bytes: info.size })
+          continue
+        }
+        let parsed
+        try {
+          parsed = JSON.parse(await io.readFile(full, 'utf-8'))
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('顶层不是对象')
+        } catch (error) {
+          warnings.push(`「${entry.name}」不是合法的提案 JSON，已跳过：${String(error?.message || error)}`)
+          continue
+        }
+        const content = typeof parsed.content === 'string' ? parsed.content : ''
+        proposals.push({
+          name: entry.name,
+          kind: 'proposal',
+          schema: typeof parsed.schema === 'string' ? parsed.schema : null,
+          id: typeof parsed.id === 'string' && parsed.id ? parsed.id : entry.name.replace(/\.json$/iu, ''),
+          status: typeof parsed.status === 'string' ? parsed.status : null,
+          target: {
+            index: Number.isSafeInteger(parsed.target?.index) ? parsed.target.index : null,
+            title: typeof parsed.target?.title === 'string' ? parsed.target.title : null,
+            file: typeof parsed.target?.file === 'string' ? parsed.target.file : null,
+            chars: Number.isSafeInteger(parsed.target?.chars) ? parsed.target.chars : null
+          },
+          contentChars: Number.isSafeInteger(parsed.contentChars) ? parsed.contentChars : content.length,
+          createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : null,
+          note: typeof parsed.note === 'string' && parsed.note ? parsed.note : null,
+          bytes: info.size
+        })
+      }
+      // 降序：新建的提案排在最上面；createdAt 缺省或相同的按文件名倒序，保证每次列出来是同一顺序。
+      proposals.sort((left, right) => {
+        const a = left.createdAt ?? ''
+        const b = right.createdAt ?? ''
+        if (a !== b) return a < b ? 1 : -1
+        return left.name < right.name ? 1 : left.name > right.name ? -1 : 0
+      })
+      raw.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+      return ok({
+        dir: '.pinax/proposals',
+        proposals,
+        raw,
+        warnings,
+        total: proposals.length,
+        rawTotal: raw.length
+      })
+    },
+
+    /** 读一份 JSON 提案（整份原样返回，内容不做任何裁剪）。 */
+    async readProposal({ name } = {}) {
+      const checked = proposalFilePath(projectRoot, name)
+      if (!checked.ok) return checked
+      const { target, fileName } = checked.value
+      const escape = await assertNoSymlinkEscape(projectRoot, target, { realpath: io.realpath, lstat: io.lstat })
+      if (!escape.ok) return escape
+      let text
+      try {
+        text = await io.readFile(target, 'utf-8')
+      } catch (error) {
+        if (error?.code === 'ENOENT') return fail('INVALID_INPUT', `提案不存在：${fileName}`, { name: fileName })
+        return fail('IO_FAILED', `读取提案失败：${fileName}`, { cause: String(error?.message || error) })
+      }
+      let parsed
+      try {
+        parsed = JSON.parse(text)
+      } catch {
+        return fail('INVALID_INPUT', `「${fileName}」不是 JSON 提案：运行时的纯文本提案只在列表里展示，不能进审阅面`, { name: fileName })
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return fail('INVALID_INPUT', `「${fileName}」不是 pinax-proposal@1 对象`, { name: fileName })
+      }
+      return ok({ name: fileName, path: `.pinax/proposals/${fileName}`, proposal: parsed })
+    },
+
+    /** 弃用＝删掉这份提案文件（正文与修订号一概不动，提案从未进过正文账）。 */
+    async discardProposal({ name } = {}) {
+      const checked = proposalFilePath(projectRoot, name)
+      if (!checked.ok) return checked
+      const { target, fileName } = checked.value
+      const escape = await assertNoSymlinkEscape(projectRoot, target, { realpath: io.realpath, lstat: io.lstat })
+      if (!escape.ok) return escape
+      try {
+        await io.unlink(target)
+      } catch (error) {
+        if (error?.code === 'ENOENT') return fail('INVALID_INPUT', `提案不存在：${fileName}`, { name: fileName })
+        return fail('IO_FAILED', `弃用提案失败：${fileName}`, { cause: String(error?.message || error) })
+      }
+      return ok({ discarded: true, name: fileName })
+    },
+
+    /**
+     * 把提案的 status 写回 JSON（原子写）。采纳后留档：提案文件不删，作者以后还查得到这一版新稿从哪来。
+     * 与 discardProposal 同一套名字校验，走同一条写链，避免与并发的采纳/弃用打架。
+     */
+    async markProposalStatus({ name, status } = {}) {
+      const checked = proposalFilePath(projectRoot, name)
+      if (!checked.ok) return checked
+      const { target, fileName } = checked.value
+      const normalized = String(status ?? '')
+      if (!PROPOSAL_STATUSES.includes(normalized)) {
+        return fail('INVALID_INPUT', `提案状态只能写 ${PROPOSAL_STATUSES.join(' / ')}`, { got: status })
+      }
+      const escape = await assertNoSymlinkEscape(projectRoot, target, { realpath: io.realpath, lstat: io.lstat })
+      if (!escape.ok) return escape
+      return service.enqueue(async () => {
+        let parsed
+        try {
+          parsed = JSON.parse(await io.readFile(target, 'utf-8'))
+        } catch (error) {
+          if (error?.code === 'ENOENT') return fail('INVALID_INPUT', `提案不存在：${fileName}`, { name: fileName })
+          return fail('INVALID_INPUT', `「${fileName}」不是合法的提案 JSON，状态写不进去`, { name: fileName })
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return fail('INVALID_INPUT', `「${fileName}」不是 pinax-proposal@1 对象`, { name: fileName })
+        }
+        const updatedAt = new Date().toISOString()
+        parsed.status = normalized
+        parsed.statusUpdatedAt = updatedAt
+        try {
+          await io.atomicWrite(target, `${JSON.stringify(parsed, null, 2)}\n`)
+        } catch (error) {
+          return fail('IO_FAILED', `写回提案状态失败：${fileName}`, { cause: String(error?.message || error) })
+        }
+        return ok({ name: fileName, status: normalized, updatedAt })
+      })
+    },
+
     /** 对外取修订号：与 read/write 同一套采纳规则，异步（可能要 stat 磁盘）。 */
     async revisionOf(relativePath) {
       return adoptRevision(String(relativePath).replaceAll('\\', '/'))
@@ -268,6 +432,22 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf-8').digest('hex')
+}
+
+/**
+ * 提案文件名校验：只接受 .pinax/proposals/ 里的一层文件名。
+ * 拒空、拒路径分隔符、拒「..」、拒隐藏/临时文件（都以点开头）、拒控制字符——
+ * 提案接口永远不该成为「按名字读项目里任意文件」的第二条路。
+ */
+function proposalFilePath(projectRoot, name) {
+  const raw = String(name ?? '').trim()
+  if (!raw) return fail('INVALID_INPUT', '要给出提案文件名')
+  if (raw.length > 240) return fail('INVALID_INPUT', '提案文件名过长', { length: raw.length })
+  if (raw.includes('/') || raw.includes('\\')) return fail('INVALID_INPUT', `提案文件名不许带路径分隔符：${raw}`, { name: raw })
+  if (raw.includes('..')) return fail('INVALID_INPUT', `提案文件名不许含「..」：${raw}`, { name: raw })
+  if (raw.startsWith('.')) return fail('INVALID_INPUT', `提案文件名不许以点开头：${raw}`, { name: raw })
+  if (/\p{Cc}/u.test(raw)) return fail('INVALID_INPUT', '提案文件名含控制字符', { name: raw })
+  return ok({ target: join(projectRoot, PROPOSALS_DIR, raw), fileName: raw })
 }
 
 function manifestDirs(manifest) {

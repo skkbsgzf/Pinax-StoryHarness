@@ -34,6 +34,14 @@ export function useBoardData(bridge) {
     note: null,
     noteDraft: '',
     notesError: null,
+    /** 提案审阅（工单A）：.pinax/proposals/ 里的模型改稿。
+     *  proposals＝列表摘要；proposal＝点开的那份整份 JSON；proposalChapter＝目标章此刻的正文（左右对照用）。
+     *  采纳仍走载体 save（带当前修订号），外壳不自己拼一份「采纳后」的正文。 */
+    proposals: [],
+    proposal: null,
+    proposalChapter: null,
+    proposalWarnings: [],
+    proposalsError: null,
     entries: [],
     entry: null,
     /** 条目编辑（工单A2）：阅读态与编辑态的开关＋草稿，与正文的 draft 分开各拿各的。 */
@@ -200,6 +208,148 @@ export function useBoardData(bridge) {
     await loadNotes()
     const made = state.notes.find((item) => item.file === saved.value.file)
     if (made) openNote(made)
+  }
+
+  /**
+   * 提案（工单A）：列 .pinax/proposals/。
+   * 失败摊在索引窗自己的错误位（不发到文档级），提案是索引窗这一栏的东西；
+   * 打开着的那份若已不在列表里（被外面删了），状态一并清掉，不留一份点不开的「当前提案」。
+   */
+  async function loadProposals() {
+    state.proposalsError = null
+    const listed = await tool('pinax_proposal_list', {})
+    if (!listed.ok) {
+      state.proposals = []
+      state.proposalWarnings = []
+      state.proposalsError = listed.message
+      return
+    }
+    state.proposals = listed.value.proposals ?? []
+    state.proposalWarnings = listed.value.warnings ?? []
+    if (!state.proposal) return
+    const fresh = state.proposals.find((item) => item.name === state.proposal.name)
+    if (!fresh) {
+      state.proposal = null
+      state.proposalChapter = null
+      if (state.selection?.type === 'proposal') state.selection = { type: null, item: null }
+      return
+    }
+    if (state.proposal.status !== fresh.status) state.proposal = { ...state.proposal, status: fresh.status }
+  }
+
+  /**
+   * 点开一份提案：整份 JSON 读回来，再把目标章此刻的正文读一份做对照。
+   * 目标章读不到不拦住审阅（提案内容本身还在），但会把原话摊在文档级错误条上。
+   */
+  async function openProposal(item) {
+    if (!item?.name) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const read = await tool('pinax_proposal_read', { name: item.name })
+    if (!read.ok) {
+      state.busy = false
+      state.proposalsError = read.message
+      return
+    }
+    const proposal = { ...read.value.proposal, name: read.value.name }
+    state.proposal = proposal
+    state.proposalChapter = null
+    const targetFile = proposal.target?.file
+    if (targetFile) {
+      const current = await tool('pinax_chapter_read', { file: targetFile, maxChars: 200000 })
+      if (current.ok) {
+        state.proposalChapter = {
+          file: current.value.chapter?.file ?? targetFile,
+          title: current.value.chapter?.title ?? proposal.target?.title ?? '',
+          text: current.value.text ?? '',
+          totalChars: current.value.totalChars ?? (current.value.text ?? '').length,
+          revision: current.value.revision,
+          truncated: Boolean(current.value.truncated)
+        }
+      } else {
+        state.error = `读不到提案的目标章「${targetFile}」：${current.message}`
+      }
+    }
+    state.busy = false
+    state.notice = proposal.status === 'adopted'
+      ? '这条提案已经采纳过；再采纳会按当前章节版本重新写入一版。'
+      : ''
+    state.selection = { type: 'proposal', item: { name: proposal.name, target: proposal.target ?? null } }
+  }
+
+  /**
+   * 采纳＝把提案正文写成目标章的新一版：先读当前修订号，再走载体 save（带修订号）。
+   * STALE_REVISION 原样摊开——提案按的是旧稿，外壳不做静默合并；正文已经落盘但状态没记上时，
+   * 保存结果里的 proposalWarning 随提示一起说清楚。
+   */
+  async function adoptProposal() {
+    const proposal = state.proposal
+    if (!proposal?.name || typeof proposal.content !== 'string' || !proposal.content.length) return
+    const targetFile = proposal.target?.file
+    if (!targetFile) {
+      state.error = '这份提案没有目标章（target.file），无法采纳'
+      return
+    }
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const current = await tool('pinax_chapter_read', { file: targetFile, maxChars: 200000 })
+    if (!current.ok) {
+      state.busy = false
+      state.error = `读不到目标章「${targetFile}」的当前修订号：${current.message}`
+      return
+    }
+    const saved = await tool('pinax_chapter_save', {
+      file: targetFile,
+      text: proposal.content,
+      expectedRevision: current.value.revision,
+      proposal: proposal.name
+    })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（提案已过期：目标章在提案生成后又被改过。请先重新打开该章再决定，外壳不做静默合并）' : ''}`
+      return
+    }
+    state.busy = false
+    state.notice = `已采纳提案，写入「${saved.value.file}」· 第 ${saved.value.revision} 版`
+    if (saved.value.proposalWarning) state.notice += `（${saved.value.proposalWarning}）`
+    // 目标章若正开着，草稿与版本号一起跟上新一版，免得下次按保存时拿旧稿覆盖刚采纳的正文。
+    if (state.chapter?.file === saved.value.file) {
+      state.chapter = { ...state.chapter, revision: saved.value.revision, totalChars: proposal.content.length, truncated: false }
+      state.draft = proposal.content
+    }
+    state.chapters = state.chapters.map((item) => (item.file === saved.value.file ? { ...item, revision: saved.value.revision } : item))
+    state.proposalChapter = {
+      ...(state.proposalChapter ?? {}),
+      file: targetFile,
+      text: proposal.content,
+      totalChars: proposal.content.length,
+      revision: saved.value.revision,
+      truncated: false
+    }
+    // 重列：状态（adopted）以磁盘上的 JSON 为准，不在界面上自说自话。
+    await loadProposals()
+  }
+
+  /** 弃用＝删掉提案文件；正文从未被它改过，所以这里也没有「回滚」可做。 */
+  async function discardProposal() {
+    const proposal = state.proposal
+    if (!proposal?.name) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const discarded = await tool('pinax_proposal_discard', { name: proposal.name })
+    state.busy = false
+    if (!discarded.ok) {
+      state.error = discarded.message
+      return
+    }
+    state.notice = `已弃用提案「${proposal.name}」`
+    state.proposal = null
+    state.proposalChapter = null
+    if (state.selection?.type === 'proposal') state.selection = { type: null, item: null }
+    await loadProposals()
   }
 
   async function loadEntries() {
@@ -386,6 +536,10 @@ export function useBoardData(bridge) {
     setNoteDraft,
     saveNote,
     createNote,
+    loadProposals,
+    openProposal,
+    adoptProposal,
+    discardProposal,
     loadEntries,
     openEntry,
     editEntry,

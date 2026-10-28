@@ -130,8 +130,10 @@ describe('空框架外壳', () => {
     await flushPromises()
     const dockStyle = wrapper.find('.col-dock').attributes('style')
     const dockWidth = Number(dockStyle.match(/width: (\d+(?:\.\d+)?)px/)[1])
-    expect(dockWidth).toBeGreaterThanOrEqual(260)
-    expect(dockWidth).toBeLessThanOrEqual(640)
+    // 右栏对齐老版参考区的 320–680（差异表 #6；src/composables/useWorkspaceHost.js:286）；
+    // 精确公式由 next/tests/focus-trap.test.mjs 的源码断言钉住。
+    expect(dockWidth).toBeGreaterThanOrEqual(320)
+    expect(dockWidth).toBeLessThanOrEqual(680)
     wrapper.unmount()
   })
 })
@@ -769,6 +771,51 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     await flushPromises()
     expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('焦点陷阱（差异表 #10）：弹窗打开时 Tab 焦点不出面板，关闭后不留驻', async () => {
+    const handlers = new Map()
+    const bridge = modalBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge }, attachTo: document.body })
+    await flushPromises()
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    const panel = wrapper.find('.workbench-modal-panel').element
+    // 打开即把焦点收进面板：不在弹窗背后的页面上。
+    expect(panel.contains(document.activeElement)).toBe(true)
+
+    const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    const focusables = [...panel.querySelectorAll(FOCUSABLE)]
+    expect(focusables.length).toBeGreaterThan(1)
+    const first = focusables[0]
+    const last = focusables.at(-1)
+
+    // 末尾 Tab 回第一个，第一个 Shift+Tab 回末尾（jsdom 不实现默认 Tab 顺序，所以回绕一定出自陷阱）。
+    last.focus()
+    last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(document.activeElement).toBe(first)
+
+    first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(document.activeElement).toBe(last)
+
+    // 连按 Tab 轮询：每一步焦点都还在面板里。
+    for (let step = 0; step < 10; step += 1) {
+      expect(panel.contains(document.activeElement)).toBe(true)
+      document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+      await flushPromises()
+    }
+    expect(panel.contains(document.activeElement)).toBe(true)
+
+    // 关掉弹窗：面板卸下，焦点不再留在面板里（归还给打开前的持有者，这里本来就是 body）。
+    await wrapper.find('.workbench-modal').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+    expect(panel.contains(document.activeElement)).toBe(false)
     wrapper.unmount()
   })
 

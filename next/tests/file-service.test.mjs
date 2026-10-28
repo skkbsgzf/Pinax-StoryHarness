@@ -125,6 +125,144 @@ test('运行时的写回只进 .pinax/proposals/，正文一个字节都不动',
   }
 })
 
+test('提案列表（工单A）：只解析 .json 提案，坏 JSON 跳过并记账，纯文本散件只给名字与大小', async () => {
+  const { service, root, workspace } = await setup()
+  try {
+    const dir = join(root, '.pinax', 'proposals')
+    const older = {
+      schema: 'pinax-proposal@1',
+      id: '20261027T060000-ch0-aaaaaaaa',
+      origin: 'mcp',
+      mode: 'review',
+      status: 'proposed',
+      target: { index: 0, title: '第001章', file: '正文/第001章.md', chars: 6 },
+      content: '旧稿新文',
+      contentChars: 4,
+      note: '先改开场',
+      createdAt: '2026-10-27T06:00:00.000Z'
+    }
+    const newer = {
+      ...older,
+      id: '20261028T093000-ch1-bbbbbbbb',
+      target: { index: 1, title: '第002章', file: '正文/第002章.md', chars: 6 },
+      contentChars: 5,
+      note: null,
+      createdAt: '2026-10-28T09:30:00.000Z'
+    }
+    await writeFile(join(dir, '20261027T060000-ch0-aaaaaaaa.json'), JSON.stringify(older), 'utf-8')
+    await writeFile(join(dir, '20261028T093000-ch1-bbbbbbbb.json'), JSON.stringify(newer), 'utf-8')
+    await writeFile(join(dir, '坏掉.json'), '{ 不是 JSON', 'utf-8')
+    await writeFile(join(dir, '运行时-建议.md'), '把雨提前一段。', 'utf-8')
+
+    const listed = await service.listProposals()
+    assert.equal(listed.ok, true, JSON.stringify(listed.error ?? {}))
+    assert.equal(listed.value.total, 2)
+    assert.deepEqual(
+      listed.value.proposals.map((item) => item.name),
+      ['20261028T093000-ch1-bbbbbbbb.json', '20261027T060000-ch0-aaaaaaaa.json'],
+      '按 createdAt 降序：新建的提案排在最上面'
+    )
+    const [first, second] = listed.value.proposals
+    assert.equal(first.kind, 'proposal')
+    assert.equal(first.id, '20261028T093000-ch1-bbbbbbbb')
+    assert.equal(first.status, 'proposed')
+    assert.equal(first.target.title, '第002章')
+    assert.equal(first.target.file, '正文/第002章.md')
+    assert.equal(first.contentChars, 5, 'contentChars 取 JSON 里的原值')
+    assert.equal(first.createdAt, '2026-10-28T09:30:00.000Z')
+    assert.equal(first.note, null)
+    assert.equal(second.note, '先改开场')
+    assert.equal(listed.value.warnings.length, 1)
+    assert.match(listed.value.warnings[0], /坏掉\.json/)
+    assert.deepEqual(
+      listed.value.raw.map((item) => [item.name, item.kind, item.bytes]),
+      [['运行时-建议.md', 'raw', Buffer.byteLength('把雨提前一段。', 'utf-8')]],
+      '非 JSON 的散件只有名字与大小，不冒充可审阅的提案'
+    )
+
+    // 目录不存在时如实给空表（不因为少一个目录就把索引窗弄红）。
+    const bare = createFileService({ root: join(root, '空项目'), registry: createRegistry({ kinds: Object.keys(PROJECT_KINDS) }) })
+    const empty = await bare.listProposals()
+    assert.equal(empty.ok, true, JSON.stringify(empty.error ?? {}))
+    assert.deepEqual(empty.value.proposals, [])
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
+test('提案读／弃／记状态（工单A）：名字只认目录内一层，非法名与坏 JSON 一律拒', async () => {
+  const { service, root, workspace } = await setup()
+  try {
+    const dir = join(root, '.pinax', 'proposals')
+    const payload = {
+      schema: 'pinax-proposal@1',
+      id: 't1',
+      status: 'proposed',
+      target: { index: 0, title: '第001章', file: '正文/第001章.md' },
+      content: '新稿全文',
+      contentChars: 4,
+      createdAt: '2026-10-28T09:30:00.000Z'
+    }
+    await writeFile(join(dir, '提案.json'), JSON.stringify(payload, null, 2), 'utf-8')
+    await writeFile(join(dir, '坏的.json'), '不是 JSON', 'utf-8')
+
+    const read = await service.readProposal({ name: '提案.json' })
+    assert.equal(read.ok, true, JSON.stringify(read.error ?? {}))
+    assert.equal(read.value.proposal.content, '新稿全文')
+    assert.equal(read.value.path, '.pinax/proposals/提案.json')
+
+    // 路径安全：带分隔符、「..」、空名都拒——提案接口不是「按名字读任意文件」的第二条路。
+    for (const bad of ['../提案.json', '子目录/提案.json', '子目录\\提案.json', '..', '', '   ']) {
+      const rejected = await service.readProposal({ name: bad })
+      assert.equal(rejected.ok, false, bad)
+      assert.equal(rejected.error.code, 'PINAX_INVALID_INPUT', bad)
+    }
+    const missing = await service.readProposal({ name: '没有这份.json' })
+    assert.equal(missing.ok, false)
+    assert.equal(missing.error.code, 'PINAX_INVALID_INPUT')
+
+    const badJson = await service.readProposal({ name: '坏的.json' })
+    assert.equal(badJson.ok, false)
+    assert.equal(badJson.error.code, 'PINAX_INVALID_INPUT')
+    assert.match(badJson.error.message, /不是 JSON 提案/)
+
+    // markStatus：只认三档状态；写回 status 字段，正文与目标章原样保留。
+    const invalid = await service.markProposalStatus({ name: '提案.json', status: 'merged' })
+    assert.equal(invalid.ok, false)
+    assert.equal(invalid.error.code, 'PINAX_INVALID_INPUT')
+    const marked = await service.markProposalStatus({ name: '提案.json', status: 'adopted' })
+    assert.equal(marked.ok, true, JSON.stringify(marked.error ?? {}))
+    assert.equal(marked.value.status, 'adopted')
+    const disk = JSON.parse(await readFile(join(dir, '提案.json'), 'utf-8'))
+    assert.equal(disk.status, 'adopted')
+    assert.equal(disk.content, '新稿全文', '状态写回不洗掉提案正文')
+    assert.equal(disk.target.title, '第001章')
+    assert.equal(typeof disk.statusUpdatedAt, 'string')
+    assert.equal((await service.listProposals()).value.proposals[0].status, 'adopted')
+
+    // discard：删提案文件；再删一次如实报不存在；正文目录与修订账一个字节不动。
+    const manuscriptBefore = await readdir(join(root, '正文'))
+    const stateBefore = await readFile(join(root, '.pinax', 'state', 'revisions.json'), 'utf-8').catch(() => '')
+    const discarded = await service.discardProposal({ name: '提案.json' })
+    assert.equal(discarded.ok, true, JSON.stringify(discarded.error ?? {}))
+    assert.deepEqual(discarded.value, { discarded: true, name: '提案.json' })
+    assert.equal(await readFile(join(dir, '提案.json'), 'utf-8').then(() => true, () => false), false)
+    assert.deepEqual(await readdir(join(root, '正文')), manuscriptBefore)
+    assert.equal(await readFile(join(root, '.pinax', 'state', 'revisions.json'), 'utf-8').catch(() => ''), stateBefore)
+
+    const twice = await service.discardProposal({ name: '提案.json' })
+    assert.equal(twice.ok, false)
+    assert.equal(twice.error.code, 'PINAX_INVALID_INPUT')
+    for (const bad of ['../正文/第001章.md', '..', '子目录/提案.json']) {
+      const rejected = await service.discardProposal({ name: bad })
+      assert.equal(rejected.ok, false, bad)
+      assert.equal(rejected.error.code, 'PINAX_INVALID_INPUT', bad)
+    }
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
 test('崩溃恢复只清 .pinax-tmp-*，不动正文', async () => {
   const { service, root, workspace } = await setup()
   try {

@@ -51,12 +51,12 @@ test('真清单过内核校验：认领的都是内核已有的名字，板块�
   assert.equal(NOVEL_CARRIER.primary.contextProfile, 'writing-chapter', '上下文档案名要对齐 shared/agentContextProfiles')
 })
 
-test('工具面聚合：启用小说后面是 23 个工具，三个只读名归属载体，声明无实现的绝不虚列', async () => {
+test('工具面聚合：启用小说后面是 26 个工具，三个只读名归属载体，声明无实现的绝不虚列', async () => {
   const { workspace, registry, runtime } = await novelProject('carrier-surface')
   try {
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 23, '19 内核 ＋ 载体自有四把：正文 pinax_chapter_save、大纲 pinax_outline_save（工单B2）、构思这对 pinax_notes_list/pinax_notes_save（工单B1；断言同步，裁定 dwfq-f2369ffa-1/3 口径）')
+    assert.equal(started.value.toolCount, 26, '19 内核 ＋ 载体自有七把：正文 pinax_chapter_save、大纲 pinax_outline_save（工单B2）、构思这对 pinax_notes_list/pinax_notes_save（工单B1）与提案三把（工单A；断言同步，裁定 dwfq-f2369ffa-1/3 口径）')
     assert.equal(started.value.aggregatedSurface, true)
     assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...NOVEL_TOOL_NAMES].sort())
 
@@ -74,7 +74,7 @@ test('工具面聚合：启用小说后面是 23 个工具，三个只读名归�
     const report = toolOwnershipReport(registry)
     assert.equal(report.claimed.length, 5, '小说 3 把只读 ＋ 设定 2 把只读（认领面按已安装的清单算，不看启用开关）')
     assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须往下走')
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save'], '工单A2 起设定板块有了自有写入口；工单B1 构思这对、工单B2 大纲写半边也是自有名字（断言同步，调度方裁定 dwfq-f2369ffa-1）')
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save'], '工单A2 起设定板块有了自有写入口；工单B1 构思这对、工单B2 大纲写半边、工单A 提案三把（内核没有同名）也是自有名字（断言同步，调度方裁定 dwfq-f2369ffa-1）')
     assert.deepEqual(report.withoutImplementation, [], '小说声明的名字都得有实现')
   } finally {
     await runtime.stop()
@@ -184,6 +184,115 @@ test('构思速记（工单B1）：列表连正文带回，保存带修订号落
     const emptyText = await runtime.callTool('pinax_notes_save', { title: '空速记', text: '', expectedRevision: 0 })
     assert.equal(emptyText.value.payload.ok, false)
     assert.equal(emptyText.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('提案三把（工单A）：列出／读回／弃用；采纳在 chapter_save 成功后把提案标成 adopted', async () => {
+  const { workspace, root, runtime, opened } = await novelProject('carrier-proposals')
+  try {
+    await runtime.start()
+    // 空目录先列一次：0 条提案，raw 也为空，不谎报。
+    const empty = await runtime.callTool('pinax_proposal_list', {})
+    assert.equal(empty.value.payload.ok, true, JSON.stringify(empty.value.payload))
+    assert.equal(empty.value.payload.total, 0)
+    assert.deepEqual(empty.value.payload.proposals, [])
+    assert.deepEqual(empty.value.payload.raw, [])
+
+    // 目标章与一份 pinax-proposal@1（种数据走 fileService.writeProposal：.pinax/ 是内核元数据）。
+    const seeded = await runtime.callTool('pinax_chapter_save', { title: '第001章-入场', text: '雨从檐口滴下来。', expectedRevision: 0 })
+    assert.equal(seeded.value.payload.ok, true, JSON.stringify(seeded.value.payload))
+    const proposalPayload = {
+      schema: 'pinax-proposal@1',
+      id: '20261028T140000-ch0-abcdef12',
+      origin: 'mcp',
+      mode: 'review',
+      status: 'proposed',
+      project: { projectId: 'p-1', name: '小说载体靶子' },
+      target: { index: 0, title: '第001章-入场', file: '正文/第001章-入场.md', chars: 8, revision: 'local-chapter:0:0' },
+      content: '雨从檐口滴下来，巷子里没人。',
+      contentChars: 14,
+      note: '把巷子空出来',
+      expert: null,
+      requestId: 'req-1',
+      createdAt: '2026-10-28T06:00:00.000Z'
+    }
+    const writtenProposal = await opened.value.fileService.writeProposal({ name: '提案-雨夜.json', text: JSON.stringify(proposalPayload, null, 2) })
+    assert.equal(writtenProposal.ok, true, JSON.stringify(writtenProposal.error ?? {}))
+    // 运行时轨的纯文本散件：只列名字与大小，不当成可审阅的提案。
+    await opened.value.fileService.writeProposal({ name: '运行时-建议.md', text: '建议：先给一场雨。' })
+    // 坏 JSON：跳过并计入 warnings，不把整栏拖垮。
+    await opened.value.fileService.writeProposal({ name: '坏提案.json', text: '{ 不是 JSON' })
+
+    const listed = await runtime.callTool('pinax_proposal_list', {})
+    assert.equal(listed.value.payload.ok, true, JSON.stringify(listed.value.payload))
+    assert.equal(listed.value.payload.total, 1)
+    const summary = listed.value.payload.proposals[0]
+    assert.equal(summary.name, '提案-雨夜.json')
+    assert.equal(summary.status, 'proposed')
+    assert.equal(summary.target.title, '第001章-入场')
+    assert.equal(summary.target.file, '正文/第001章-入场.md')
+    assert.equal(summary.contentChars, 14)
+    assert.equal(summary.createdAt, '2026-10-28T06:00:00.000Z')
+    assert.equal(summary.note, '把巷子空出来')
+    assert.deepEqual(listed.value.payload.raw.map((item) => [item.name, item.kind]), [['运行时-建议.md', 'raw']])
+    assert.match(listed.value.payload.warnings.join('\n'), /坏提案\.json/)
+
+    const read = await runtime.callTool('pinax_proposal_read', { name: '提案-雨夜.json' })
+    assert.equal(read.value.payload.ok, true, JSON.stringify(read.value.payload))
+    assert.equal(read.value.payload.proposal.content, '雨从檐口滴下来，巷子里没人。')
+    assert.equal(read.value.payload.proposal.schema, 'pinax-proposal@1')
+    assert.equal(read.value.payload.name, '提案-雨夜.json')
+
+    // 路径安全：带分隔符／「..」／空名的名字一律拒，不给出「按名字读项目里任意文件」的第二条路。
+    for (const bad of ['../提案.json', 'a/提案.json', 'a\\提案.json', '..', '']) {
+      const rejected = await runtime.callTool('pinax_proposal_read', { name: bad })
+      assert.equal(rejected.value.payload.ok, false, bad)
+      assert.equal(rejected.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT, bad)
+    }
+    const rawRead = await runtime.callTool('pinax_proposal_read', { name: '运行时-建议.md' })
+    assert.equal(rawRead.value.payload.ok, false, '纯文本提案不进审阅面')
+    assert.match(rawRead.value.payload.message, /不是 JSON 提案/)
+
+    // 采纳：先读当前修订号，再走载体 save；成功后提案 status 写成 adopted，文件仍在。
+    const current = await runtime.callTool('pinax_chapter_read', { file: '正文/第001章-入场.md' })
+    assert.equal(current.value.payload.revision, 1)
+    const adopted = await runtime.callTool('pinax_chapter_save', {
+      file: '正文/第001章-入场.md',
+      text: read.value.payload.proposal.content,
+      expectedRevision: current.value.payload.revision,
+      proposal: '提案-雨夜.json'
+    })
+    assert.equal(adopted.value.payload.ok, true, JSON.stringify(adopted.value.payload))
+    assert.equal(adopted.value.payload.revision, 2)
+    assert.deepEqual(adopted.value.payload.proposal, { name: '提案-雨夜.json', status: 'adopted' })
+    assert.match(await readFile(join(root, '正文', '第001章-入场.md'), 'utf-8'), /巷子里没人/)
+    const afterAdopt = await runtime.callTool('pinax_proposal_read', { name: '提案-雨夜.json' })
+    assert.equal(afterAdopt.value.payload.proposal.status, 'adopted', '采纳后状态写回 JSON，提案不删')
+    assert.equal((await runtime.callTool('pinax_proposal_list', {})).value.payload.total, 1)
+
+    // 修订号不符的采纳：正文不写、状态不动（STALE 由文件服务拒，外壳不做静默合并）。
+    const staleAdopt = await runtime.callTool('pinax_chapter_save', {
+      file: '正文/第001章-入场.md',
+      text: '基于旧版的一笔',
+      expectedRevision: 1,
+      proposal: '运行时-建议.md'
+    })
+    assert.equal(staleAdopt.value.payload.ok, false)
+    assert.equal(staleAdopt.value.payload.code, NEXT_ERROR_CODES.STALE_REVISION)
+
+    // 弃用：删掉提案文件；正文一个字节不动。
+    const discarded = await runtime.callTool('pinax_proposal_discard', { name: '提案-雨夜.json' })
+    assert.equal(discarded.value.payload.ok, true, JSON.stringify(discarded.value.payload))
+    assert.equal(discarded.value.payload.discarded, true)
+    assert.equal(discarded.value.payload.name, '提案-雨夜.json')
+    assert.equal((await runtime.callTool('pinax_proposal_list', {})).value.payload.total, 0)
+    const again = await runtime.callTool('pinax_proposal_discard', { name: '提案-雨夜.json' })
+    assert.equal(again.value.payload.ok, false)
+    assert.equal(again.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(await readFile(join(root, '正文', '第001章-入场.md'), 'utf-8'), /巷子里没人/)
   } finally {
     await runtime.stop()
     await workspace.cleanup()
@@ -351,7 +460,7 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
   })
   try {
     await runtime.start()
-    assert.equal(runtime.listTools().length, 23)
+    assert.equal(runtime.listTools().length, 26)
     assert.ok(opened.value.view.enabled.includes(NOVEL_CARRIER_ID))
 
     const disabled = await setCarrierEnabled({ root, registry, pluginId: NOVEL_CARRIER_ID, enabled: false, expectedRevision: opened.value.document.carriers.revision })

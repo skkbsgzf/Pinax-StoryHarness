@@ -12,6 +12,11 @@ import { NOVEL_CARRIER_ID } from './manifest.mjs'
  * pinax_notes_save 是它的写入口——没有单独的 notes 读工具，列与读合在一把里。
  * 大纲的写半边（工单B2）：pinax_outline_save 整份覆盖 大纲/outline.json——改名/新增都改完整 nodes 后回传，
  * 不收增量、不做合并；大纲的层级语义住在 edges（from→to）里，保存原样落盘。
+ *
+ * 提案审阅（工单A）：模型改稿落 .pinax/proposals/（pinax-proposal@1 JSON，或运行时轨的纯文本散件），
+ * 由 pinax_proposal_list / pinax_proposal_read / pinax_proposal_discard 三把读/读/弃承接（内核没有同名工具）。
+ * 采纳不另开写口：作者按下的那一下仍走 pinax_chapter_save——带上当前修订号，成功后把这份提案的
+ * status 写成 adopted（pinax_chapter_save 的可选 proposal 参数，元数据由文件服务原子写回）。
  */
 export const NOVEL_DIRS = Object.freeze({ manuscript: '正文', outline: '大纲', notes: '构思' })
 
@@ -212,7 +217,7 @@ export function createNovelTools(context = {}) {
     {
       name: 'pinax_chapter_save',
       title: '保存章节正文（小说载体）',
-      description: '作者确认后的正文落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。写 正文/ 走文件服务三道闸（归属＋file:正文:rw＋并发）。',
+      description: '作者确认后的正文落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。写 正文/ 走文件服务三道闸（归属＋file:正文:rw＋并发）。可选 proposal 指认这次写入来自哪份提案：落盘成功后把该提案的 status 标成 adopted（提案文件保留）。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -221,7 +226,8 @@ export function createNovelTools(context = {}) {
           file: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（正文/ 下），与 title 二选一。' },
           title: { type: 'string', minLength: 1, maxLength: 120, description: '新建章节用标题，落成「正文/<标题>.md」。' },
           text: { type: 'string', minLength: 1, maxLength: MAX_TEXT_CHARS, description: '整章正文内容（覆盖式保存，故必须带修订号）。' },
-          expectedRevision: { type: 'integer', minimum: 0, description: '读取时拿到的修订号；新建传 0。' }
+          expectedRevision: { type: 'integer', minimum: 0, description: '读取时拿到的修订号；新建传 0。' },
+          proposal: { type: 'string', minLength: 1, maxLength: 240, description: '可选：这次写入来自哪份提案（.pinax/proposals/ 里的 JSON 文件名）。落盘成功后把该提案的 status 写成 adopted；写不进去只回 proposalWarning，不推翻已经落盘的正文。' }
         }
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
@@ -233,6 +239,9 @@ export function createNovelTools(context = {}) {
         if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 0) {
           return fail('INVALID_INPUT', 'expectedRevision 必填（新建传 0），改稿请带回 pinax_chapter_read 给的修订号')
         }
+        if (args.proposal !== undefined && (typeof args.proposal !== 'string' || !args.proposal.trim())) {
+          return fail('INVALID_INPUT', 'proposal 须是 .pinax/proposals/ 里的提案文件名')
+        }
         const target = args.file ?? chapterFileNameFromTitle(args.title)
         if (!target) return fail('INVALID_INPUT', '要给 file（正文/ 下的相对路径）或 title（新建章节标题）')
         const relative = toDirRelative(NOVEL_DIRS.manuscript, target)
@@ -240,13 +249,20 @@ export function createNovelTools(context = {}) {
 
         const written = await fileService.write({ pluginId, dir: NOVEL_DIRS.manuscript, file: relative, text: args.text, expectedRevision: args.expectedRevision })
         if (!written.ok) return written
-        return ok({
+        const result = {
           file: written.value.relativePath,
           revision: written.value.revision,
           created: args.expectedRevision === 0,
           sha256: written.value.sha256,
           bytes: written.value.bytes
-        })
+        }
+        // 采纳留痕：正文已经落盘才算数；状态没记上只如实带回一句警告，不把写作翻成失败。
+        if (args.proposal) {
+          const marked = await fileService.markProposalStatus({ name: args.proposal, status: 'adopted' })
+          if (marked.ok) result.proposal = { name: marked.value.name, status: marked.value.status }
+          else result.proposalWarning = `正文已写入，但提案状态没记上：${marked.error.message}`
+        }
+        return ok(result)
       }
     },
     {
@@ -362,12 +378,66 @@ export function createNovelTools(context = {}) {
           bytes: written.value.bytes
         })
       }
+    },
+    {
+      name: 'pinax_proposal_list',
+      title: '列出提案（小说载体）',
+      description: '列出 .pinax/proposals/ 里的审阅提案：JSON 提案给出 id／status／目标章／字数／createdAt／note，按 createdAt 降序；坏 JSON 跳过并记进 warnings；运行时轨写下的纯文本散件以 kind:"raw" 只列名字与大小。只读，不改正文。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {}
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      run: async () => {
+        const missing = needService()
+        if (missing) return missing
+        return fileService.listProposals()
+      }
+    },
+    {
+      name: 'pinax_proposal_read',
+      title: '读取提案（小说载体）',
+      description: '按文件名读一份 .pinax/proposals/ 下的 JSON 提案，整份原样返回（target／content／note／status 都在里面）。只接受目录内的一层文件名，带路径分隔符或「..」一律拒。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 240, description: '提案文件名（如 20261028T140000-ch1-abcdef12.json）。' }
+        }
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        return fileService.readProposal({ name: args.name })
+      }
+    },
+    {
+      name: 'pinax_proposal_discard',
+      title: '弃用提案（小说载体）',
+      description: '弃用一份提案：删掉 .pinax/proposals/ 里对应的文件，正文与修订号一个字都不动。只接受目录内的一层文件名，带路径分隔符或「..」一律拒。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 240, description: '提案文件名（如 20261028T140000-ch1-abcdef12.json）。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        return fileService.discardProposal({ name: args.name })
+      }
     }
   ]
 }
 
-/** 载体已认领（读）与自有（写）的工具名，供门禁核「认领面只增不减」；大纲写半边与构思这对也是自有名字。 */
-export const NOVEL_TOOL_NAMES = Object.freeze(['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save'])
+/** 载体已认领（读）与自有（写）的工具名，供门禁核「认领面只增不减」；大纲写半边、构思这对与提案三把也是自有名字。 */
+export const NOVEL_TOOL_NAMES = Object.freeze(['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'])
 
 async function resolveChapter(args, listManuscript) {
   const all = await listManuscript()

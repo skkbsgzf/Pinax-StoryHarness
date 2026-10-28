@@ -1,5 +1,6 @@
 <script setup>
-import { onBeforeUnmount, onMounted } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { trapFocus } from './focusTrap.mjs'
 
 /**
  * WorkbenchModal（工单B0 · 作者裁定 U13）：配置项／设置页／顶栏延伸下来的功能配置，
@@ -15,6 +16,10 @@ import { onBeforeUnmount, onMounted } from 'vue'
  *
  * 不带 Teleport：jsdom 界面测试要在文档流里查得到（next/tests/shell-ui.spec.mjs）。
  * dismissable=false（如 D1 主载体硬闸）时没有关闭钮，Esc 与点遮罩都不关。
+ *
+ * 焦点陷阱（工单B · 差异表 #10）：打开时对面板根起 next/shell/focusTrap.mjs 的陷阱——
+ * Tab 在面板内可聚焦元素之间循环，关闭/卸载时摘监听并归还打开前的焦点。
+ * Esc 仍由下面这条 window 监听处理，两者互不抢键：陷阱只认 Tab。
  */
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -22,6 +27,31 @@ const props = defineProps({
   dismissable: { type: Boolean, default: true }
 })
 const emit = defineEmits(['close'])
+
+/** 面板根：焦点陷阱的作用域（Tab 在这枚 section 里循环，不跑到弹窗背后的页面上）。 */
+const panel = ref(null)
+let trap = null
+
+/** 打开＝把焦点收进面板并循环；关闭/卸载＝摘监听、归还打开前的焦点。 */
+function engage() {
+  if (trap || !props.open || !panel.value) return
+  trap = trapFocus(panel.value)
+}
+
+function disengage() {
+  if (!trap) return
+  const active = trap
+  trap = null
+  active.release()
+}
+
+// flush: 'post'：等 v-if 把面板挂进 DOM 再对面板根起陷阱；open 翻 false 时也先让 DOM 收起再释放。
+watch(() => props.open, (open) => {
+  if (open) nextTick(engage)
+  else disengage()
+}, { flush: 'post' })
+
+onMounted(engage)
 
 /** Esc 关闭挂在 window 上：焦点落在面板里的输入框时也要能关（仅 dismissable 时）。 */
 function onKeydown(event) {
@@ -31,6 +61,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKeydown)
 })
 onBeforeUnmount(() => {
+  disengage()
   window.removeEventListener('keydown', onKeydown)
 })
 </script>
@@ -38,7 +69,7 @@ onBeforeUnmount(() => {
 <template>
   <Transition name="modal-fade">
     <div v-if="open" class="workbench-modal" @click.self="dismissable && emit('close')">
-      <section class="workbench-modal-panel" role="dialog" aria-modal="true" :aria-label="title">
+      <section ref="panel" class="workbench-modal-panel" role="dialog" aria-modal="true" :aria-label="title">
         <header class="workbench-modal-head">
           <h3 class="workbench-modal-title">{{ title }}</h3>
           <button
