@@ -32,12 +32,144 @@ body {
   --nx-fs-2xl: 19px; /* 页面主标题 */
   --nx-radius-xs: 6px; /* 小号图标按钮（28px 级） */
   display: flex;
-  height: 100vh;
+  /* 标题栏（工单F）是根节点里的第一行；三栏本体吃掉剩下的高度。 */
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   background: var(--surface-workbench-muted);
   color: var(--archive-ink);
   font-family: var(--font-interface);
   font-size: var(--fs-base);
+}
+
+/* —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
+   窗口走 titleBarStyle:'hidden' + titleBarOverlay（next/shell/main.mjs 的 TITLEBAR_OVERLAY），
+   这条全宽行就是那层「顶栏」：应用名／页内菜单行（MENU_TEMPLATE 渲染）／项目信息 chip／
+   原生窗控占位。高度 36 与 overlay 的 height 对齐（--nx-titlebar-height 只在本文件用）。
+   整条可拖动窗口；按钮与下拉回到 no-drag，否则点不动。 */
+.nx-shell-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+}
+.nx-titlebar {
+  --nx-titlebar-height: 36px; /* 与 next/shell/main.mjs 的 TITLEBAR_OVERLAY.height 同步 */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 var(--nx-titlebar-height);
+  height: var(--nx-titlebar-height);
+  padding-inline: 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--workbench-chrome);
+  color: var(--archive-ink);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.nx-titlebar-brand {
+  flex: 0 0 auto;
+  font-family: var(--font-display);
+  font-size: var(--nx-fs-md);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--archive-ink);
+  white-space: nowrap;
+}
+.nx-menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+.nx-menu {
+  position: relative;
+}
+.nx-titlebar .nx-menu-trigger,
+.nx-titlebar .nx-menu-item {
+  -webkit-app-region: no-drag;
+}
+/* 老版 .control-quiet 的 36px 命中区正好铺满标题栏；字号收回 --nx-fs-md 一档。
+   选择器与 .control-* 的四段同权重、并且后置（legacy.mjs 里 next-shell.css 最后引），
+   不用 !important 也能覆盖。 */
+.theme-legacy .nx-titlebar .nx-menu .nx-menu-trigger {
+  padding: 4px 10px;
+  font-size: var(--nx-fs-md);
+  white-space: nowrap;
+}
+.nx-menu-popup {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: var(--z-popover);
+  min-width: 220px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+  -webkit-app-region: no-drag;
+}
+.theme-legacy .nx-titlebar .nx-menu-popup .nx-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: var(--nx-fs-md);
+  text-align: left;
+  white-space: nowrap;
+}
+.nx-menu-item:disabled {
+  cursor: not-allowed;
+}
+.nx-menu-label {
+  min-width: 0;
+}
+.nx-menu-accelerator {
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-menu-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--hairline-soft);
+}
+.nx-titlebar-chip {
+  flex: 0 1 auto;
+  max-width: 360px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: color-mix(in srgb, var(--surface-workbench-raised) 55%, transparent);
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 没有项目时 chip 走虚线边：一眼看出「这里以后会有东西」。 */
+.nx-titlebar-chip.is-empty {
+  border-style: dashed;
+}
+.nx-titlebar-drag {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 24px;
+}
+.nx-titlebar-window-controls {
+  /* 原生窗控 overlay（主进程 titleBarOverlay）约占 138px：这里只留位，不放可点元素。 */
+  flex: 0 0 138px;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
 }
 
 /* —— 行按钮 primitive：清单行与竖条行共用一个形态 ————————————————
@@ -142,6 +274,18 @@ body {
 .nx-ribbon-item:focus-visible {
   outline: 2px solid var(--workbench-focus);
   outline-offset: -3px;
+}
+/* 无项目形态（工单F · 反馈③）：载体格保留形状但不可点——压暗一档，悬停不长高亮，
+   让「打开项目后可用」这件事从视觉上就成立。 */
+.nx-ribbon-item.is-disabled,
+.nx-ribbon-item[aria-disabled='true'] {
+  color: var(--text-muted);
+  opacity: 0.45;
+  cursor: default;
+}
+.nx-ribbon-item[aria-disabled='true']:hover {
+  background: transparent;
+  color: var(--text-muted);
 }
 
 /* —— 索引窗 ————————————————————————————————————————————————

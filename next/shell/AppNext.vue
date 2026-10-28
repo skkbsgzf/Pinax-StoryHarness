@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CenterSlotHost from './CenterSlotHost.vue'
@@ -14,6 +14,7 @@ import HistorySection from './settings/HistorySection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { IPC_CHANNELS, IPC_EVENT } from './ipcContract.mjs'
+import { MENU_TEMPLATE } from './menus.mjs'
 import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs'
 
 /**
@@ -173,6 +174,112 @@ async function openHistoryFor(payload) {
   else if (payload.type === 'note') data.openNote(payload.item)
   else if (payload.type === 'outline') data.selectOutlineNode(payload.index)
   openSection('history')
+}
+
+/**
+ * 打开项目文件夹（工单F · 作者反馈②「打开项目这个操作根本行不通」）：
+ * 菜单「文件 → 打开项目文件夹…」与竖条「打开项目…」的共同落点。
+ * 选目录（默认 purpose）→ 取消就什么都不做 → project:open → refresh。
+ * 打开失败（如大梦这类 D2 闸）不改走别的路：view.openError 的横幅会把内核那句原因原样摊开。
+ */
+async function openProjectFolder() {
+  if (!props.bridge?.request) return
+  const picked = await props.bridge.request(IPC_CHANNELS.projectPickDir, {})
+  if (!picked?.ok || !picked.value?.picked || !picked.value.path) return
+  try {
+    await props.bridge.request(IPC_CHANNELS.projectOpen, { root: picked.value.path })
+  } catch {
+    // 桥自身抛错也落到 refresh：外壳照常把最新状态画出来，不白屏。
+  }
+  await refresh()
+}
+
+/* —— 标题栏与页内菜单行（工单F · 作者反馈①②）————————————————————
+ * 原生应用菜单保留（accelerator 仍由主进程的 Menu.setApplicationMenu 提供）；
+ * 可见的菜单行改成页内渲染，数据源就是同一份 MENU_TEMPLATE（./menus.mjs）——
+ * 菜单项不另立第二份清单；点击一律经 menuInvoke 通道（与原生菜单同一条分发），
+ * 页面内的落点（开弹窗／换主题／打开项目）与原生菜单事件共用 menuActions。 */
+const openMenuLabel = ref(null)
+const menubarRoot = ref(null)
+
+/** 模板里的角色项没有 label（原生菜单由 Electron 自己取名），页内菜单行补一份人话。 */
+const ROLE_LABELS = Object.freeze({
+  undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
+  minimize: '最小化', zoom: '缩放', close: '关闭窗口',
+  resetZoom: '重置缩放', zoomIn: '放大', zoomOut: '缩小',
+  toggleDevTools: '开发者工具', reload: '重新加载', quit: '退出'
+})
+
+function menuLabel(item) {
+  return item?.label ?? ROLE_LABELS[item?.role] ?? String(item?.role ?? '')
+}
+
+/** 项目信息 chip（作者反馈①）：有项目给「名称 · 类型 · 第 N 版」，没有就明说未打开。 */
+const projectChip = computed(() => {
+  const current = project.value
+  if (!current) return '未打开项目'
+  const name = current.name ?? '未命名项目'
+  const kind = current.kind ?? '未定类型'
+  const revision = Number.isFinite(current.revision) ? current.revision : 0
+  return `${name} · ${kind} · 第 ${revision} 版`
+})
+
+const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform ?? '')
+function acceleratorHint(accelerator) {
+  if (!accelerator) return ''
+  return isMac ? accelerator.replace('CmdOrCtrl', '⌘') : accelerator.replace('CmdOrCtrl', 'Ctrl')
+}
+
+function toggleTopMenu(label) {
+  openMenuLabel.value = openMenuLabel.value === label ? null : label
+}
+function hoverTopMenu(label) {
+  openMenuLabel.value = label
+}
+function closeTopMenu() {
+  openMenuLabel.value = null
+}
+
+/** 菜单动作的页面内落点：原生菜单事件（menuInvoked）与页内菜单点击共用这一份。 */
+const menuActions = {
+  'project.create': () => openNewProject(),
+  'project.open': () => void openProjectFolder(),
+  'project.import': () => openImport(),
+  'project.history': () => openHistory(),
+  'settings.theme': () => toggleTheme(),
+  'settings.preferences': () => void openSettings(),
+  'settings.carriers': () => void openCarriers()
+}
+
+function runMenuAction(id) {
+  const action = menuActions[id]
+  if (action) action()
+}
+
+/**
+ * 页内菜单项点击：先落页面内动作，再经 menuInvoke 通道交给主进程分发（与原生菜单同一条路）。
+ * 只读角色项（撤销／复制／最小化…）没有 IPC id，按钮本身是禁用态——原生菜单与快捷键照常可用。
+ */
+async function invokeMenu(item) {
+  closeTopMenu()
+  if (!item?.id) return
+  runMenuAction(item.id)
+  if (!props.bridge?.request) return
+  try {
+    await props.bridge.request(IPC_CHANNELS.menuInvoke, { id: item.id })
+  } catch {
+    // 分发失败不收回已经摊开的弹窗：主进程侧各通道会各自如实报错。
+  }
+}
+
+/** Esc 与点击外部收起下拉（页内菜单不能挡着内容）。 */
+function onTitlebarKeydown(event) {
+  if (event.key === 'Escape' && openMenuLabel.value) closeTopMenu()
+}
+function onTitlebarPointerDown(event) {
+  if (!openMenuLabel.value) return
+  if (menubarRoot.value?.contains?.(event.target)) return
+  closeTopMenu()
 }
 
 /**
@@ -415,85 +522,148 @@ onMounted(() => {
     indexOpen.value = !event.matches
   })
   // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
-  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => {
-    if (payload?.id === 'project.create') openNewProject()
-    if (payload?.id === 'project.import') openImport()
-    if (payload?.id === 'project.history') openHistory()
-    if (payload?.id === 'settings.theme') toggleTheme()
-    if (payload?.id === 'settings.preferences') void openSettings()
-    if (payload?.id === 'settings.carriers') void openCarriers()
-  })
+  // 工单F：页内菜单行的点击也收敛到同一个 runMenuAction——两条入口，一份落点。
+  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => runMenuAction(payload?.id))
+  // 页内菜单行的收起手势挂在 document 上：Esc 与点击菜单外都收（下拉不许一直挂着）。
+  document.addEventListener('keydown', onTitlebarKeydown)
+  document.addEventListener('pointerdown', onTitlebarPointerDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onTitlebarKeydown)
+  document.removeEventListener('pointerdown', onTitlebarPointerDown)
 })
 </script>
 
 <template>
-  <div class="next-shell app-shell" :data-dragging="dragging">
-    <ActivityRail
-      :boards="boards"
-      :active-id="activeBoardId"
-      :open-id="indexOpen ? activeBoardId : null"
-      :scheme="scheme"
-      @select="selectBoard"
-      @toggle-theme="toggleTheme"
-    />
+  <div class="nx-shell-root">
+    <!-- —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
+         全宽一条：左侧应用名＋页内菜单行（数据源＝menus.mjs 的 MENU_TEMPLATE，与原生菜单同一份），
+         中间项目信息 chip，右侧给原生窗控 overlay 留空（主进程 titleBarOverlay，约 138px）。
+         整条可拖动窗口（-webkit-app-region:drag）；只有按钮与下拉回到 no-drag（样式见
+         next-shell.css 的标题栏段）。 -->
+    <header class="nx-titlebar">
+      <span class="nx-titlebar-brand">Pinax · Next</span>
 
-    <template v-if="indexOpen">
-      <IndexWindow
-        :board="activeBoard"
-        :data="data"
-        :archive="view?.archive ?? []"
-        :width="indexWidth"
-        @collapse="indexOpen = false"
-        @history="openHistoryFor"
-      />
-      <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('index', $event)" />
-    </template>
+      <nav ref="menubarRoot" class="nx-menubar" aria-label="应用菜单">
+        <div v-for="(top, topIndex) in MENU_TEMPLATE" :key="`menu-${topIndex}`" class="nx-menu">
+          <button
+            type="button"
+            class="control-quiet nx-menu-trigger"
+            :class="{ 'is-open': openMenuLabel === top.label }"
+            :data-menu="top.label"
+            aria-haspopup="menu"
+            :aria-expanded="(openMenuLabel === top.label).toString()"
+            @click="toggleTopMenu(top.label)"
+            @mouseenter="hoverTopMenu(top.label)"
+          >{{ top.label }}</button>
+          <ul v-if="openMenuLabel === top.label" class="nx-menu-popup" role="menu" :aria-label="top.label">
+            <template v-for="(item, itemIndex) in top.submenu" :key="`${topIndex}-${itemIndex}`">
+              <li v-if="item.type === 'separator'" class="nx-menu-separator" role="separator"></li>
+              <li v-else role="none">
+                <!-- 有 id 的项走 menuInvoke 通道（与原生菜单同一条分发）；只有 role 的项由原生菜单
+                     与快捷键提供，页内渲染成禁用行，不假装点了有用。 -->
+                <button
+                  type="button"
+                  class="control-quiet nx-menu-item"
+                  :data-menu-id="item.id"
+                  role="menuitem"
+                  :disabled="!item.id"
+                  :title="item.id ? null : '由系统菜单与快捷键提供'"
+                  @click="invokeMenu(item)"
+                >
+                  <span class="nx-menu-label">{{ menuLabel(item) }}</span>
+                  <span v-if="item.accelerator" class="nx-menu-accelerator">{{ acceleratorHint(item.accelerator) }}</span>
+                </button>
+              </li>
+            </template>
+          </ul>
+        </div>
+      </nav>
 
-    <div class="col-center">
-      <div v-if="openError" class="banner is-error">
-        <strong>{{ openError.code }}</strong>
-        <span>{{ openError.message }}</span>
-      </div>
-      <div v-for="item in rejected" :key="item.pluginId" class="banner is-warn">
-        插件「{{ item.pluginId }}」未加载：{{ item.error?.message }}
-      </div>
+      <span
+        class="nx-titlebar-chip"
+        :class="{ 'is-empty': !project }"
+        data-test="titlebar-project-chip"
+      >{{ projectChip }}</span>
 
-      <!-- 工单B0/C0（U13 作者裁定）：核心区是纯净的文档与组件展示——
-           偏好／载体管理／主载体选择／新建项目全部收进统一的设置二级页（SettingsModal，模板尾部），
-           这里不再内嵌任何配置 section。 -->
+      <span class="nx-titlebar-drag" aria-hidden="true"></span>
+      <!-- 原生窗控浮层占位：主进程 titleBarOverlay 盖在这块约 138px 上，页面上不放可点元素。 -->
+      <span class="nx-titlebar-window-controls" aria-hidden="true"></span>
+    </header>
 
-      <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
-
-      <CenterSlotHost
-        :active-pane="activeCenterPane"
-        :data="data"
+    <div class="next-shell app-shell" :data-dragging="dragging">
+      <ActivityRail
+        :boards="boards"
+        :carriers="carriers"
         :project="project"
+        :active-id="activeBoardId"
+        :open-id="indexOpen ? activeBoardId : null"
+        :scheme="scheme"
+        @select="selectBoard"
+        @toggle-theme="toggleTheme"
+        @open-project="openProjectFolder"
+        @new-project="openNewProject"
       />
+
+      <template v-if="indexOpen">
+        <IndexWindow
+          :board="activeBoard"
+          :data="data"
+          :archive="view?.archive ?? []"
+          :width="indexWidth"
+          @collapse="indexOpen = false"
+          @history="openHistoryFor"
+        />
+        <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('index', $event)" />
+      </template>
+
+      <div class="col-center">
+        <div v-if="openError" class="banner is-error">
+          <strong>{{ openError.code }}</strong>
+          <span>{{ openError.message }}</span>
+        </div>
+        <div v-for="item in rejected" :key="item.pluginId" class="banner is-warn">
+          插件「{{ item.pluginId }}」未加载：{{ item.error?.message }}
+        </div>
+
+        <!-- 工单B0/C0（U13 作者裁定）：核心区是纯净的文档与组件展示——
+             偏好／载体管理／主载体选择／新建项目全部收进统一的设置二级页（SettingsModal，模板尾部），
+             这里不再内嵌任何配置 section。 -->
+
+        <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
+
+        <CenterSlotHost
+          :active-pane="activeCenterPane"
+          :data="data"
+          :project="project"
+        />
+      </div>
+
+      <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('right', $event)" />
+
+      <div class="col-dock" :style="{ width: dockWidth + 'px' }">
+        <RuntimeDock :runtime="runtime" :bridge="bridge" />
+      </div>
+
+      <!-- —— 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项 ——————————
+           四节都登记在上面的目录表里；D1 硬闸（needsPrimary）时自动落在主载体节且不可关闭。 -->
+      <SettingsModal
+        :open="settingsOpen"
+        :dismissable="!needsPrimary"
+        :active-section="activeSection"
+        :sections="settingsSections"
+        @close="closeSettings"
+        @changed="refresh"
+        @theme="applyThemeChoice"
+        @set-enabled="setCarrierEnabled"
+        @set-primary="pickPrimary"
+        @toggle-companion="toggleCompanion"
+        @update:active-section="activeSection = $event"
+      />
+
+      <WorkbenchTooltip />
     </div>
-
-    <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('right', $event)" />
-
-    <div class="col-dock" :style="{ width: dockWidth + 'px' }">
-      <RuntimeDock :runtime="runtime" :bridge="bridge" />
-    </div>
-
-    <!-- —— 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项 ——————————
-         四节都登记在上面的目录表里；D1 硬闸（needsPrimary）时自动落在主载体节且不可关闭。 -->
-    <SettingsModal
-      :open="settingsOpen"
-      :dismissable="!needsPrimary"
-      :active-section="activeSection"
-      :sections="settingsSections"
-      @close="closeSettings"
-      @changed="refresh"
-      @theme="applyThemeChoice"
-      @set-enabled="setCarrierEnabled"
-      @set-primary="pickPrimary"
-      @toggle-companion="toggleCompanion"
-      @update:active-section="activeSection = $event"
-    />
-
-    <WorkbenchTooltip />
   </div>
 </template>
 

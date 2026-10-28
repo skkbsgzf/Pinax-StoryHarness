@@ -75,6 +75,31 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   assert.deepEqual(dispatcher.menuIds.sort(), ids.sort())
 })
 
+test('标题栏与页内菜单行（工单F）：overlay 留给原生窗控，可见菜单仍是同一份 MENU_TEMPLATE', async () => {
+  // 主进程：自绘标题栏＋原生窗控浮层；原生应用菜单保留（accelerator 那一半靠它）。
+  const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
+  assert.match(mainSource, /titleBarStyle:\s*'hidden'/, '窗口必须走隐藏标题栏（渲染层自绘 .nx-titlebar）')
+  assert.match(mainSource, /titleBarOverlay/, '原生窗控必须以浮层形式保留（titleBarOverlay）')
+  assert.match(mainSource, /Menu\.setApplicationMenu/, '原生应用菜单不得删除：accelerator 仍由它提供')
+
+  // 渲染层：页内菜单行用同一份模板渲染，点击走 menuInvoke 通道（与原生菜单同一条分发）。
+  const appSource = await readFile(new URL('../shell/AppNext.vue', import.meta.url), 'utf-8')
+  assert.match(appSource, /import \{ MENU_TEMPLATE \} from '\.\/menus\.mjs'/, '页内菜单行必须用同一份 MENU_TEMPLATE 数据渲染')
+  assert.match(appSource, /IPC_CHANNELS\.menuInvoke/, '页内菜单点击必须经 menuInvoke 通道分发')
+  assert.match(appSource, /IPC_CHANNELS\.projectPickDir/, '打开项目必须先经系统目录对话框（project:pick-dir）')
+  assert.match(appSource, /IPC_CHANNELS\.projectOpen/, '选中的目录必须经 project:open 打开')
+  // 作者反馈②的整条链：pickDir 取消即返回，成功才 projectOpen，最后 refresh。
+  assert.match(appSource, /picked\.value\?\.picked/, '取消选择时不得继续打开项目')
+  assert.match(appSource, /projectOpen, \{ root: picked\.value\.path \}\)/, 'project:open 的载荷必须带选中的 root')
+
+  // 无项目形态（反馈③）：竖条数据来自 registry.list() 的 carriers，而不是已打开项目的 view。
+  const railSource = await readFile(new URL('../shell/ActivityRail.vue', import.meta.url), 'utf-8')
+  assert.match(railSource, /carriers: \{ type: Array/, '竖条必须能收到 registry.list() 的载体清单')
+  assert.match(railSource, /aria-disabled="true"/, '无项目时的载体格必须是禁用态')
+  assert.match(railSource, /打开项目后可用/, '无项目时的载体格必须说明原因')
+  assert.match(appSource, /:carriers="carriers"/, 'AppNext 必须把 carriers 传给竖条')
+})
+
 test('IPC 通道全在 pinax:agent: 命名空间内，未注册通道直接拒', async () => {
   const channels = Object.values(IPC_CHANNELS)
   assert.ok(channels.length >= 10)

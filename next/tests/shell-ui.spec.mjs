@@ -843,6 +843,123 @@ describe('文档历史面板（D2 · R3-3）', () => {
   })
 })
 
+describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () => {
+  it('标题栏渲染项目信息 chip：有项目＝名称·类型·版本，无项目＝未打开项目', async () => {
+    const withProject = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
+    await flushPromises()
+    expect(withProject.find('.nx-titlebar').exists()).toBe(true)
+    expect(withProject.find('.nx-titlebar-brand').text()).toBe('Pinax · Next')
+    expect(withProject.find('[data-test="titlebar-project-chip"]').text()).toBe('大梦 · novel · 第 1 版')
+    // 右侧给原生窗控留位（主进程 titleBarOverlay 盖在这块上）。
+    expect(withProject.find('.nx-titlebar-window-controls').exists()).toBe(true)
+    withProject.unmount()
+
+    const withoutProject = mount(AppNext, { props: { bridge: stubBridge(emptyFrameworkView()) } })
+    await flushPromises()
+    expect(withoutProject.find('[data-test="titlebar-project-chip"]').text()).toBe('未打开项目')
+    withoutProject.unmount()
+  })
+
+  it('页内菜单行：顶层与 MENU_TEMPLATE 一致，菜单项走 menuInvoke；打开项目＝选目录→projectOpen→refresh；Esc/点外部收起', async () => {
+    const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
+    const pick = vi.fn(async () => ({ ok: true, value: { picked: true, path: 'D:/books/大梦' } }))
+    const open = vi.fn(async () => ({ ok: true, value: {} }))
+    const bridge = stubBridge(view, {
+      [IPC_CHANNELS.projectPickDir]: pick,
+      [IPC_CHANNELS.projectOpen]: open
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 页内菜单行不是第二份清单：顶层标签就是 MENU_TEMPLATE 的那七个。
+    expect(wrapper.findAll('.nx-menu-trigger').map((node) => node.text()))
+      .toEqual(['文件', '编辑', '视图', '运行时', '窗口', '设置', '帮助'])
+
+    await wrapper.find('[data-menu="文件"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(true)
+    expect(wrapper.find('[data-menu="文件"]').attributes('aria-expanded')).toBe('true')
+
+    // 打开项目文件夹…：走 menuInvoke 分发，同时选目录→projectOpen→refresh 一条链落完。
+    const viewCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length
+    await wrapper.find('[data-menu-id="project.open"]').trigger('click')
+    await flushPromises()
+    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'project.open' })
+    expect(pick).toHaveBeenCalledWith({})
+    expect(open).toHaveBeenCalledWith({ root: 'D:/books/大梦' })
+    expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length).toBeGreaterThan(viewCallsBefore)
+    // 点完一项就收起下拉。
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+
+    // Esc 收起下拉。
+    await wrapper.find('[data-menu="设置"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+
+    // 点击菜单外部收起下拉。
+    await wrapper.find('[data-menu="设置"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(true)
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('页内菜单的只读角色项是禁用态：撤销/复制这类项没有 IPC id，不假装点了有用', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
+    await flushPromises()
+    await wrapper.find('[data-menu="编辑"]').trigger('click')
+    await flushPromises()
+
+    const rows = wrapper.findAll('.nx-menu-popup .nx-menu-item')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.every((row) => row.attributes('disabled') !== undefined)).toBe(true)
+    expect(rows[0].text()).toContain('撤销')
+    wrapper.unmount()
+  })
+})
+
+describe('无项目时的竖条（工单F · 作者反馈③）', () => {
+  it('竖条常驻：载体格禁用＋「打开项目后可用」，打开/新建动作可用，主题钮仍在底部', async () => {
+    const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
+    const pick = vi.fn(async () => ({ ok: true, value: { picked: false, path: null } }))
+    const open = vi.fn(async () => ({ ok: true, value: {} }))
+    const bridge = stubBridge(view, {
+      [IPC_CHANNELS.projectPickDir]: pick,
+      [IPC_CHANNELS.projectOpen]: open
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const rail = wrapper.findComponent(ActivityRail)
+    expect(rail.find('[aria-label="打开项目…"]').exists()).toBe(true)
+    expect(rail.find('[aria-label="新建项目…"]').exists()).toBe(true)
+
+    // registry.list() 的两块载体照常出现，但是禁用态，并说明打开项目后可用。
+    const cells = rail.findAll('.nx-ribbon-item[aria-disabled="true"]')
+    expect(cells).toHaveLength(2)
+    expect(cells.map((node) => node.attributes('aria-label'))).toEqual(['小说（夹具）', '剧本（夹具）'])
+    expect(cells[0].attributes('data-tooltip')).toBe('打开项目后可用')
+    expect(rail.find('.nx-ribbon-item.is-bottom').exists()).toBe(true)
+
+    // 打开项目…：走系统目录对话框；取消就什么都不做（不调 projectOpen）。
+    await rail.find('[aria-label="打开项目…"]').trigger('click')
+    await flushPromises()
+    expect(pick).toHaveBeenCalledTimes(1)
+    expect(open).not.toHaveBeenCalled()
+
+    // 新建项目…：落在统一二级页的 newProject 节。
+    await rail.find('[aria-label="新建项目…"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+})
+
 describe('统一设置二级页（工单B0/C0 · U13）', () => {
   /**
    * 作者裁定 U13：配置项／设置页／顶栏延伸的功能配置一律走统一弹窗；工单C0 把四块内容

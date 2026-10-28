@@ -22,6 +22,26 @@ import { MENU_TEMPLATE } from './menus.mjs'
  */
 const currentDir = dirname(fileURLToPath(import.meta.url))
 
+/**
+ * 自绘标题栏（工单F · 作者反馈①②）：原生窗控浮层。
+ *
+ * BrowserWindow 的 titleBarOverlay 只吃真实颜色值——渲染层的 CSS token（--workbench-chrome 等）
+ * 在主进程里取不到，所以这里落一份常量，写明它与 token 的对应关系：
+ *   - color: '#00000000'：透明底，让渲染层 .nx-titlebar 的 --workbench-chrome 透上来
+ *     （明暗两套主题里这枚 token 分别是 #f3f3f2 / #1b1c1e，见 src/styles/themes/legacy.css:65/764）；
+ *   - symbolColor: '#999999'：窗控符号取明暗两档 --text-muted（legacy.css:14 #6b7078 / :714 #969ba3）
+ *     的中间值，两个主题下都看得清；
+ *   - height: 36 与 next-shell.css 的 --nx-titlebar-height 一致（overlay 只能给 DIP）。
+ *
+ * 已知记账项：作者在应用里切明暗主题时，这层原生浮层不会跟着改色（overlay 只在建窗时生效）。
+ * 要让窗控符号跟主题走，得在主题切换的偏好回调里再调 window.setTitleBarOverlay——不在本工单范围内。
+ */
+const TITLEBAR_OVERLAY = Object.freeze({
+  color: '#00000000',
+  symbolColor: '#999999',
+  height: 36
+})
+
 // 数据/缓存目录跟随 PINAX_APP_DATA（批次16 验收修）。
 // 默认 userData（%APPDATA%/Electron）被所有实例共享：一个实例被强杀后残留的缓存锁，
 // 会把下一个实例卡死在 renderer 出生之前（症状＝主进程活、无 renderer 子进程、无窗口）。
@@ -83,6 +103,10 @@ function createWindow(preloadPath, uiZoom) {
     minHeight: 640,
     title: 'Pinax · Next',
     backgroundColor: '#101014',
+    // 工单F：标题栏交给渲染层自绘（AppNext 的 .nx-titlebar 行），原生窗控以浮层形式保留在右上角。
+    // 原生应用菜单不删：accelerator（Ctrl+O / Ctrl+Q 等）仍由 Menu.setApplicationMenu 提供。
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { ...TITLEBAR_OVERLAY },
     show: false,
     webPreferences: {
       preload: preloadPath,
@@ -96,6 +120,7 @@ function createWindow(preloadPath, uiZoom) {
     win.show()
     // 启动器（launch-next-dameng.mjs）轮询这行标记判断「窗口真的出来了」——
     // 本机裸 spawn electron 约一半概率丢 renderer，重试是这个启动器的自愈手段。
+    // eslint-disable-next-line no-console -- 主进程没有渲染层可报，这行标记必须留在 stderr
     console.error('[pinax-next] 窗口已显示')
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -205,6 +230,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     onMenuInvoke: async (id) => {
       if (id === 'runtime.tools' || id === 'view.focusRuntime') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'tools' })
       if (id === 'runtime.proposals') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'proposals', dir: '.pinax/proposals/' })
+      // 工单F：页内菜单行里的「退出」走同一条 menuInvoke 分发（原生菜单那一半仍由 role:'quit' 直办）。
+      // 放到下一拍再退：让这次 IPC 的回执先发出去，再进 before-quit 的历史兜底。
+      if (id === 'app.quit') setImmediate(() => app.quit())
     }
   })
 
