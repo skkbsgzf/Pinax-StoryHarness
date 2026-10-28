@@ -295,3 +295,65 @@ describe('Obsidian 三栏', () => {
     wrapper.unmount()
   })
 })
+
+describe('偏好与模型面板（批次8①）', () => {
+  function prefsBridge({ handlers = new Map(), prefsValue = { modelPlaneEndpoint: null, uiZoom: 0.85 } } = {}) {
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: prefsValue }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent }
+  }
+
+  it('菜单「设置 → 偏好与模型…」打开面板：字段来自 prefsGet，死菜单的入口第一次有了落点', async () => {
+    const handlers = new Map()
+    const bridge = prefsBridge({
+      handlers,
+      prefsValue: { modelPlaneEndpoint: 'http://127.0.0.1:8461', uiZoom: 0.9 }
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(false)
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="偏好与模型"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.find('.prefs-input').element.value).toBe('http://127.0.0.1:8461')
+    expect(Number(panel.find('.prefs-zoom').element.value)).toBe(0.9)
+    wrapper.unmount()
+  })
+
+  it('检测与保存都走合同通道：三态如实渲染，保存的载荷端点空串归 null', async () => {
+    const handlers = new Map()
+    const probe = vi.fn(async () => ({ ok: true, value: { state: 'unreachable', endpoint: 'http://127.0.0.1:8451', detail: '拒绝连接' } }))
+    const save = vi.fn(async (payload) => ({ ok: true, value: { modelPlaneEndpoint: payload.modelPlaneEndpoint, uiZoom: payload.uiZoom } }))
+    handlers.set(IPC_CHANNELS.prefsProbeModelPlane, probe)
+    handlers.set(IPC_CHANNELS.prefsSet, save)
+    const bridge = prefsBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    await wrapper.find('[aria-label="偏好与模型"]').find('.control-secondary').trigger('click')
+    await flushPromises()
+    expect(probe).toHaveBeenCalledTimes(1)
+    const state = wrapper.find('.prefs-state')
+    expect(state.classes()).toContain('is-error')
+    expect(state.text()).toContain('模型面不可达')
+
+    const panel = wrapper.find('[aria-label="偏好与模型"]')
+    await panel.find('.prefs-input').setValue('')
+    await panel.find('.prefs-zoom').setValue('1.1')
+    await panel.find('.control-primary').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith({ modelPlaneEndpoint: null, uiZoom: 1.1 })
+    expect(wrapper.find('.prefs-state.is-ready').text()).toContain('已保存并生效')
+    wrapper.unmount()
+  })
+})

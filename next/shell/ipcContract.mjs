@@ -24,6 +24,9 @@ export const IPC_CHANNELS = Object.freeze({
   runtimeAsk: 'pinax:agent:runtime:ask',
   runtimeToolCall: 'pinax:agent:runtime:tool-call',
   runtimePropose: 'pinax:agent:runtime:propose',
+  prefsGet: 'pinax:agent:prefs:get',
+  prefsSet: 'pinax:agent:prefs:set',
+  prefsProbeModelPlane: 'pinax:agent:prefs:probe-model-plane',
   menuInvoke: 'pinax:agent:menu:invoke'
 })
 
@@ -110,8 +113,13 @@ export function shellView(session) {
 /**
  * 纯函数分发器：主进程 ipcMain 与单测共用同一个实现。
  * 第二个参数允许 undefined/null（当作 {}），但拒绝非对象——避免渲染层把字符串塞进 payload 造成内核侧 TypeError。
+ *
+ * deps 扩展（批次 8①）：
+ *   prefs            —— 应用级偏好存储（next/runtime/appPreferences）；不注入时 prefs:* 通道如实报缺。
+ *   onPrefsApplied   —— 偏好落盘后的生效钩子（主进程：改任务面端点 + 改窗口缩放）；
+ *   probeModelPlane  —— 模型面三态探测（next/runtime/modelPlaneProbe）；不注入时探测通道如实报缺。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
 
   async function dispatch(channel, payload) {
@@ -149,6 +157,17 @@ export function createIpcDispatcher({ session, onMenuInvoke = null }) {
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
       case IPC_CHANNELS.runtimePropose:
         return session.runtime ? session.runtime.propose({ name: input.name, text: input.text }) : fail('INVALID_INPUT', '运行时尚未就绪')
+      case IPC_CHANNELS.prefsGet:
+        return prefs ? prefs.read() : fail('INVALID_INPUT', '偏好存储未接入（主进程未创建偏好文件）')
+      case IPC_CHANNELS.prefsSet: {
+        if (!prefs) return fail('INVALID_INPUT', '偏好存储未接入（主进程未创建偏好文件）')
+        const written = await prefs.write({ modelPlaneEndpoint: input.modelPlaneEndpoint, uiZoom: input.uiZoom })
+        if (!written.ok) return written
+        if (onPrefsApplied) await onPrefsApplied(written.value)
+        return ok(written.value)
+      }
+      case IPC_CHANNELS.prefsProbeModelPlane:
+        return probeModelPlane ? await probeModelPlane() : fail('INVALID_INPUT', '模型面探测未接入')
       case IPC_CHANNELS.menuInvoke: {
         if (!menuIds.has(input.id)) {
           return fail('INVALID_INPUT', `菜单项 ${String(input.id)} 不在应用菜单模板里；载体不得注入顶层菜单（C5）`, { id: input.id })

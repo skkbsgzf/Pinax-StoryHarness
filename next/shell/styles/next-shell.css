@@ -555,3 +555,56 @@ body {
   line-height: 1.85;
   color: var(--archive-ink);
 }
+
+/* —— 窄屏（手机）：桌面那三栏在 390px 上会挤成一团，作者在手机侧要能真试 ——————
+   竖条转成横条、正文占满上半、Agent 对话固定在下半屏，索引窗改成覆盖式抽屉。
+   桌面形态一行没动：这里只是窄屏另走一套排布。 */
+@media (max-width: 860px) {
+  .next-shell {
+    position: relative;
+    flex-direction: column;
+  }
+  .nx-ribbon {
+    flex: 0 0 44px;
+    width: 100%;
+    height: 44px;
+    flex-direction: row;
+    padding-top: 0;
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--hairline-soft);
+  }
+  .nx-ribbon-item {
+    height: 44px;
+  }
+  .nx-ribbon-item.is-bottom {
+    margin-top: 0;
+    margin-bottom: 0;
+    margin-left: auto;
+  }
+  .nx-index-window {
+    position: absolute;
+    z-index: 4;
+    top: 44px;
+    bottom: 52vh;
+    left: 0;
+    width: 78vw !important;
+  }
+  /* 索引窗在窄屏是覆盖式抽屉，桌面那条拖拽把手没有意义。 */
+  .resizer {
+    display: none;
+  }
+  .col-center {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+  }
+  .col-dock {
+    width: 100% !important;
+    flex: 0 0 auto;
+    height: 52vh;
+  }
+  .dock {
+    border-left: 0;
+    border-top: 1px solid var(--hairline-soft);
+  }
+}

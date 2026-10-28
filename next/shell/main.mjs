@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import { createNextSession } from '../index.mjs'
 import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
+import { createAppPreferences } from '../runtime/appPreferences.mjs'
+import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
 import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 
@@ -17,12 +19,21 @@ import { MENU_TEMPLATE } from './menus.mjs'
 const currentDir = dirname(fileURLToPath(import.meta.url))
 
 /**
- * 界面缩放：作者口径 0.85（1440×900 下三栏＋右栏的舒适档），可用 PINAX_NEXT_ZOOM 覆写，
- * 菜单「视图」里另有放大/缩小/重置（重置＝100%）。越界值回默认，不猜。
+ * 界面缩放：作者口径 0.85（1440×900 下三栏＋右栏的舒适档）。
+ * 优先级：env PINAX_NEXT_ZOOM（批次7 的覆写口）＞偏好文件（批次8 偏好面，uiZoom）＞默认 0.85。
+ * 菜单「视图」里另有放大/缩小/重置（重置＝100%）。越界值一律回默认，不猜。
  */
-function resolveUiZoom() {
-  const parsed = Number.parseFloat(process.env.PINAX_NEXT_ZOOM ?? '0.85')
-  return Number.isFinite(parsed) && parsed >= 0.5 && parsed <= 2 ? parsed : 0.85
+function resolveUiZoom({ storedZoom = null } = {}) {
+  const fromEnv = Number.parseFloat(process.env.PINAX_NEXT_ZOOM ?? '')
+  if (Number.isFinite(fromEnv) && fromEnv >= 0.5 && fromEnv <= 2) return fromEnv
+  const fromPrefs = Number(storedZoom)
+  if (Number.isFinite(fromPrefs) && fromPrefs >= 0.5 && fromPrefs <= 2) return fromPrefs
+  return 0.85
+}
+
+/** 偏好文件位置：PINAX_APP_DATA（隔离/验收）优先，否则 Electron 用户数据目录。 */
+function preferencesFile() {
+  return join(process.env.PINAX_APP_DATA || app.getPath('userData'), 'next-preferences.json')
 }
 
 let session = null
@@ -50,7 +61,7 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
-function createWindow(preloadPath) {
+function createWindow(preloadPath, uiZoom) {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -64,7 +75,7 @@ function createWindow(preloadPath) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      zoomFactor: resolveUiZoom()
+      zoomFactor: uiZoom
     }
   })
   win.once('ready-to-show', () => win.show())
@@ -90,6 +101,13 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   await app.whenReady()
   buildMenu()
 
+  // 应用级偏好（批次8①）：启动即读、即生效——模型面端点与界面缩放不再只靠 env。
+  const prefs = createAppPreferences({ file: preferencesFile() })
+  const storedPrefs = await prefs.read()
+  const stored = storedPrefs.ok ? storedPrefs.value : { modelPlaneEndpoint: null, uiZoom: null }
+  if (stored.modelPlaneEndpoint) applyModelPlaneEndpoint(stored.modelPlaneEndpoint)
+  const uiZoom = resolveUiZoom({ storedZoom: stored.uiZoom })
+
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
   session = await createNextSession({
@@ -99,6 +117,13 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   })
   dispatcher = createIpcDispatcher({
     session,
+    prefs,
+    probeModelPlane: () => probeModelPlane(),
+    onPrefsApplied: async (value) => {
+      // 保存即生效：端点改网关（null 回默认来源），缩放改当前窗口（无需重开）。
+      applyModelPlaneEndpoint(value.modelPlaneEndpoint ?? null)
+      window_?.webContents.setZoomFactor(value.uiZoom ?? 0.85)
+    },
     onMenuInvoke: async (id) => {
       if (id === 'runtime.tools' || id === 'view.focusRuntime') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'tools' })
       if (id === 'runtime.proposals') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'proposals', dir: '.pinax/proposals/' })
@@ -109,7 +134,7 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     ipcMain.handle(channel, async (_event, payload) => dispatcher.dispatch(channel, payload))
   }
 
-  window_ = createWindow(preloadPath || join(currentDir, 'preload.mjs'))
+  window_ = createWindow(preloadPath || join(currentDir, 'preload.mjs'), uiZoom)
   window_.on('closed', () => { window_ = null })
   await loadRenderer(window_, env)
   sendToRenderer(IPC_EVENT.viewChanged, shellView(session))

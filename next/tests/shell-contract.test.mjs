@@ -288,12 +288,58 @@ test('真模型这条链在主进程里接线：外壳必须注入进程内 advi
 test('界面缩放是产品参数不是巧合：默认 0.85（作者口径）且 env 可覆写，菜单里有缩放入口', async () => {
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
   assert.match(mainSource, /PINAX_NEXT_ZOOM/, '缩放必须可用 PINAX_NEXT_ZOOM 覆写')
-  assert.match(mainSource, /zoomFactor:\s*resolveUiZoom\(\)/, '窗口 webPreferences 必须落 zoomFactor')
+  assert.match(mainSource, /zoomFactor:\s*uiZoom/, '窗口 webPreferences 必须落 zoomFactor')
   assert.match(mainSource, /0\.85/, '默认缩放＝作者口径 0.85')
   const menuSource = await readFile(new URL('../shell/menus.mjs', import.meta.url), 'utf-8')
   assert.match(menuSource, /role:\s*'resetZoom'/, '视图菜单要有重置缩放')
   assert.match(menuSource, /role:\s*'zoomIn'/, '视图菜单要有放大')
   assert.match(menuSource, /role:\s*'zoomOut'/, '视图菜单要有缩小')
+})
+
+test('偏好通道（批次8①）：读/写/探测三分，写后生效钩子必须被调，存储未注入时如实报缺', async () => {
+  const applied = []
+  const store = {
+    read: async () => ({ ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85 } }),
+    write: async (patch) => ({ ok: true, value: { modelPlaneEndpoint: patch.modelPlaneEndpoint ?? null, uiZoom: patch.uiZoom ?? null } })
+  }
+  const probe = async () => ({ ok: true, value: { state: 'unreachable', endpoint: 'http://127.0.0.1:8451', detail: '拒绝连接' } })
+  const { session } = harness()
+  const dispatcher = createIpcDispatcher({ session, prefs: store, probeModelPlane: probe, onPrefsApplied: async (value) => applied.push(value) })
+
+  const got = await dispatcher.dispatch(IPC_CHANNELS.prefsGet, {})
+  assert.equal(got.ok, true)
+  assert.deepEqual(got.value, { modelPlaneEndpoint: null, uiZoom: 0.85 })
+
+  const set = await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { modelPlaneEndpoint: 'http://127.0.0.1:8461', uiZoom: 0.9 })
+  assert.equal(set.ok, true)
+  assert.equal(set.value.modelPlaneEndpoint, 'http://127.0.0.1:8461')
+  assert.equal(applied.length, 1, '写成功后必须调 onPrefsApplied（端点/缩放在此生效）')
+  assert.deepEqual(applied[0], { modelPlaneEndpoint: 'http://127.0.0.1:8461', uiZoom: 0.9 })
+
+  const probed = await dispatcher.dispatch(IPC_CHANNELS.prefsProbeModelPlane, {})
+  assert.equal(probed.ok, true)
+  assert.equal(probed.value.state, 'unreachable')
+
+  const bare = createIpcDispatcher({ session: harness().session })
+  const denied = await bare.dispatch(IPC_CHANNELS.prefsSet, { modelPlaneEndpoint: 'http://127.0.0.1:8461' })
+  assert.equal(denied.ok, false)
+  assert.match(String(denied.error?.message), /偏好存储未接入/)
+  const deniedProbe = await bare.dispatch(IPC_CHANNELS.prefsProbeModelPlane, {})
+  assert.match(String(deniedProbe.error?.message), /探测未接入/)
+})
+
+test('主进程把偏好真正接到网关与窗口：端点 setter、启动即应用、保存即生效都写在 main.mjs', async () => {
+  const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
+  assert.match(mainSource, /createAppPreferences\(/, '主进程必须创建偏好存储')
+  assert.match(mainSource, /applyModelPlaneEndpoint\(stored\.modelPlaneEndpoint\)/, '启动时必须应用已存端点')
+  assert.match(mainSource, /prefs,\s*\n\s*probeModelPlane/, '分发器必须注入偏好与探测')
+  assert.match(mainSource, /onPrefsApplied/, '保存后的生效钩子必须接上')
+  assert.doesNotMatch(mainSource, /\.\.\/\.\.\/server\//, '外壳不得直接 import server/——端点收在 runtime 层（modelPlaneProbe）')
+  const probeSource = await readFile(new URL('../runtime/modelPlaneProbe.mjs', import.meta.url), 'utf-8')
+  assert.match(probeSource, /setTaskPlaneEndpoint/, 'runtime 层必须包住网关端点 setter')
+  const gatewaySource = await readFile(new URL('../../server/services/kitModelGateway.js', import.meta.url), 'utf-8')
+  assert.match(gatewaySource, /export function setTaskPlaneEndpoint/, '网关必须暴露运行时端点 setter')
+  assert.match(gatewaySource, /export function getTaskPlaneEndpoint/, '网关必须暴露当前端点 getter（探测与偏好面显示用）')
 })
 
 function harness() {

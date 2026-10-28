@@ -30,7 +30,12 @@ const view = ref(props.initialView ?? null)
 /** 章节／条目的单一归属：索引窗与核心区共用这一份，存完正文索引窗不会还写着旧版本号。 */
 const data = useBoardData(props.bridge)
 const activeBoardId = ref(null)
-const indexOpen = ref(true)
+/**
+ * 索引窗默认开合按视口宽度定：宽屏展开（Obsidian 桌面形态），窄屏（手机）收起——
+ * 窄屏它会盖住正文，作者点竖条那一格再展开。窗口跨过 860px 时跟着换。
+ */
+const narrowQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(max-width: 860px)') : null
+const indexOpen = ref(!narrowQuery?.matches)
 const indexWidth = ref(256)
 const dockWidth = ref(360)
 const dragging = ref(null)
@@ -48,6 +53,21 @@ const rejected = computed(() => view.value?.rejected ?? [])
 const needsPrimary = computed(() => Boolean(view.value?.needsPrimary))
 const openError = computed(() => view.value?.openError ?? null)
 const kinds = computed(() => view.value?.kernel?.kinds ?? [])
+
+/** 偏好与模型（批次8①）：应用级偏好面，菜单「设置 → 偏好与模型…」打开。 */
+const settingsOpen = ref(false)
+const prefsDraft = ref({ modelPlaneEndpoint: '', uiZoom: 0.85 })
+const prefsBusy = ref(false)
+const prefsFeedback = ref(null)
+const probeState = ref(null)
+const probeClass = computed(() => ({ ready: 'is-ready', 'no-model': 'is-warn', unreachable: 'is-error' })[probeState.value?.state ?? ''] ?? 'is-warn')
+const probeText = computed(() => {
+  const state = probeState.value
+  if (!state) return ''
+  if (state.state === 'ready') return `模型面就绪：${state.endpoint}`
+  if (state.state === 'no-model') return `任务面可达但未配模型：请在 serve:pinax 一侧选择模型（${state.endpoint}）`
+  return `模型面不可达：${state.endpoint}${state.detail ? `（${state.detail}）` : ''}。请启动 pi-agent 任务面（serve:pinax）或修改端点。`
+})
 
 /**
  * 一块板＝一个载体：竖条一格、索引窗一份树、核心区一份正文。
@@ -133,6 +153,43 @@ async function createProject(name) {
   await refresh()
 }
 
+async function openSettings() {
+  settingsOpen.value = true
+  prefsFeedback.value = null
+  probeState.value = null
+  if (!props.bridge?.request) return
+  const result = await props.bridge.request(IPC_CHANNELS.prefsGet, {})
+  if (result.ok) {
+    prefsDraft.value = {
+      modelPlaneEndpoint: result.value.modelPlaneEndpoint ?? '',
+      uiZoom: result.value.uiZoom ?? 0.85
+    }
+  }
+}
+
+async function probePlane() {
+  if (!props.bridge?.request || prefsBusy.value) return
+  prefsBusy.value = true
+  probeState.value = null
+  const result = await props.bridge.request(IPC_CHANNELS.prefsProbeModelPlane, {})
+  prefsBusy.value = false
+  probeState.value = result.ok ? result.value : { state: 'unreachable', endpoint: '', detail: result.error?.message ?? '探测失败' }
+}
+
+async function savePrefs() {
+  if (!props.bridge?.request || prefsBusy.value) return
+  prefsBusy.value = true
+  prefsFeedback.value = null
+  const result = await props.bridge.request(IPC_CHANNELS.prefsSet, {
+    modelPlaneEndpoint: String(prefsDraft.value.modelPlaneEndpoint || '').trim() || null,
+    uiZoom: Number(prefsDraft.value.uiZoom)
+  })
+  prefsBusy.value = false
+  prefsFeedback.value = result.ok
+    ? { kind: 'ok', text: '已保存并生效。' }
+    : { kind: 'error', text: result.error?.message ?? '保存失败。' }
+}
+
 function toggleTheme() {
   scheme.value = writeScheme(scheme.value === 'dark' ? 'light' : 'dark')
 }
@@ -159,9 +216,14 @@ function startDrag(target, event) {
 onMounted(() => {
   applyScheme(scheme.value)
   void refresh()
-  // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那一条。
+  // 视口跨过 860px：窄屏收起索引窗（它会盖住正文），宽屏展开（桌面形态）。
+  narrowQuery?.addEventListener?.('change', (event) => {
+    indexOpen.value = !event.matches
+  })
+  // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
   props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => {
     if (payload?.id === 'settings.theme') toggleTheme()
+    if (payload?.id === 'settings.preferences') void openSettings()
   })
 })
 </script>
@@ -196,6 +258,29 @@ onMounted(() => {
       <div v-for="item in rejected" :key="item.pluginId" class="banner is-warn">
         插件「{{ item.pluginId }}」未加载：{{ item.error?.message }}
       </div>
+
+      <section v-if="settingsOpen" class="wizard" aria-label="偏好与模型">
+        <h3>偏好与模型</h3>
+        <p class="wizard-note">应用级偏好，不随项目走。模型凭据仍由任务面（serve:pinax）持有——这里只决定「任务面在哪个端点」与界面观感。</p>
+        <div class="prefs-grid">
+          <div class="prefs-row">
+            <span class="prefs-row-label">模型面端点</span>
+            <input v-model="prefsDraft.modelPlaneEndpoint" class="nx-field prefs-input" type="text" placeholder="http://127.0.0.1:8451（留空＝默认 8451）">
+            <button type="button" class="control-secondary" :disabled="prefsBusy" @click="probePlane">检测模型面</button>
+          </div>
+          <p v-if="probeState" class="prefs-state" :class="probeClass">{{ probeText }}</p>
+          <div class="prefs-row">
+            <span class="prefs-row-label">界面缩放</span>
+            <input v-model.number="prefsDraft.uiZoom" class="nx-field prefs-zoom" type="number" min="0.5" max="2" step="0.05">
+            <span class="prefs-row-hint">0.5–2.0，保存即生效</span>
+          </div>
+          <div class="prefs-actions">
+            <button type="button" class="control-primary" :disabled="prefsBusy" @click="savePrefs">保存并生效</button>
+            <button type="button" class="control-quiet" @click="settingsOpen = false">关闭</button>
+            <span v-if="prefsFeedback" class="prefs-state" :class="prefsFeedback.kind === 'ok' ? 'is-ready' : 'is-error'">{{ prefsFeedback.text }}</span>
+          </div>
+        </div>
+      </section>
 
       <section v-if="needsPrimary" class="wizard" aria-label="主载体选择">
         <h3>这个项目要创作什么？</h3>
@@ -248,3 +333,18 @@ onMounted(() => {
     <WorkbenchTooltip />
   </div>
 </template>
+
+<style scoped>
+/* 偏好面布局层（批次8①）：颜色与字号全走 token（U9/U10），这里只补栅格与输入宽度。 */
+.prefs-grid { display: flex; flex-direction: column; gap: 14px; }
+.prefs-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prefs-row-label { flex: 0 0 auto; min-width: 88px; font-size: var(--nx-fs-md); color: var(--archive-ink-soft); }
+.prefs-input { flex: 1 1 260px; width: auto; }
+.prefs-zoom { flex: 0 0 96px; width: 96px; }
+.prefs-row-hint { font-size: var(--nx-fs-md); color: var(--text-muted); }
+.prefs-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prefs-state { margin: 0; padding: 8px 12px; border-radius: var(--radius-control); font-size: var(--nx-fs-md); line-height: 1.7; }
+.prefs-state.is-ready { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); }
+.prefs-state.is-warn { border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent); background: color-mix(in srgb, var(--signal-warm) 10%, transparent); color: var(--signal-warm); }
+.prefs-state.is-error { border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent); background: color-mix(in srgb, var(--control-danger) 8%, transparent); color: var(--control-danger); }
+</style>

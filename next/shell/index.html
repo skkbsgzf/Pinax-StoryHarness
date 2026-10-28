@@ -2,6 +2,9 @@
 <html lang="zh-CN" class="theme-legacy theme-light">
   <head>
     <meta charset="utf-8" />
+    <!-- 手机上不声明这一条，浏览器会拿 980px 当布局宽度再整页缩小：字小、点不准、横向拖。
+         声明成设备宽度，窄屏那套排布（next-shell.css 的 max-width: 860px）才生效。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
     <title>Pinax · Next</title>
   </head>
