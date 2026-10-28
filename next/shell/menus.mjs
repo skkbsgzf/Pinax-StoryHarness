@@ -9,6 +9,7 @@ export const MENU_TEMPLATE = Object.freeze([
     submenu: [
       { id: 'project.create', label: '新建项目…', accelerator: 'CmdOrCtrl+Shift+N' },
       { id: 'project.open', label: '打开项目文件夹…', accelerator: 'CmdOrCtrl+O' },
+      { id: 'project.history', label: '当前文档历史…', accelerator: 'CmdOrCtrl+Shift+H' },
       { type: 'separator' },
       { id: 'project.recent', label: '最近项目', role: null, submenu: [] },
       { type: 'separator' },

@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import * as gitHistory from '../history/gitHistory.mjs'
 import { createNextSession } from '../index.mjs'
 import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
 import { createAppPreferences } from '../runtime/appPreferences.mjs'
+import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
 import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
@@ -13,7 +15,8 @@ import { MENU_TEMPLATE } from './menus.mjs'
  * 三件事是这层的全部职责，且都是「今天整个 electron/ 目录里不存在」的东西：
  *   1) 建立应用级菜单（Menu 在本仓第一次落地——运行时因此有菜单栏归属，不再只能靠渲染层堆按钮）；
  *   2) 起内核会话（主进程内装配，无 Express、无端口）；
- *   3) 把内核能力按通道名挂到 ipcMain（渲染层只认 next/shell/ipcContract 的通道，碰不到实现）。
+ *   3) 把内核能力按通道名挂到 ipcMain（渲染层只认 next/shell/ipcContract 的通道，碰不到实现）；
+ *   4) 历史快照（R3/D1）：项目打开后建独立 git 仓库并起定时提交，关窗前兜底再存一次。
  * 窗口文件由打包侧注入：dev 走 vite dev server，prod 走打包后的 renderer html。
  */
 const currentDir = dirname(fileURLToPath(import.meta.url))
@@ -39,6 +42,9 @@ function preferencesFile() {
 let session = null
 let dispatcher = null
 let window_ = null
+
+/** 历史定时调度（D1）：单例；项目打开后绑定，关窗前兜底提交。 */
+const historyScheduler = createHistoryScheduler()
 
 function sendToRenderer(channel, payload) {
   if (window_ && !window_.isDestroyed()) window_.webContents.send(channel, payload)
@@ -104,9 +110,40 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   // 应用级偏好（批次8①）：启动即读、即生效——模型面端点与界面缩放不再只靠 env。
   const prefs = createAppPreferences({ file: preferencesFile() })
   const storedPrefs = await prefs.read()
-  const stored = storedPrefs.ok ? storedPrefs.value : { modelPlaneEndpoint: null, uiZoom: null }
+  const stored = storedPrefs.ok ? storedPrefs.value : { modelPlaneEndpoint: null, uiZoom: null, historyIntervalMinutes: 5 }
   if (stored.modelPlaneEndpoint) applyModelPlaneEndpoint(stored.modelPlaneEndpoint)
   const uiZoom = resolveUiZoom({ storedZoom: stored.uiZoom })
+
+  /**
+   * 项目打开/刷新后的历史接线（D1）：建独立 git 仓库 → 给新 fileService 挂「写成功→标脏」→ 起定时器。
+   * 任何一步失败都不拦住写作，只在日志留痕；历史面板经 history:probe 如实显示不可用（绝不静默假装可用）。
+   */
+  async function beginHistory({ root: projectRoot, fileService } = {}) {
+    if (!projectRoot) return
+    const ensured = await gitHistory.ensureHistoryRepo({ root: projectRoot })
+    if (!ensured.ok) {
+      // eslint-disable-next-line no-console -- 主进程没有渲染层可报；历史不可用必须留痕
+      console.error('[pinax-next] 历史仓库不可用：', ensured.error?.message ?? ensured.error)
+      historyScheduler.stop()
+      return
+    }
+    if (fileService?.setOnWrite) {
+      fileService.setOnWrite(async ({ relativePath }) => {
+        const marked = await gitHistory.markDirty({ root: projectRoot, paths: [relativePath] })
+        if (!marked.ok) {
+          // eslint-disable-next-line no-console -- 旁路失败不打断写作，但必须留痕
+          console.error('[pinax-next] 历史标脏失败：', marked.error?.message ?? marked.error)
+        }
+      })
+    }
+    const storedNow = await prefs.read()
+    const interval = storedNow.ok ? storedNow.value.historyIntervalMinutes : 5
+    const started = await historyScheduler.start({ root: projectRoot, intervalMinutes: interval })
+    if (!started.ok) {
+      // eslint-disable-next-line no-console -- 定时器起不来也要留痕（手动/关窗快照仍可用）
+      console.error('[pinax-next] 历史定时器启动失败：', started.error?.message ?? started.error)
+    }
+  }
 
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
@@ -129,16 +166,28 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
       if (result.canceled || !result.filePaths?.length) return { ok: true, value: { picked: false, path: null } }
       return { ok: true, value: { picked: true, path: result.filePaths[0] } }
     },
+    history: { gitHistory, scheduler: historyScheduler },
+    onProjectOpened: beginHistory,
     onPrefsApplied: async (value) => {
       // 保存即生效：端点改网关（null 回默认来源），缩放改当前窗口（无需重开）。
       applyModelPlaneEndpoint(value.modelPlaneEndpoint ?? null)
       window_?.webContents.setZoomFactor(value.uiZoom ?? 0.85)
+      // 历史间隔同样保存即生效：已绑定项目时按新间隔重起（0＝关闭定时器）。
+      const current = historyScheduler.status()
+      if (current.ok && current.value.root) {
+        await historyScheduler.start({ root: current.value.root, intervalMinutes: value.historyIntervalMinutes ?? 5 })
+      }
     },
     onMenuInvoke: async (id) => {
       if (id === 'runtime.tools' || id === 'view.focusRuntime') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'tools' })
       if (id === 'runtime.proposals') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'proposals', dir: '.pinax/proposals/' })
     }
   })
+
+  // PINAX_NEXT_ROOT 直开的项目也接历史；IPC 打开/新建的项目走 onProjectOpened。
+  if (session.project?.ok) {
+    await beginHistory({ root: session.projectRoot, fileService: session.project.value?.fileService })
+  }
 
   for (const channel of Object.values(IPC_CHANNELS)) {
     ipcMain.handle(channel, async (_event, payload) => slimForIpc(await dispatcher.dispatch(channel, payload)))
@@ -153,6 +202,22 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+// 关窗兜底（D1）：先补一次历史快照再退出。
+// 最多等 10 秒——仓库/磁盘异常也不能把应用卡死在退出流程里；超时照样退出。
+let quittingAfterHistory = false
+app.on('before-quit', (event) => {
+  if (quittingAfterHistory) return
+  quittingAfterHistory = true
+  event.preventDefault()
+  const deadline = new Promise((resolveDeadline) => {
+    const timer = setTimeout(resolveDeadline, 10_000)
+    timer.unref?.()
+  })
+  Promise.race([historyScheduler.beforeQuit(), deadline])
+    .catch(() => {})
+    .finally(() => app.quit())
 })
 
 // 只有作为 Forge/Node 的直接入口运行时才自启，单测与 bundle 构建 import 它不应拉起 Electron。

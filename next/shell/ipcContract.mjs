@@ -28,6 +28,11 @@ export const IPC_CHANNELS = Object.freeze({
   prefsGet: 'pinax:agent:prefs:get',
   prefsSet: 'pinax:agent:prefs:set',
   prefsProbeModelPlane: 'pinax:agent:prefs:probe-model-plane',
+  historyList: 'pinax:agent:history:list',
+  historyShow: 'pinax:agent:history:show',
+  historyDiff: 'pinax:agent:history:diff',
+  historyCommitNow: 'pinax:agent:history:commit-now',
+  historyProbe: 'pinax:agent:history:probe',
   menuInvoke: 'pinax:agent:menu:invoke'
 })
 
@@ -167,9 +172,22 @@ export function shellView(session) {
  *   prefs            —— 应用级偏好存储（next/runtime/appPreferences）；不注入时 prefs:* 通道如实报缺。
  *   onPrefsApplied   —— 偏好落盘后的生效钩子（主进程：改任务面端点 + 改窗口缩放）；
  *   probeModelPlane  —— 模型面三态探测（next/runtime/modelPlaneProbe）；不注入时探测通道如实报缺。
+ * deps 扩展（D1 历史）：
+ *   history          —— { gitHistory, scheduler }；不注入时 history:* 五条通道如实报缺。
+ *   onProjectOpened  —— 项目打开/刷新成功后的接线钩子（主进程：建历史仓库 + 起定时器 + 给新 fileService 挂标脏钩子）。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
+
+  /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
+  async function notifyProjectOpened(result) {
+    if (!onProjectOpened || !result?.ok) return
+    try {
+      await onProjectOpened({ root: session.projectRoot, fileService: result.value?.fileService ?? null })
+    } catch {
+      // 历史是旁路：probe 会如实显示不可用，项目本身照常可用。
+    }
+  }
 
   async function dispatch(channel, payload) {
     if (!Object.values(IPC_CHANNELS).includes(channel)) {
@@ -188,20 +206,33 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return ok(session.kernel)
       case IPC_CHANNELS.view:
         return ok(shellView(session))
-      case IPC_CHANNELS.projectCreate:
-        return session.create({ name: input.name, primaryCarrier: input.primaryCarrier, extraEnabled: input.extraEnabled ?? [], root: input.root ?? null })
+      case IPC_CHANNELS.projectCreate: {
+        const created = await session.create({ name: input.name, primaryCarrier: input.primaryCarrier, extraEnabled: input.extraEnabled ?? [], root: input.root ?? null })
+        if (created.ok) await notifyProjectOpened(created)
+        return created
+      }
       case IPC_CHANNELS.projectPickDir:
         return pickProjectDir ? pickProjectDir(input) : fail('INVALID_INPUT', '目录选择未接入（主进程系统对话框不可用）')
       case IPC_CHANNELS.projectCreateBare:
         return session.createBare({ name: input.name })
-      case IPC_CHANNELS.projectOpen:
-        return session.open(input.root)
+      case IPC_CHANNELS.projectOpen: {
+        const opened = await session.open(input.root)
+        if (opened.ok) await notifyProjectOpened(opened)
+        return opened
+      }
       case IPC_CHANNELS.projectClose:
         return session.close()
-      case IPC_CHANNELS.carrierSetEnabled:
-        return session.setEnabled(input.pluginId, input.enabled, input.expectedRevision)
-      case IPC_CHANNELS.carrierSetPrimary:
-        return session.setPrimary(input.pluginId, input.expectedRevision)
+      case IPC_CHANNELS.carrierSetEnabled: {
+        const result = await session.setEnabled(input.pluginId, input.enabled, input.expectedRevision)
+        // 启停会重建 fileService（session.refresh）：新实例必须重新挂上标脏钩子，否则之后的写入不进历史。
+        if (result.ok) await notifyProjectOpened(result)
+        return result
+      }
+      case IPC_CHANNELS.carrierSetPrimary: {
+        const result = await session.setPrimary(input.pluginId, input.expectedRevision)
+        if (result.ok) await notifyProjectOpened(result)
+        return result
+      }
       case IPC_CHANNELS.runtimeAsk:
         return session.runtime ? session.runtime.ask(input.question, input.context ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
       case IPC_CHANNELS.runtimeToolCall:
@@ -212,13 +243,40 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return prefs ? prefs.read() : fail('INVALID_INPUT', '偏好存储未接入（主进程未创建偏好文件）')
       case IPC_CHANNELS.prefsSet: {
         if (!prefs) return fail('INVALID_INPUT', '偏好存储未接入（主进程未创建偏好文件）')
-        const written = await prefs.write({ modelPlaneEndpoint: input.modelPlaneEndpoint, uiZoom: input.uiZoom })
+        // 只写载荷真的带了的字段：D2 起外壳会单独写 theme（主题切换），
+        // 若把 modelPlaneEndpoint/uiZoom 以 undefined 一并塞进去，会把用户已存的端点/缩放重置回默认。
+        const patch = {}
+        if ('modelPlaneEndpoint' in input) patch.modelPlaneEndpoint = input.modelPlaneEndpoint
+        if ('uiZoom' in input) patch.uiZoom = input.uiZoom
+        if ('historyIntervalMinutes' in input) patch.historyIntervalMinutes = input.historyIntervalMinutes
+        if ('theme' in input) patch.theme = input.theme
+        const written = await prefs.write(patch)
         if (!written.ok) return written
         if (onPrefsApplied) await onPrefsApplied(written.value)
         return ok(written.value)
       }
       case IPC_CHANNELS.prefsProbeModelPlane:
         return probeModelPlane ? await probeModelPlane() : fail('INVALID_INPUT', '模型面探测未接入')
+      case IPC_CHANNELS.historyList:
+        if (!history?.gitHistory) return fail('INVALID_INPUT', '历史引擎未接入（主进程未创建历史服务）')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '历史查询需要先打开一个项目')
+        return history.gitHistory.listFileHistory({ root: session.projectRoot, path: input.path, limit: input.limit })
+      case IPC_CHANNELS.historyShow:
+        if (!history?.gitHistory) return fail('INVALID_INPUT', '历史引擎未接入（主进程未创建历史服务）')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '历史查询需要先打开一个项目')
+        return history.gitHistory.readVersion({ root: session.projectRoot, oid: input.oid, path: input.path })
+      case IPC_CHANNELS.historyDiff:
+        if (!history?.gitHistory) return fail('INVALID_INPUT', '历史引擎未接入（主进程未创建历史服务）')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '历史查询需要先打开一个项目')
+        return history.gitHistory.diffVersions({ root: session.projectRoot, a: input.a, b: input.b, path: input.path })
+      case IPC_CHANNELS.historyCommitNow:
+        return history?.scheduler
+          ? history.scheduler.requestCommit(input.message)
+          : fail('INVALID_INPUT', '历史调度未接入（主进程未创建历史服务）')
+      case IPC_CHANNELS.historyProbe:
+        return history?.scheduler
+          ? history.scheduler.probe()
+          : fail('INVALID_INPUT', '历史探测未接入（主进程未创建历史服务）')
       case IPC_CHANNELS.menuInvoke: {
         if (!menuIds.has(input.id)) {
           return fail('INVALID_INPUT', `菜单项 ${String(input.id)} 不在应用菜单模板里；载体不得注入顶层菜单（C5）`, { id: input.id })

@@ -138,6 +138,39 @@ test('崩溃恢复只清 .pinax-tmp-*，不动正文', async () => {
   }
 })
 
+test('onWrite 钩子（D1）：落盘成功后才调用；钩子抛错不影响写入；可摘除', async () => {
+  const workspace = await createTempWorkspace('fs-onwrite')
+  const root = await workspace.projectPath('历史标脏')
+  try {
+    for (const dir of PROJECT_KINDS.novel) await mkdir(join(root, dir), { recursive: true })
+    const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+    registry.install(FIXTURE_NOVEL)
+    const calls = []
+    const service = createFileService({ root, registry, onWrite: async (info) => { calls.push(info) } })
+    await service.init()
+
+    const first = await service.write({ pluginId: 'fixture.novel', dir: '正文', file: '第001章.md', text: '开场。', expectedRevision: 0 })
+    assert.equal(first.ok, true, JSON.stringify(first.error ?? {}))
+    assert.deepEqual(calls, [{ root, relativePath: '正文/第001章.md', revision: 1 }], '写盘成功后钩子拿到项目根＋相对路径＋新修订号')
+
+    let throwingCalls = 0
+    service.setOnWrite(async () => {
+      throwingCalls += 1
+      throw new Error('历史标脏失败')
+    })
+    const second = await service.write({ pluginId: 'fixture.novel', dir: '正文', file: '第001章.md', text: '改过的开场。', expectedRevision: 1 })
+    assert.equal(second.ok, true, '旁路钩子抛错绝不能把已经落盘的写作翻成失败')
+    assert.equal(throwingCalls, 1)
+
+    service.setOnWrite(null)
+    const third = await service.write({ pluginId: 'fixture.novel', dir: '正文', file: '第001章.md', text: '再改一次。', expectedRevision: 2 })
+    assert.equal(third.ok, true)
+    assert.equal(throwingCalls, 1, '摘掉钩子后不再调用')
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
 test('板块注册即建目录：只补缺，绝不删除', async () => {
   const workspace = await createTempWorkspace('fs-dirs')
   const root = workspace.projects

@@ -15,7 +15,7 @@ import { assertNoSymlinkEscape, joinContained } from './projectPath.mjs'
  */
 const REVISIONS_FILE = join('state', 'revisions.json')
 
-export function createFileService({ root, registry, fsImpl } = {}) {
+export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
   const projectRoot = resolve(String(root || '.'))
   const io = {
     readFile: fsImpl?.readFile || readFile,
@@ -28,6 +28,7 @@ export function createFileService({ root, registry, fsImpl } = {}) {
   }
   let revisions = new Map()
   let queue = Promise.resolve()
+  let writeHook = typeof onWrite === 'function' ? onWrite : null
 
   const service = {
     root: projectRoot,
@@ -45,6 +46,15 @@ export function createFileService({ root, registry, fsImpl } = {}) {
       const next = queue.then(task, task)
       queue = next.then(() => undefined, () => undefined)
       return next
+    },
+
+    /**
+     * 重挂写入钩子（D1）：fileService 会随 openProject/carriers 刷新重建，
+     * 主进程每次拿到新实例后经这里把「写成功→标脏」接回去。传 null 即摘掉。
+     */
+    setOnWrite(hook) {
+      writeHook = typeof hook === 'function' ? hook : null
+      return ok({ attached: Boolean(writeHook) })
     },
 
     /** 板块注册即建目录：只补缺，绝不删除。 */
@@ -116,6 +126,7 @@ export function createFileService({ root, registry, fsImpl } = {}) {
         revisions.set(located.value.relativePath, revision)
         const persisted = await saveRevisions()
         if (!persisted.ok) return persisted
+        await notifyWrite({ relativePath: located.value.relativePath, revision })
         return ok({ relativePath: located.value.relativePath, revision, sha256: sha256(text), bytes: Buffer.byteLength(text, 'utf-8') })
       })
     },
@@ -223,6 +234,19 @@ export function createFileService({ root, registry, fsImpl } = {}) {
       return ok(true)
     } catch (error) {
       return fail('IO_FAILED', '写入 .pinax/state/revisions.json 失败', { cause: String(error?.message || error) })
+    }
+  }
+
+  /**
+   * 写入后的旁路通知（D1：历史标脏的单一接入点，不让各载体自己标）。
+   * 历史是旁路：钩子失败绝不能让已经落盘的写作失败，异常在这里吞掉。
+   */
+  async function notifyWrite(info) {
+    if (!writeHook) return
+    try {
+      await writeHook({ root: projectRoot, ...info })
+    } catch {
+      // 忽略：历史面板会经 probe 如实显示不可用，写作本身不受影响。
     }
   }
 

@@ -9,10 +9,11 @@ import PrefsSection from './settings/PrefsSection.vue'
 import CarriersSection from './settings/CarriersSection.vue'
 import NewProjectSection from './settings/NewProjectSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
+import HistorySection from './settings/HistorySection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { IPC_CHANNELS, IPC_EVENT } from './ipcContract.mjs'
-import { applyScheme, readScheme, writeScheme } from './theme.mjs'
+import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs'
 
 /**
  * Next 外壳根组件：Obsidian 三栏（图标竖条／索引窗／核心区）＋右栏运行时 ＋ 统一设置二级页。
@@ -23,7 +24,8 @@ import { applyScheme, readScheme, writeScheme } from './theme.mjs'
  *   - 核心区：只挂 center 槽的 pane，正文在这里，宽的那一栏就是它；
  *   - 右栏：Pi-Agent 运行时独占（一级公民，插件抢不走）；
  *   - 设置（工单C0 · U13）：偏好／载体管理／新建项目／主载体选择一律收进
- *     SettingsModal 这一枚统一的二级页面（左栏目录＋右栏设置项），
+ *     SettingsModal 这一枚统一的二级页面（左栏目录＋右栏设置项）；
+ *     D2 起「文档」组再收一节「文档历史」（快照列表／diff／恢复）。
  *     核心区不再内嵌任何配置 section 与按钮，目录之外的弹窗不允许存在。
  *
  * 不引 vue-router、不引 Pinia、不 import src/ 的页面——零插件时外壳仍要能起来（M1 判据）。
@@ -62,19 +64,62 @@ const needsPrimary = computed(() => Boolean(view.value?.needsPrimary))
 const openError = computed(() => view.value?.openError ?? null)
 const kinds = computed(() => view.value?.kernel?.kinds ?? [])
 
+/**
+ * 当前文档（D2 历史面板的锚点）：索引窗选中什么，历史就查什么。
+ * 路径与修订号都取自已读回的状态（不是列表页的旧值）——恢复时 expectedRevision 才对得上。
+ */
+const historyTarget = computed(() => {
+  const selection = data.selection
+  if (!selection?.type) return null
+  if (selection.type === 'chapter' && data.chapter?.file) {
+    return {
+      kind: 'chapter',
+      path: data.chapter.file,
+      title: data.chapter.title ?? selection.item?.title ?? '章节',
+      revision: Number.isInteger(data.chapter.revision) ? data.chapter.revision : 0
+    }
+  }
+  if (selection.type === 'entry' && (data.entry?.path ?? selection.item?.path)) {
+    return {
+      kind: 'entry',
+      path: data.entry?.path ?? selection.item.path,
+      title: data.entry?.title ?? data.entry?.name ?? selection.item?.name ?? '条目',
+      revision: Number.isInteger(data.entry?.revision) ? data.entry.revision : 0
+    }
+  }
+  if (selection.type === 'note' && (data.note?.file ?? selection.item?.file)) {
+    return {
+      kind: 'note',
+      path: data.note?.file ?? selection.item.file,
+      title: data.note?.title ?? selection.item?.title ?? '构思',
+      revision: Number.isInteger(data.note?.revision) ? data.note.revision : 0
+    }
+  }
+  if (selection.type === 'outline-node') {
+    return {
+      kind: 'outline',
+      path: '大纲/outline.json',
+      title: '大纲',
+      revision: Number.isInteger(data.outlineRevision) ? data.outlineRevision : 0
+    }
+  }
+  return null
+})
+
 /** 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项。
- *  外壳只留挂载与 open／activeSection 两个状态；四节的内容与状态住在各自 SFC
+ *  外壳只留挂载与 open／activeSection 两个状态；各节的内容与状态住在各自 SFC
  *  （next/shell/settings/，照 AssistantDialog 从 AuthoringKnowledgeAssistant 抽取的同一模式）。
  *  节的动作经事件上交：通道调用与 refresh 留在外壳（同 RuntimeDock 持桥发问的分工）。 */
 const settingsOpen = ref(false)
 const activeSection = ref('prefs')
 
-/** 目录表：本批登记四节；未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
+/** 目录表：两组，设置四节＋文档历史（D2）。未登记的功能不许开弹窗（门禁见 next/tests/visual-contract.test.mjs）。 */
 const settingsSections = computed(() => [
-  { id: 'prefs', title: '偏好与模型', component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
-  { id: 'carriers', title: '载体管理', component: CarriersSection, props: { carriers: carriers.value } },
-  { id: 'newProject', title: '新建项目', component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
-  { id: 'primary', title: '主载体选择', component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } }
+  { id: 'prefs', title: '偏好与模型', group: '设置', component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
+  { id: 'carriers', title: '载体管理', group: '设置', component: CarriersSection, props: { carriers: carriers.value } },
+  { id: 'newProject', title: '新建项目', group: '设置', component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
+  { id: 'primary', title: '主载体选择', group: '设置', component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } },
+  { id: 'history', title: '文档历史', group: '文档', component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } }
 ])
 
 function openSection(id) {
@@ -101,6 +146,88 @@ async function openCarriers() {
 function openNewProject() {
   if (project.value || !canPickPrimary.value) return
   openSection('newProject')
+}
+
+/** 当前文档历史（D2）：菜单「文件 → 当前文档历史…」与索引窗行动作的共同落点。 */
+function openHistory() {
+  openSection('history')
+}
+
+/** 索引窗行动作：先把该文档读进来（修订号以磁盘为准），再摊开历史。 */
+async function openHistoryFor(payload) {
+  if (!payload) return
+  if (payload.type === 'chapter') await data.openChapter(payload.item)
+  else if (payload.type === 'entry') await data.openEntry(payload.item)
+  else if (payload.type === 'note') data.openNote(payload.item)
+  else if (payload.type === 'outline') data.selectOutlineNode(payload.index)
+  openSection('history')
+}
+
+/**
+ * 世界书历史版本是整份文件（含契约 frontmatter）；载体的 save 只收正文，
+ * frontmatter 由工具按当前文件原样保留。这里只剥历史文本的头，不重写契约字段。
+ */
+function stripWorldbookFrontmatter(text) {
+  const source = String(text ?? '')
+  const match = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/u.exec(source)
+  return match ? source.slice(match[0].length) : source
+}
+
+/**
+ * 恢复到某一版（D2）：内容已由 HistorySection 经 history.show 取到，
+ * 这里只走载体自己的 save 工具（带 expectedRevision）——恢复＝新增一次版本，
+ * 不绕过载体的 scope 与并发闸直写文件服务。
+ */
+async function restoreHistoryVersion({ target, text } = {}) {
+  if (!target) return { ok: false, message: '没有可恢复的文档' }
+  const revision = Number.isInteger(target.revision) ? target.revision : 0
+
+  if (target.kind === 'chapter') {
+    const saved = await data.tool('pinax_chapter_save', { file: target.path, text: String(text ?? ''), expectedRevision: revision })
+    if (!saved.ok) return { ok: false, message: saved.message }
+    await data.openChapter({ file: target.path, title: target.title })
+    return { ok: true, message: `已恢复「${target.title}」· 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
+  }
+
+  if (target.kind === 'entry') {
+    const body = stripWorldbookFrontmatter(text)
+    if (!body.trim()) return { ok: false, message: '这一版条目只有契约头、没有正文，无法恢复。' }
+    const saved = await data.tool('pinax_worldbook_save', { path: target.path, text: body, expectedRevision: revision })
+    if (!saved.ok) return { ok: false, message: saved.message }
+    const entry = data.entry ?? data.selection?.item
+    if (entry) await data.openEntry(entry)
+    return { ok: true, message: `已恢复「${target.title}」· 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
+  }
+
+  if (target.kind === 'note') {
+    const saved = await data.tool('pinax_notes_save', { file: target.path, text: String(text ?? ''), expectedRevision: revision })
+    if (!saved.ok) return { ok: false, message: saved.message }
+    await data.loadNotes()
+    const note = data.notes.find((item) => item.file === saved.value.file)
+    if (note) data.openNote(note)
+    return { ok: true, message: `已恢复「${target.title}」· 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
+  }
+
+  if (target.kind === 'outline') {
+    let document
+    try {
+      document = JSON.parse(String(text ?? ''))
+    } catch {
+      return { ok: false, message: '这一版大纲不是合法 JSON，无法恢复。' }
+    }
+    const nodes = Array.isArray(document?.nodes) ? document.nodes : null
+    if (!nodes?.length) return { ok: false, message: '这一版大纲没有节点，无法恢复。' }
+    const saved = await data.tool('pinax_outline_save', {
+      nodes,
+      edges: Array.isArray(document.edges) ? document.edges : [],
+      expectedRevision: revision
+    })
+    if (!saved.ok) return { ok: false, message: saved.message }
+    await data.loadOutline()
+    return { ok: true, message: `已恢复大纲 · 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
+  }
+
+  return { ok: false, message: `未知的文档类型：${String(target.kind)}` }
 }
 
 /** D1 硬闸（工单C0）：needsPrimary 时统一弹窗自动打开、落在主载体节且不可关闭——
@@ -204,13 +331,46 @@ function toggleCompanion(pluginId) {
     : [...extraEnabled.value, pluginId]
 }
 
-function toggleTheme() {
-  scheme.value = writeScheme(scheme.value === 'dark' ? 'light' : 'dark')
+/** 主题切换（D2）：偏好 JSON 为准；过渡期由 theme.mjs 双写老前端的 app_theme 键。 */
+async function persistTheme(value) {
+  scheme.value = writeScheme(value)
+  if (!props.bridge?.request) return
+  try {
+    await props.bridge.request(IPC_CHANNELS.prefsSet, { theme: scheme.value })
+  } catch {
+    // 偏好写失败时内存与老键的主题照样生效；下次切换会再试。
+  }
 }
 
-/** 偏好节里的主题选择：写回同一份 localStorage 契约，竖条的明暗按钮跟着变。 */
+function toggleTheme() {
+  void persistTheme(scheme.value === 'dark' ? 'light' : 'dark')
+}
+
+/** 偏好节里的主题选择：同一条持久化路径，竖条的明暗按钮跟着变。 */
 function applyThemeChoice(value) {
-  scheme.value = writeScheme(value)
+  void persistTheme(value)
+}
+
+/** 启动时以偏好为准；偏好还没有 theme（迁移前）→ 把老 localStorage 的值一次性迁进去。 */
+async function syncThemeFromPrefs() {
+  if (!props.bridge?.request) return
+  let stored = null
+  try {
+    stored = await props.bridge.request(IPC_CHANNELS.prefsGet, {})
+  } catch {
+    return
+  }
+  if (!stored?.ok) return
+  const theme = stored.value?.theme
+  if (isValidScheme(theme)) {
+    scheme.value = writeScheme(theme)
+    return
+  }
+  try {
+    await props.bridge.request(IPC_CHANNELS.prefsSet, { theme: scheme.value })
+  } catch {
+    // 迁移失败不拦：老键还在，下次启动再试。
+  }
 }
 
 function startDrag(target, event) {
@@ -234,6 +394,7 @@ function startDrag(target, event) {
 
 onMounted(() => {
   applyScheme(scheme.value)
+  void syncThemeFromPrefs()
   void refresh()
   // 视口跨过 860px：窄屏收起索引窗（它会盖住正文），宽屏展开（桌面形态）。
   narrowQuery?.addEventListener?.('change', (event) => {
@@ -242,6 +403,7 @@ onMounted(() => {
   // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
   props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => {
     if (payload?.id === 'project.create') openNewProject()
+    if (payload?.id === 'project.history') openHistory()
     if (payload?.id === 'settings.theme') toggleTheme()
     if (payload?.id === 'settings.preferences') void openSettings()
     if (payload?.id === 'settings.carriers') void openCarriers()
@@ -267,6 +429,7 @@ onMounted(() => {
         :archive="view?.archive ?? []"
         :width="indexWidth"
         @collapse="indexOpen = false"
+        @history="openHistoryFor"
       />
       <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('index', $event)" />
     </template>

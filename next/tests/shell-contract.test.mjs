@@ -16,6 +16,16 @@ import {
 } from '../shell/ipcContract.mjs'
 import { MENU_TEMPLATE, canCarrierInjectMenu, flattenMenuIds } from '../shell/menus.mjs'
 import { OPEN_SLOTS, RESERVED_SLOTS, isReservedSlot, orderActivityItems, slotReason } from '../shell/slots.mjs'
+import { PREFS_DEFAULTS, normalizePrefs } from '../runtime/appPreferences.mjs'
+
+/** D1 历史五通道：名字与顺序都钉在门禁里，UI 与主进程共用同一份常量。 */
+const HISTORY_CHANNELS = [
+  [IPC_CHANNELS.historyList, 'list'],
+  [IPC_CHANNELS.historyShow, 'show'],
+  [IPC_CHANNELS.historyDiff, 'diff'],
+  [IPC_CHANNELS.historyCommitNow, 'commit-now'],
+  [IPC_CHANNELS.historyProbe, 'probe']
+]
 
 /**
  * WP4 外壳合同测试：菜单／槽位／IPC 三条线都在纯数据层判定，
@@ -48,7 +58,7 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   assert.match(injection.reason, /顶层菜单/)
 
   const ids = flattenMenuIds(MENU_TEMPLATE).map((item) => item.id)
-  for (const required of ['project.create', 'project.open', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
+  for (const required of ['project.create', 'project.open', 'project.history', 'runtime.ask', 'runtime.tools', 'view.focusRuntime', 'settings.theme', 'settings.carriers']) {
     assert.ok(ids.includes(required), `菜单模板缺 ${required}`)
   }
   assert.equal(new Set(ids).size, ids.length, '菜单 id 不得重复')
@@ -71,6 +81,12 @@ test('IPC 通道全在 pinax:agent: 命名空间内，未注册通道直接拒',
   for (const channel of channels) assert.ok(channel.startsWith('pinax:agent:'), channel)
   for (const event of IPC_EVENTS) assert.ok(event.startsWith('pinax:agent:event:'), event)
 
+  // D1：五条历史通道按工单命名，缺一条 UI 就调不到。
+  for (const [channel, suffix] of HISTORY_CHANNELS) {
+    assert.ok(channels.includes(channel), `缺历史通道 ${channel}`)
+    assert.equal(channel, `pinax:agent:history:${suffix}`)
+  }
+
   const { dispatcher } = harness()
   const rogue = await dispatcher.dispatch('pinax:agent:fs:write-anywhere', { file: '正文/第一章.md' })
   assert.equal(rogue.ok, false)
@@ -79,6 +95,61 @@ test('IPC 通道全在 pinax:agent: 命名空间内，未注册通道直接拒',
   assert.equal(badPayload.ok, false)
   const noProject = await dispatcher.dispatch(IPC_CHANNELS.carrierSetPrimary, { pluginId: 'fixture.novel' })
   assert.equal(noProject.ok, false, '没有已打开的项目时不得改 carriers')
+})
+
+test('历史五通道（D1）：未注入时如实报缺，不静默假装可用', async () => {
+  const { dispatcher } = harness()
+  for (const [channel] of HISTORY_CHANNELS) {
+    const result = await dispatcher.dispatch(channel, {})
+    assert.equal(result.ok, false, `${channel} 未注入时必须失败`)
+    assert.equal(result.error.code, NEXT_ERROR_CODES.INVALID_INPUT, channel)
+    assert.match(result.error.message, /历史/, channel)
+  }
+})
+
+test('历史五通道（D1）：注入后按当前项目根分发；没有项目时如实拒绝', async () => {
+  const calls = []
+  const gitHistory = {
+    listFileHistory: async (args) => { calls.push(['list', args]); return { ok: true, value: [] } },
+    readVersion: async (args) => { calls.push(['show', args]); return { ok: true, value: '第一版正文' } },
+    diffVersions: async (args) => { calls.push(['diff', args]); return { ok: true, value: { hunks: [] } } }
+  }
+  const scheduler = {
+    requestCommit: async (message) => { calls.push(['commit', message]); return { ok: true, value: { committed: false } } },
+    probe: async () => { calls.push(['probe']); return { ok: true, value: { available: true } } }
+  }
+  const { session } = harness()
+  session.projectRoot = 'D:/books/历史书'
+  const dispatcher = createIpcDispatcher({ session, history: { gitHistory, scheduler } })
+  const oidA = 'a'.repeat(40)
+  const oidB = 'b'.repeat(40)
+
+  const listed = await dispatcher.dispatch(IPC_CHANNELS.historyList, { path: '正文/001.md', limit: 10 })
+  assert.equal(listed.ok, true)
+  assert.deepEqual(calls.at(-1), ['list', { root: 'D:/books/历史书', path: '正文/001.md', limit: 10 }])
+
+  const shown = await dispatcher.dispatch(IPC_CHANNELS.historyShow, { oid: oidA, path: '正文/001.md' })
+  assert.equal(shown.value, '第一版正文')
+  assert.deepEqual(calls.at(-1), ['show', { root: 'D:/books/历史书', oid: oidA, path: '正文/001.md' }])
+
+  const diffed = await dispatcher.dispatch(IPC_CHANNELS.historyDiff, { a: oidA, b: oidB, path: '正文/001.md' })
+  assert.equal(diffed.ok, true)
+  assert.deepEqual(calls.at(-1), ['diff', { root: 'D:/books/历史书', a: oidA, b: oidB, path: '正文/001.md' }])
+
+  const committed = await dispatcher.dispatch(IPC_CHANNELS.historyCommitNow, { message: '手动快照' })
+  assert.equal(committed.ok, true)
+  assert.deepEqual(calls.at(-1), ['commit', '手动快照'])
+
+  const probed = await dispatcher.dispatch(IPC_CHANNELS.historyProbe, {})
+  assert.equal(probed.value.available, true)
+  assert.deepEqual(calls.at(-1), ['probe'], '探测走调度器（仓库可用性 + 定时器状态）')
+
+  const noProject = createIpcDispatcher({ session: harness().session, history: { gitHistory, scheduler } })
+  for (const channel of [IPC_CHANNELS.historyList, IPC_CHANNELS.historyShow, IPC_CHANNELS.historyDiff]) {
+    const denied = await noProject.dispatch(channel, { path: '正文/001.md' })
+    assert.equal(denied.ok, false, channel)
+    assert.match(denied.error.message, /项目/, channel)
+  }
 })
 
 test('空框架：不装任何插件，外壳可进入、可打开项目、可在运行时栏问一句话', async () => {
@@ -286,6 +357,38 @@ test('真模型这条链在主进程里接线：外壳必须注入进程内 advi
   assert.match(gateway, /process\.env\.PINAX_ADAPTER_ENDPOINT\s*\|\|\s*KIT_TASK_PLANE_ENDPOINT/, '模型面端点必须允许 env 覆写')
 })
 
+test('主题偏好字段（D2）：只认 light／dark／null；prefs:set 单写 theme 不重置其它偏好', async () => {
+  assert.equal(normalizePrefs({ theme: 'dark' }).value.theme, 'dark')
+  assert.equal(normalizePrefs({ theme: 'light' }).value.theme, 'light')
+  assert.equal(normalizePrefs({ theme: null }).value.theme, null)
+  for (const bad of ['blue', 42, true]) {
+    assert.equal(normalizePrefs({ theme: bad }).ok, false, `应拒绝 theme=${JSON.stringify(bad)}`)
+  }
+  assert.equal('theme' in PREFS_DEFAULTS, false, 'theme 是可选迁移字段：缺省表示还没迁过，由渲染层用老键兜底')
+
+  let captured = null
+  const store = {
+    read: async () => ({ ok: true, value: { ...PREFS_DEFAULTS } }),
+    write: async (patch) => { captured = patch; return { ok: true, value: { ...PREFS_DEFAULTS, ...patch } } }
+  }
+  const dispatcher = createIpcDispatcher({ session: harness().session, prefs: store })
+  const written = await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { theme: 'dark' })
+  assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+  assert.deepEqual(captured, { theme: 'dark' }, '只写 theme：端点/缩放/历史间隔不得被 undefined 顺手重置')
+})
+
+test('主进程历史接线（D1）：建仓＋起表＋关窗兜底＋写入标脏钩子都落在 main.mjs', async () => {
+  const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
+  assert.match(mainSource, /ensureHistoryRepo\(\{\s*root:\s*projectRoot\s*\}\)/, '项目打开后必须建独立历史仓库')
+  assert.match(mainSource, /historyScheduler\.start\(\{\s*root:\s*projectRoot/, '建仓后必须起定时提交')
+  assert.match(mainSource, /onProjectOpened:\s*beginHistory/, '打开/刷新项目必须触发历史接线')
+  assert.match(mainSource, /history:\s*\{\s*gitHistory,\s*scheduler:\s*historyScheduler\s*\}/, 'gitHistory/scheduler 必须经 deps 注入分发器')
+  assert.match(mainSource, /setOnWrite\(async \(\{ relativePath \}\)/, '标脏钩子必须读 fileService 的 relativePath')
+  assert.match(mainSource, /markDirty\(\{\s*root:\s*projectRoot,\s*paths:\s*\[relativePath\]\s*\}\)/, '写成功后按相对路径标脏')
+  assert.match(mainSource, /app\.on\('before-quit'/, '关窗必须兜底提交')
+  assert.match(mainSource, /historyScheduler\.beforeQuit\(\)/, '兜底提交走调度器（与定时/手动同一队列）')
+})
+
 test('界面缩放是产品参数不是巧合：默认 0.85（作者口径）且 env 可覆写，菜单里有缩放入口', async () => {
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
   assert.match(mainSource, /PINAX_NEXT_ZOOM/, '缩放必须可用 PINAX_NEXT_ZOOM 覆写')
@@ -327,6 +430,34 @@ test('偏好通道（批次8①）：读/写/探测三分，写后生效钩子�
   assert.match(String(denied.error?.message), /偏好存储未接入/)
   const deniedProbe = await bare.dispatch(IPC_CHANNELS.prefsProbeModelPlane, {})
   assert.match(String(deniedProbe.error?.message), /探测未接入/)
+})
+
+test('历史间隔（D1）：prefs:set 透传 historyIntervalMinutes，默认 5、0–120 值域', async () => {
+  assert.equal(PREFS_DEFAULTS.historyIntervalMinutes, 5, '默认 5 分钟一存')
+  let captured = null
+  const store = {
+    read: async () => ({ ok: true, value: { ...PREFS_DEFAULTS } }),
+    write: async (patch) => {
+      captured = patch
+      return { ok: true, value: { ...PREFS_DEFAULTS, ...patch } }
+    }
+  }
+  const dispatcher = createIpcDispatcher({ session: harness().session, prefs: store })
+  const written = await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { historyIntervalMinutes: 0 })
+  assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+  assert.equal(captured.historyIntervalMinutes, 0, '0（关闭定时快照）必须原样透传到偏好存储')
+
+  // 载荷没带这一项时不能凭空写进去：否则每次改缩放/端点都会把间隔重置回默认。
+  captured = null
+  await dispatcher.dispatch(IPC_CHANNELS.prefsSet, { uiZoom: 0.9 })
+  assert.equal('historyIntervalMinutes' in captured, false)
+
+  for (const minutes of [0, 1, 120]) {
+    assert.equal(normalizePrefs({ historyIntervalMinutes: minutes }).value.historyIntervalMinutes, minutes)
+  }
+  for (const bad of [-1, 121, 1.5, '大']) {
+    assert.equal(normalizePrefs({ historyIntervalMinutes: bad }).ok, false, `应拒绝 ${JSON.stringify(bad)}`)
+  }
 })
 
 test('主进程把偏好真正接到网关与窗口：端点 setter、启动即应用、保存即生效都写在 main.mjs', async () => {

@@ -95,8 +95,10 @@ describe('空框架外壳', () => {
     expect(wrapper.text()).toContain('bad.carrier')
     expect(wrapper.text()).toContain('这个项目要创作什么？')
 
-    // 渲染层唯一的外呼就是 view 通道：它拿不到内核实现，也就没有旁路写盘的可能。
-    expect(bridge.request.mock.calls.every((call) => call[0] === IPC_CHANNELS.view)).toBe(true)
+    // 渲染层的外呼只有外壳合同里的这几条：view（读视图）与偏好（D2 主题迁移/持久化）。
+    // 它拿不到内核实现，也就没有旁路写盘的可能。
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet]
+    expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
 
@@ -374,10 +376,12 @@ describe('偏好与模型面板（批次8①）', () => {
     wrapper.unmount()
   })
 
-  it('外观主题段：偏好面里的单选写回同一份 localStorage 契约', async () => {
+  it('外观主题段（D2）：单选写偏好 JSON，并双写老 localStorage 键', async () => {
     globalThis.localStorage?.setItem('app_theme', 'light')
     const handlers = new Map()
-    const bridge = prefsBridge({ handlers })
+    const save = vi.fn(async (patch) => ({ ok: true, value: { ...patch } }))
+    handlers.set(IPC_CHANNELS.prefsSet, save)
+    const bridge = prefsBridge({ handlers, prefsValue: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } })
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
@@ -386,8 +390,38 @@ describe('偏好与模型面板（批次8①）', () => {
     const darkRadio = wrapper.find('input[name="prefs-theme"][value="dark"]')
     await darkRadio.setValue()
     await flushPromises()
+    expect(save).toHaveBeenCalledWith({ theme: 'dark' })
     expect(globalThis.localStorage.getItem('app_theme')).toBe('dark')
     expect(document.documentElement.className).toContain('theme-dark')
+    wrapper.unmount()
+  })
+
+  it('主题迁移（D2）：偏好里的 theme 是权威，挂载时覆盖老 localStorage 值并双写回去', async () => {
+    globalThis.localStorage?.setItem('app_theme', 'light')
+    const handlers = new Map()
+    const save = vi.fn(async (patch) => ({ ok: true, value: { ...patch } }))
+    handlers.set(IPC_CHANNELS.prefsSet, save)
+    const bridge = prefsBridge({ handlers, prefsValue: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'dark' } })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(document.documentElement.className).toContain('theme-dark')
+    expect(globalThis.localStorage.getItem('app_theme')).toBe('dark')
+    expect(save).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('主题（D2 修正）：偏好没有 theme 时写入应用默认值，不从浏览器缓存迁移（缓存不是权威）', async () => {
+    globalThis.localStorage?.setItem('app_theme', 'dark')
+    const handlers = new Map()
+    const save = vi.fn(async (patch) => ({ ok: true, value: { ...patch } }))
+    handlers.set(IPC_CHANNELS.prefsSet, save)
+    const bridge = prefsBridge({ handlers, prefsValue: { modelPlaneEndpoint: null, uiZoom: 0.85 } })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    // R3-1：浏览器缓存不是权威——旧 localStorage 里的 dark 不得被读回来，
+    // 首帧与应用默认（light）一致，并把默认值写进偏好补全字段。
+    expect(document.documentElement.className).toContain('theme-light')
+    expect(save).toHaveBeenCalledWith({ theme: 'light' })
     wrapper.unmount()
   })
 
@@ -522,7 +556,156 @@ describe('载体管理面板（工单A1）', () => {
     await flushPromises()
     // 没有 project 就没有面板：carrierSetEnabled/carrierSetPrimary 在通道层同样要求先有项目。
     expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
-    expect(bridge.request.mock.calls.every((call) => call[0] === IPC_CHANNELS.view)).toBe(true)
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet]
+    expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
+    wrapper.unmount()
+  })
+})
+
+describe('文档历史面板（D2 · R3-3）', () => {
+  const OLD_OID = 'a'.repeat(40)
+  const NEW_OID = 'b'.repeat(40)
+  const SNAPSHOTS = [
+    { oid: NEW_OID, message: 'snapshot 2026-10-28 15:00 · 1 文件\n\n正文/雨夜.md', when: '2026-10-28T07:00:00.000Z', author: 'pinax' },
+    { oid: OLD_OID, message: 'snapshot 2026-10-28 14:00 · 1 文件', when: '2026-10-28T06:00:00.000Z', author: 'pinax' }
+  ]
+  const AFTER_RESTORE = [
+    { oid: 'c'.repeat(40), message: '恢复 · 雨夜 → aaaaaaa', when: '2026-10-28T08:00:00.000Z', author: 'pinax' },
+    ...SNAPSHOTS
+  ]
+  const DIFF = [
+    { type: 'ctx', line: 1, text: '雨夜。' },
+    { type: 'del', line: 2, text: '旧句' },
+    { type: 'add', line: 2, text: '新句' }
+  ]
+
+  /**
+   * 历史面板的桥：view／章节工具／历史五通道全部按真实合同形状回。
+   * prefsGet 带 theme，避免挂载时的主题迁移写把 save 调用计数搅乱。
+   */
+  function historyBridge({ handlers = new Map(), probe = { available: true, reason: null }, listHandler = null } = {}) {
+    const calls = { list: [], diff: [], show: [], save: [], commit: [] }
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      if (channel === IPC_CHANNELS.historyProbe) return { ok: true, value: probe }
+      if (channel === IPC_CHANNELS.historyList) {
+        calls.list.push(payload)
+        return listHandler ? listHandler(payload, calls.list.length) : { ok: true, value: SNAPSHOTS }
+      }
+      if (channel === IPC_CHANNELS.historyDiff) {
+        calls.diff.push(payload)
+        return { ok: true, value: { hunks: DIFF } }
+      }
+      if (channel === IPC_CHANNELS.historyShow) {
+        calls.show.push(payload)
+        return { ok: true, value: '雨夜旧版。\n' }
+      }
+      if (channel === IPC_CHANNELS.historyCommitNow) {
+        calls.commit.push(payload)
+        return { ok: true, value: { committed: true } }
+      }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        if (payload.tool === 'pinax_chapter_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapters: [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }] } } }
+        }
+        if (payload.tool === 'pinax_chapter_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: 0, title: '雨夜', file: payload.args.file }, text: '雨夜。', totalChars: 3, truncated: false, revision: 1 } } }
+        }
+        if (payload.tool === 'pinax_chapter_save') {
+          calls.save.push(payload)
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, file: payload.args.file, revision: 2 } } }
+        }
+      }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent, calls }
+  }
+
+  async function openHistoryFromMenu(bridge, handlers) {
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.history' })
+    await flushPromises()
+    return wrapper
+  }
+
+  it('索引窗「历史…」：列表→选中→diff→恢复走载体 save（带 expectedRevision），二次确认不另开弹窗', async () => {
+    const handlers = new Map()
+    const bridge = historyBridge({
+      handlers,
+      listHandler: (_payload, call) => ({ ok: true, value: call === 1 ? SNAPSHOTS : AFTER_RESTORE })
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const historyAction = wrapper.find('.nx-index-window .nx-index-history')
+    expect(historyAction.exists()).toBe(true)
+    await historyAction.trigger('click')
+    await flushPromises()
+
+    const panel = wrapper.find('[aria-label="文档历史"]')
+    expect(panel.exists()).toBe(true)
+    // 「文档」组出现在统一目录里，历史节是它唯一的一节。
+    expect(panel.attributes('role')).toBe('tabpanel')
+    expect(wrapper.find('[data-test="settings-tab-history"]').exists()).toBe(true)
+    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toContain('文档')
+
+    const rows = panel.findAll('.history-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('snapshot 2026-10-28 15:00')
+    expect(rows[0].text()).toContain('2026-10-28 15:00')
+    expect(rows[0].classes()).toContain('is-active')
+    // 最新一版自动选中：diff 相对上一版（旧→新）。
+    expect(bridge.calls.diff.at(-1)).toEqual({ a: OLD_OID, b: NEW_OID, path: '正文/雨夜.md' })
+    expect(panel.find('.history-diff-line.is-del').text()).toContain('旧句')
+    expect(panel.find('.history-diff-line.is-add').text()).toContain('新句')
+    expect(panel.find('.history-diff-line.is-ctx').text()).toContain('雨夜。')
+
+    // 第一次点「恢复到这一版」只进二次确认态：同一枚弹窗里，不另开。
+    await panel.find('.history-restore').trigger('click')
+    await flushPromises()
+    expect(panel.find('.history-confirm').exists()).toBe(true)
+    expect(wrapper.findAll('.workbench-modal')).toHaveLength(1)
+
+    await panel.find('.history-confirm .control-primary').trigger('click')
+    await flushPromises()
+
+    expect(bridge.calls.show).toContainEqual({ oid: NEW_OID, path: '正文/雨夜.md' })
+    expect(bridge.calls.save).toHaveLength(1)
+    expect(bridge.calls.save[0].tool).toBe('pinax_chapter_save')
+    expect(bridge.calls.save[0].args).toEqual({ file: '正文/雨夜.md', text: '雨夜旧版。\n', expectedRevision: 1 })
+    expect(bridge.calls.commit.length).toBeGreaterThanOrEqual(2)
+    expect(panel.find('.history-feedback.is-ok').text()).toContain('已恢复')
+    expect(bridge.calls.list.length).toBeGreaterThanOrEqual(2)
+    wrapper.unmount()
+  })
+
+  it('不可用态：历史仓库缺失时如实显示，不拉假列表', async () => {
+    const handlers = new Map()
+    const bridge = historyBridge({ handlers, probe: { available: false, reason: 'history-repo-missing' } })
+    const wrapper = await openHistoryFromMenu(bridge, handlers)
+
+    const panel = wrapper.find('[aria-label="文档历史"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.find('.history-unavailable').text()).toContain('历史不可用')
+    expect(panel.find('.history-retry').exists()).toBe(true)
+    expect(panel.findAll('.history-row')).toHaveLength(0)
+    expect(bridge.calls.list).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('空态：文档还没有快照时给说明，不摆空列表', async () => {
+    const handlers = new Map()
+    const bridge = historyBridge({ handlers, listHandler: () => ({ ok: true, value: [] }) })
+    const wrapper = await openHistoryFromMenu(bridge, handlers)
+
+    const panel = wrapper.find('[aria-label="文档历史"]')
+    expect(panel.find('.history-empty').text()).toContain('还没有历史快照')
+    expect(panel.findAll('.history-row')).toHaveLength(0)
     wrapper.unmount()
   })
 })

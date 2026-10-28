@@ -11,18 +11,25 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   - 密钥永不入此文件——模型凭据仍由任务面（serve:pinax）持有，Next 只管「端点指到哪」；
  *   - 文件是 JSON、原子写（复用 fs/atomicWrite）；损坏时按默认值继续，不崩外壳。
  *
- * 合同（写进门禁的字段就这两个，加字段先改这里和 AppNext 的草稿表单）：
+ * 合同（写进门禁的字段就这几个，加字段先改这里和 AppNext 的草稿表单）：
  *   modelPlaneEndpoint：null（用默认 8451）或 http(s)://… 字符串；
- *   uiZoom：null（用默认 0.85）或 0.5–2.0 的数字。
+ *   uiZoom：null（用默认 0.85）或 0.5–2.0 的数字；
+ *   historyIntervalMinutes：5（默认）或 0–120 的整数，0＝关闭定时快照（D1）；
+ *   theme：可选迁移字段（D2）——'light' / 'dark' / null；缺省表示「还没迁过」，
+ *     渲染层用老 localStorage 的值兜底并一次性迁入（老前端退役后删掉那条兜底）。
  */
 
 export const PREFS_DEFAULTS = Object.freeze({
   modelPlaneEndpoint: null,
-  uiZoom: null
+  uiZoom: null,
+  historyIntervalMinutes: 5
 })
 
 const ZOOM_MIN = 0.5
 const ZOOM_MAX = 2
+const HISTORY_INTERVAL_MIN = 0
+const HISTORY_INTERVAL_MAX = 120
+const THEMES = new Set(['light', 'dark'])
 
 export function isValidEndpoint(value) {
   if (value === null || value === undefined || value === '') return true
@@ -51,6 +58,25 @@ export function normalizePrefs(raw) {
       if (!Number.isFinite(num) || num < ZOOM_MIN || num > ZOOM_MAX) return { ok: false, error: `uiZoom 必须在 ${ZOOM_MIN}–${ZOOM_MAX} 之间，收到：${JSON.stringify(value ?? null)}` }
       out.uiZoom = num
     }
+  }
+  if ('historyIntervalMinutes' in source) {
+    const value = source.historyIntervalMinutes
+    if (value === null || value === undefined || value === '') {
+      out.historyIntervalMinutes = PREFS_DEFAULTS.historyIntervalMinutes
+    } else {
+      const num = typeof value === 'number' ? value : Number(String(value).trim())
+      if (!Number.isInteger(num) || num < HISTORY_INTERVAL_MIN || num > HISTORY_INTERVAL_MAX) {
+        return { ok: false, error: `historyIntervalMinutes 必须是 ${HISTORY_INTERVAL_MIN}–${HISTORY_INTERVAL_MAX} 的整数（0＝关闭），收到：${JSON.stringify(value ?? null)}` }
+      }
+      out.historyIntervalMinutes = num
+    }
+  }
+  if ('theme' in source) {
+    // D2 主题迁移：null / 空串表示「还没迁过」，渲染层用老 localStorage 的值兜底。
+    const value = source.theme
+    if (value === null || value === undefined || value === '') out.theme = null
+    else if (THEMES.has(String(value))) out.theme = String(value)
+    else return { ok: false, error: `theme 必须是 light／dark 或 null，收到：${JSON.stringify(value ?? null)}` }
   }
   return { ok: true, value: out }
 }

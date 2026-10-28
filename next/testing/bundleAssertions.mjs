@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
 import { readdir, readFile, stat } from 'node:fs/promises'
+import { isBuiltin } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'vite'
@@ -10,6 +11,7 @@ import { build } from 'vite'
  *   a 构建参数：build.ssr ＋ ssr.noExternal:true（缺一条就坏，一条炸在 node:crypto，一条装机即断）
  *   b 裸导入白名单：用 rollup 自己的 generateBundle 结果判定，不用正则扫文本
  *     —— 正则会把 ajv 代码生成里的 `require("ajv/dist/runtime/uri")` 字符串和 SDK 的 JSDoc 误判成裸导入。
+ *     Node 内建按 isBuiltin 放行（isomorphic-git 的 CJS 产物会以 `crypto`／`buffer` 裸名出现）。
  *   c Express 不进桌包。
  *   d 产物自足可执行：直接 import 产物跑一次 in-process 往返，"编译通过"不算数。
  *   e 外壳 bundle 同规则（a4/b2），并且应用菜单是真的打进产物里（今天 electron/ 里 grep 不到 Menu）。
@@ -20,6 +22,20 @@ const repoRoot = resolve(here, '..', '..')
 const CONFIG_PATH = join(repoRoot, 'next', 'vite.next.main.config.mjs')
 const BUNDLE_PATH = join(repoRoot, 'next', '.build', 'pinax-next-main.mjs')
 const ALLOWED_BARE = new Set(['electron', 'better-sqlite3', 'bindings', 'file-uri-to-path'])
+
+/**
+ * 外部说明符是否可接受：相对路径、Node 内建（含不带 node: 前缀的写法）、白名单里的运行时依赖。
+ * isomorphic-git（R3 内置 git 库）的 CJS 产物 require('crypto')/require('buffer') 不带 node: 前缀，
+ * Vite SSR 会原样外部化；它们是 Node 内建而不是「没打进包的 npm 依赖」，所以按 isBuiltin 放行。
+ * 白名单本身没动：新增 npm 依赖仍必须经 ssr.noExternal 内联进 bundle。
+ */
+function isAllowedExternal(specifier) {
+  return specifier.startsWith('.')
+    || specifier.startsWith('/')
+    || specifier.startsWith('node:')
+    || isBuiltin(specifier)
+    || ALLOWED_BARE.has(specifier)
+}
 
 const failures = []
 function check(name, passed, note = '') {
@@ -52,14 +68,17 @@ await build({
 })
 
 const offenders = [...captured.imports, ...captured.dynamicImports]
-  .filter((specifier) => !specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.startsWith('node:') && !ALLOWED_BARE.has(specifier))
-check('b 裸导入白名单：产物只剩 electron／node:*／原生模块', offenders.length === 0, offenders.join(', ') || `外部说明符 ${captured.imports.length + captured.dynamicImports.length} 条`)
+  .filter((specifier) => !isAllowedExternal(specifier))
+check('b 裸导入白名单：产物只剩 electron／Node 内建／原生模块', offenders.length === 0, offenders.join(', ') || `外部说明符 ${captured.imports.length + captured.dynamicImports.length} 条`)
 
 const bundle = await readFile(BUNDLE_PATH, 'utf-8')
 check('c Express 不进桌包：产物内 express 命中 0', (bundle.match(/\bexpress\b/g) ?? []).length === 0)
 
+// R3 裁定（2026-10-28，作者原话「忽略这个门禁，可以把它打到包里面」）：内置 git 库随包发布，
+// 体积上限 1.6 MB → 6 MB。实际值继续打印，涨到哪儿一眼看得见（isomorphic-git 约 +1 MB 级，
+// 设计见 docs/plan/next-git-history-design-20261028.md §3）。
 const info = await stat(BUNDLE_PATH)
-check('体积记账：主进程 bundle 未压缩 < 1.6 MB', info.size < 1.6 * 1024 * 1024, `${(info.size / 1024).toFixed(1)} kB`)
+check('体积记账：主进程 bundle 未压缩 < 6 MB（按 R3 裁定：内置 git 库随包发布）', info.size < 6 * 1024 * 1024, `${(info.size / 1024).toFixed(1)} kB`)
 
 // d：把产物当真装机的模块跑一遍（桩 2d 的做法——只"编译通过"不算自足）。
 try {
@@ -102,8 +121,8 @@ await build({
   }]
 })
 const shellOffenders = shellCaptured.imports
-  .filter((specifier) => !specifier.startsWith('.') && !specifier.startsWith('/') && !specifier.startsWith('node:') && !ALLOWED_BARE.has(specifier))
-check('b2 外壳 bundle 裸导入白名单：只剩 electron／node:*／原生模块', shellOffenders.length === 0, shellOffenders.join(', ') || `外部说明符 ${shellCaptured.imports.length} 条`)
+  .filter((specifier) => !isAllowedExternal(specifier))
+check('b2 外壳 bundle 裸导入白名单：只剩 electron／Node 内建／原生模块', shellOffenders.length === 0, shellOffenders.join(', ') || `外部说明符 ${shellCaptured.imports.length} 条`)
 
 const shellBundle = await readFile(SHELL_BUNDLE_PATH, 'utf-8')
 // 今天整个 electron/ 目录 grep 不到 Menu——这条断言保证 Next 的应用菜单是真的进了产物。
@@ -122,11 +141,44 @@ check('f 渲染层依赖薄：不含内核工具面与旧轨代码',
   !/pinax_project_open/.test(rendererSource) && !/createPinaxMcpServer/.test(rendererSource) && !/__vite-browser-external/.test(rendererSource),
   `renderer js ${(rendererBytes / 1024).toFixed(1)} kB`)
 
+// R3-3 运行时不变量：内置 git 库只在主进程用，渲染层产物不得含 git 历史引擎的任何标记。
+// 误引一次就等于把 Node 专用代码与 ~1 MB 包体拖进渲染层，还会在 jsdom/窗口里直接炸。
+const GIT_LIBRARY_MARKERS = ['isomorphic-git', 'gitdir', 'commitSnapshot', 'HISTORY_UNAVAILABLE', 'next/history']
+const rendererGitHits = []
+for (const name of rendererJs) {
+  const text = await readFile(join(rendererDir, name), 'utf-8')
+  for (const marker of GIT_LIBRARY_MARKERS) {
+    if (text.includes(marker)) rendererGitHits.push(`${name}:${marker}`)
+  }
+}
+check('f2 渲染层产物不含 isomorphic-git：git 历史只归主进程',
+  rendererGitHits.length === 0,
+  rendererGitHits.join(', ') || `扫了 ${rendererJs.length} 个 js`)
+
+// 渲染层是从 next/shell 根构建的：源码里出现 history 导入就是越界的早期信号（产物断言 f2 是最后一道）。
+// main.mjs 是 Electron 主进程入口（D1 起它要建历史仓库、起定时器），不是渲染层源码；
+// 它没有进入渲染层产物（入口是 index.html），渲染层可达性由 f2 的产物断言兜底。
+const shellSourceFiles = (await collectSourceFiles(join(repoRoot, 'next', 'shell')))
+  .filter((rel) => rel !== 'main.mjs')
+const historyImportHits = []
+for (const rel of shellSourceFiles) {
+  const text = await readFile(join(repoRoot, 'next', 'shell', rel), 'utf-8')
+  const specifiers = [...text.matchAll(/(?:import|from)\s*(?:\(\s*)?['"]([^'"]+)['"]/g)].map((match) => match[1])
+  for (const specifier of specifiers) {
+    if (/(?:^|\/)history\//.test(specifier)) historyImportHits.push(`${rel} → ${specifier}`)
+  }
+}
+check('l 渲染层外壳源码不 import next/history/：git 历史引擎不得进渲染层',
+  historyImportHits.length === 0,
+  historyImportHits.join(', ') || `扫了 ${shellSourceFiles.length} 个渲染层源文件`)
+
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
+// 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，
+// 旧正则 join\\(currentDir… 会被标识符改名误伤（门禁该守路径，不该守压缩后的变量名）。
 const rendererHtml = join(repoRoot, 'next', '.build', 'renderer-next', 'index.html')
 const htmlExists = await stat(rendererHtml).then(() => true, () => false)
-check('g 外壳 prod 加载路径指得到渲染层产物：bundle 同级 renderer-next/index.html 存在，且产物里就是这个写法',
-  htmlExists && /join\(currentDir, "renderer-next", "index\.html"\)/.test(shellBundle),
+check('g 外壳 prod 加载路径指得到渲染层产物：bundle 同级 renderer-next/index.html 存在，且产物调用了该路径',
+  htmlExists && /currentDir,\s*"renderer-next",\s*"index\.html"/.test(shellBundle),
   htmlExists ? 'next/.build/renderer-next/index.html' : '产物缺失')
 
 // 风格复用要真的进到产物里：渲染层 CSS 必须带着老前端那套控件词汇与 token（明暗两套），
@@ -175,6 +227,17 @@ const missingPreload = preloadExists ? preloadMarkers.filter((marker) => !preloa
 check('k preload 在产物里：bundle 同级 preload.mjs 存在且带 contextBridge 桥面与通道白名单',
   preloadExists && missingPreload.length === 0,
   missingPreload.length ? `缺 ${missingPreload.join(' ')}` : `${(preloadSource.length / 1024).toFixed(1)} kB`)
+
+/** 递归收集源码清单（外壳源码断言用；与 shell-contract 的 collectShellSources 同一口径）。 */
+async function collectSourceFiles(directory, prefix = '') {
+  const found = []
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) found.push(...await collectSourceFiles(join(directory, entry.name), rel))
+    else if (/\.(mjs|vue|html|js)$/.test(entry.name)) found.push(rel)
+  }
+  return found
+}
 
 if (failures.length) {
   console.log(`\n打包门禁：${failures.length} 项不合格 → ${failures.join(' / ')}`)

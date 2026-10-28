@@ -336,4 +336,32 @@ test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目
   for (const needle of ['settings-navigation', 'settings-tab', 'settings-section', 'role="tablist"', 'role="tabpanel"', 'WorkbenchModal']) {
     assert.ok(settings.includes(needle), `SettingsModal 缺老版设置弹窗的目录词汇：${needle}`)
   }
+  // D2：目录分两组（设置／文档），文档历史节登记在「文档」组里。
+  assert.ok(settings.includes('settings-group-label'), 'SettingsModal 缺分组标题（设置／文档）的目录词汇')
+})
+
+/**
+ * R3-1／D2：主题的权威来源迁到偏好 JSON，next/shell 源码不得再出现 localStorage。
+ * 唯一例外是 theme.mjs 里带 legacy-localstorage-bridge 标记的过渡双写块（老前端退役后删）。
+ * 这个例外是会退役的：双写块删掉后为 0 处访问，断言仍通过；其它文件一旦出现 localStorage 立刻红。
+ */
+test('next/shell 源码不得出现 localStorage（唯一过渡例外：theme.mjs 的老前端双写块）', async () => {
+  const files = (await walk(shellDir)).filter((file) => /\.(mjs|js|vue|html)$/u.test(file))
+  const offenders = []
+  for (const file of files) {
+    if (file.endsWith('theme.mjs')) continue
+    // 注释里提到这个词不算使用（theme 迁移的说明文字要能写清楚）；只看去掉注释后的源码。
+    const text = stripComments(await readFile(file, 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+    if (text.includes('localStorage')) offenders.push(file)
+  }
+  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
+
+  const theme = await readFile(join(shellDir, 'theme.mjs'), 'utf-8')
+  const accesses = (theme.match(/\.localStorage/g) ?? []).length
+  assert.ok(accesses <= 1, `过渡期只允许「只写不读」的一处 localStorage 访问（读会造出第二个真相源），实际 ${accesses} 处`)
+  if (accesses > 0) {
+    assert.match(theme, /legacy-localstorage-bridge/, 'theme.mjs 的过渡双写块必须带 legacy-localstorage-bridge 标记')
+    assert.match(theme, /老前端退役后删/, '过渡双写块必须写明老前端退役后删除')
+    assert.doesNotMatch(stripComments(theme), /\.localStorage\??\.getItem/u, '禁止读浏览器缓存：权威来源只能是偏好 JSON')
+  }
 })

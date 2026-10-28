@@ -18,7 +18,7 @@ const props = defineProps({
   archive: { type: Array, default: () => [] },
   width: { type: Number, default: 256 }
 })
-const emit = defineEmits(['collapse'])
+const emit = defineEmits(['collapse', 'history'])
 
 const newTitle = ref('')
 
@@ -85,7 +85,7 @@ watch(() => props.board?.id, () => {
         </div>
         <p class="workspace-nav-section">{{ treeDir }}</p>
         <ul class="nx-tree">
-          <li v-for="item in data.chapters" :key="item.file">
+          <li v-for="item in data.chapters" :key="item.file" class="nx-tree-line">
             <button
               type="button"
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
@@ -96,6 +96,12 @@ watch(() => props.board?.id, () => {
               <span class="workspace-nav-label">{{ item.index + 1 }}. {{ item.title }}</span>
               <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
             </button>
+            <button
+              type="button"
+              class="nx-row nx-index-history"
+              :aria-label="`「${item.title}」的历史`"
+              @click.stop="emit('history', { type: 'chapter', item })"
+            >历史…</button>
           </li>
         </ul>
         <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
@@ -104,7 +110,7 @@ watch(() => props.board?.id, () => {
              大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
         <p class="workspace-nav-section">大纲</p>
         <ul class="nx-tree">
-          <li v-for="(node, index) in data.outline" :key="node.id ?? `outline-${index}`">
+          <li v-for="(node, index) in data.outline" :key="node.id ?? `outline-${index}`" class="nx-tree-line">
             <button
               type="button"
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
@@ -114,6 +120,12 @@ watch(() => props.board?.id, () => {
             >
               <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
             </button>
+            <button
+              type="button"
+              class="nx-row nx-index-history"
+              :aria-label="`大纲「${node.title}」节点的历史`"
+              @click.stop="emit('history', { type: 'outline', index })"
+            >历史…</button>
           </li>
         </ul>
         <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty">
@@ -126,7 +138,7 @@ watch(() => props.board?.id, () => {
              点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。 -->
         <p class="workspace-nav-section">构思</p>
         <ul class="nx-tree">
-          <li v-for="item in data.notes" :key="item.file">
+          <li v-for="item in data.notes" :key="item.file" class="nx-tree-line">
             <button
               type="button"
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
@@ -137,6 +149,12 @@ watch(() => props.board?.id, () => {
               <span class="workspace-nav-label">{{ item.title }}</span>
               <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
             </button>
+            <button
+              type="button"
+              class="nx-row nx-index-history"
+              :aria-label="`「${item.title}」的历史`"
+              @click.stop="emit('history', { type: 'note', item })"
+            >历史…</button>
           </li>
         </ul>
         <p v-if="!data.notes.length && !data.notesError" class="nx-index-empty">构思还没有内容（构思/）。</p>
@@ -146,7 +164,7 @@ watch(() => props.board?.id, () => {
       <template v-else-if="treeKind === 'entries'">
         <p class="workspace-nav-section">{{ treeDir }}</p>
         <ul class="nx-tree">
-          <li v-for="item in data.entries" :key="item.path">
+          <li v-for="item in data.entries" :key="item.path" class="nx-tree-line">
             <button
               type="button"
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
@@ -157,6 +175,12 @@ watch(() => props.board?.id, () => {
               <span class="workspace-nav-label">{{ item.name }}</span>
               <span class="workspace-nav-meta">{{ item.chars }} 字<template v-if="item.contract === false"> · 未建档</template></span>
             </button>
+            <button
+              type="button"
+              class="nx-row nx-index-history"
+              :aria-label="`「${item.name}」的历史`"
+              @click.stop="emit('history', { type: 'entry', item })"
+            >历史…</button>
           </li>
         </ul>
         <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
@@ -180,3 +204,32 @@ watch(() => props.board?.id, () => {
     </div>
   </aside>
 </template>
+
+<style scoped>
+/* 行上下文动作（D2）：每行右侧一枚小「历史…」，不挤走行本体。
+   行本体仍是老版 .workspace-nav-item 词汇；这里只摆位置与尺寸。 */
+.nx-tree-line {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.nx-tree-line > .nx-tree-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.nx-index-history {
+  flex: none;
+  width: auto;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+  opacity: 0.75;
+}
+.nx-index-history:hover,
+.nx-index-history:focus-visible {
+  color: var(--archive-ink);
+  opacity: 1;
+}
+</style>

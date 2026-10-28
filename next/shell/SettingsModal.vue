@@ -10,9 +10,10 @@ import WorkbenchModal from './WorkbenchModal.vue'
  * 右栏 section.settings-section，.modal-fade-* 过渡）。
  *
  * 底座是 WorkbenchModal（遮罩／圆角／Esc／过渡原样沿用，props open/dismissable/title 透传）。
- * 目录表 props.sections = [{ id, title, component, props? }] 注册——本批四节：
- * 偏好与模型／载体管理／新建项目／主载体选择；未登记的功能不许开弹窗
- * （门禁：next/tests/visual-contract.test.mjs「目录外弹窗不允许存在」的机器版）。
+ * 目录表 props.sections = [{ id, title, group?, component, props? }] 注册——D2 起两组：
+ * 「设置」偏好与模型／载体管理／新建项目／主载体选择；「文档」文档历史。
+ * 未登记的功能不许开弹窗（门禁：next/tests/visual-contract.test.mjs「目录外弹窗不允许存在」的机器版）。
+ * 分组标签和目录项同在 tablist 里：标签是 <p>，不是 tab，不参与 roving tabindex。
  *
  * 键盘语义取老版 tablist 的那半：目录 roving tabindex＋方向键换节（SettingsPopup.vue:489-501）。
  * 老版 C07 的 trapFocusWithin 焦点陷阱不在 Next 落地——它是 src/ 的 composable，
@@ -67,20 +68,26 @@ function onTablistKeydown(event) {
            （settings-tabs／settings-navigation 词汇、tablist／tab 角色与 roving tabindex）；
            按钮本体落 .nx-row（Next 行按钮 primitive），激活态与配色按老版原件重刷。 -->
       <nav class="settings-tabs settings-navigation" role="tablist" aria-label="设置分区" @keydown="onTablistKeydown">
-        <button
-          v-for="section in sections"
-          :id="`settings-tab-${section.id}`"
-          :key="section.id"
-          class="settings-tab nx-row"
-          :class="{ active: section.id === current?.id }"
-          :data-test="`settings-tab-${section.id}`"
-          role="tab"
-          :aria-selected="(section.id === current?.id).toString()"
-          :aria-controls="`settings-panel-${section.id}`"
-          :tabindex="section.id === current?.id ? 0 : -1"
-          type="button"
-          @click="select(section.id)"
-        >{{ section.title }}</button>
+        <template v-for="(section, index) in sections" :key="section.id">
+          <!-- 分组标签（D2「文档」组）：同一 tablist 里的静态标题，不是 tab，不参与方向键换节。 -->
+          <p
+            v-if="index === 0 || sections[index - 1]?.group !== section.group"
+            class="settings-group-label"
+            aria-hidden="true"
+          >{{ section.group ?? '设置' }}</p>
+          <button
+            :id="`settings-tab-${section.id}`"
+            class="settings-tab nx-row"
+            :class="{ active: section.id === current?.id }"
+            :data-test="`settings-tab-${section.id}`"
+            role="tab"
+            :aria-selected="(section.id === current?.id).toString()"
+            :aria-controls="`settings-panel-${section.id}`"
+            :tabindex="section.id === current?.id ? 0 : -1"
+            type="button"
+            @click="select(section.id)"
+          >{{ section.title }}</button>
+        </template>
       </nav>
 
       <div class="settings-modal__body">
@@ -140,6 +147,16 @@ function onTablistKeydown(event) {
   text-align: left;
   color: var(--text-secondary);
 }
+/* 分组标题（D2「设置」／「文档」）：老版设置弹窗的目录分段语义，静态文本不是 tab。 */
+.settings-navigation .settings-group-label {
+  margin: 8px 12px 2px;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+  letter-spacing: 0.06em;
+}
+.settings-navigation .settings-group-label:first-child {
+  margin-top: 0;
+}
 .settings-navigation .settings-tab.active {
   background: var(--bg-hover);
   color: var(--text-primary);
@@ -156,5 +173,6 @@ function onTablistKeydown(event) {
   .settings-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .settings-navigation { flex-direction: row; flex-wrap: nowrap; padding: 8px; overflow-x: auto; }
   .settings-navigation .settings-tab { min-height: 44px; flex: none; }
+  .settings-navigation .settings-group-label { display: none; }
 }
 </style>
