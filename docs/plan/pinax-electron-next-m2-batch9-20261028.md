@@ -15,8 +15,12 @@
 - 窄屏（≤860px）另走一套排布：竖条转横条、正文占上半屏、Pi-Agent 对话固定下半屏、索引窗变成点竖条才弹出的覆盖式抽屉。
 - 手机上打开的地址：**`http://192.168.1.130:8471/`**（本机 LAN 地址，宿主 `0.0.0.0`，`curl` 自测 200）。
   **不提供 `127.0.0.1`**（作者在手机侧那个地址打不开）；**没有擅自开公网隧道**（作者自己有 cloudflared）。
-- 真模型这一调在手机视口里也通：**6 055 ms / 7 046 ms** 两轮，回答＝一句结论＋6 条审稿意见＋3 条可执行动作。
+- 真模型这一调在手机视口里也通：**6 055 ms / 7 046 ms** 两轮，回答＝一句结论＋6 条审稿意见＋3 条可执行动作；
+  本批收尾时又跑了第三轮（**25 344 ms**，同一答案结构）——慢的那一轮是模型侧排队，不是链路问题。
 - 桌面窗口的三栏没被窄屏排布带歪：竖条 45px（44px 基准＋边框）／索引窗 256px／核心区 1004px／右栏 360px（视口 1675px）。
+- **桌面窗口这一侧也查清了**：先前那些「Renderer process crashed / GPU exit 143」里，**应用没死**（主进程一直活着），
+  死的是 GPU 进程——这台机器提交内存被作者自己的 ComfyUI 占了 34.6 GB（上限 60.4 GB）。
+  用 `--in-process-gpu` ＋ 隔离的 `--user-data-dir` 起，**窗口四块全画出来了**（见 2.2 与 3.7–3.12）。
 
 **没做成的，如实记账**：① 预览口只服务「外壳＋真模型」这条链路，**载体写盘、偏好面板这些桌面专属路径在手机视口里没逐项走过**；
 ② 桌面那一侧仍然只有截图与计算样式，**没有真人坐在桌前点过一轮**；③ 窄屏排布只做了「能用」，**没做移动端手势**（滑出抽屉、点空白收起）；
@@ -90,15 +94,23 @@
 视口 1675px：竖条 **45**（44 基准＋边框，x=0）／索引窗 **256**（x=45）／核心区 **1004**（x=306）／右栏 **360**（x=1315）。
 索引窗行数 2 —— 窄屏那套排布没有污染桌面形态。
 
+桌面窗口本批又**重起了一轮并肉眼看图**：`23-desktop-preview.png` 里四块（图标竖条／索引窗含 3 行／核心区正文／右侧 Pi-Agent 对话框）
+都画出来了，右下角是输入框、上面是「工具面（20）」折叠条。**不是只量了计算样式。**
+
 ### 2.3 门禁（`npm run verify:next` 五段全绿）
 
 | 段 | 结果 |
 | --- | --- |
 | 验收 | **16/16** |
-| 内核单测 `node --test "next/tests/*.test.mjs"` | **129/129** |
-| 外壳界面测 `vitest run --config next/vitest.next.shell.config.mjs` | **29/29** |
+| 内核单测 `node --test "next/tests/*.test.mjs"` | **130/130** |
+| 外壳界面测 `vitest run --config next/vitest.next.shell.config.mjs` | **31/31** |
 | `npm run lint:next` | 0 错 0 警 |
-| 打包门禁 `node next/testing/bundleAssertions.mjs` | **a–k 全过**：主 bundle 860.9 kB、渲染层 js 304.3 kB、渲染层 CSS 89.9 kB、preload 1.8 kB、产物内 express 命中 0、import 产物后 in-process 列出 19 工具 |
+| 打包门禁 `node next/testing/bundleAssertions.mjs` | **a–k 全过**：主 bundle 861.0 kB、渲染层 js 309.3 kB、渲染层 CSS 89.9 kB、preload 1.8 kB、产物内 express 命中 0、import 产物后 in-process 列出 19 工具 |
+
+> **门禁数字与批次 8 记录差 +1／+2（129→130、29→31）**：差的这两条不在本批的改动里——
+> `next/tests/shell-contract.test.mjs`（mtime 08:40，多了「选目录通道（批次9）」一条）与
+> `next/tests/shell-ui.spec.mjs`（mtime 08:44，多了「外观主题段」「新建项目走选目录」两条），
+> 与本批的窄屏适配在同一工作副本里并发改过。**改动的归属与先后不可考**，这里只记账数字。
 
 **本批没有新增门禁**：窄屏排布走的是既有 `@media` 与既有 token；`legacy-copied` 豁免沿用批次 6 的写法（补回的是老版原话度量，不是新刻度）。
 **也没有放松任何既有门禁口径**。
@@ -130,7 +142,7 @@
    **教训：门禁跑的是 jsdom，不是浏览器——浏览器才有的 API 必须自己判。**
 6. **抽象过来的老版样式少了一条 gutter。** 见 1.5。老版那条 `padding-inline: var(--assistant-gutter)` 在拷贝时丢了，
    手机上引导语贴边。**教训：抄度量要连「让它为什么长这样」的那条一起抄。**
-7. **桌面预览窗口连着两次死掉，是两个不同的原因，都不是应用自己的锅。**
+7. **桌面预览窗口「死了」三次，其实只有一次是真死，其余两次是我自己造的。**
    - 第一次：Playwright 连 CDP 之后调 `browser.close()`，**把被测的 Electron 应用一起关掉**（退出码 1、9222 释放），
      看着像「应用自己崩了」。改法：CDP 连来的浏览器**不调 `close()`**，只断连接、让脚本进程自己退。
    - 第二次：上一批截图脚本（`_electron.launch`）留下的 **4 个孤儿 `electron.exe`** 占着共享的 `%APPDATA%\Electron` 缓存目录，
@@ -138,6 +150,42 @@
      查法与处置：`Get-CimInstance Win32_Process -Filter "Name='electron.exe'"` 逐个看命令行，
      **只停命令行里带本仓 `node_modules/electron` 的那些**（作者的 Qoder 是 `Qoder.exe`，不受影响），停完确认 `electron.exe` 计数为 0 再起一个；
      起完用 `http://127.0.0.1:9222/json/list` 确认只有一个 page target。
+   - **第三次（也就是最后查清的那次）：应用根本没死。** 日志里那两行
+     `Renderer process crashed` / `GPU process exited unexpectedly: exit_code=143` 看着像应用崩了，
+     实测却是：**主进程一直活着**（`timeout` 到点才把它杀掉，退出码 143 是被杀出来的，不是崩出来的），
+     死的只是 **GPU 进程**与网络服务。**教训：看到「crashed」先分清是谁崩的——主进程活着就说明应用没死，
+     别把 GPU/子进程的退出当成应用的死。**
+
+8. **顶层 `await` 会和 Electron 的启动期互锁。** 诊断脚本里写成
+   `await startNextShell(...)`（模块顶层 await）时，现象是**永远停在启动第一步**：
+   Electron 等主模块求值（含顶层 await）结束才发 `ready`，而 `startNextShell` 内部又在等 `app.whenReady()`——
+   两头等，**死锁，`app.whenReady()` 永不返回**。改法：`startNextShell(...)` **不要顶层 await**，
+   挂 `.then()/.catch()` 即可（产品入口 `next/shell/main.mjs` 本身也是这样调的，没问题）。
+   **教训：Electron 的 ESM 主进程里，顶层 await 是一把刀。**
+
+9. **给 Electron 多传一个位置参数就会静默打死它。** `electron <script> <url> <另一个>` 这种传法，
+   第二个位置参数会让 Electron 直接退出（无任何输出、退出码 -1）。改法：**位置参数只留一个**（应用脚本本身），
+   其余参数（URL、preload 路径）一律走 **env** 传。**这条差点把排障带偏：一度误判成「preload 一加就死」。**
+
+10. **GPU 进程被系统掐掉的真因：这台机器的提交内存快满了。**
+    `Get-Counter '\Memory\Committed Bytes'` 实测在 **44–59 GB** 之间跳，提交上限 **60.4 GB**；
+    占了 **34.6 GB** 的是作者自己的 **ComfyUI**（`python main.py --port 8188`，PID 28428，03:59 起跑）。
+    Chromium 的 GPU 进程在提交额度见底时被系统终止（143＝SIGTERM），网络服务跟着一起重启。
+    **处置**：`--in-process-gpu`（GPU 不再单独起进程，错误行消失，窗口照常画出来）＋
+    隔离的 `--user-data-dir`（避开共享缓存）。**没有动作者的 ComfyUI**（他 8188 那个服务是他在用的东西，不碰）。
+
+11. **提交额度紧张时，「最小 Electron 壳能起、我们的应用起不来」是假象。** 中途做过一组矩阵：
+    最小壳 3/3 稳、带 preload 全灭——一度指向 preload；后来证明那个矩阵的失败来自第 9 条（多传位置参数），
+    与 preload 无关（改走 env 后，源码 preload 与打包 preload **都正常**，IPC 通道当场调通）。
+    **教训：矩阵实验的每个维度只能改一个；这次是两个维度一起动，差点得出一个假结论。**
+
+12. **这批的桌面窗口用这套参数是稳的**（实测 30 秒以上不退出、窗口四块全画出来、CDP 量得到列宽）：
+    ```bash
+    node node_modules/electron/cli.js D:/next-preview/preview-shell.mjs \
+      --user-data-dir=D:/next-preview/.ep-live2 \
+      --remote-debugging-port=9222 \
+      --in-process-gpu
+    ```
 
 ---
 
@@ -158,9 +206,15 @@ node D:/next-preview/serve-next-preview.mjs
 node D:/next-preview/check-phone-preview.mjs
 
 # ⑤ 桌面窗口（真实 Electron，CDP 9222）
-node D:/next-preview/start-preview.mjs
+#    三个参数缺一不可：隔离的 --user-data-dir（避开共享 %APPDATA%\Electron 缓存）、
+#    --in-process-gpu（本机提交额度紧张时 GPU 进程会被系统掐掉）、--remote-debugging-port（截图用）
+node node_modules/electron/cli.js D:/next-preview/preview-shell.mjs \
+  --user-data-dir=D:/next-preview/.ep-live2 --remote-debugging-port=9222 --in-process-gpu
 node D:/next-preview/shot-desktop.mjs
 ```
+
+> **注意**：`start-preview.mjs` 里若带了顶层 `await startNextShell(...)`，会撞上 3.8 那条死锁；
+> 起窗口的脚本一律用 `.then()/.catch()` 挂出去。
 
 ---
 
@@ -170,7 +224,10 @@ node D:/next-preview/shot-desktop.mjs
    **待裁**：这条手机口要不要收进产品（比如正式出一个 Web 形态），还是就停在「作者试手用」这一层。
 2. **载体写盘、偏好面板这些桌面专属路径在手机视口里没逐项走过。** 今天在手机上验证的是「外壳起得来＋真模型答得出＋索引窗能开合」，
    保存正文、新建章节这些写操作在桌面窗口验证过，手机视口没重跑。**待裁**：要不要把写操作也在手机视口跑一遍。
-3. **桌面那一侧仍然没有真人走查。** 悬停态、滚动、焦点环、真实点击的选中行为，只有静态截图与计算样式作证。
+3. **桌面那一侧仍然没有真人走查。** 窗口这轮确实起来了、四块都画出来了（不是只量计算样式），
+   但悬停态、滚动、焦点环、真实点击的选中行为，仍只有截图与计算样式作证。
+   另外 **`--in-process-gpu` 是绕开本机提交额度紧张的权宜之计**，不是产品结论：
+   提交额度的根本解法是停掉/瘦身 ComfyUI 或加大 pagefile，**那是作者机器上的事，本批没动**。
 4. **窄屏只做到「能用」。** 没有滑出手势、没有点空白处收起、没有横竖屏切换的专项处理。
 5. **回答质量仍然没有被测量。** 今天量的是链路、格式、素材齐不齐；答得对不对、好不好，仍是 1 个靶子项目、1 种任务。
 6. **批次 8 那条「本沙箱无任务面、未做真实模型调用」的记账，在本批被推翻**：本机隔离任务面（8461）上跑通了真模型调用
