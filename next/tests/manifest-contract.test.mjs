@@ -25,7 +25,14 @@ const cases = [
   ['工具名命名规则（C8 命名空间隔离的前半）', (m) => { m.tools = ['Chapter Read'] }, 'TOOL_CONFLICT'],
   ['未声明 scopes 即拒绝（第 7 节：白名单不是默认放行）', (m) => { delete m.scopes }, 'INVALID_MANIFEST'],
   ['agent 作用域只认 agent:ask', (m) => { m.scopes = ['file:正文:rw', 'agent:write'] }, 'INVALID_MANIFEST'],
-  ['context.budgetChars 越界拒绝', (m) => { m.context = { providers: ['chapter'], budgetChars: 9_999_999 } }, 'INVALID_MANIFEST']
+  ['context.budgetChars 越界拒绝', (m) => { m.context = { providers: ['chapter'], budgetChars: 9_999_999 } }, 'INVALID_MANIFEST'],
+  // 载体设置节（协议 P14 第二步）：声明了就必须是 [{ id, title }]，非法整份清单拒装（与其他字段同口径）。
+  ['settings 声明了就必须是数组', (m) => { m.settings = { id: 'novel.writing', title: '写作偏好' } }, 'INVALID_INPUT'],
+  ['settings.title 不得为空串', (m) => { m.settings = [{ id: 'novel.writing', title: '   ' }] }, 'INVALID_INPUT'],
+  ['settings.title 上限 40 字', (m) => { m.settings = [{ id: 'novel.writing', title: '写'.repeat(41) }] }, 'INVALID_INPUT'],
+  ['settings.id 须是载体命名空间内的小写名', (m) => { m.settings = [{ id: 'Novel Writing', title: '写作偏好' }] }, 'INVALID_INPUT'],
+  ['settings.id 在同一载体内不得重复', (m) => { m.settings = [{ id: 'novel.writing', title: '写作偏好' }, { id: 'novel.writing', title: '写作偏好二' }] }, 'INVALID_INPUT'],
+  ['settings 项不得多写字段（声明了却不生效的静默丢弃一律拒绝）', (m) => { m.settings = [{ id: 'novel.writing', title: '写作偏好', group: '载体' }] }, 'INVALID_INPUT']
 ]
 
 for (const [title, mutate, code] of cases) {
@@ -48,4 +55,21 @@ test('缺省可选项：未声明 requires 视作无依赖', () => {
   const result = validateCarrierManifest(withMutation(FIXTURE_NOVEL, (m) => { delete m.requires }))
   assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
   assert.deepEqual(result.value.requires, [])
+})
+
+test('settings 声明合法即原样透传（P14：载体设置进统一目录的唯一数据源）', () => {
+  // 边界一并钉住：title 恰好 40 字仍合法；第二条声明证明多条按声明顺序保留。
+  const declared = [
+    { id: 'novel.writing', title: '写作偏好' },
+    { id: 'novel.export', title: '写'.repeat(40) }
+  ]
+  const result = validateCarrierManifest(withMutation(FIXTURE_NOVEL, (m) => { m.settings = declared }))
+  assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
+  assert.deepEqual(result.value.settings, declared)
+})
+
+test('settings 缺省＝空数组：没声明的载体在设置页不出目录项', () => {
+  const result = validateCarrierManifest(FIXTURE_NOVEL)
+  assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
+  assert.deepEqual(result.value.settings, [])
 })

@@ -13,6 +13,9 @@ const PLUGIN_ID_PATTERN = /^[a-z][a-z0-9.-]{0,79}$/u
 const LOGICAL_NAME_PATTERN = /^[a-z][a-zA-Z0-9]{0,31}$/u
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/u
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_.]{1,63}$/u
+/** 载体设置节 id：载体命名空间内的小写名（与工具名的命名家族一致，不带大写与空格）。 */
+const SETTING_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u
+const SETTING_TITLE_MAX = 40
 
 /** 插件可用的槽位（C5）。right 是保留字——右栏归一级公民运行时，任何插件声明即拒。 */
 export const OPEN_SLOTS = Object.freeze(['left-dock', 'center'])
@@ -59,6 +62,8 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (!context.ok) return context
   const scopes = validateScopes(m.scopes, dataDirs.value, m.id)
   if (!scopes.ok) return scopes
+  const settings = validateSettings(m.settings, m.id)
+  if (!settings.ok) return settings
 
   return ok({
     spec: CARRIER_SPEC,
@@ -74,7 +79,8 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
     requires: requires.value,
     tools: tools.value,
     context: context.value,
-    scopes: scopes.value
+    scopes: scopes.value,
+    settings: settings.value
   })
 }
 
@@ -210,6 +216,39 @@ function validateContext(value, pluginId) {
     return fail('INVALID_MANIFEST', `${pluginId} 的 context.budgetChars 须是 0–400000 的整数`)
   }
   return ok({ providers: [...new Set(providers.map((item) => item.trim()))], budgetChars })
+}
+
+/**
+ * 载体设置节声明（协议 P14 第二步）：`[{ id, title }]`。
+ * id 在该载体自己的命名空间里唯一（不同载体可同名；设置页拼上载体前缀后做全局唯一）；
+ * title 是目录项显示文案，1–40 字。group 不由载体声明——统一二级页固定归「载体」组，
+ * 所以多写的字段直接拒装而不是静默丢弃（批次20 的遗留正是「声明了却不生效」）。
+ * 缺省＝[]：没声明设置的载体在设置页不出目录项（不再按载体标题伪造占位节）。
+ */
+function validateSettings(value, pluginId) {
+  if (value === undefined || value === null) return ok([])
+  if (!Array.isArray(value)) return fail('INVALID_INPUT', `${pluginId} 的 settings 必须是数组（可空，但声明了就得是数组）`)
+  const seen = new Set()
+  const out = []
+  for (const item of value) {
+    if (!isPlainObject(item)) return fail('INVALID_INPUT', `${pluginId} 的 settings 项必须是对象`)
+    for (const key of Object.keys(item)) {
+      if (key !== 'id' && key !== 'title') {
+        return fail('INVALID_INPUT', `${pluginId} 的 settings 项含未知字段 "${key}"：可声明字段只有 id / title（分组由设置页固定为「载体」）`, { pluginId, key })
+      }
+    }
+    if (typeof item.id !== 'string' || !SETTING_ID_PATTERN.test(item.id)) {
+      return fail('INVALID_INPUT', `${pluginId} 的 settings id 须匹配 ${SETTING_ID_PATTERN}（载体命名空间内的小写名）`, { id: item.id })
+    }
+    const title = typeof item.title === 'string' ? item.title.trim() : ''
+    if (!title || title.length > SETTING_TITLE_MAX) {
+      return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) title 须是 1–${SETTING_TITLE_MAX} 字的非空串`, { title: item.title })
+    }
+    if (seen.has(item.id)) return fail('INVALID_INPUT', `${pluginId} 的 settings id 重复：${item.id}`)
+    seen.add(item.id)
+    out.push({ id: item.id, title })
+  }
+  return ok(out)
 }
 
 function validateScopes(value, dataDirs, pluginId) {

@@ -42,9 +42,10 @@ export const NOVEL_CARRIER = Object.freeze({
   capabilities: ['text.chapters', 'outline.tree', 'notes.ideas'],
   requires: [],
 
-  // 协议 P14 载体设置注册（工单B 第一步）：声明格式 [{ id, title, group }]，
-  // 由统一设置二级页收进「载体」组。本批先空数组——具体设置项后续批再填。
-  settings: [],
+  // 协议 P14 载体设置注册（工单A 第二步）：声明格式 [{ id, title }]——id 在本载体命名空间内唯一，
+  // title 是统一设置二级页「载体」组里的目录项文案（1–40 字）。分组由设置页固定，不在这里声明。
+  // 「写作偏好」目前只有声明与空态（右栏「该载体的设置项还没有内容」），具体设置项后续批再填。
+  settings: [{ id: 'novel.writing', title: '写作偏好' }],
 
   tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'],
 

@@ -241,7 +241,8 @@ test('装了载体：建项目 → 三栏视图有条目 → 提案只落 .pinax
     const root = join(workspace.projects, '有载体的书')
     const session = await createNextSession({
       root,
-      plugins: [{ manifest: FIXTURE_NOVEL }, { manifest: FIXTURE_WORLDBOOK }],
+      // 小说夹具声明一条设置节：它必须穿过内核白名单与 shellView 两处透到渲染层（P14 第二步）。
+      plugins: [{ manifest: withMutation(FIXTURE_NOVEL, (m) => { m.settings = [{ id: 'novel.writing', title: '写作偏好' }] }) }, { manifest: FIXTURE_WORLDBOOK }],
       autoOpen: false
     })
     const dispatcher = createIpcDispatcher({ session })
@@ -257,6 +258,16 @@ test('装了载体：建项目 → 三栏视图有条目 → 提案只落 .pinax
     assert.equal(view.value.primary.title, '小说（夹具）')
     assert.deepEqual(view.value.skeletonDirs, [...PROJECT_KINDS.novel])
     assert.equal(view.value.carriers.length, 2)
+    assert.deepEqual(
+      view.value.carriers.find((item) => item.id === 'fixture.novel').settings,
+      [{ id: 'novel.writing', title: '写作偏好' }],
+      '载体声明的 settings 必须穿过内核白名单与 shellView，原样到渲染层（P14 第二步）'
+    )
+    assert.deepEqual(
+      view.value.carriers.find((item) => item.id === 'fixture.worldbook').settings,
+      [],
+      '没声明 settings 的载体按空数组透出：设置页据此不出目录项'
+    )
 
     const ask = await dispatcher.dispatch(IPC_CHANNELS.runtimeAsk, { question: '第一章现在多少字？' })
     assert.equal(ask.ok, false, '仍未接运行器，这里要的是如实报缺')

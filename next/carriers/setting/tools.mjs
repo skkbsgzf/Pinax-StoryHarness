@@ -22,8 +22,15 @@ import { SETTING_CARRIER, SETTING_CARRIER_ID } from './manifest.mjs'
  * text 的语义（调度方裁定 dwfq-f2369ffa-2）：保存的是正文；现有文件能解析出 frontmatter 的
  * （契约条目），id/type/keys/tags/relations 原样保留、只把正文换成 text——否则面板一保存
  * 就把条目建档信息洗掉，openEntry 按 id 重读的链路也会断；裸 md 与新建文件按原样整份写。
+ * 元数据口（工单C）：pinax_worldbook_save 的可选 meta＝{ keys?, tags?, summary? }，在契约条目上
+ * 覆盖解析出的对应字段（未提供的字段保持原值，id/type/relations 一律不给改）；裸 md 与新建
+ * 提供 meta 即 INVALID_INPUT——新建条目请先保存正文建档，再改关键词／标签。
  */
 const MAX_CONTENT_CHARS = 200_000
+/** 元数据口的一句话摘要上限（工单C）：超过就不落盘，不静默截断。 */
+const MAX_SUMMARY_CHARS = 500
+/** meta 只开这三个字段：relations 归关系图域、id 是稳定标识、type 走建档（工单C 边界）。 */
+const META_FIELDS = Object.freeze(['keys', 'tags', 'summary'])
 const WORLDBOOK_DIR = SETTING_CARRIER.dataDirs.entries
 const RULES_DIR = SETTING_CARRIER.dataDirs.constraints
 /** 约束列表随篇带回正文的上限（与构思速记的 pinax_notes_list 同一档）；超出截断并在条目上标注。 */
@@ -218,7 +225,7 @@ export function createSettingTools(context = {}) {
     {
       name: 'pinax_worldbook_save',
       title: '保存世界书条目（设定载体）',
-      description: '作者确认后的设定落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。保存的是条目正文：契约条目保留既有 frontmatter（id/type/keys/relations 不变），裸 md 与新建文件按原样整份写。写 世界书/ 走文件服务三道闸（归属＋file:世界书:rw＋并发），约束目录不在其列。',
+      description: '作者确认后的设定落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。保存的是条目正文：契约条目保留既有 frontmatter（id/type/keys/relations 不变），裸 md 与新建文件按原样整份写。可选 meta 只改已建档条目的元数据（keys 关键词／tags 标签／summary 摘要），未提供的字段保持原值；裸 md 与新建带 meta 即拒（先保存正文建档再改）。写 世界书/ 走文件服务三道闸（归属＋file:世界书:rw＋并发），约束目录不在其列。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -226,7 +233,29 @@ export function createSettingTools(context = {}) {
         properties: {
           path: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（世界书/ 下），与读取工具给回的 path 同一形状，如「世界书/人物·柯秒.md」或「人物·柯秒.md」。' },
           text: { type: 'string', minLength: 1, maxLength: MAX_CONTENT_CHARS, description: '条目正文（契约条目只换正文、frontmatter 原样保留；裸 md 与新建按原样整份写），故必须带修订号。' },
-          expectedRevision: { type: 'integer', minimum: 0, description: '读取时拿到的修订号；新建传 0。' }
+          expectedRevision: { type: 'integer', minimum: 0, description: '读取时拿到的修订号；新建传 0。' },
+          meta: {
+            type: 'object',
+            additionalProperties: false,
+            description: '可选：改条目元数据。只对已按世界书文件契约建档（有 frontmatter）的条目生效——未提供的字段保持原值；传空数组／空串表示清空该字段。裸 md 与新建文件提供 meta 即拒（新建请先保存正文建档，再改关键词／标签）；id 是稳定标识、relations 归关系图域，两者都不在这个口里。',
+            properties: {
+              keys: {
+                type: 'array',
+                items: { type: 'string', minLength: 1 },
+                description: '关键词（别名）：覆盖 frontmatter 的 keys，元素必须是非空字符串，如 ["柯秒", "秒子"]；传 [] 清空。'
+              },
+              tags: {
+                type: 'array',
+                items: { type: 'string', minLength: 1 },
+                description: '标签：覆盖 frontmatter 的 tags，元素必须是非空字符串，如 ["主角", "停摆的表"]；传 [] 清空。'
+              },
+              summary: {
+                type: 'string',
+                maxLength: MAX_SUMMARY_CHARS,
+                description: `一句话摘要（≤${MAX_SUMMARY_CHARS} 字）：覆盖 frontmatter 的 summary；传空串清空。`
+              }
+            }
+          }
         }
       },
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
@@ -242,11 +271,33 @@ export function createSettingTools(context = {}) {
         const relative = toDirRelative(WORLDBOOK_DIR, args.path)
         if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '世界书条目文件名必须以 .md 结尾', { path: args.path })
 
+        // 元数据口（工单C）：形状先判（与落盘与否无关），契约与否等读到现文件再判。
+        const metaProvided = args.meta !== undefined
+        let meta = null
+        if (metaProvided) {
+          const normalized = normalizeEntryMeta(args.meta)
+          if (!normalized.ok) return normalized
+          meta = normalized.value
+        }
+
         // 契约条目只换正文（调度方裁定 dwfq-f2369ffa-2）：写前读现文件，能解析出 frontmatter 就
         // 用同一对 parse/serialize 原样带回（不许自造第二套 frontmatter 格式）；裸 md 与新建原样写。
         const current = await fileService.read({ pluginId, dir: WORLDBOOK_DIR, file: relative })
         const parsed = current.ok ? parseWorldbookEntryFile(current.value.text) : null
-        const body = parsed?.ok ? serializeWorldbookEntryFile({ ...parsed.entry, content: args.text }) : args.text
+        if (metaProvided && !parsed?.ok) {
+          return fail('INVALID_INPUT', `「${relative}」不存在或没有可解析的 frontmatter（${parsed?.error?.message ?? current.error?.message ?? '未建档'}）：meta 只能改已按世界书文件契约建档的条目；新建条目请先保存正文建档，再改关键词／标签`, {
+            path: relative,
+            contract: false
+          })
+        }
+        const entry = parsed?.ok ? { ...parsed.entry, content: args.text } : null
+        if (entry && meta) {
+          // 未提供的字段保持原值；id/type/relations 不在 meta 里，天然动不到（工单C 边界）。
+          if (meta.keys !== undefined) entry.keys = meta.keys
+          if (meta.tags !== undefined) entry.tags = meta.tags
+          if (meta.summary !== undefined) entry.summary = meta.summary
+        }
+        const body = entry ? serializeWorldbookEntryFile(entry) : args.text
 
         const written = await fileService.write({ pluginId, dir: WORLDBOOK_DIR, file: relative, text: body, expectedRevision: args.expectedRevision })
         if (!written.ok) return written
@@ -340,6 +391,45 @@ export function createSettingTools(context = {}) {
 function toDirRelative(dir, path) {
   const normalized = String(path).replaceAll('\\', '/')
   return normalized.startsWith(`${dir}/`) ? normalized.slice(dir.length + 1) : normalized
+}
+
+/**
+ * meta 形状校验（工单C）：只认 keys / tags / summary。
+ * 数组元素必须是非空字符串（trim 后落盘）；summary 是字符串且 ≤500 字（传空串＝清空），
+ * 超长不静默截断。多写的字段直接拒——声明了却不生效正是作者最怕的那种「保存了但没变」。
+ */
+function normalizeEntryMeta(meta) {
+  if (!isPlainObject(meta)) return fail('INVALID_INPUT', 'meta 必须是对象：{ keys?, tags?, summary? }')
+  for (const key of Object.keys(meta)) {
+    if (!META_FIELDS.includes(key)) {
+      return fail('INVALID_INPUT', `meta 含未知字段 "${key}"：可改的元数据只有 keys / tags / summary（id 是稳定标识、relations 归关系图域，都不在这个口里）`, { key })
+    }
+  }
+  const out = {}
+  for (const field of ['keys', 'tags']) {
+    if (meta[field] === undefined) continue
+    if (!Array.isArray(meta[field])) return fail('INVALID_INPUT', `meta.${field} 必须是字符串数组`, { got: typeof meta[field] })
+    const values = []
+    for (const item of meta[field]) {
+      if (typeof item !== 'string' || !item.trim()) {
+        return fail('INVALID_INPUT', `meta.${field} 的元素必须是非空字符串`, { value: item === undefined ? null : item })
+      }
+      values.push(item.trim())
+    }
+    out[field] = values
+  }
+  if (meta.summary !== undefined) {
+    if (typeof meta.summary !== 'string') return fail('INVALID_INPUT', 'meta.summary 必须是字符串')
+    if (meta.summary.length > MAX_SUMMARY_CHARS) {
+      return fail('INVALID_INPUT', `meta.summary 超出上限 ${MAX_SUMMARY_CHARS} 字`, { got: meta.summary.length })
+    }
+    out.summary = meta.summary
+  }
+  return ok(out)
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 /** 标题→文件名：与小说载体的 chapterFileNameFromTitle 同一套规则（非法字符与控制字符换空格）。 */

@@ -2,7 +2,8 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 /**
- * 核心区里的载体面板：正文的编辑面、构思速记的编辑面（工单B1）、条目的阅读与编辑面（工单A2 起条目可改）、
+ * 核心区里的载体面板：正文的编辑面、构思速记的编辑面（工单B1）、条目的阅读与编辑面（工单A2 起条目可改；
+ * 工单C 起契约条目的 frontmatter 关键词／标签也能在编辑态改，随 save 的 meta 落盘）、
  * 约束的编辑面（工单E2）、资料的阅读与编辑面（工单G1）。
  *
  * 数据不在这里自己取——索引窗与核心区共用 useBoardData 的同一份对象，
@@ -11,6 +12,8 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
  *
  * 保存交互（工单H1，对齐老版）：没有常驻保存按钮——Ctrl+S／Cmd+S 触发（编辑器聚焦时生效），
  * 结果只落在编辑面头部一枚自动消失的保存 chip 上（复刻 wall__save-chip 的度量）。
+ * 批次19 H1 收尾：大纲与条目两块面按双通道——各自的常驻「保存」按钮保留（这两块面的主操作位已有惯例），
+ * 同时接 Ctrl+S；两条路落同一格 chip，不另铺常驻提示。
  */
 const props = defineProps({
   pane: { type: Object, default: null },
@@ -89,15 +92,20 @@ async function openKnowledgeHit(hit) {
 
 /**
  * 保存 chip（工单H1）：只认 useBoardData.saveFeedback 这一格。
- * 四个编辑面共用同一条反馈状态，但每块面只显示自己 target 的那一条；
+ * 六个编辑面共用同一条反馈状态，但每块面只显示自己 target 的那一条；
  * saved 2.5 秒后收起，saving／error 常驻（失败带重试，STALE 换成重新载入）。
+ * 大纲与条目（批次19 H1 收尾）：按「双通道」保存——常驻按钮保留（这两块面的主操作位已有惯例），
+ * 同时接 Ctrl+S，两条路都落这一格 chip。
  */
 const SAVE_TARGET_BY_VIEW = {
   'chapter-editor': 'chapter',
   'notes-editor': 'note',
+  'outline-editor': 'outline',
   'rule-editor': 'rule',
-  'document-detail': 'document'
+  'document-detail': 'document',
+  'entry-detail': 'entry'
 }
+
 const chipVisible = ref(false)
 let chipTimer = null
 
@@ -165,7 +173,9 @@ function retrySaveFromChip() {
 }
 
 /** STALE 的「重新载入」：丢弃本稿、按磁盘重读当前文档（文案在 chip 里说明会丢弃未保存修改）。
- *  速记与约束的正文随 list 工具一起回来，所以先重列再打开——不能拿手里这份旧 item 当磁盘。 */
+ *  速记与约束的正文随 list 工具一起回来，所以先重列再打开——不能拿手里这份旧 item 当磁盘。
+ *  大纲／条目（批次19 H1 收尾）同一条规矩：大纲整份重读后重新选中同一位置的节点，
+ *  条目先重列再打开，修订号与正文都以磁盘为准。 */
 async function reloadFromChip() {
   const target = saveChip.value?.target
   if (target === 'chapter' && props.data.chapter) {
@@ -183,6 +193,17 @@ async function reloadFromChip() {
     return
   }
   if (target === 'document' && props.data.document) await props.data.openDocument(props.data.document)
+  if (target === 'outline') {
+    // loadOutline 会收起旧 chip（重读＝新状态）；节点下标按重读后的长度钳一下，节点被删也不越界。
+    await props.data.loadOutline()
+    const last = Math.max(0, (props.data.outline?.length ?? 1) - 1)
+    props.data.selectOutlineNode(Math.min(props.data.outlineNodeIndex ?? 0, last))
+    return
+  }
+  if (target === 'entry') {
+    await props.data.loadEntries()
+    if (props.data.entry) await props.data.openEntry(props.data.entry)
+  }
 }
 
 function actOnSaveChip() {
@@ -257,12 +278,20 @@ function actOnSaveChip() {
     </template>
 
     <!-- 大纲编辑面（工单B2）：改名与加节点都先落在整份草稿上，按保存才走 pinax_outline_save 整份覆盖。
-         改名选中「中栏改名」这一实现（比行内编辑省一套焦点管理）；不提供拖拽重排。 -->
+         改名选中「中栏改名」这一实现（比行内编辑省一套焦点管理）；不提供拖拽重排。
+         批次19 H1 收尾：保存是双通道——下方按钮保留，Ctrl+S 同效；结果只进头部保存 chip。 -->
     <template v-else-if="viewKind === 'outline-editor'">
       <div v-if="data.outlineDraft" class="editor">
         <div class="editor-head nx-pane-header">
           <h4 class="pane-sub">大纲 · {{ data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? '节点' }}</h4>
           <span class="editor-meta">大纲/outline.json · 第 {{ data.outlineRevision ?? 0 }} 版 · 共 {{ data.outlineDraft.nodes.length }} 个节点</span>
+          <span v-if="chipVisible && saveChip" class="nx-pane-actions">
+            <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+          </span>
         </div>
         <input
           class="nx-field outline-title"
@@ -361,11 +390,44 @@ function actOnSaveChip() {
       <div v-if="data.entry" class="entry-body">
         <div class="entry-head nx-pane-header">
           <h4 class="pane-sub">{{ data.entry.name }}</h4>
-          <span class="entry-meta">{{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="!data.entry.contract">（未建档）</template></span>
-          <span v-if="!data.editingEntry" class="nx-pane-actions">
-            <button type="button" class="control-secondary entry-edit" @click="data.editEntry()">编辑</button>
+          <span class="entry-meta">{{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="data.entry.keys?.length"> · 关键词：{{ data.entry.keys.join('、') }}</template><template v-if="!data.entry.contract">（未建档）</template></span>
+          <span v-if="(chipVisible && saveChip) || !data.editingEntry" class="nx-pane-actions">
+            <!-- 保存 chip（批次19 H1 收尾）：Ctrl+S 与下方「保存」按钮同一格反馈；阅读态留着让结果看得见。 -->
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!data.editingEntry" type="button" class="control-secondary entry-edit" @click="data.editEntry()">编辑</button>
           </span>
         </div>
+        <!-- 条目元数据（工单C）：契约条目的 frontmatter 关键词／标签在这里改，随保存一起走 meta；
+             裸 md 没有 frontmatter，只给一句话说明（保存仍按原样整份写正文）。 -->
+        <div v-if="data.editingEntry && data.entry.contract" class="entry-meta-edit">
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">关键词</span>
+            <input
+              class="nx-field"
+              :value="data.entryMetaDraft.keys"
+              spellcheck="false"
+              aria-label="条目关键词（逗号分隔）"
+              @input="data.setEntryMeta('keys', $event.target.value)"
+            >
+          </label>
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">标签</span>
+            <input
+              class="nx-field"
+              :value="data.entryMetaDraft.tags"
+              spellcheck="false"
+              aria-label="条目标签（逗号分隔）"
+              @input="data.setEntryMeta('tags', $event.target.value)"
+            >
+          </label>
+        </div>
+        <p v-else-if="data.editingEntry" class="pane-hint entry-meta-bare" data-test="entry-meta-bare">
+          这篇没有 frontmatter（未按世界书文件契约建档），关键词／标签改不了；保存仍按原样整份写正文。
+        </p>
         <textarea
           v-if="data.editingEntry"
           class="editor-area"
@@ -574,6 +636,37 @@ function actOnSaveChip() {
   line-height: 1.6;
   color: var(--text-muted);
   white-space: pre-wrap;
+}
+
+/* 条目元数据行（工单C）：关键词／标签两栏并列。输入沿用 .nx-field primitive
+   （颜色／圆角／字号都由它带），这里只调排布，不另起一套控件度量。 */
+.entry-meta-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.entry-meta-field {
+  display: flex;
+  flex: 1 1 220px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.entry-meta-label {
+  flex: none;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.entry-meta-field .nx-field {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+  resize: none;
+}
+.entry-meta-bare {
+  margin: 0 0 8px;
 }
 </style>
 

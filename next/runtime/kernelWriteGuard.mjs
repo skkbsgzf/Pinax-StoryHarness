@@ -25,6 +25,8 @@ import { tools as kernelTools } from '../../server/mcp/createMcpServer.js'
  *
  * 名单不手写：写族从内核自己的 annotations（readOnlyHint === false）现取，
  * 分类表必须逐条点名——新增一把内核写工具而这里没定性，next/tests/kernel-write-guard.test.mjs 直接红。
+ * 载体自有工具同理：写工具身份取自载体 impl 的 annotations，落点（写哪块目录）由 CARRIER_WRITE_CLASS 点名，
+ * 拒绝提示只列「写这块目录的写工具」——只读工具与写别的目录的工具不混进来（批次16 记账，批次19 H1 收尾）。
  */
 
 /** 内核自己声明的写族（不是「我们想拦哪些」，而是「annotations 说这些会写盘」）。 */
@@ -46,6 +48,25 @@ export const KERNEL_WRITE_CLASS = Object.freeze({
   pinax_project_index: Object.freeze({ derived: true, writeAction: 'sync' })
 })
 
+/**
+ * 载体自有写工具的落点（批次16 记账，批次19 H1 收尾）：名字 → 它写的那块 dataDir。
+ * dir: null ＝写的是内核元数据（提案目录 .pinax/proposals/），不归任何载体目录，任何目录提示都不列它。
+ *
+ * 为什么落点要在这里点名：载体工具描述里只有 annotations.readOnlyHint，没有「写哪块目录」的字段，
+ * 而拒绝提示要说出「写「正文/」请走哪把」——只有知道落点才说得准。写工具的身份仍以载体 impl 的
+ * annotations 为准（见 carrierToolAnnotations），这张表只补落点；guardCarrierWriteGaps() 在门禁里
+ * 与「载体 impl 现列的写工具」逐条对账：漏点名／点名了却不是写工具／点名的目录不归该载体，都直接红。
+ */
+export const CARRIER_WRITE_CLASS = Object.freeze({
+  pinax_chapter_save: Object.freeze({ dir: '正文' }),
+  pinax_outline_save: Object.freeze({ dir: '大纲' }),
+  pinax_notes_save: Object.freeze({ dir: '构思' }),
+  pinax_worldbook_save: Object.freeze({ dir: '世界书' }),
+  pinax_rule_save: Object.freeze({ dir: '约束' }),
+  pinax_document_save: Object.freeze({ dir: '资料' }),
+  pinax_proposal_discard: Object.freeze({ dir: null })
+})
+
 /** 分类表与内核写族名单的对账结果：漏定性／定了性但内核没这把工具，都算清单说谎。 */
 export function guardClassificationGaps() {
   const declared = Object.keys(KERNEL_WRITE_CLASS)
@@ -54,6 +75,38 @@ export function guardClassificationGaps() {
     staleEntries: declared.filter((name) => !KERNEL_WRITE_TOOL_NAMES.includes(name)),
     outsideKernel: declared.filter((name) => !KERNEL_NAME_SET.has(name))
   }
+}
+
+/**
+ * 载体写工具落点表的对账（门禁用，运行时不用）：
+ *   unmapped         —— 载体 impl 说是写工具、落点表却没点名（拒绝提示会说不准）；
+ *   staleEntries     —— 落点表点了名，已安装载体里却没有这把写工具（表在说谎）；
+ *   dirOutsideOwner  —— 点名的目录不归该载体（提示会把作者指到别人的目录上）。
+ * 写工具身份取自载体 impl 的 annotations（readOnlyHint === false），与提示列表同一个数据源。
+ */
+export function guardCarrierWriteGaps(registry) {
+  const unmapped = []
+  const staleEntries = []
+  const dirOutsideOwner = []
+  const seen = new Set()
+  for (const manifest of registry?.list?.() ?? []) {
+    const owned = (manifest.tools ?? []).filter((tool) => !KERNEL_NAME_SET.has(tool))
+    const annotations = carrierToolAnnotations(registry, manifest)
+    for (const name of owned) {
+      if (annotations?.get(name)?.readOnlyHint !== false) continue
+      seen.add(name)
+      const klass = CARRIER_WRITE_CLASS[name]
+      if (!klass) {
+        unmapped.push({ pluginId: manifest.id, name })
+        continue
+      }
+      if (klass.dir && !Object.values(manifest.dataDirs ?? {}).includes(klass.dir)) {
+        dirOutsideOwner.push({ pluginId: manifest.id, name, dir: klass.dir })
+      }
+    }
+  }
+  for (const name of Object.keys(CARRIER_WRITE_CLASS)) if (!seen.has(name)) staleEntries.push(name)
+  return { unmapped, staleEntries, dirOutsideOwner }
 }
 
 /**
@@ -143,7 +196,37 @@ function findDirOwner({ dir, registry }) {
     pluginId,
     title: manifest.title ?? pluginId,
     scopes,
-    // 板块自有的写工具＝清单里声明了、内核却没有的那个名字（C3 的「认领＝接管」在这里的具体形状）。
-    ownedTools: (manifest.tools ?? []).filter((tool) => !KERNEL_NAME_SET.has(tool))
+    // 板块自有的写工具里，只取落在这一块目录上的那几把（批次19 H1 收尾：提示精确化）。
+    ownedTools: carrierWriteToolsForDir({ manifest, dir, registry })
+  }
+}
+
+/**
+ * 板块自有工具里「写在 dir 上」的写工具。
+ * 只认 impl 的 annotations.readOnlyHint === false（与内核写族同一个身份来源）：
+ * 只读工具（如 pinax_rule_list／pinax_proposal_list）与写别的目录的工具（如 pinax_outline_save）
+ * 都不混进「写「正文/」请走…」这句话。落点由 CARRIER_WRITE_CLASS 点名。
+ * impl 取不到 annotations 时退回落点表——那张表只收写工具，于是也不会把只读工具说成写入口。
+ */
+function carrierWriteToolsForDir({ manifest, dir, registry }) {
+  const owned = (manifest.tools ?? []).filter((tool) => !KERNEL_NAME_SET.has(tool))
+  const annotations = carrierToolAnnotations(registry, manifest)
+  return owned.filter((name) => {
+    if (CARRIER_WRITE_CLASS[name]?.dir !== dir) return false
+    return annotations ? annotations.get(name)?.readOnlyHint === false : true
+  })
+}
+
+/** 载体 impl 现列的工具 → annotations。取不到（没实现／工厂抛错）返回 null：不猜，也不把只读工具当写入口。 */
+function carrierToolAnnotations(registry, manifest) {
+  const impl = registry?.impl?.(manifest.id)
+  if (typeof impl?.tools !== 'function') return null
+  try {
+    const provided = impl.tools({ pluginId: manifest.id, manifest, fileService: null, registry }) ?? []
+    return new Map(provided
+      .filter((tool) => tool && typeof tool.name === 'string')
+      .map((tool) => [tool.name, tool.annotations ?? {}]))
+  } catch {
+    return null
   }
 }

@@ -56,8 +56,8 @@ function carrierView() {
     rejected: [],
     project: { root: 'x', name: '大梦', kind: 'novel', spec: 'pinax-project@2', revision: 1 },
     primary: { id: 'fixture.novel', title: '小说（夹具）', primary: { projectKind: 'novel' } },
-    carriers: [{ id: 'fixture.novel', title: '小说（夹具）', primary: { projectKind: 'novel' }, isPrimary: true, isEnabled: true, capabilities: [], requires: [], scopes: [], dataDirs: ['正文'] },
-      { id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }],
+    carriers: [{ id: 'fixture.novel', title: '小说（夹具）', primary: { projectKind: 'novel' }, isPrimary: true, isEnabled: true, capabilities: [], requires: [], scopes: [], dataDirs: ['正文'], settings: [{ id: 'novel.writing', title: '写作偏好' }] },
+      { id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'], settings: [] }],
     left: [{ slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'book', pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true }],
     center: [{ slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true }],
     skeletonDirs: ['正文', '大纲', '世界书', '构思', '资料', '日志', '约束'],
@@ -1336,7 +1336,7 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     wrapper.unmount()
   })
 
-  it('载体设置占位节（协议 P14 第一步）：每块载体在「载体」组占一格，点开是空态说明', async () => {
+  it('载体设置节读真声明（协议 P14 第二步）：有声明的载体按声明 title 出目录项，空声明载体不出格', async () => {
     const handlers = new Map()
     const bridge = modalBridge({ handlers })
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -1344,14 +1344,20 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
     await flushPromises()
 
+    // 有声明的载体进「载体」组，目录项文案就是声明里的 title——不再是按载体标题伪造的「<载体> 设置」。
     expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toContain('载体')
-    const carrierTab = wrapper.findAll('.settings-navigation .settings-tab')
-      .find((node) => node.text() === '小说（夹具） 设置')
-    expect(carrierTab).toBeTruthy()
+    const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
+    expect(tabs).toContain('写作偏好')
+    expect(tabs).not.toContain('小说（夹具） 设置')
+    // settings: [] 的载体不出目录项（fixture.script 声明为空）。
+    expect(tabs).not.toContain('剧本（夹具） 设置')
 
+    const carrierTab = wrapper.findAll('.settings-navigation .settings-tab')
+      .find((node) => node.text() === '写作偏好')
     await carrierTab.trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel"]').exists()).toBe(true)
+    // 节 id 拼了载体前缀（声明 id 只在载体命名空间里唯一）；内容组件后续批——空态就是当前真实现。
+    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="carrier-settings-empty"]').text()).toBe('该载体的设置项还没有内容')
     wrapper.unmount()
   })

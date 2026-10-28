@@ -11,7 +11,7 @@ import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { kernelToolNames, toolOwnershipReport } from '../runtime/mcpSurface.mjs'
 import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, REFERENCE_CARRIER_ID, REFERENCE_TOOL_NAMES, SETTING_CARRIER, SETTING_CARRIER_ID, SETTING_TOOL_NAMES } from '../carriers/index.mjs'
-import { serializeWorldbookEntryFile } from '../../shared/worldbookFileContract.js'
+import { parseWorldbookEntryFile, serializeWorldbookEntryFile } from '../../shared/worldbookFileContract.js'
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**
@@ -440,6 +440,150 @@ test('世界书保存（调度方裁定 dwfq-f2369ffa-2）：契约条目只换�
     assert.equal(afterEntry.contract, true)
     assert.equal(afterEntry.revision, entry.revision + 1)
     assert.equal(afterEntry.content, '全新的正文，只有这一句。')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书元数据（工单C）：meta 覆盖 keys/tags/summary，其余 frontmatter 原样、未提供的字段不动', async () => {
+  const { workspace, opened, runtime } = await settingProject('setting-save-meta', { fill: true })
+  try {
+    const before = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(before.value.payload.ok, true, JSON.stringify(before.value.payload))
+    const entry = before.value.payload.entry
+    assert.equal(entry.contract, true, '夹具是契约条目，元数据口才成立')
+    assert.deepEqual(entry.keys, ['柯秒'])
+    assert.deepEqual(entry.tags, ['主角'])
+
+    // 三字段一起给：keys/tags/summary 都被覆盖，正文换成 text。
+    const saved = await runtime.callTool('pinax_worldbook_save', {
+      path: entry.path,
+      text: '改过正文的一条。',
+      expectedRevision: entry.revision,
+      meta: { keys: ['柯秒', '秒子'], tags: ['主角', '停摆的表'], summary: '雨夜醒来的主角' }
+    })
+    assert.equal(saved.value.payload.ok, true, JSON.stringify(saved.value.payload))
+    assert.equal(saved.value.payload.revision, entry.revision + 1)
+
+    const after = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(after.value.payload.ok, true, '按 id 还读得到：frontmatter 没被洗掉')
+    const afterEntry = after.value.payload.entry
+    assert.deepEqual(afterEntry.keys, ['柯秒', '秒子'], '关键词被 meta 覆盖')
+    assert.deepEqual(afterEntry.tags, ['主角', '停摆的表'], '标签被 meta 覆盖')
+    assert.equal(afterEntry.content, '改过正文的一条。')
+    // 其余 frontmatter 原样：id/名称/类型/关系一个字都不动（id 是稳定标识，不在 meta 口里）。
+    assert.equal(afterEntry.id, entry.id)
+    assert.equal(afterEntry.name, entry.name)
+    assert.equal(afterEntry.type, entry.type)
+    assert.deepEqual(afterEntry.relations, entry.relations)
+    assert.equal(afterEntry.contract, true)
+
+    // 磁盘取证：summary 没有读取口，直接按同一对 parse/serialize 核 frontmatter 原文件。
+    const direct = await opened.value.fileService.read({ pluginId: SETTING_CARRIER_ID, dir: '世界书', file: '人物·柯秒.md' })
+    assert.equal(direct.ok, true, JSON.stringify(direct.error ?? {}))
+    const parsed = parseWorldbookEntryFile(direct.value.text)
+    assert.equal(parsed.ok, true, '落盘仍是契约条目（frontmatter 结构没破）')
+    assert.equal(parsed.entry.summary, '雨夜醒来的主角', 'summary 随 meta 落进 frontmatter')
+    assert.deepEqual(parsed.entry.keys, ['柯秒', '秒子'])
+    assert.deepEqual(parsed.entry.tags, ['主角', '停摆的表'])
+    assert.equal(parsed.entry.id, entry.id)
+    assert.equal(parsed.entry.content, '改过正文的一条。')
+
+    // 只给 keys：tags 保持上一次的值（未提供的字段不动）。
+    const keysOnly = await runtime.callTool('pinax_worldbook_save', {
+      path: entry.path,
+      text: '只改关键词的一笔。',
+      expectedRevision: afterEntry.revision,
+      meta: { keys: ['秒子'] }
+    })
+    assert.equal(keysOnly.value.payload.ok, true, JSON.stringify(keysOnly.value.payload))
+    const third = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.deepEqual(third.value.payload.entry.keys, ['秒子'])
+    assert.deepEqual(third.value.payload.entry.tags, ['主角', '停摆的表'], '没给 tags 就保持原值')
+    const thirdParsed = parseWorldbookEntryFile((await opened.value.fileService.read({ pluginId: SETTING_CARRIER_ID, dir: '世界书', file: '人物·柯秒.md' })).value.text)
+    assert.equal(thirdParsed.entry.summary, '雨夜醒来的主角', '没给 summary 也保持原值')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书元数据（工单C）：裸 md 与新建提供 meta 即 INVALID_INPUT，盘上一个字节不动', async () => {
+  const { workspace, opened, runtime } = await settingProject('setting-save-meta-reject', { fill: true })
+  try {
+    const bare = await runtime.callTool('pinax_worldbook_read', { name: '随手记' })
+    assert.equal(bare.value.payload.ok, true, JSON.stringify(bare.value.payload))
+    const bareEntry = bare.value.payload.entry
+    assert.equal(bareEntry.contract, false, '夹具是作者手写的裸 md')
+
+    const bareSave = await runtime.callTool('pinax_worldbook_save', {
+      path: bareEntry.path,
+      text: '裸 md 的新正文。',
+      expectedRevision: bareEntry.revision,
+      meta: { keys: ['随手'] }
+    })
+    assert.equal(bareSave.value.payload.ok, false)
+    assert.equal(bareSave.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(bareSave.value.payload.message, /建档/, '拒时要给修复路径：先保存正文建档')
+
+    // 盘上不动：裸 md 既没被改写，也没被补 frontmatter。
+    const still = await opened.value.fileService.read({ pluginId: SETTING_CARRIER_ID, dir: '世界书', file: '随手记.md' })
+    assert.equal(still.ok, true)
+    assert.match(still.value.text, /设定碎句/)
+    assert.doesNotMatch(still.value.text, /^---/)
+
+    // 新建（文件还不存在）带 meta：同样拒，且一个文件都不落。
+    const created = await runtime.callTool('pinax_worldbook_save', {
+      path: '地点·钟楼.md',
+      text: '巷尾的钟楼，钟停在雨夜。',
+      expectedRevision: 0,
+      meta: { tags: ['新'] }
+    })
+    assert.equal(created.value.payload.ok, false)
+    assert.equal(created.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(created.value.payload.message, /建档/)
+    const missing = await opened.value.fileService.read({ pluginId: SETTING_CARRIER_ID, dir: '世界书', file: '地点·钟楼.md' })
+    assert.equal(missing.ok, false, '被拒的新建不许留半截文件')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书元数据（工单C）：非法 meta 一律 INVALID_INPUT（非数组／空串元素／summary 超 500 字／未知字段）', async () => {
+  const { workspace, runtime } = await settingProject('setting-save-meta-invalid', { fill: true })
+  try {
+    const read = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    const entry = read.value.payload.entry
+    const base = { path: entry.path, text: '一次都不该落盘的正文。', expectedRevision: entry.revision }
+
+    for (const [label, meta] of [
+      ['keys 不是数组', { keys: '柯秒' }],
+      ['数组里有空白元素', { tags: ['主角', '   '] }],
+      ['数组里有非字符串元素', { keys: ['柯秒', 42] }],
+      ['summary 超 500 字', { summary: '长'.repeat(501) }],
+      ['未知字段（relations 不在口里）', { relations: [] }],
+      ['meta 不是对象', ['柯秒']]
+    ]) {
+      const result = await runtime.callTool('pinax_worldbook_save', { ...base, meta })
+      assert.equal(result.value.payload.ok, false, label)
+      assert.equal(result.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT, label)
+    }
+
+    // 全被拒：盘上版本与正文都没动。
+    const reread = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(reread.value.payload.entry.revision, entry.revision)
+    assert.match(reread.value.payload.entry.content, /停摆的表/)
+    assert.doesNotMatch(reread.value.payload.entry.content, /一次都不该落盘/)
+
+    // 500 字是边界：恰好 500 字合法（与 keys/tags 的数组覆盖同一口）。
+    const boundary = await runtime.callTool('pinax_worldbook_save', {
+      ...base,
+      text: '边界摘要的一笔。',
+      meta: { summary: '摘'.repeat(500) }
+    })
+    assert.equal(boundary.value.payload.ok, true, JSON.stringify(boundary.value.payload))
   } finally {
     await runtime.stop()
     await workspace.cleanup()

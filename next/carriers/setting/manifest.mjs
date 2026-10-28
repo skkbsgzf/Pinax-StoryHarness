@@ -39,8 +39,9 @@ export const SETTING_CARRIER = Object.freeze({
   capabilities: ['setting.entries', 'constraint.rules'],
   requires: [],
 
-  // 协议 P14 载体设置注册（工单B 第一步）：声明格式 [{ id, title, group }]，
-  // 由统一设置二级页收进「载体」组。本批先空数组——具体设置项后续批再填。
+  // 协议 P14 载体设置注册（工单A 第二步）：声明格式 [{ id, title }]（id 在本载体命名空间内唯一，
+  // title 是设置页目录项文案；分组由设置页固定为「载体」）。机制示例已由小说的「写作偏好」给出，
+  // 本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
   settings: [],
   tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'],
 

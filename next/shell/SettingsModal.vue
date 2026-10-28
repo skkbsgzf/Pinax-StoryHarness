@@ -16,14 +16,16 @@ import WorkbenchModal from './WorkbenchModal.vue'
  * 底座是 WorkbenchModal（遮罩／圆角／Esc／过渡原样沿用，props open/dismissable/title 透传）。
  * 目录表 props.sections = [{ id, title, group?, keywords?, component, props? }] 注册——分三组：
  * 「应用」偏好与模型／备份与恢复；「项目」载体管理／导入既有稿／新建项目／主载体选择；「文档」文档历史。
- * 载体设置（协议 P14 第一步）：props.carriers 的每块载体在目录里另挂一个「<载体> 设置」占位节
- * （「载体」组，右栏是空态说明）；清单里的 settings 声明本批先空数组，具体设置项后续批再注册。
+ * 载体设置（协议 P14 第二步）：props.carriers 的每块载体按它清单里真声明的设置节
+ * （settings: [{ id, title }]）在目录里出目录项（「载体」组，文案照声明的 title），右栏是该节的空态说明；
+ * 声明为空数组的载体不占目录格（批次20 按载体标题伪造的占位节已删）。设置项内容组件后续批再注册。
  * 未登记的功能不许开弹窗（门禁：next/tests/visual-contract.test.mjs「目录外弹窗不允许存在」的机器版）。
  * 分组标签和目录项同在 tablist 里：标签是 <p>，不是 tab，不参与 roving tabindex；搜索框在 tablist 之外。
  *
  * 键盘语义取老版 tablist 的那半：目录 roving tabindex＋方向键换节（SettingsPopup.vue:489-501）。
- * 焦点陷阱（批次15 B · 差异表 #10）：打开时由底座 WorkbenchModal 对面板根起 next/shell/focusTrap.mjs
- * 的陷阱——焦点先收进面板、Tab 在面板内可聚焦元素之间循环、关闭/卸载时摘监听并归还打开前的焦点；
+ * 焦点陷阱（批次15 B · 差异表 #10；取代批次13 记账里「trapFocusWithin 不在 Next 落地、Tab 走浏览器默认顺序」
+ * 那句旧说法）：打开时由底座 WorkbenchModal 对面板根起 next/shell/focusTrap.mjs 的陷阱——
+ * 焦点先收进面板、Tab 在面板内可聚焦元素之间循环、关闭/卸载时摘监听并归还打开前的焦点；
  * Esc 仍归 WorkbenchModal。老版 src/ 的 trapFocusWithin 是 composable，薄渲染层门禁不许引，
  * 这里是 next/ 内的纯 DOM 重写（同一行为，不引旧轨）。
  */
@@ -34,7 +36,7 @@ const props = defineProps({
   activeSection: { type: String, default: '' },
   /** 目录表：[{ id, title, group?, keywords?, component, props? }]。 */
   sections: { type: Array, default: () => [] },
-  /** 视图里的载体清单：[{ id, title, dataDirs? }]——每块载体挂一个设置占位节（P14 第一步）。 */
+  /** 视图里的载体清单：[{ id, title, dataDirs?, settings? }]——settings 是清单里真声明的设置节（P14）。 */
   carriers: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['close', 'changed', 'theme', 'set-enabled', 'set-primary', 'toggle-companion', 'update:activeSection'])
@@ -43,21 +45,28 @@ const emit = defineEmits(['close', 'changed', 'theme', 'set-enabled', 'set-prima
 const searchQuery = ref('')
 
 /**
- * 载体设置占位节（协议 P14 第一步）：清单里每块载体在目录里占一格「<载体> 设置」，
- * 右栏是空态说明。settings 声明（本批三载体都是空数组）留给后续批填内容，
- * 这里先立住「载体设置进统一目录」的机制。
+ * 载体设置节（协议 P14 第二步）：目录格完全由清单里的 settings 声明决定——
+ * 一条声明出的一格，文案照声明的 title；settings 为空数组（或没声明）的载体不出格。
+ * 节 id 拼成 `carrier:<载体 id>:<声明 id>`：声明 id 只在载体自己的命名空间里唯一，跨载体可能同名，
+ * 拼上载体前缀才能当全局目录键（DOM id／activeSection／搜索命中都用这一份）。
+ * 内容组件后续批再注册；右栏先给空态说明，那是真实现（不伪造设置项）。
  */
-const carrierSections = computed(() => props.carriers
-  .filter((carrier) => carrier?.id && carrier?.title)
-  .map((carrier) => ({
-    id: `carrier:${carrier.id}`,
-    title: `${carrier.title} 设置`,
-    group: '载体',
-    kind: 'carrier-settings',
-    carrierId: carrier.id,
-    // 浅匹配只用已知字段：载体标题／「设置」／它认领的数据目录名；不做渲染文本深搜。
-    keywords: [carrier.title, '设置', ...(Array.isArray(carrier.dataDirs) ? carrier.dataDirs : [])]
-  })))
+const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
+  if (!carrier?.id || !carrier?.title) return []
+  const declared = Array.isArray(carrier.settings) ? carrier.settings : []
+  return declared
+    .filter((setting) => setting?.id && setting?.title)
+    .map((setting) => ({
+      id: `carrier:${carrier.id}:${setting.id}`,
+      title: setting.title,
+      group: '载体',
+      kind: 'carrier-settings',
+      carrierId: carrier.id,
+      settingId: setting.id,
+      // 浅匹配只用已知字段：载体标题／声明标题／「设置」／它认领的数据目录名；不做渲染文本深搜。
+      keywords: [carrier.title, setting.title, '设置', ...(Array.isArray(carrier.dataDirs) ? carrier.dataDirs : [])]
+    }))
+}))
 
 const allSections = computed(() => [...props.sections, ...carrierSections.value])
 
@@ -172,7 +181,7 @@ function onTablistKeydown(event) {
           :aria-label="current.title"
           :data-test="`settings-panel-${current.id}`"
         >
-          <!-- 载体设置占位节（P14 第一步）：目录先占位，内容后续批注册。 -->
+          <!-- 载体设置节（P14 第二步）：目录项来自载体清单的真声明，内容组件后续批注册——空态就是当前真实现。 -->
           <p
             v-if="current.kind === 'carrier-settings'"
             class="pane-hint"

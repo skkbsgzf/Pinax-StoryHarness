@@ -9,7 +9,9 @@ import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import {
+  CARRIER_WRITE_CLASS,
   KERNEL_WRITE_TOOL_NAMES,
+  guardCarrierWriteGaps,
   guardClassificationGaps,
   guardKernelToolCall
 } from '../runtime/kernelWriteGuard.mjs'
@@ -40,6 +42,32 @@ test('写族名单从内核 annotations 现取，分类表逐条点名且没有�
   assert.deepEqual(gaps.unclassified, [], '新出现的内核写工具必须先定性，否则闸不认它、面里却留着它')
   assert.deepEqual(gaps.staleEntries, [], '分类表里不许留着已经不再是写族的条目')
   assert.deepEqual(gaps.outsideKernel, [], '分类表只能定性内核真有的工具，不许虚增')
+})
+
+test('载体写工具落点表与载体 impl 的 annotations 对账：提示只列写这块目录的写工具', () => {
+  const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+  for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry.install(plugin.manifest, plugin.impl ?? {}, plugin.meta ?? {})
+  const gaps = guardCarrierWriteGaps(registry)
+  assert.deepEqual(gaps.unmapped, [], '载体 impl 说是写工具就必须在落点表里点名，否则拒绝提示指不准该走哪把')
+  assert.deepEqual(gaps.staleEntries, [], '落点表里不许留着已经没有实现方的写工具')
+  assert.deepEqual(gaps.dirOutsideOwner, [], '点名的落点必须是该载体自己认领的 dataDir')
+
+  // 只读工具（列／读）不是写入口，不进落点表——它们也不会出现在「请走…」这句话里。
+  for (const readOnly of [
+    'pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read',
+    'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_rule_list',
+    'pinax_proposal_list', 'pinax_proposal_read',
+    'pinax_document_list', 'pinax_document_read', 'pinax_reference_search'
+  ]) {
+    assert.equal(CARRIER_WRITE_CLASS[readOnly], undefined, `${readOnly} 是只读工具，不该被说成写入口`)
+  }
+  // 写内核元数据的那把（提案弃用）在表里但落点为空：任何 dataDir 的提示都不列它。
+  assert.equal(CARRIER_WRITE_CLASS.pinax_proposal_discard.dir, null)
+  assert.deepEqual(
+    Object.keys(CARRIER_WRITE_CLASS).sort(),
+    ['pinax_chapter_save', 'pinax_document_save', 'pinax_notes_save', 'pinax_outline_save', 'pinax_proposal_discard', 'pinax_rule_save', 'pinax_worldbook_save'],
+    '载体自有写工具就这七把；新增一把要在这里留名'
+  )
 })
 
 test('非写族原样放行：读工具与运行时自己的通道不受闸约束', () => {
@@ -91,12 +119,21 @@ test('一目录一主人：认领过的目录内核写不进，未认领的目�
   assert.equal(manuscript.error.code, NEXT_ERROR_CODES.SCOPE_NOT_GRANTED)
   assert.match(manuscript.error.message, /正文\/ 的主人/)
   assert.match(manuscript.error.message, /pinax_chapter_save/, '拒的时候要把合法的那条路（带修订号）点名出来')
+  // 提示精确化（批次16 记账，批次19 H1 收尾）：只列写这块目录的写工具——
+  // 只读工具（pinax_chapter_list／pinax_outline_read）与写别的目录的工具（大纲／构思／提案）都不混进来。
+  for (const noise of ['pinax_outline_save', 'pinax_notes_save', 'pinax_proposal_discard', 'pinax_chapter_list', 'pinax_outline_read', 'pinax_proposal_list']) {
+    assert.doesNotMatch(manuscript.error.message, new RegExp(noise), `「正文/」的提示不该点名 ${noise}`)
+  }
   assert.equal(manuscript.error.details.owner, NOVEL_CARRIER_ID)
 
   const book = guardKernelToolCall({ tool: 'pinax_worldbook_write', args: { projectPath: root, name: '人物·新角', content: 'x' }, root, registry })
   assert.equal(book.ok, false)
   assert.equal(book.error.details.owner, SETTING_CARRIER_ID)
   assert.match(book.error.message, /pinax_worldbook_save/, '世界书的主人自有写工具了（工单A2）：拒时点名那条带修订号的路（断言同步，调度方裁定 dwfq-f2369ffa-1）')
+  // 同一个载体的「约束」写工具也是写工具，但不写世界书——不许混进这句话；只读的 list 同样不列。
+  for (const noise of ['pinax_rule_save', 'pinax_rule_list', 'pinax_worldbook_list', 'pinax_worldbook_read']) {
+    assert.doesNotMatch(book.error.message, new RegExp(noise), `「世界书/」的提示不该点名 ${noise}`)
+  }
 
   // 把设定板块停掉后，「世界书/」在注册表里仍是它认领的目录（认领关系不随开关消失），所以照旧拒。
   const disabled = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })

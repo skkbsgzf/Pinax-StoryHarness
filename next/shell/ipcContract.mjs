@@ -148,6 +148,8 @@ export function shellView(session) {
       tools: manifest.tools,
       context: manifest.context ?? null,
       panes: manifest.panes,
+      // 载体声明的设置节（协议 P14）：统一设置二级页据此出目录项；空声明＝设置页不出这一格。
+      settings: manifest.settings ?? [],
       dataDirs: Object.values(manifest.dataDirs),
       isPrimary: manifest.id === primaryId,
       isEnabled: view ? view.enabled.includes(manifest.id) : false

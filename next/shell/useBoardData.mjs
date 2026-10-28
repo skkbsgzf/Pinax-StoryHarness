@@ -17,9 +17,10 @@ export function useBoardData(bridge) {
     error: null,
     notice: '',
     /** 保存反馈（工单H1）：编辑面头部的保存 chip 只读这一格。
-     *  target 是 chapter／note／rule／document——chip 只在该编辑面上出现；
+     *  target 是 chapter／note／outline／rule／document／entry——chip 只在该编辑面上出现；
      *  status 三态 saving／saved／error，只有 saved 由界面安排 2.5 秒后收起（失败常驻）。
-     *  保存语义（expectedRevision／提案链）不在这里动，这里只记「这一下按下去的结果」。 */
+     *  保存语义（expectedRevision／提案链）不在这里动，这里只记「这一下按下去的结果」。
+     *  大纲与条目（批次19 H1 收尾）：保留各自的常驻保存按钮，同时接 Ctrl+S——两通道落的是同一格反馈。 */
     saveFeedback: null,
     /** 资料板检索（工单H2）：走 knowledge:search 通道，主进程内部是 createKnowledgeRuntime（worker 线程）。
      *  knowledgeSearched 只用来区分「还没检索」与「检索完没命中」；错误码留给界面翻人话。 */
@@ -72,6 +73,9 @@ export function useBoardData(bridge) {
     /** 条目编辑（工单A2）：阅读态与编辑态的开关＋草稿，与正文的 draft 分开各拿各的。 */
     editingEntry: false,
     entryDraft: '',
+    /** 条目元数据草稿（工单C）：frontmatter 的 keys／tags 在界面上是逗号分隔字符串，
+     *  保存时再拆成数组随 pinax_worldbook_save 的 meta 传（裸 md 没有 frontmatter，不进这两栏）。 */
+    entryMetaDraft: { keys: '', tags: '' },
     listWarnings: [],
     entryWarnings: [],
     selection: { type: null, item: null }
@@ -623,10 +627,15 @@ export function useBoardData(bridge) {
   }
 
   /** 条目编辑（工单A2）：「编辑」进草稿，「取消」原样退回，保存走设定载体自有的 pinax_worldbook_save
-   *  ——带读到的修订号，冲突由文件服务拒，与正文保存同一套并发规矩。 */
+   *  ——带读到的修订号，冲突由文件服务拒，与正文保存同一套并发规矩。
+   *  工单C：契约条目的 frontmatter 关键词／标签一起进草稿（entryMetaDraft），保存时随 meta 落盘。 */
   function editEntry() {
     if (!state.entry) return
     state.entryDraft = state.entry.content ?? ''
+    state.entryMetaDraft = {
+      keys: joinMetaList(state.entry.keys),
+      tags: joinMetaList(state.entry.tags)
+    }
     state.editingEntry = true
     state.error = null
   }
@@ -634,6 +643,7 @@ export function useBoardData(bridge) {
   function cancelEditEntry() {
     state.editingEntry = false
     state.entryDraft = ''
+    state.entryMetaDraft = { keys: '', tags: '' }
     state.error = null
   }
 
@@ -641,20 +651,38 @@ export function useBoardData(bridge) {
     state.entryDraft = value
   }
 
+  /** 元数据草稿的逐字写入（工单C）：field 只认 keys／tags，值原样保留（逗号在保存时才切）。 */
+  function setEntryMeta(field, value) {
+    if (field !== 'keys' && field !== 'tags') return
+    state.entryMetaDraft = { ...state.entryMetaDraft, [field]: String(value ?? '') }
+  }
+
   async function saveEntry() {
     if (!state.entry || !state.entryDraft) return
     state.busy = true
     state.error = null
-    const saved = await tool('pinax_worldbook_save', { path: state.entry.path, text: state.entryDraft, expectedRevision: state.entry.revision })
+    beginSaveFeedback('entry')
+    // 元数据只对契约条目开（工单C）：裸 md 提供 meta 会被载体拒（INVALID_INPUT），所以干脆不传。
+    const payload = { path: state.entry.path, text: state.entryDraft, expectedRevision: state.entry.revision }
+    if (state.entry.contract) {
+      payload.meta = {
+        keys: splitMetaList(state.entryMetaDraft.keys),
+        tags: splitMetaList(state.entryMetaDraft.tags)
+      }
+    }
+    const saved = await tool('pinax_worldbook_save', payload)
     if (!saved.ok) {
       state.busy = false
       state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该条目后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('entry', saved)
       return
     }
     // 退出编辑态后重新 openEntry：版本号与全文以重读为准，不就地拼一份「自以为保存成功」的条目。
     state.editingEntry = false
     state.entryDraft = ''
     await openEntry(state.entry)
+    // openEntry 会清瞬时提示（打开＝新状态）：落盘结果在重读之后才进 chip，否则刚保存就被冲掉。
+    settleSaveFeedback('entry', saved)
   }
 
   function setDraft(value) {
@@ -669,6 +697,8 @@ export function useBoardData(bridge) {
     state.outlineError = null
     state.outlineDraft = null
     state.outlineNodeIndex = null
+    // 重读＝新状态：上一枚保存 chip（尤其失败态）不能挂在新读到的树上。
+    state.saveFeedback = null
     const read = await tool('pinax_outline_read', {})
     if (!read.ok) {
       state.outline = []
@@ -738,13 +768,15 @@ export function useBoardData(bridge) {
     return `node-${index}`
   }
 
-  /** 大纲保存＝作者按下去的那一下：整份草稿走 pinax_outline_save，冲突由文件服务拒，不静默覆盖。
+  /** 大纲保存＝作者按下去的那一下（按钮与 Ctrl+S 是同一条路）：整份草稿走 pinax_outline_save，
+   *  冲突由文件服务拒，不静默覆盖。成功率先进保存 chip（工单H1 同款，不再铺常驻 notice）；
    *  成功后就地推进树与修订号（不重读、不冲掉提示），草稿继续开着——作者可以接着改。 */
   async function saveOutline() {
     if (!state.outlineDraft || !state.outlineDraft.nodes.length) return
     state.busy = true
     state.error = null
     state.notice = ''
+    beginSaveFeedback('outline')
     const saved = await tool('pinax_outline_save', {
       nodes: state.outlineDraft.nodes,
       edges: state.outlineDraft.edges,
@@ -753,6 +785,7 @@ export function useBoardData(bridge) {
     if (!saved.ok) {
       state.busy = false
       state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新点开大纲节点后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('outline', saved)
       return
     }
     state.outlineRevision = saved.value.revision
@@ -760,7 +793,7 @@ export function useBoardData(bridge) {
     state.outline = decorateOutlineNodes(JSON.parse(JSON.stringify(state.outlineDraft.nodes)), state.outlineDraft.edges)
     state.outlineEdges = JSON.parse(JSON.stringify(state.outlineDraft.edges))
     state.busy = false
-    state.notice = `已保存大纲 · 第 ${saved.value.revision} 版 · ${saved.value.nodeTotal} 个节点`
+    settleSaveFeedback('outline', saved)
   }
 
   /**
@@ -853,6 +886,7 @@ export function useBoardData(bridge) {
     editEntry,
     cancelEditEntry,
     setEntryDraft,
+    setEntryMeta,
     saveEntry,
     loadOutline,
     selectOutlineNode,
@@ -941,4 +975,23 @@ function plainOutlineNodes(nodes) {
     delete copy.depth
     return copy
   })
+}
+
+/**
+ * 条目元数据的界面 ↔ 落盘互转（工单C）：界面是一个逗号分隔的输入框，frontmatter 是字符串数组。
+ * 切分中英文逗号都认（作者常从别处粘「柯秒, 秒子」或「柯秒，秒子」）；空白项丢弃，避免存进空关键词。
+ * 合并用中文逗号显示，与中文正文的排版一致。
+ */
+function splitMetaList(text) {
+  return String(text ?? '')
+    .split(/[,，]/u)
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+function joinMetaList(list) {
+  return (Array.isArray(list) ? list : [])
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+    .join('，')
 }
