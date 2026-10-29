@@ -359,15 +359,17 @@ test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目
 
 /**
  * R3-1／D2：主题的权威来源迁到偏好 JSON，next/shell 源码不得再出现 localStorage。
- * 例外只有三处，都有明确边界：
+ * 例外只有四处，都有明确边界：
  *   1) theme.mjs 里带 legacy-localstorage-bridge 标记的过渡双写块（老前端退役后删）；
  *   2) FloatingWidget.vue 的悬浮窗位置/吸附记忆（协议 v1.1-C/P20 明确允许）——
  *      只许用 `overlay.<paneId>` 这一条键，读写都必须走 storageKey.value，不许出现第二条键；
  *   3) paneForms.mjs 的打开形态记忆（协议 v1.2 P21 明确要求）——
- *      只许用 `paneForm.<paneId>` 这一条键，键名由宿主拼（载体的 forms 声明本身不落盘）。
+ *      只许用 `paneForm.<paneId>` 这一条键，键名由宿主拼（载体的 forms 声明本身不落盘）；
+ *   4) agentSessions.mjs 的会话存储（批次27 工单 §1 明确要求）——
+ *      只许用 `agentSessions.<projectRoot>` 这一条键，键名由本模块拼（换项目＝另一份会话）。
  * 这个例外是会退役的：双写块删掉后为 0 处访问，断言仍通过；其它文件一旦出现 localStorage 立刻红。
  */
-test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双写、FloatingWidget 位置记忆与 paneForms 形态记忆）', async () => {
+test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双写、FloatingWidget 位置记忆、paneForms 形态记忆与会话存储）', async () => {
   const files = (await walk(shellDir)).filter((file) => /\.(mjs|js|vue|html)$/u.test(file))
   const offenders = []
   for (const file of files) {
@@ -384,6 +386,19 @@ test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双�
       assert.ok(accesses.length > 0, 'paneForms 应负责形态记忆的读写')
       for (const line of accesses) {
         assert.match(line, /storage/iu, `localStorage 访问必须经 storage 抽象（键 paneForm.<paneId>）：${line.trim()}`)
+      }
+      continue
+    }
+    if (file.endsWith('agentSessions.mjs')) {
+      // 会话存储（批次27）：键必须是 agentSessions.<projectRoot>，且由本模块拼（不许写死第二条键）。
+      assert.match(text, /AGENT_SESSION_STORAGE_PREFIX = 'agentSessions\.'/u,
+        '会话存储的键前缀必须是 agentSessions.（键名带项目根）')
+      assert.match(text, /`\$\{AGENT_SESSION_STORAGE_PREFIX\}\$\{/u,
+        '会话存储的键必须由前缀 + 项目根拼出')
+      const accesses = text.match(/[^\n]*\.localStorage[^\n]*/gu) ?? []
+      assert.ok(accesses.length > 0, 'agentSessions 应负责会话的读写')
+      for (const line of accesses) {
+        assert.match(line, /storage/iu, `localStorage 访问必须经 storage 抽象（键 agentSessions.<projectRoot>）：${line.trim()}`)
       }
       continue
     }

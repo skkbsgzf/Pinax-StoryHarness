@@ -1,6 +1,9 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
+import { SLASH_COMMANDS, isSlashDraft } from './slashCommands.mjs'
+import { REFERENCE_KIND_ORDER, referenceKindLabel } from './agentReferences.mjs'
+import { formatRelativeTime } from './agentSessions.mjs'
 
 /**
  * Agent 对话框：从老前端的作品资料助手抽出来的纯会话面。
@@ -16,9 +19,15 @@ import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
  *
  * 与老版唯一的差别：多了审稿意见／可执行动作两块（模型答的是结构化审稿，
  * 那两块是内容不是备注，摊开是应该的），以及把「工具面」收成底部一个折叠层。
+ *
+ * 批次27 加的三件（作者原话「底部输入框的 / 弹出 skill，@ 弹出参考」＋「需要有会话管理」）：
+ *   - 工具栏「会话」按钮 → 轻量弹层（列表／新建／切换／双击改名／✕ 删除）；
+ *   - `/` 提示从「只显示」升级为可点/可 Enter 选中，选中把模板填进草稿（命令词不留在草稿里）；
+ *   - `@` 弹层按类列出当前项目内容，点一条把 @《标题》 插进光标处。
+ * 本组件不做命令路由与引用解析（那是 RuntimeDock 的事）：它只把草稿与选中的命令交上去。
  */
 const props = defineProps({
-  /** 会话面：[{ id, role:'user'|'agent', text, findings:[], actions:[], failed:boolean, at:string }] */
+  /** 会话面：[{ id, role:'user'|'agent', text, findings:[], actions:[], command, notes:[], failed:boolean, at:string }] */
   messages: { type: Array, default: () => [] },
   busy: { type: Boolean, default: false },
   /** 没有桥（渲染层没接主进程）时为真：输入框禁用。 */
@@ -28,58 +37,306 @@ const props = defineProps({
   /** 折叠层的工具名清单（默认不展开）。 */
   tools: { type: Array, default: () => [] },
   /** 当前模式：review（提案制）或 auto（直写）。 */
-  mode: { type: String, default: 'review' }
+  mode: { type: String, default: 'review' },
+  /** 会话列表摘要：[{ id, title, updatedAt, messageCount }]（agentSessions.list()）。 */
+  sessions: { type: Array, default: () => [] },
+  activeSessionId: { type: String, default: '' },
+  /** @ 引用清单：[{ kind, title, path }]，由外壳从 board data 组一份传下来。 */
+  references: { type: Array, default: () => [] },
+  /** 统一二级页开着时为 true：Esc 先归它（照 FloatingWidget 的 suspendEsc 先例）。 */
+  suspendEsc: { type: Boolean, default: false }
 })
-const emit = defineEmits(['send', 'retry', 'update:mode'])
+const emit = defineEmits(['send', 'retry', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session'])
 
 const draft = ref('')
 const threadRef = ref(null)
+const textareaRef = ref(null)
+const sessionRoot = ref(null)
 const mode = computed(() => props.mode)
 
-/** / 命令提示（输入以 / 开头时显示可用命令）。 */
-const slashCommands = [
-  { cmd: '/审阅', desc: '审阅当前章节' },
-  { cmd: '/大纲', desc: '查看或编辑大纲' },
-  { cmd: '/总结', desc: '总结当前内容' },
-  { cmd: '/资料', desc: '搜索参考资料' }
-]
-const showSlashHint = computed(() => draft.value.startsWith('/'))
+/**
+ * 从提示层选中的命令：作者可能在模板上继续改，所以它不写进草稿（命令词本身不留在草稿里），
+ * 只在提交时随草稿一起交给 RuntimeDock 做路由；草稿被清空就作废（那是新的一问）。
+ */
+const pendingCommand = ref(null)
+
+/* —— / 命令提示：可点、可 Enter 选中 —— */
+const slashCommands = SLASH_COMMANDS
+const slashClosed = ref(false)
+const slashIndex = ref(0)
+const slashOpen = computed(() => !slashClosed.value && !refOpen.value && isSlashDraft(draft.value))
+
+/* —— @ 引用弹层 —— */
+const MAX_REFERENCE_PER_KIND = 8
+const refOpen = ref(false)
+const refQuery = ref('')
+const refIndex = ref(0)
+const referenceGroups = computed(() => {
+  const query = refQuery.value.trim()
+  const groups = []
+  for (const kind of REFERENCE_KIND_ORDER) {
+    const items = (props.references ?? [])
+      .filter((item) => item?.kind === kind)
+      .filter((item) => item?.title && (!query || String(item.title).includes(query)))
+      .slice(0, MAX_REFERENCE_PER_KIND)
+    if (items.length) groups.push({ kind, label: referenceKindLabel(kind), items })
+  }
+  return groups
+})
+const referenceOptions = computed(() => referenceGroups.value.flatMap((group) => group.items))
+
+/* —— 会话弹层 —— */
+const sessionOpen = ref(false)
+const renamingId = ref(null)
+const renameDraft = ref('')
 
 function submit() {
   const text = draft.value.trim()
   if (!text || props.busy || props.disabled) return
-  emit('send', text)
+  emit('send', { text, command: pendingCommand.value })
   draft.value = ''
+  pendingCommand.value = null
+  slashClosed.value = false
+  refOpen.value = false
 }
 
 /** 老版的口径：Enter 发送，Shift+Enter 换行，中文输入法组字时不抢键。 */
 function onKeydown(event) {
-  if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+  if (event.isComposing) return
+  if (slashOpen.value) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      slashIndex.value = (slashIndex.value + step + slashCommands.length) % slashCommands.length
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      pickSlash(slashCommands[slashIndex.value])
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      slashClosed.value = true
+      return
+    }
+  }
+  if (refOpen.value) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const total = referenceOptions.value.length
+      if (!total) return
+      const step = event.key === 'ArrowDown' ? 1 : -1
+      refIndex.value = (refIndex.value + step + total) % total
+      return
+    }
+    if (event.key === 'Enter') {
+      const item = referenceOptions.value[refIndex.value]
+      if (!item) return
+      event.preventDefault()
+      insertReference(item)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      refOpen.value = false
+      return
+    }
+  }
+  if (event.key !== 'Enter' || event.shiftKey) return
   event.preventDefault()
   submit()
+}
+
+/** 选中命令：模板填进草稿，命令词不留在草稿里（路由靠 pendingCommand 带过去）。 */
+function pickSlash(command) {
+  if (!command) return
+  pendingCommand.value = command
+  draft.value = command.template
+  slashClosed.value = true
+  nextTick(() => textareaRef.value?.focus?.())
+}
+
+/** 每次键入都重算 @ 触发：光标前最后一个 token 形如 `@query` 才弹；敲到空白外就收。 */
+function onInput() {
+  if (!draft.value.trim()) pendingCommand.value = null
+  // 上一轮 Esc 关掉的提示，重新打字就再给一次机会（Esc 只管那一下）。
+  slashClosed.value = false
+  updateRefMenu()
+}
+
+function updateRefMenu() {
+  const element = textareaRef.value
+  const caret = element?.selectionStart ?? draft.value.length
+  const before = draft.value.slice(0, caret)
+  const match = /(?:^|\s)@([^\s@]*)$/u.exec(before)
+  if (!match) {
+    refOpen.value = false
+    refQuery.value = ''
+    return
+  }
+  refOpen.value = true
+  refQuery.value = match[1] ?? ''
+  refIndex.value = 0
+}
+
+/** 把 @《标题》 插进光标处，替换掉正在输入的 `@query`。 */
+function insertReference(item) {
+  const element = textareaRef.value
+  const value = draft.value
+  const caret = element?.selectionStart ?? value.length
+  const before = value.slice(0, caret)
+  const after = value.slice(caret)
+  const token = `@《${item.title}》`
+  const start = Math.max(0, before.length - refQuery.value.length - 1)
+  const head = value.slice(0, start)
+  draft.value = `${head}${token} ${after.replace(/^\s*/u, '')}`
+  refOpen.value = false
+  refQuery.value = ''
+  const position = head.length + token.length + 1
+  nextTick(() => {
+    element?.focus?.()
+    element?.setSelectionRange?.(position, position)
+  })
+}
+
+function toggleSessions() {
+  sessionOpen.value = !sessionOpen.value
+  renamingId.value = null
+}
+
+function startRename(session) {
+  renamingId.value = session.id
+  renameDraft.value = session.title
+  nextTick(() => {
+    const input = sessionRoot.value?.querySelector?.('.authoring-knowledge__session-rename')
+    input?.focus?.()
+    input?.select?.()
+  })
+}
+
+function commitRename() {
+  const id = renamingId.value
+  const title = renameDraft.value.trim()
+  renamingId.value = null
+  if (id && title) emit('rename-session', { id, title })
+}
+
+function cancelRename() {
+  renamingId.value = null
+}
+
+function relativeTime(timestamp) {
+  return formatRelativeTime(timestamp, Date.now())
+}
+
+/** Esc：会话弹层先收（统一二级页开着时让位，照 FloatingWidget 的 suspendEsc）。 */
+function onDocumentKeydown(event) {
+  if (event.key !== 'Escape' || props.suspendEsc) return
+  if (!sessionOpen.value) return
+  event.preventDefault()
+  sessionOpen.value = false
+  renamingId.value = null
+}
+
+/** 点会话弹层外面收起（按钮自己 toggle，不参与这条）。 */
+function onDocumentPointerDown(event) {
+  if (!sessionOpen.value) return
+  if (sessionRoot.value?.contains?.(event.target)) return
+  sessionOpen.value = false
+  renamingId.value = null
 }
 
 watch(() => props.messages.length, async () => {
   await nextTick()
   if (threadRef.value) threadRef.value.scrollTop = threadRef.value.scrollHeight
 }, { immediate: true })
+
+watch(slashOpen, (open) => {
+  if (open) slashIndex.value = 0
+})
+
+watch(referenceOptions, () => {
+  refIndex.value = 0
+})
+
+onMounted(() => {
+  globalThis.document?.addEventListener?.('keydown', onDocumentKeydown)
+  globalThis.document?.addEventListener?.('pointerdown', onDocumentPointerDown)
+})
+
+onBeforeUnmount(() => {
+  globalThis.document?.removeEventListener?.('keydown', onDocumentKeydown)
+  globalThis.document?.removeEventListener?.('pointerdown', onDocumentPointerDown)
+})
 </script>
 
 <template>
   <section class="authoring-knowledge" :class="{ 'is-starting': !messages.length }" aria-label="Pi-Agent 对话">
-    <header class="authoring-knowledge__toolbar">
+    <header ref="sessionRoot" class="authoring-knowledge__toolbar">
       <div class="authoring-knowledge__toolbar-primary">
         <div class="authoring-knowledge__model">
           <strong>{{ title }}</strong>
         </div>
       </div>
-      <button
-        type="button"
-        class="authoring-knowledge__mode-badge"
-        :class="mode === 'review' ? 'is-review' : 'is-auto'"
-        :title="mode === 'review' ? '审阅模式：AI 产出走提案，确认后才落盘' : '自动模式：AI 产出直接写入（慎用）'"
-        @click="emit('update:mode', mode === 'review' ? 'auto' : 'review')"
-      >{{ mode === 'review' ? '审阅' : '自动' }}</button>
+      <div class="authoring-knowledge__toolbar-actions">
+        <button
+          type="button"
+          class="authoring-knowledge__session-btn"
+          :class="{ 'is-open': sessionOpen }"
+          :aria-expanded="sessionOpen.toString()"
+          title="会话：切换／新建／改名／删除"
+          @click="toggleSessions"
+        >会话<span class="authoring-knowledge__session-count">{{ sessions.length }}</span></button>
+        <button
+          type="button"
+          class="authoring-knowledge__mode-badge"
+          :class="mode === 'review' ? 'is-review' : 'is-auto'"
+          :title="mode === 'review' ? '审阅模式：AI 产出走提案，确认后才落盘' : '自动模式：AI 产出直接写入（慎用）'"
+          @click="emit('update:mode', mode === 'review' ? 'auto' : 'review')"
+        >{{ mode === 'review' ? '审阅' : '自动' }}</button>
+      </div>
+
+      <div v-if="sessionOpen" class="authoring-knowledge__sessions" role="dialog" aria-label="会话列表">
+        <button type="button" class="authoring-knowledge__session-new" @click="emit('new-session')">＋ 新建会话</button>
+        <ul class="authoring-knowledge__session-list">
+          <li
+            v-for="session in sessions"
+            :key="session.id"
+            class="authoring-knowledge__session-row"
+            :class="{ 'is-active': session.id === activeSessionId }"
+          >
+            <input
+              v-if="renamingId === session.id"
+              v-model="renameDraft"
+              class="authoring-knowledge__session-rename"
+              aria-label="会话标题"
+              @keydown.enter.prevent="commitRename"
+              @keydown.esc.prevent.stop="cancelRename"
+              @blur="commitRename"
+            />
+            <template v-else>
+              <button
+                type="button"
+                class="authoring-knowledge__session-item"
+                :aria-current="session.id === activeSessionId ? 'true' : undefined"
+                @click="emit('switch-session', session.id)"
+                @dblclick="startRename(session)"
+              >
+                <span class="authoring-knowledge__session-title">{{ session.title }}</span>
+                <span class="authoring-knowledge__session-time">{{ relativeTime(session.updatedAt) }} · {{ session.messageCount }} 条</span>
+              </button>
+              <button
+                type="button"
+                class="authoring-knowledge__session-remove"
+                :aria-label="`删除会话 ${session.title}`"
+                title="删除会话"
+                @click.stop="emit('remove-session', session.id)"
+              >✕</button>
+            </template>
+          </li>
+        </ul>
+      </div>
     </header>
 
     <div class="authoring-knowledge__body">
@@ -91,7 +348,14 @@ watch(() => props.messages.length, async () => {
         <template v-for="message in messages" :key="message.id">
           <div v-if="message.role === 'user'" class="authoring-knowledge__question-row" :data-message-id="message.id">
             <div class="authoring-knowledge__question">
-              <p>{{ message.text }}</p>
+              <p>
+                <span v-if="message.command" class="authoring-knowledge__command-badge">{{ message.command }}</span>{{ message.text }}
+              </p>
+              <p
+                v-for="note in message.notes"
+                :key="note"
+                class="authoring-knowledge__question-note"
+              >{{ note }}</p>
             </div>
           </div>
           <article v-else class="authoring-knowledge__answer">
@@ -139,18 +403,58 @@ watch(() => props.messages.length, async () => {
 
       <div class="authoring-knowledge__input-row">
         <textarea
+          ref="textareaRef"
           v-model="draft"
           rows="1"
           :placeholder="placeholder"
           aria-label="向助手提问"
           :disabled="disabled || busy"
           @keydown="onKeydown"
+          @input="onInput"
+          @click="updateRefMenu"
+          @blur="refOpen = false"
         />
-        <div v-if="showSlashHint" class="authoring-knowledge__slash-hint">
-          <span v-for="cmd in slashCommands" :key="cmd.cmd" class="authoring-knowledge__slash-item">
-            <code>{{ cmd.cmd }}</code> {{ cmd.desc }}
-          </span>
+
+        <!-- @ 引用弹层：按类列出当前项目内容（每类最多 8 条），点一条插进光标处。 -->
+        <div v-if="refOpen" class="authoring-knowledge__ref-pop" role="listbox" aria-label="引用项目内容">
+          <p class="authoring-knowledge__ref-head">引用项目内容（@）</p>
+          <p v-if="!referenceOptions.length" class="authoring-knowledge__ref-empty">当前项目还没有可引用的内容（打开对应栏目后这里就有）。</p>
+          <template v-for="group in referenceGroups" :key="group.kind">
+            <p class="authoring-knowledge__ref-group">{{ group.label }}</p>
+            <button
+              v-for="item in group.items"
+              :key="`${group.kind}-${item.path ?? item.title}`"
+              type="button"
+              class="authoring-knowledge__ref-item"
+              :class="{ 'is-active': referenceOptions[refIndex] === item }"
+              role="option"
+              :aria-selected="(referenceOptions[refIndex] === item).toString()"
+              @mousedown.prevent
+              @click="insertReference(item)"
+            >
+              <span class="authoring-knowledge__ref-title">@《{{ item.title }}》</span>
+              <span class="authoring-knowledge__ref-kind">{{ group.label }}</span>
+            </button>
+          </template>
         </div>
+
+        <!-- / 命令提示：可点、可上下键选、可 Enter 选中（选中把模板填进草稿）。 -->
+        <div v-if="slashOpen" class="authoring-knowledge__slash-hint" role="listbox" aria-label="可用命令">
+          <button
+            v-for="(command, index) in slashCommands"
+            :key="command.name"
+            type="button"
+            class="authoring-knowledge__slash-item"
+            :class="{ 'is-active': index === slashIndex }"
+            role="option"
+            :aria-selected="(index === slashIndex).toString()"
+            @mousedown.prevent
+            @click="pickSlash(command)"
+          >
+            <code>{{ command.name }}</code> {{ command.desc }}
+          </button>
+        </div>
+
         <div class="authoring-knowledge__composer-actions">
           <button
             type="button"
@@ -170,7 +474,7 @@ watch(() => props.messages.length, async () => {
 <style scoped>
 /* legacy-copied：度量与配色逐条抄自 src/components/authoring/AuthoringKnowledgeAssistant.vue（老版原话）。
    本块在视觉合同里豁免「裸 px 字号/圆角」检查——那是复用老版度量，不是另立刻度；
-   Next 自己加的样式在第二个 style 块（审稿意见／可执行动作），走 --nx-* 刻度，受门禁管。 */
+   Next 自己加的样式在后面的 style 块（审稿意见／会话弹层／slash 命令／@ 引用），走 --nx-* 刻度，受门禁管。 */
 .authoring-knowledge { position: relative; display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; color: var(--text-primary); background: var(--surface-assistant); font: 14px/1.5 var(--font-interface, var(--font-sans)); }
 .authoring-knowledge__toolbar { display: flex; min-height: 52px; box-sizing: border-box; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px 7px 14px; border-bottom: 0; }
 .authoring-knowledge__toolbar-primary { min-width: 0; }
@@ -239,6 +543,47 @@ watch(() => props.messages.length, async () => {
 .authoring-knowledge__mode-badge { flex: none; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
 .authoring-knowledge__mode-badge.is-review { color: var(--accent, var(--accent)); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
 .authoring-knowledge__mode-badge.is-auto { color: var(--signal-warm, var(--signal-warm)); border-color: color-mix(in srgb, var(--signal-warm) 32%, transparent); }
-.authoring-knowledge__slash-hint { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 6px 4px 0; font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
+.authoring-knowledge__slash-hint { display: flex; flex-wrap: wrap; gap: 6px 8px; padding: 6px 4px 0; font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
+.authoring-knowledge__slash-item { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); cursor: pointer; }
+.authoring-knowledge__slash-item.is-active, .authoring-knowledge__slash-item:hover { color: var(--archive-ink); background: var(--nav-hover); border-color: var(--border-strong); }
 .authoring-knowledge__slash-item code { color: var(--accent, var(--accent)); font-weight: 600; margin-right: 4px; }
+</style>
+
+<style scoped>
+/* 批次27：会话管理（工具栏按钮＋轻量弹层）、命令徽章、@ 引用弹层。全 token，受 visual-contract 门禁管。 */
+.authoring-knowledge__toolbar { position: relative; }
+.authoring-knowledge__toolbar-actions { display: flex; flex: none; align-items: center; gap: 6px; }
+.authoring-knowledge__session-btn { display: inline-flex; align-items: center; gap: 4px; flex: none; min-height: 24px; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); cursor: pointer; }
+.authoring-knowledge__session-btn.is-open, .authoring-knowledge__session-btn:hover { color: var(--archive-ink); background: var(--nav-hover); border-color: var(--border-strong); }
+.authoring-knowledge__session-count { color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+
+/* 会话弹层：轻量一枚（不是二级页），贴着工具栏下缘。层序走 --z-popover（低于统一二级页）。 */
+.authoring-knowledge__sessions { position: absolute; top: calc(100% - 4px); right: 8px; z-index: var(--z-popover); width: min(280px, 92vw); max-height: 340px; overflow-y: auto; padding: 6px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: var(--surface-workbench-raised); box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent); scrollbar-width: thin; }
+.authoring-knowledge__session-new { display: flex; width: 100%; min-height: 30px; align-items: center; padding: 5px 8px; margin-bottom: 4px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--accent); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
+.authoring-knowledge__session-new:hover { background: var(--nav-hover); }
+.authoring-knowledge__session-list { list-style: none; margin: 0; padding: 0; }
+.authoring-knowledge__session-row { display: flex; align-items: center; gap: 2px; border-radius: var(--nx-radius-xs); }
+.authoring-knowledge__session-row.is-active { background: var(--nav-selected); }
+.authoring-knowledge__session-item { display: flex; flex: 1 1 auto; min-width: 0; flex-direction: column; gap: 2px; padding: 6px 8px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--archive-ink); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
+.authoring-knowledge__session-item:hover { background: var(--nav-hover); }
+.authoring-knowledge__session-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.authoring-knowledge__session-time { color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__session-remove { flex: none; width: 24px; height: 24px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); cursor: pointer; opacity: .35; }
+.authoring-knowledge__session-row:hover .authoring-knowledge__session-remove, .authoring-knowledge__session-remove:focus-visible { opacity: 1; }
+.authoring-knowledge__session-remove:hover { color: var(--control-danger); background: var(--nav-hover); }
+.authoring-knowledge__session-rename { width: 100%; min-height: 28px; padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: var(--nx-radius-xs); background: var(--surface-workbench-input); color: var(--text-primary); font-size: var(--nx-fs-md); }
+
+/* 命令徽章与引用标注：一条 user 消息上的两个小字。 */
+.authoring-knowledge__command-badge { margin-right: 6px; padding: 1px 6px; border-radius: var(--nx-radius-xs); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-size: var(--nx-fs-2xs); }
+p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.5; }
+
+/* @ 引用弹层：贴在输入行上缘（弹层在输入行内部，input-row 已是 relative）。 */
+.authoring-knowledge__ref-pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: var(--z-popover); max-height: 300px; overflow-y: auto; padding: 6px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: var(--surface-workbench-raised); box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent); scrollbar-width: thin; }
+.authoring-knowledge__ref-head { margin: 2px 8px 4px; color: var(--text-muted); font-size: var(--nx-fs-2xs); letter-spacing: .04em; }
+.authoring-knowledge__ref-group { margin: 6px 8px 2px; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__ref-item { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--archive-ink); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
+.authoring-knowledge__ref-item.is-active, .authoring-knowledge__ref-item:hover { background: var(--nav-hover); }
+.authoring-knowledge__ref-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.authoring-knowledge__ref-kind { flex: none; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__ref-empty { margin: 4px 8px; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.6; }
 </style>

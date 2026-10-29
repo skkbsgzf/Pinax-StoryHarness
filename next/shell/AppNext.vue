@@ -198,6 +198,32 @@ const exportDocumentTarget = computed(() => {
   return null
 })
 
+/**
+ * @ 引用清单（批次27 · 任务三）：从 board data 组一份 { kind, title, path } 交给右栏。
+ * 只列已经载入过的树——为了这份清单额外读盘会顺手打开第一条（loadEntries 的既有行为），
+ * 那不是作者点的事，所以这里只做投影，不触发取数。对应栏目打开过一次，它的内容就会出现在 @ 里。
+ */
+const referenceCatalog = computed(() => {
+  const out = []
+  for (const chapter of data.chapters ?? []) {
+    if (!chapter?.file) continue
+    out.push({ kind: 'chapter', title: chapter.title ?? chapter.file, path: chapter.file })
+  }
+  for (const entry of data.entries ?? []) {
+    if (!entry?.path) continue
+    out.push({ kind: 'entry', title: entry.name ?? entry.title ?? entry.path, path: entry.path, id: entry.id ?? null })
+  }
+  for (const document of data.documents ?? []) {
+    if (!document?.file) continue
+    out.push({ kind: 'document', title: document.title ?? document.file, path: document.file })
+  }
+  for (const script of data.scripts ?? []) {
+    if (!script?.file) continue
+    out.push({ kind: 'script', title: script.title ?? script.file, path: script.file })
+  }
+  return out
+})
+
 /** 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项。
  *  外壳只留挂载与 open／activeSection 两个状态；各节的内容与状态住在各自 SFC
  *  （next/shell/settings/，照 AssistantDialog 从 AuthoringKnowledgeAssistant 抽取的同一模式）。
@@ -1235,7 +1261,14 @@ onBeforeUnmount(() => {
       <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('right', $event)" />
 
       <div class="col-dock" :style="{ width: dockWidth + 'px' }">
-        <RuntimeDock :runtime="runtime" :bridge="bridge" />
+        <!-- 批次27：会话按项目根隔离（换项目＝另一份会话）；@ 引用清单与 Esc 让位也在这里接线。 -->
+        <RuntimeDock
+          :runtime="runtime"
+          :bridge="bridge"
+          :project-root="project?.root ?? ''"
+          :references="referenceCatalog"
+          :suspend-esc="settingsOpen"
+        />
       </div>
 
       <!-- —— 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项 ——————————
