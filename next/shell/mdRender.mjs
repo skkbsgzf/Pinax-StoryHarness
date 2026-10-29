@@ -1,194 +1,84 @@
 /**
- * 轻量 Markdown → HTML（批次26 · MD 原生渲染）。
+ * Markdown → 安全 HTML（批次26 建、批次32 换内核）。
  *
- * 为什么手写而不引第三方：npm install 要网络、打包体积也要守住（bundle 门禁钉着上限），
- * 而阅读态只需要「够用」的一档——标题／粗体／斜体／行内代码／代码块／引用／列表／分隔线／链接。
- * 不认表格、脚注、HTML 内联块、数学公式：认不出的就按段落原样显示（不吞内容、不假装渲染了）。
+ * 内核换成旧线同款：`marked` 解析 ＋ `dompurify` 清洗（两者本来就在 package.json，属复用不是新增）。
+ * 批次26 那份手写解析器认不出的东西（表格／图片／任务列表／自动链接／h4–h6／行内 HTML），
+ * 换 marked 之后全都认——「中心区域支持 Web 和 MD 的这部分尽可能迁移」的第一档。
  *
- * 安全边界（v-html 的唯一入口就在这三行）：
- *   1) 先把整段源文本做 HTML 转义——**作者文档里的原始 HTML 一律当文字**，所以 `<script>` 这类
- *      标签根本没有机会变成元素；渲染出来的标签全部由本模块自己拼。
- *   2) 再拼我们自己的标签（p/h/ul/li/blockquote/pre/code/strong/em/a/br/hr/del）。
- *   3) 出线前过 sanitizeHtml：去掉 script/iframe/style 一类容器与 on* 事件属性、
- *      把 javascript: 协议的链接打成 #。哪怕将来某处忘了转义，这一道也还站着。
- * 链接只认 http(s)、mailto 与相对路径；别的协议（javascript:/data:）只留文字，不留可点的 href。
+ * 安全边界（v-html 的唯一入口就在本模块）：
+ *   marked@18 是**故意宽松**的：它不剥 <script>、不剥 onclick、不管 javascript: 协议。
+ *   所以解析出来的 HTML 一律要过清洗，两档（按运行环境选，口径一致：都不许可执行内容穿透）：
+ *     · 有 DOM（渲染层真环境 / vitest+jsdom）→ DOMPurify＋allow-list（与 src/utils/sanitize.js 同源表）；
+ *     · 无 DOM（node --test 轨）→ fallbackSanitize（独立模块 next/shell/sanitizeFallback.mjs，
+ *       零第三方依赖——主进程的 exportService 直接认那个模块，本模块的 marked/dompurify
+ *       不得进主进程 bundle，批次32 调度方补刀）。正则剥容器标签／事件属性／危险协议，
+ *       比 DOMPurify 松（不做 allow-list），但危险面同样封死。
+ *   两档都剥 <script>、都摘 on*、都把 javascript:／vbscript:／data: 的 href/src 打成 #。
+ *
+ * 对外只有 renderMarkdown(text) → html 字符串（签名自批次26 起不变）：
+ * 调用方是 CarrierPaneHost 三处阅读面与提案两段、设置里「文档 → 导出」的 doc 导出。
  */
 
-const BLOCK_START = /^(?:\s*#{1,6}\s|\s*```|\s*>|\s*[-*+]\s|\s*\d+[.)]\s|\s*(?:---|\*\*\*|___)\s*$)/u
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
+import { fallbackSanitize } from './sanitizeFallback.mjs'
 
-/** HTML 转义：文本节点的唯一出口。 */
-export function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
+/**
+ * allow-list：与 `src/utils/sanitize.js` 的 HTML_CONFIG **同源**（旧线口径，单一事实源在那边）。
+ * 这里复制而不 import，是因为 next/ 是独立重写线：渲染层产物不许把旧轨（src/）拖进来
+ * （打包门禁 f「渲染层依赖薄」就是这么规定的）。表更新时两边一起改。
+ *
+ * 唯一差异（批次32 记明）：多收 `input` 标签与 `checked`／`disabled` 两个属性——
+ * GFM 任务列表由 marked 输出 `<input type="checkbox" disabled>`，不允许它就只剩空条目。
+ * 这三项都是惰性标记，没有事件、没有协议、不能执行任何东西。
+ */
+const HTML_CONFIG = Object.freeze({
+  ALLOWED_TAGS: [
+    'a', 'abbr', 'b', 'blockquote', 'br', 'code', 'del', 'div', 'em', 'figcaption',
+    'figure', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'input', 'ins',
+    'kbd', 'li', 'mark', 'ol', 'p', 'pre', 'q', 's', 'small', 'span', 'strong', 'sub',
+    'sup', 'table', 'tbody', 'td', 'th', 'thead', 'tr', 'u', 'ul'
+  ],
+  ALLOWED_ATTR: [
+    'href', 'title', 'alt', 'src', 'class', 'id', 'lang', 'dir',
+    'colspan', 'rowspan', 'start', 'type', 'rel', 'target', 'checked', 'disabled'
+  ],
+  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i
+})
+
+/** GFM 起手：表格／任务列表／自动链接要；单换行不折 <br>（breaks:false，与旧线一致）。 */
+marked.setOptions({ gfm: true, breaks: false })
+
+/** 渲染层真环境才有 DOM；DOMPurify 在没有 document 时会退化成「原样返回」，所以两个条件都要判。 */
+function hasDom() {
+  return typeof globalThis.window !== 'undefined'
+    && typeof globalThis.window?.document !== 'undefined'
+    && DOMPurify.isSupported === true
 }
 
-/** 出线前的兜底清洗（输入的转义已经挡住绝大部分，这一道是纵深防御）。
- *  只在标签内部动手：文字里的「onerror=」是被转义过的普通文字，不该被摘掉。 */
+
+/**
+ * 双档清洗：有 DOM 走 DOMPurify（allow-list），没有就走 fallbackSanitize（独立模块）。
+ * 主进程不经本模块拿清洗——exportService 直接 import sanitizeFallback.mjs，
+ * 免得 marked/dompurify 的模块图拖进主进程 bundle（批次32 评审发现，调度方切断）。
+ */
 export function sanitizeHtml(html) {
-  return String(html ?? '')
-    // 成对的危险容器整段去掉（连内容一起——它们本来就不该出现在稿子里）。
-    .replace(/<\s*(script|style|iframe|object|embed|form|noscript)\b[\s\S]*?<\s*\/\s*\1\s*>/giu, '')
-    // 落单的开标签（没有闭合的）也去掉。
-    .replace(/<\s*\/?\s*(script|style|iframe|object|embed|form|noscript|link|meta|base)\b[^>]*>/giu, '')
-    .replace(/<[^>]*>/gu, (tag) => tag
-      // 事件属性一律摘掉（onclick / onerror / onload …）。
-      .replace(/\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/giu, '')
-      // javascript:/vbscript:/data: 的 href/src 打成 #，不留可点的危险协议。
-      .replace(/\b(href|src)\s*=\s*(["'])\s*(?:javascript|vbscript|data):[^"']*\2/giu, '$1="#"'))
-}
-
-/** 链接白名单：http(s)、mailto、站内相对路径；其余只留文字。 */
-function safeHref(rawUrl) {
-  const url = String(rawUrl ?? '').trim()
-  if (!url) return null
-  if (/^(?:https?:\/\/|mailto:)/iu.test(url)) return url
-  if (/^[a-z][a-z0-9+.-]*:/iu.test(url)) return null
-  return url
-}
-
-/** 行内标记：先转义，再按「代码 → 粗体 → 斜体 → 删除线 → 链接」的顺序套标签。 */
-export function renderInline(raw) {
-  let text = escapeHtml(raw)
-  // 行内代码最先：里面的星号/下划线不该被当成强调。
-  const codes = []
-  text = text.replace(/`([^`\n]+)`/gu, (_match, code) => {
-    codes.push(`<code>${code}</code>`)
-    return `\uE000${codes.length - 1}\uE000`
-  })
-  text = text.replace(/\*\*([^*\n]+)\*\*/gu, '<strong>$1</strong>')
-  text = text.replace(/__([^_\n]+)__/gu, '<strong>$1</strong>')
-  text = text.replace(/(^|[^*])\*([^*\n]+)\*/gu, '$1<em>$2</em>')
-  text = text.replace(/(^|[^_\w])_([^_\n]+)_/gu, '$1<em>$2</em>')
-  text = text.replace(/~~([^~\n]+)~~/gu, '<del>$1</del>')
-  text = text.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/gu, (_match, label, url) => {
-    const href = safeHref(url)
-    if (!href) return label
-    return `<a href="${href}" rel="noreferrer noopener" target="_blank">${label}</a>`
-  })
-  // 代码片段回填（占位符里只有序号，不会被上面的强调规则伤到）。
-  return text.replace(/\uE000(\d+)\uE000/gu, (_match, index) => codes[Number(index)] ?? '')
+  if (html == null || html === '') return ''
+  return hasDom()
+    ? DOMPurify.sanitize(String(html), HTML_CONFIG)
+    : fallbackSanitize(html)
 }
 
 /**
  * Markdown 源文本 → 安全的 HTML 片段。空文本返回空串（调用方据此决定要不要画容器）。
- * 块级：标题／围栏代码块／引用／无序列表／有序列表／分隔线／段落；段落内换行保留成 <br>。
+ * 解析交给 marked（gfm 表格／任务列表／自动链接／行内 HTML 都认），清洗交给 sanitizeHtml。
  */
 export function renderMarkdown(source) {
   const text = String(source ?? '').replace(/\r\n?/gu, '\n')
   if (!text.trim()) return ''
-  const lines = text.split('\n')
-  const html = []
-  let index = 0
-
-  while (index < lines.length) {
-    const line = lines[index]
-
-    // 围栏代码块（```lang）——里面原样保留，不做行内标记。
-    const fence = /^\s*```([A-Za-z0-9_+-]*)\s*$/u.exec(line)
-    if (fence) {
-      const body = []
-      index += 1
-      while (index < lines.length && !/^\s*```\s*$/u.test(lines[index])) {
-        body.push(lines[index])
-        index += 1
-      }
-      index += 1 // 跳过闭合围栏（没有闭合就吃到文末，不丢内容）
-      html.push(`<pre class="md-code"><code>${escapeHtml(body.join('\n'))}</code></pre>`)
-      continue
-    }
-
-    if (!line.trim()) {
-      index += 1
-      continue
-    }
-
-    const heading = /^(#{1,6})\s+(.*)$/u.exec(line)
-    if (heading) {
-      const level = heading[1].length
-      html.push(`<h${level}>${renderInline(heading[2].trim())}</h${level}>`)
-      index += 1
-      continue
-    }
-
-    if (/^\s*(?:---|\*\*\*|___)\s*$/u.test(line)) {
-      html.push('<hr>')
-      index += 1
-      continue
-    }
-
-    // 引用：连续的 > 行收成一块，块内按段落（空 > 行分段）。
-    if (/^\s*>/u.test(line)) {
-      const inner = []
-      while (index < lines.length && /^\s*>/u.test(lines[index])) {
-        inner.push(lines[index].replace(/^\s*>\s?/u, ''))
-        index += 1
-      }
-      html.push(`<blockquote>${paragraphsOf(inner)}</blockquote>`)
-      continue
-    }
-
-    // 无序列表：连续的 -/*/+ 行。
-    if (/^\s*[-*+]\s+/u.test(line)) {
-      const items = []
-      while (index < lines.length && /^\s*[-*+]\s+/u.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*[-*+]\s+/u, ''))
-        index += 1
-      }
-      html.push(`<ul>${items.map((item) => `<li>${renderInline(item.trim())}</li>`).join('')}</ul>`)
-      continue
-    }
-
-    // 有序列表：连续的 1. / 1) 行。
-    if (/^\s*\d+[.)]\s+/u.test(line)) {
-      const items = []
-      while (index < lines.length && /^\s*\d+[.)]\s+/u.test(lines[index])) {
-        items.push(lines[index].replace(/^\s*\d+[.)]\s+/u, ''))
-        index += 1
-      }
-      html.push(`<ol>${items.map((item) => `<li>${renderInline(item.trim())}</li>`).join('')}</ol>`)
-      continue
-    }
-
-    // 段落：一直吃到空行或另一个块的开头。
-    const paragraph = []
-    while (index < lines.length && lines[index].trim() && !BLOCK_START.test(lines[index])) {
-      paragraph.push(lines[index])
-      index += 1
-    }
-    if (!paragraph.length) {
-      // 兜底：认得出是「块的开头」却没有分支接住的行，按段落原样显示，绝不空转。
-      html.push(`<p>${renderInline(lines[index].trim())}</p>`)
-      index += 1
-      continue
-    }
-    html.push(`<p>${paragraph.map((item) => renderInline(item.trim())).join('<br>')}</p>`)
-  }
-
-  return sanitizeHtml(html.join('\n'))
-}
-
-/** 引用块内部：空行分段，段落内换行成 <br>。 */
-function paragraphsOf(lines) {
-  const out = []
-  let current = []
-  const flush = () => {
-    if (!current.length) return
-    out.push(`<p>${current.map((item) => renderInline(item.trim())).join('<br>')}</p>`)
-    current = []
-  }
-  for (const line of lines) {
-    if (!line.trim()) {
-      flush()
-      continue
-    }
-    current.push(line)
-  }
-  flush()
-  return out.join('')
+  // async:false 是 marked 的默认值，这里写死是为了拿到的永远是字符串而不是 Promise。
+  const parsed = marked.parse(text, { async: false, gfm: true, breaks: false })
+  return sanitizeHtml(typeof parsed === 'string' ? parsed : '')
 }
 
 export default renderMarkdown

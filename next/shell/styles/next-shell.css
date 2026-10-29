@@ -1080,3 +1080,80 @@ body {
   margin: 4px 8px;
   background: var(--hairline-soft);
 }
+
+/* —— 富渲染（批次32）：marked 带来的新元素 —————————————————————————————
+   批次26 的手写解析器只出 p/h/ul/ol/pre/blockquote/hr/a/strong/em/del/code；批次32 换成
+   marked 之后表格、图片、任务列表、h4–h6、行内 HTML 白名单标签都会出现——这里只补这些
+   新元素的度量。阅读面的行高与字号（P18 裁定）一个字都不动：正文容器 .nx-rendered-md
+   的基础度量仍由 CarrierPaneHost 的 .entry-text 带。
+   为什么写在布局层：载体阅读面的 scoped 样式已经盖住老元素，新元素是所有阅读面共用的，
+   放进全局层一次到位。 */
+.nx-rendered-md table {
+  margin: 0 0 0.9em;
+  border-collapse: collapse;
+  border: 1px solid var(--hairline-soft);
+}
+.nx-rendered-md th,
+.nx-rendered-md td {
+  padding: 6px 10px;
+  border: 1px solid var(--hairline-soft);
+  text-align: start;
+  vertical-align: top;
+}
+.nx-rendered-md th {
+  background: var(--surface-workbench-input);
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.nx-rendered-md img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--nx-radius-xs);
+}
+/* 任务列表（GFM）：checkbox 是原生控件，条目不再画圆点，缩进与普通列表对齐。 */
+.nx-rendered-md li:has(> input[type='checkbox']) {
+  list-style: none;
+  margin-inline-start: -1.2em;
+}
+.nx-rendered-md input[type='checkbox'] {
+  margin-inline-end: 6px;
+  accent-color: var(--archive-olive);
+}
+/* 行内 HTML 白名单标签（marked 原样透传、sanitize 放行）：只给最小可读性。 */
+.nx-rendered-md mark {
+  background: var(--surface-workbench-input);
+  color: var(--archive-ink);
+}
+.nx-rendered-md kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: var(--surface-workbench-input);
+  font-family: var(--font-mono);
+  font-size: var(--nx-fs-md);
+}
+.nx-rendered-md sub,
+.nx-rendered-md sup {
+  font-size: var(--nx-fs-2xs);
+}
+/* 代码块：marked 输出 <pre><code class="language-x">，批次26 的 .md-code 类没有了。
+   CarrierPaneHost 那条 :deep(code) 是行内样式的（scoped 选择器带 data-v，类数多一筹），
+   这里用重复类名＋子选择器（类数相同再比元素数）把块内 code 的 padding／底色／圆角压回来，
+   否则整块代码像一枚大徽章。 */
+.nx-rendered-md.nx-rendered-md pre {
+  margin: 0 0 0.9em;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-input);
+  white-space: pre;
+}
+.nx-rendered-md.nx-rendered-md pre > code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--nx-fs-md);
+  line-height: 1.65;
+  white-space: pre;
+}

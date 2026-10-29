@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { fail, ok } from '../kernel/errors.mjs'
-import { sanitizeHtml } from './mdRender.mjs'
+import { sanitizeHtml } from './sanitizeFallback.mjs'
 
 /**
  * 导出当前文档（批次26 · 任务三）。
@@ -69,7 +69,8 @@ function escapeHtml(value) {
  */
 export function buildDocumentHtml({ content = '', html = null, title = '' } = {}) {
   const safeTitle = escapeHtml(String(title ?? '').trim() || '导出文档')
-  // 渲染层给的 html 也过一遍 mdRender 的清洗（IPC 载荷按不可信处理：范围只限我们自己的标签与属性）。
+  // 渲染层给的 html 也过一遍清洗（IPC 载荷按不可信处理）。清洗来自 sanitizeFallback——
+  // 主进程不引 mdRender（那会连带 marked/dompurify 进主进程 bundle，批次32 边界）。
   const body = typeof html === 'string' && html.trim()
     ? sanitizeHtml(html)
     : escapeHtml(content).replace(/\r\n?/gu, '\n').replaceAll('\n', '<br>')

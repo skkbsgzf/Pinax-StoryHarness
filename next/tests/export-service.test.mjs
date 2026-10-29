@@ -10,6 +10,7 @@ import {
   exportDocument,
   resolveExportTarget
 } from '../shell/exportService.mjs'
+import { renderMarkdown } from '../shell/mdRender.mjs'
 
 /**
  * 批次26 · 任务三：导出为 txt／doc。
@@ -152,4 +153,36 @@ test('buildDocumentHtml：标题转义、空标题回落、换行进 <br>', () =
   assert.match(html, /第一行<br>第二行/u)
   const untitled = buildDocumentHtml({ content: 'x' })
   assert.match(untitled, /<title>导出文档<\/title>/u)
+})
+
+test('doc 走 mdRender（批次32 换 marked 内核）：表格／标题进 .doc，危险内容仍被剥', async () => {
+  const dir = await tempDir('md')
+  try {
+    const content = [
+      '# 第002章',
+      '',
+      '| 列一 | 列二 |',
+      '| --- | --- |',
+      '| 甲 | 乙 |',
+      '',
+      '<script>alert(1)</script>'
+    ].join('\n')
+    const target = join(dir, '富渲染.doc')
+    const result = await exportDocument({
+      content,
+      format: 'doc',
+      targetPath: target,
+      html: renderMarkdown(content)
+    })
+    assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
+    const written = await readFile(target, 'utf-8')
+    // 表格是批次32 才有的能力：导出面与阅读态同一份 mdRender，doc 里也该是真表格。
+    assert.match(written, /<table>/u)
+    assert.match(written, /<th>列一<\/th>/u)
+    assert.match(written, /<h1>第002章<\/h1>/u)
+    assert.doesNotMatch(written, /<script/iu)
+    assert.doesNotMatch(written, /alert\(1\)/u)
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3 })
+  }
 })
