@@ -52,6 +52,7 @@ export function collectCarrierTools({ registry, view, fileService } = {}) {
 export async function createAggregatedMcpServer({
   kernelServer,
   carrierMap = new Map(),
+  nativeMap = new Map(),
   name = 'pinax-runtime',
   version = '0.2.0',
   instructions = '',
@@ -67,12 +68,16 @@ export async function createAggregatedMcpServer({
     for (const [toolName, { tool }] of carrierMap) {
       merged.set(toolName, publicDescriptor(toolName, tool))
     }
+    // 运行时原生工具（M2.5-B：技能读取）：与载体工具同一个出口，但归运行时自己。
+    for (const [toolName, { tool }] of nativeMap) {
+      merged.set(toolName, publicDescriptor(toolName, tool))
+    }
     return { tools: [...merged.values()] }
   })
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = String(request.params?.name ?? '')
-    const entry = carrierMap.get(toolName)
+    const entry = carrierMap.get(toolName) ?? nativeMap.get(toolName)
     if (entry) {
       const result = await entry.tool.run(request.params?.arguments ?? {}, { pluginId: entry.pluginId, advisorBaseUrl })
       return toMcpResult(result)

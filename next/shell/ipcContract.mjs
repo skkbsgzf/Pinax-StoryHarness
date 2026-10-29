@@ -38,6 +38,13 @@ export const IPC_CHANNELS = Object.freeze({
   runtimeAsk: 'pinax:agent:runtime:ask',
   runtimeToolCall: 'pinax:agent:runtime:tool-call',
   runtimePropose: 'pinax:agent:runtime:propose',
+  // M2.5-B：会话落盘。load 读 JSONL，save 交整份快照，import 只给老浏览器缓存迁移用一次。
+  sessionsLoad: 'pinax:agent:sessions:load',
+  sessionsSave: 'pinax:agent:sessions:save',
+  sessionsImport: 'pinax:agent:sessions:import',
+  // M2.5-C：工作区四轴状态（.pinax/workspace.json）。渲染层整份读、整份写，形状净化在渲染层。
+  workspaceLoad: 'pinax:agent:workspace:load',
+  workspaceSave: 'pinax:agent:workspace:save',
   // H2 知识服务：进程内 knowledgeService（createKnowledgeRuntime），不走 HTTP。
   // entry 恒传当前项目根；不开全局知识面。
   knowledgeSearch: 'pinax:agent:knowledge:search',
@@ -323,10 +330,39 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         const onEvent = typeof emitRuntimeEvent === 'function'
           ? (event) => emitRuntimeEvent({ askId, event })
           : null
-        const result = await session.runtime.ask(input.question, input.context ?? {}, onEvent ? { onEvent } : {})
+        // writeMode／skill 只从载荷进：写模式是会话真值（未知值由运行时回落 review），
+        // 技能是 slash 选中后带上的方法名；两者都不在这里猜。
+        const result = await session.runtime.ask(input.question, input.context ?? {}, {
+          ...(onEvent ? { onEvent } : {}),
+          ...('writeMode' in input ? { writeMode: input.writeMode } : {}),
+          ...('skill' in input ? { skill: input.skill } : {})
+        })
         // askId 随回执回去：渲染层据此把「本次 busy 期」的事件串到这一条回答上（晚到的事件对不上号就丢）。
         if (result?.ok) return { ...result, value: { ...(result.value ?? {}), askId } }
         return result
+      }
+      case IPC_CHANNELS.sessionsLoad:
+        return typeof session.loadSessions === 'function'
+          ? session.loadSessions()
+          : fail('INVALID_INPUT', '会话服务未接入（主进程未创建 sessionStore）：这条通道现在只报缺')
+      case IPC_CHANNELS.sessionsSave: {
+        if (typeof session.saveSessions !== 'function') return fail('INVALID_INPUT', '会话服务未接入（主进程未创建 sessionStore）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '会话落盘需要先打开一个项目')
+        return session.saveSessions(input.snapshot)
+      }
+      case IPC_CHANNELS.sessionsImport: {
+        if (typeof session.importSessions !== 'function') return fail('INVALID_INPUT', '会话服务未接入（主进程未创建 sessionStore）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '会话迁移需要先打开一个项目')
+        return session.importSessions(input.legacy)
+      }
+      case IPC_CHANNELS.workspaceLoad:
+        return typeof session.loadWorkspace === 'function'
+          ? session.loadWorkspace()
+          : fail('INVALID_INPUT', '工作区服务未接入（主进程未创建 workspaceStore）：这条通道现在只报缺')
+      case IPC_CHANNELS.workspaceSave: {
+        if (typeof session.saveWorkspace !== 'function') return fail('INVALID_INPUT', '工作区服务未接入（主进程未创建 workspaceStore）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '工作区落盘需要先打开一个项目')
+        return session.saveWorkspace(input.snapshot)
       }
       case IPC_CHANNELS.runtimeToolCall:
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')

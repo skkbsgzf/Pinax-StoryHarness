@@ -6,6 +6,8 @@ import { createProject, initBareProject } from './project/createProject.mjs'
 import { openProject } from './project/openProject.mjs'
 import { setCarrierEnabled, setPrimaryCarrier } from './project/carriers.mjs'
 import { createAgentRuntime } from './runtime/agentRuntime.mjs'
+import { createFileSessionStore } from './sessionStore.mjs'
+import { createFileWorkspaceStore } from './workspaceStore.mjs'
 import { BUILT_IN_CARRIER_PLUGINS } from './carriers/index.mjs'
 
 /**
@@ -69,6 +71,58 @@ export async function createNextSession({ root, plugins, builtInCarriers = true,
     runtime: null,
     view: null,
     lastFailure: null,
+    /** 会话落盘（M2.5-B）：跟着当前项目根走；换项目就换一份（`.pinax/sessions/` 在那个项目下）。 */
+    sessions: null,
+
+    /** 当前项目的会话存储；没有项目根时返回 null（渲染层只在打开项目后才读盘）。 */
+    sessionStore() {
+      if (!session.projectRoot) return null
+      if (!session.sessions || session.sessions.root !== session.projectRoot) {
+        session.sessions = createFileSessionStore({ root: session.projectRoot })
+      }
+      return session.sessions
+    },
+
+    async loadSessions() {
+      const store = session.sessionStore()
+      if (!store) return ok({ sessions: [], warnings: [], badLines: 0, dir: null })
+      return store.loadAll()
+    },
+
+    async saveSessions(snapshot) {
+      const store = session.sessionStore()
+      if (!store) return fail('INVALID_INPUT', '会话落盘需要先打开一个项目')
+      return store.saveSnapshot(snapshot)
+    },
+
+    async importSessions(legacy) {
+      const store = session.sessionStore()
+      if (!store) return fail('INVALID_INPUT', '会话迁移需要先打开一个项目')
+      return store.importLegacy(legacy)
+    },
+
+    /** 工作区状态（M2.5-C）：同样跟着当前项目根走，换项目就换一份。 */
+    workspaces: null,
+
+    workspaceStore() {
+      if (!session.projectRoot) return null
+      if (!session.workspaces || session.workspaces.root !== session.projectRoot) {
+        session.workspaces = createFileWorkspaceStore({ root: session.projectRoot })
+      }
+      return session.workspaces
+    },
+
+    async loadWorkspace() {
+      const store = session.workspaceStore()
+      if (!store) return ok({ version: 1, entries: {}, warnings: [], exists: false })
+      return store.read()
+    },
+
+    async saveWorkspace(snapshot) {
+      const store = session.workspaceStore()
+      if (!store) return fail('INVALID_INPUT', '工作区落盘需要先打开一个项目')
+      return store.write(snapshot)
+    },
 
     async create({ name, primaryCarrier, extraEnabled = [], root: projectRootOverride } = {}) {
       // root 覆写（批次9）：渲染层经系统对话框选定的空目录优先于会话根——

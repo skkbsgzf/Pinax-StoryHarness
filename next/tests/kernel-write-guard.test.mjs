@@ -186,7 +186,7 @@ test('真运行时里闸是生效的：内核写族被拒，带修订号的载�
   const started = await runtime.start()
   assert.equal(started.ok, true)
   try {
-    assert.equal(started.value.toolCount, 33, '闸不改面的形状：内核 19 ∪ 六载体自有 14（小说 4：正文写口＋提案三把；大纲 1；构思 2；世界书 1；约束 2；资料 4；断言同步）')
+    assert.equal(started.value.toolCount, 34, '闸不改面的形状：内核 19 ∪ 技能读取 1 ∪ 六载体自有 14（小说 4：正文写口＋提案三把；大纲 1；构思 2；世界书 1；约束 2；资料 4；断言同步）')
     const guard = runtime.surfaceInfo().writeGuard
     assert.deepEqual([...guard.tools].sort(), [...WRITE_FAMILY].sort(), '右栏要能读出此刻受约束的是哪几把')
     assert.equal(guard.projectRoot, opened.value.fileService.root)

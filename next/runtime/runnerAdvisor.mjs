@@ -2,8 +2,11 @@ import { runAdvisorAgent } from '../../server/services/advisorAgentRunner.js'
 import { createAdvisorTaskResponse } from '../../server/services/advisorTaskService.js'
 import { collectAgentEnvelopeSourceRefs } from '../../shared/agentContextContract.js'
 import { createModelRoundGuard } from '../../shared/modelLoopGuard.js'
+import { buildOpenClawUserMessage } from '../../server/services/openclawService.js'
 import { fail, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { buildRuntimeEnvelope } from './contextProfiles.mjs'
+import { skillCatalogLines } from '../skills/loadSkills.mjs'
+import { normalizeWriteMode } from './writePolicy.mjs'
 
 /**
  * 进程内 advisor 运行器（M2 · WP3 收口项）。
@@ -33,9 +36,11 @@ export function createAdvisorRunner({
   runAgent = runAdvisorAgent,
   buildEnvelope = buildRuntimeEnvelope,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  onEvent = null
+  onEvent = null,
+  // M2.5-A：工具循环默认关。注入 { run } 后由它接管模型往返；不注入时这一层与今天一字不差。
+  toolLoop = null
 } = {}) {
-  return async function advisorRunner({ question, context = {}, runtime, onEvent: perAskEvent = null } = {}) {
+  return async function advisorRunner({ question, context = {}, runtime, onEvent: perAskEvent = null, writeMode = null, skill = null } = {}) {
     // 单次提问的事件口优先：外壳每一问都要带自己的 askId，不能靠 runner 创建时绑死的那一个。
     const emit = createEventEmitter(typeof perAskEvent === 'function' ? perAskEvent : onEvent)
     emit({ stage: 'start', questionChars: String(question ?? '').length })
@@ -72,14 +77,40 @@ export function createAdvisorRunner({
     // 只包一层 acquire：每一次真实轮都发一条 model-round（超限那一次会抛，不算成功轮）。
     const roundGuard = withRoundEvents(createModelRoundGuard(), (round) => emit({ stage: 'model-round', round }))
     let run
+    let loopResult = null
     try {
-      run = await withTimeout(runAgent({
-        providerId: 'text-model',
-        capability: payload.capability,
-        envelope: payload.envelope,
-        question,
-        taskMeta: { taskType: payload.taskType, target: payload.envelope.target, options: {}, roundGuard }
-      }), timeoutMs)
+      if (toolLoop && typeof toolLoop.run === 'function') {
+        // M2.5-A：注入的工具循环接管这一问。工具面从运行时现取（项目/载体在 start() 时已定形）；
+        // 循环自己发 step / tool-* 事件，roundGuard 不参与——它计的是单次 runAgent 的回合。
+        const tools = typeof runtime?.listTools === 'function' ? runtime.listTools() : []
+        // 渐进披露：系统提示只给「名字 + 一句话」，正文要模型自己调 pinax_skill_read。
+        const catalog = typeof runtime?.skills === 'function' ? (runtime.skills().catalog ?? []) : []
+        loopResult = await withTimeout(toolLoop.run({
+          question,
+          envelope: payload.envelope,
+          tools,
+          skill,
+          writeMode,
+          onEvent: emit,
+          buildUserMessage: ({ question: asked, envelope }) => {
+            const base = buildOpenClawUserMessage(envelope, asked, {
+              taskType: payload.taskType,
+              target: payload.envelope.target
+            })
+            if (!catalog.length) return base
+            return `${base}\n\n可用技能（要用哪个先调 pinax_skill_read 读正文，别凭名字猜步骤）：\n${skillCatalogLines(catalog).join('\n')}`
+          }
+        }), timeoutMs)
+        run = { advice: String(loopResult?.text ?? '') }
+      } else {
+        run = await withTimeout(runAgent({
+          providerId: 'text-model',
+          capability: payload.capability,
+          envelope: payload.envelope,
+          question,
+          taskMeta: { taskType: payload.taskType, target: payload.envelope.target, options: {}, roundGuard }
+        }), timeoutMs)
+      }
     } catch (error) {
       const mapped = mapRunnerFailure(error, payload)
       emit({
@@ -96,25 +127,44 @@ export function createAdvisorRunner({
       targetRevision: payload.envelope.target.revision,
       sourceRefs: collectAgentEnvelopeSourceRefs(payload.envelope),
       budget: payload.envelope.budget,
-      roundsUsed: roundGuard.used,
+      roundsUsed: loopResult ? (Array.isArray(loopResult.steps) ? loopResult.steps.length : 0) : roundGuard.used,
       contextWarnings: payload.warnings
     }
+    if (loopResult) {
+      meta.toolLoop = {
+        kind: String(loopResult.kind ?? 'final'),
+        steps: Array.isArray(loopResult.steps) ? loopResult.steps.length : 0,
+        calls: Array.isArray(loopResult.calls) ? loopResult.calls.length : 0,
+        dropped: Array.isArray(loopResult.dropped) ? loopResult.dropped.length : 0
+      }
+      meta.writeMode = normalizeWriteMode(writeMode)
+      if (skill?.name) meta.skill = String(skill.name)
+    }
     let advice = String(run?.advice ?? '')
+    if (loopResult && loopResult.kind === 'step-budget') {
+      // 循环没有收敛时不能把空串当回答：如实说清是运行时截断的，不是模型没说话。
+      advice = `工具调用已达本轮上限（${meta.toolLoop.steps} 步），没有形成最终回答；请缩小这次请求的范围后重试。`
+    }
     const rawAdvice = advice
     let result = null
     let structured = false
-    try {
-      const response = createAdvisorTaskResponse({ taskType: payload.taskType, advice, target: payload.envelope.target, meta })
-      advice = response.advice
-      result = response.result
-      // structured＝这一层真的把模型原话解析成了结构化审稿：解析成功时 advice 已被换成 result.summary，
-      // 解析不出来时 formatAdvice 原样回吐那段字（两者逐字相同）。不拿「没抛错」冒充「解析成功」。
-      structured = Boolean(result) && String(advice).trim() !== rawAdvice.trim()
-    } catch {
-      // 解析不了就原样给作者看模型返回的那段字，同时把「没解析成结构化结果」记在 meta 里，不假装成功。
-      meta.resultParsing = 'advice 未能转成结构化结果，已按原文返回'
+    if (loopResult?.kind === 'step-budget') {
+      // 运行时截断的话不送结构化解析：这段不是模型的产出，别让它冒充审稿意见。
+      meta.resultParsing = '未形成回答（步数用尽），不做结构化解析'
+    } else {
+      try {
+        const response = createAdvisorTaskResponse({ taskType: payload.taskType, advice, target: payload.envelope.target, meta })
+        advice = response.advice
+        result = response.result
+        // structured＝这一层真的把模型原话解析成了结构化审稿：解析成功时 advice 已被换成 result.summary，
+        // 解析不出来时 formatAdvice 原样回吐那段字（两者逐字相同）。不拿「没抛错」冒充「解析成功」。
+        structured = Boolean(result) && String(advice).trim() !== rawAdvice.trim()
+      } catch {
+        // 解析不了就原样给作者看模型返回的那段字，同时把「没解析成结构化结果」记在 meta 里，不假装成功。
+        meta.resultParsing = 'advice 未能转成结构化结果，已按原文返回'
+      }
     }
-    emit({ stage: 'answer', chars: String(advice).length, structured, roundsUsed: roundGuard.used })
+    emit({ stage: 'answer', chars: String(advice).length, structured, roundsUsed: meta.roundsUsed })
     return {
       ok: true,
       source: ADVISOR_RUNNER_SOURCE,

@@ -275,7 +275,7 @@ test('空框架：不装任何插件，外壳可进入、可打开项目、可�
     assert.equal(view.value.runtime.builtIn, true)
     assert.equal(view.value.runtime.disableable, false)
     assert.equal(view.value.runtime.ownsSlot, 'right')
-    assert.equal(view.value.runtime.tools.length, 19, '运行时工具面不依附于任何插件')
+    assert.equal(view.value.runtime.tools.length, 20, '运行时工具面不依附于任何插件（内核 19 ＋ 技能读取 1）')
     assert.equal(view.value.runtime.started, true, '项目没打开成功时运行时也必须活着')
 
     // 「问一句话」在 M1 的如实形态：通道通、预算通，但没有模型运行器 → 明确报缺，不编回答。
@@ -317,8 +317,8 @@ test('装了载体：建项目 → 三栏视图有条目 → 提案只落 .pinax
     assert.equal(view.value.carriers.length, 2)
     assert.deepEqual(
       view.value.carriers.find((item) => item.id === 'fixture.novel').settings,
-      [{ id: 'novel.writing', title: '写作偏好' }],
-      '载体声明的 settings 必须穿过内核白名单与 shellView，原样到渲染层（P14 第二步）'
+      [{ id: 'novel.writing', title: '写作偏好', type: 'section' }],
+      '载体声明的 settings 必须穿过内核白名单与 shellView，原样到渲染层（P14 第二步；v1 的 {id,title} 归一成 section）'
     )
     assert.deepEqual(
       view.value.carriers.find((item) => item.id === 'fixture.worldbook').settings,

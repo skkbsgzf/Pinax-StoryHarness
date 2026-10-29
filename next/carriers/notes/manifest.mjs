@@ -12,10 +12,11 @@
 export const NOTES_CARRIER_ID = 'pinax.carrier.notes'
 
 export const NOTES_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@1',
+  spec: 'pinax-carrier@2',
+  manifestVersion: 2,
   id: NOTES_CARRIER_ID,
   title: '构思',
-  version: '1.0.0',
+  version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -29,16 +30,18 @@ export const NOTES_CARRIER = Object.freeze({
     notes: '构思'
   }),
 
-  panes: [
-    { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea' },
-    { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing' }
-  ],
+  contributes: Object.freeze({
+    panes: [
+      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list' },
+      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor' }
+    ],
+    // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
+    settings: []
+  }),
 
-  capabilities: ['notes.ideas'],
+  provides: ['notes.ideas'],
   requires: [],
 
-  // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
-  settings: [],
   tools: ['pinax_notes_list', 'pinax_notes_save'],
 
   context: {
@@ -48,7 +51,9 @@ export const NOTES_CARRIER = Object.freeze({
 
   // agent:ask 是运行时调用载体工具的前置授权（next/kernel/scopeGrant.mjs:59）：缺了它，这一栏的
   // 读写工具在运行时面上会被整组拒掉。与小说/资料同一口径。
-  scopes: ['file:构思:rw', 'agent:ask']
+  permissions: [{ type: 'file', dir: '构思', mode: 'rw' }, 'agent:ask'],
+
+  subscriptions: ['project.changed']
 })
 
 export default NOTES_CARRIER

@@ -16,10 +16,37 @@ export function createRegistry(options = {}) {
   const rejected = []
   const toolOwners = new Map()
   const namespaceOwners = new Map()
+  /** 每插件的清理钩子（视图实例、订阅、定时器）；uninstall 时统一跑，跑完即弃。 */
+  const disposers = new Map()
+  const uninstallListeners = new Set()
 
   function releaseClaims(pluginId) {
     for (const [tool, owner] of [...toolOwners]) if (owner === pluginId) toolOwners.delete(tool)
     for (const [namespace, owner] of [...namespaceOwners]) if (owner === pluginId) namespaceOwners.delete(namespace)
+  }
+
+  /** 先跑 impl.dispose()，再跑注册期挂上的钩子；单个抛错不阻断其余，但要记下来。 */
+  function disposePlugin(pluginId) {
+    const disposed = []
+    const impl = impls.get(pluginId)
+    if (impl && typeof impl.dispose === 'function') {
+      try {
+        impl.dispose()
+        disposed.push({ source: 'impl' })
+      } catch (error) {
+        disposed.push({ source: 'impl', error: String(error?.message ?? error) })
+      }
+    }
+    for (const [index, fn] of [...(disposers.get(pluginId) ?? new Map()).values()].entries()) {
+      try {
+        fn()
+        disposed.push({ source: 'hook', index })
+      } catch (error) {
+        disposed.push({ source: 'hook', index, error: String(error?.message ?? error) })
+      }
+    }
+    disposers.delete(pluginId)
+    return disposed
   }
 
   const registry = {
@@ -63,10 +90,58 @@ export function createRegistry(options = {}) {
 
     uninstall(pluginId) {
       if (!manifests.has(pluginId)) return fail('INVALID_INPUT', `未安装的插件：${pluginId}`)
+      // 顺序：先跑清理（视图实例、订阅、定时器），再释放工具/目录名claims，最后除名——
+      // 清理钩子里若还读得到清单，不算是「卸载后再动已消失的插件」。
+      const disposed = disposePlugin(pluginId)
       releaseClaims(pluginId)
       manifests.delete(pluginId)
       impls.delete(pluginId)
-      return ok({ pluginId, removed: true })
+      for (const listener of [...uninstallListeners]) {
+        try {
+          listener({ pluginId })
+        } catch {
+          // 监听方自己出错不影响卸载结果；下次装载仍可重新订阅。
+        }
+      }
+      return ok({ pluginId, removed: true, disposed })
+    },
+
+    /** 注册期清理钩子：返回释放句柄；插件卸载时统一调用（幂等，重复调用只跑一次）。 */
+    onDispose(pluginId, fn) {
+      if (typeof pluginId !== 'string' || !pluginId) return fail('INVALID_INPUT', 'onDispose 需要插件 id')
+      if (typeof fn !== 'function') return fail('INVALID_INPUT', 'onDispose 需要函数')
+      if (!disposers.has(pluginId)) disposers.set(pluginId, new Map())
+      const bucket = disposers.get(pluginId)
+      const key = Symbol('dispose')
+      bucket.set(key, fn)
+      return ok({
+        off() {
+          bucket.delete(key)
+        }
+      })
+    },
+
+    /** 卸载广播（运行时/view 注册表据此 disposeOwner）；返回退订函数。 */
+    onUninstalled(listener) {
+      if (typeof listener !== 'function') return fail('INVALID_INPUT', 'onUninstalled 需要函数')
+      uninstallListeners.add(listener)
+      return ok({ off: () => uninstallListeners.delete(listener) })
+    },
+
+    /** 已安装清单里声明过的命令（v2 contributes.commands）。 */
+    commands() {
+      const out = []
+      for (const [pluginId, manifest] of manifests) {
+        for (const command of manifest.commands ?? []) out.push({ pluginId, ...command })
+      }
+      return out
+    },
+
+    commandOwner(commandId) {
+      for (const [pluginId, manifest] of manifests) {
+        if ((manifest.commands ?? []).some((command) => command.id === commandId)) return pluginId
+      }
+      return null
     },
 
     get(pluginId) {

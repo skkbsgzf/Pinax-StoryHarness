@@ -87,10 +87,20 @@ try {
   const link = await mod.connectInProcess(surface)
   const listed = await link.listTools()
   await link.close()
-  check('d 产物自足可执行：import 产物后 in-process 列出 19 工具', listed.length === 19, `toolCount=${listed.length}`)
+  // createMcpSurface 是「纯内核那一份」，19 把内核工具；技能读取是运行时自有工具，由 d2 核。
+  check('d 产物自足可执行：import 产物后 in-process 列出内核 19 工具', listed.length === 19, `toolCount=${listed.length}`)
+
+  // d2：真实运行时面（内核 19 ＋ pinax_skill_read）。技能正文是否装得上看 skillCatalog；打包产物里
+  // next/skills/ 还没跟着走时，rejected 会如实记 SKILLS_DIR_UNREADABLE，但工具本身必须在面上。
+  const runtime = mod.createAgentRuntime({})
+  await runtime.start()
+  const names = runtime.listTools().map((tool) => tool.name)
+  const skillRejected = runtime.surfaceInfo().skills?.rejected?.map((item) => item.reason) ?? []
+  await runtime.stop()
+  check('d2 运行时面：内核 19 ＋ pinax_skill_read', names.length === 20 && names.includes('pinax_skill_read'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
   check('内核版本对外可见：KERNEL_INFO.contractVersion=1', mod.KERNEL_INFO?.contractVersion === '1', mod.NEXT_VERSION ?? '')
 } catch (error) {
-  check('d 产物自足可执行：import 产物后 in-process 列出 19 工具', false, String(error?.message || error).slice(0, 120))
+  check('d 产物自足可执行：import 产物后 in-process 列出 20 工具（内核 19 ＋ 技能读取）', false, String(error?.message || error).slice(0, 120))
 }
 
 console.log(`ℹ 原生模块：bundle 文本引用 better-sqlite3 ＝ ${/better-sqlite3/.test(bundle) ? '是' : '否'}；换档脚本在 win32 直接 return，Electron ABI 档要在出包后单独核`)

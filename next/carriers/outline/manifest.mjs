@@ -12,10 +12,12 @@
 export const OUTLINE_CARRIER_ID = 'pinax.carrier.outline'
 
 export const OUTLINE_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@1',
+  // 工单 C：写时只写 v2（manifestVersion 显式 2）。
+  spec: 'pinax-carrier@2',
+  manifestVersion: 2,
   id: OUTLINE_CARRIER_ID,
   title: '大纲',
-  version: '1.0.0',
+  version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -29,19 +31,22 @@ export const OUTLINE_CARRIER = Object.freeze({
     outline: '大纲'
   }),
 
-  panes: [
-    { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline' },
-    { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list' },
-    // 协议 v1.1-C：悬浮小工具窗（作者点名「大纲变成微型悬浮窗，悬浮在小说正文的某个位置」）。
-    // 载体只声明意图与宽度；定位、拖动、收起/展开、位置记忆全归宿主 next/shell/FloatingWidget.vue。
-    { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300 }
-  ],
+  // 工单 C2：pane 自声明 view（大纲树／编辑器），宿主不再按 id 前缀猜。
+  contributes: Object.freeze({
+    panes: [
+      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree' },
+      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor' },
+      // 协议 v1.1-C：悬浮小工具窗（作者点名「大纲变成微型悬浮窗，悬浮在小说正文的某个位置」）。
+      // 载体只声明意图与宽度；定位、拖动、收起/展开、位置记忆全归宿主 next/shell/FloatingWidget.vue。
+      { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, view: 'pinax.view.tree' }
+    ],
+    // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
+    settings: []
+  }),
 
-  capabilities: ['outline.tree'],
+  provides: ['outline.tree'],
   requires: [],
 
-  // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
-  settings: [],
   tools: ['pinax_outline_read', 'pinax_outline_save'],
 
   context: {
@@ -51,7 +56,9 @@ export const OUTLINE_CARRIER = Object.freeze({
 
   // agent:ask 是运行时调用载体工具的前置授权（next/kernel/scopeGrant.mjs:59）：缺了它，这一栏的
   // 读/写工具在运行时面上会被整组拒掉，作者点什么都调不动。与小说/资料同一口径。
-  scopes: ['file:大纲:rw', 'agent:ask']
+  permissions: [{ type: 'file', dir: '大纲', mode: 'rw' }, 'agent:ask'],
+
+  subscriptions: ['project.changed']
 })
 
 export default OUTLINE_CARRIER

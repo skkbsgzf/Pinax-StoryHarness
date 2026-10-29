@@ -20,10 +20,11 @@
 export const SCRIPT_CARRIER_ID = 'pinax.carrier.script'
 
 export const SCRIPT_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@1',
+  spec: 'pinax-carrier@2',
+  manifestVersion: 2,
   id: SCRIPT_CARRIER_ID,
   title: '剧本',
-  version: '1.0.0',
+  version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -37,17 +38,19 @@ export const SCRIPT_CARRIER = Object.freeze({
     script: '剧本'
   }),
 
-  panes: [
-    // 竖条图标用 film（老前端图标表里的片子那一枚）；中栏是剧本正文。
-    { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film' },
-    { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document' }
-  ],
+  contributes: Object.freeze({
+    panes: [
+      // 竖条图标用 film（老前端图标表里的片子那一枚）；中栏是剧本正文。
+      { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film', view: 'pinax.view.list' },
+      { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor' }
+    ],
+    // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
+    settings: []
+  }),
 
-  capabilities: ['script.scenes'],
+  provides: ['script.scenes'],
   requires: [],
 
-  // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
-  settings: [],
   tools: ['pinax_script_list', 'pinax_script_read', 'pinax_script_save'],
 
   context: {
@@ -59,7 +62,9 @@ export const SCRIPT_CARRIER = Object.freeze({
 
   // agent:ask 是运行时调用载体工具的前置授权（next/kernel/scopeGrant.mjs）：缺了它，这一栏的
   // 三把工具在运行时面上会被整组拒掉。与小说/资料同一口径。
-  scopes: ['file:剧本:rw', 'agent:ask']
+  permissions: [{ type: 'file', dir: '剧本', mode: 'rw' }, 'agent:ask'],
+
+  subscriptions: ['project.changed']
 })
 
 export default SCRIPT_CARRIER

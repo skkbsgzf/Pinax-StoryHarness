@@ -24,13 +24,15 @@ import { MENU_TEMPLATE } from './menus.mjs'
 import {
   PANE_FORMS,
   PANE_FORM_LABELS,
-  getPaneForm,
-  hostPaneForms,
-  hydratePaneForms,
-  isPaneForm,
-  sanitizePaneForms,
-  setPaneForm
+  sanitizePaneForms
 } from './paneForms.mjs'
+import {
+  hostWorkspace,
+  instanceIdFor,
+  isPlacement,
+  subscribeWorkspace
+} from './workspace.mjs'
+import { legacyLocalStorage, migrateLegacyWorkspace } from './workspaceMigration.mjs'
 import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs'
 
 /**
@@ -87,18 +89,49 @@ const WRITING_LINE_HEIGHT_DEFAULT = 1.9
 const writingPrefs = ref({ fontSize: WRITING_FONT_SIZE_DEFAULT, lineHeight: WRITING_LINE_HEIGHT_DEFAULT })
 
 /**
- * 多形态打开（协议 v1.2 P18–P21）：宿主一份 formMap，AppNext 只订阅快照。
+ * 多形态打开（协议 v1.2 P18–P21 → M2.5-C 四轴）：宿主一份工作区状态，AppNext 只订阅快照。
+ * 位置（placement）／最小化（minimized）／几何（geometry）／还原记忆（restore）都是工作区的一轴，
+ * 落 `.pinax/workspace.json`（项目级，经主进程通道），不再写 localStorage。
  * 形态由载体 manifest.panes 的 forms 声明；未声明的形态不出现（见 formTargetsForBoard）。
- * 状态的唯一写入口是 paneForms.mjs 的 setPaneForm（P21：载体 SFC 不感知形态）。
  */
-const formMap = ref(hostPaneForms.snapshot())
-const unsubscribePaneForms = hostPaneForms.subscribe((snapshot) => {
-  formMap.value = snapshot
+const workspaceSnapshot = ref(hostWorkspace.snapshot())
+const unsubscribeWorkspace = subscribeWorkspace((snapshot) => {
+  workspaceSnapshot.value = snapshot
 })
 
-/** 当前 pane 的形态（缺省 dock）。模板与 computed 都走这一条，避免各写各的默认值。 */
+/** 一块 pane 的缺省实例（`<paneId>#1`）。第二份起由 openInstance 分配，#n 各记各的状态。 */
+function paneInstance(paneId) {
+  return instanceIdFor(paneId, 1)
+}
+
+/** 某条实例的状态（没记录时给一份不落盘的缺省）。 */
+function paneState(instance) {
+  return workspaceSnapshot.value.entries[instance] ?? hostWorkspace.get(instance)
+}
+
+/** 当前 pane 的位置（缺省 dock）。模板与 computed 都走这一条，避免各写各的默认值。 */
 function paneFormOf(paneId) {
-  return formMap.value[String(paneId ?? '')] ?? 'dock'
+  return paneState(paneInstance(paneId))?.placement ?? 'dock'
+}
+
+/** 当前 pane 的最小化状态（缺省 none）。 */
+function minimizedOf(paneId) {
+  return paneState(paneInstance(paneId))?.minimized ?? 'none'
+}
+
+/** 某条实例的几何（null＝还没拖过）。 */
+function geometryOf(instance) {
+  return paneState(instance)?.geometry ?? null
+}
+
+/** P21 的宿主统一入口（右键菜单与浮窗按钮都走这一条）。 */
+function setPaneForm(paneId, form) {
+  return hostWorkspace.place(paneInstance(paneId), form)
+}
+
+/** 一块 pane 的全部实例 id（#1 永远在，第二份起由「再开一份」创建）。 */
+function overlayInstances(paneId) {
+  return hostWorkspace.instancesOf(paneId)
 }
 
 const project = computed(() => view.value?.project ?? null)
@@ -603,16 +636,57 @@ const overlayPanes = computed(() => carriers.value
     }))))
 
 /**
- * 悬浮窗开合＝形态状态机的一次切换（协议 v1.2 P21）：打开＝overlay；收起＝dock。
- * 收起态仍由 FloatingWidget 画成侧缘小标签（工单C 的行为不变，只是状态改由宿主统一持有）。
+ * 悬浮窗开合＝工作区的一次切换（M2.5-C 四轴）：
+ *   打开＝placement:overlay + minimized:none；收起＝留在 overlay，minimized:collapsed（侧缘标签）；
+ *   气泡＝minimized:bubble（同一轴上的另一种最小化，不占第五种位置）。
  */
-function setOverlayOpen(paneId, open) {
+/** 实例缺省＝#1；多开时由模板把具体实例传进来（两份状态各记各的）。 */
+function resolveInstance(paneId, instance) {
+  return instance || paneInstance(paneId)
+}
+
+function setOverlayOpen(paneId, open, instance) {
   if (!paneId) return
-  applyPaneForm(paneId, open ? 'overlay' : 'dock')
+  const target = resolveInstance(paneId, instance)
+  if (open) {
+    const result = hostWorkspace.place(target, 'overlay')
+    hostWorkspace.expand(target)
+    return result
+  }
+  hostWorkspace.place(target, 'overlay')
+  return hostWorkspace.minimize(target, 'collapsed')
 }
 
 function toggleBoardOverlay(paneId) {
-  setOverlayOpen(paneId, paneFormOf(paneId) !== 'overlay')
+  setOverlayOpen(paneId, !(paneFormOf(paneId) === 'overlay' && minimizedOf(paneId) === 'none'))
+}
+
+/** 缩成气泡球（作者原话）：位置不变，只换最小化这一轴。 */
+function bubblePane(paneId, instance) {
+  if (!paneId) return
+  const target = resolveInstance(paneId, instance)
+  hostWorkspace.place(target, 'overlay')
+  return hostWorkspace.minimize(target, 'bubble')
+}
+
+/** 气泡／标签展开：回到最小化之前的位置（placement 不动）。 */
+function expandPane(paneId, instance) {
+  if (!paneId) return
+  hostWorkspace.expand(resolveInstance(paneId, instance))
+}
+
+/** 再开一份：同一块 pane 的第二份实例，状态各记各的（大纲浮在正文上时中栏也能有一份树）。 */
+function duplicatePane(paneId) {
+  if (!paneId) return null
+  const instance = hostWorkspace.openInstance(paneId, { placement: 'overlay' })
+  if (instance) void preparePaneData(paneId)
+  return instance
+}
+
+/** 拖动结束：几何回宿主（本组件不自己存坐标）。 */
+function savePaneGeometry(instance, geometry) {
+  if (!instance) return
+  hostWorkspace.setGeometry(instance, geometry)
 }
 
 /**
@@ -662,7 +736,7 @@ const overlayPaneIds = computed(() => overlayPanes.value.map((pane) => pane.pane
 /** 中栏 pane 被选成浮窗时，仍然用宿主 FloatingWidget 装它（内容仍由 CarrierPaneHost 渲染）。 */
 const floatingCenterPanes = computed(() => centerPaneRecords.value
   .filter(({ pane }) => paneFormOf(pane.id) === 'overlay')
-  .map(({ pane, board }) => ({ ...pane, boardId: board.id })))
+  .map(({ pane, board }) => ({ ...pane, boardId: board.id, instance: paneInstance(pane.id) })))
 
 /** 全屏形态（P20/P21）：占满中栏的 pane。中栏 pane 优先于 overlay 槽的迷你窗。 */
 const fullscreenTarget = computed(() => {
@@ -742,12 +816,12 @@ function startSplitDrag(event) {
 /** 形态切换的唯一外壳入口：单副栏／单全屏的清理在这里做，右键菜单与浮窗按钮都走它。 */
 function applyPaneForm(paneId, form) {
   if (form === 'split' || form === 'fullscreen') {
-    for (const [otherId, otherForm] of Object.entries(formMap.value)) {
-      if (otherId === paneId) continue
+    for (const entry of Object.values(workspaceSnapshot.value.entries)) {
+      if (entry.pane === paneId) continue
       // 单副栏：第二块 split 收回 dock。
-      if (otherForm === form) setPaneForm(otherId, 'dock')
+      if (entry.placement === form) hostWorkspace.dockPane(entry.pane)
       // 全屏占满中栏时会盖住分屏：选分屏＝明确要看见副栏，先把全屏收回 dock。
-      else if (form === 'split' && otherForm === 'fullscreen') setPaneForm(otherId, 'dock')
+      else if (form === 'split' && entry.placement === 'fullscreen') hostWorkspace.dockPane(entry.pane)
     }
   }
   const result = setPaneForm(paneId, form)
@@ -755,20 +829,16 @@ function applyPaneForm(paneId, form) {
   return result
 }
 
-/** 全屏的「还原」目标：记下进入前形态；刷新后没有记忆时，overlay 槽的 pane 还原成浮窗。 */
-const fullscreenReturn = ref({})
-
+/** 全屏的「还原」目标：工作区的 restore 轴记着进来之前的位置（不再是外壳里的一枚补丁 ref）。 */
 function enterFullscreen(paneId) {
   // 空 id 直接交给状态机拒绝：不能因为一次无效点击先把别的全屏 pane 清掉。
-  if (!paneId) return setPaneForm(paneId, 'fullscreen')
-  const previous = getPaneForm(paneId)
-  if (previous !== 'fullscreen') fullscreenReturn.value = { ...fullscreenReturn.value, [paneId]: previous }
+  if (!paneId) return hostWorkspace.place('', 'fullscreen')
   return applyPaneForm(paneId, 'fullscreen')
 }
 
 function restoreFormFor(paneId) {
-  const previous = fullscreenReturn.value[paneId]
-  if (previous && previous !== 'fullscreen' && isPaneForm(previous)) return previous
+  const previous = paneState(paneInstance(paneId))?.restore
+  if (isPlacement(previous) && previous !== 'fullscreen') return previous
   return overlayPaneIds.value.includes(paneId) ? 'overlay' : 'dock'
 }
 
@@ -794,31 +864,68 @@ async function preparePaneData(paneId) {
   else if (id.startsWith('reference.')) await data.loadDocuments()
 }
 
-/** 新载体清单到位时把 paneForm.<paneId> 读回来；恢复出非 dock 形态时顺手取一次内容。 */
+/**
+ * 工作区状态的水合（M2.5-C）：换项目＝换一份 `.pinax/workspace.json`。
+ * 顺序固定——先读主进程那份，再搬老键（已有记录不覆盖），最后补一次不在 dock 的内容。
+ * 没有桥（浏览器预览）时纯内存：persistent=false，界面不假装落过盘。
+ */
+let workspaceReady = false
 let paneDataRestored = false
-function hydratePaneFormsForView() {
+let legacyMigrated = false
+let workspaceHydrateSeq = 0
+
+function workspacePaneIds() {
   const ids = new Set()
   for (const board of boards.value) for (const pane of board.panes ?? []) ids.add(pane.id)
   for (const pane of overlayPanes.value) ids.add(pane.paneId)
-  if (!ids.size) return
-  const before = formMap.value
-  hydratePaneForms([...ids])
-  const after = formMap.value
-  const toLoad = new Set()
-  if (!paneDataRestored) {
-    // 本次挂载的第一次有效清单：所有非 dock 形态都要内容（可能是上次启动留下的）。
-    paneDataRestored = true
-    for (const [paneId, form] of Object.entries(after)) if (form !== 'dock') toLoad.add(paneId)
-  } else if (after !== before) {
-    // 之后才出现的 pane（如启用新载体）只补新读回来的那一块。
-    for (const [paneId, form] of Object.entries(after)) {
-      if (form !== 'dock' && before[paneId] !== form) toLoad.add(paneId)
-    }
-  }
-  for (const paneId of toLoad) void preparePaneData(paneId)
+  return [...ids]
 }
 
-watch([boards, overlayPanes], () => hydratePaneFormsForView(), { immediate: true })
+function syncWorkspaceForView() {
+  if (!workspaceReady) return
+  const ids = workspacePaneIds()
+  if (!ids.length) return
+  if (!legacyMigrated) {
+    legacyMigrated = true
+    // 只读一次老键；搬成功（或已有记录）才删键，删不掉的留着下次再搬。
+    migrateLegacyWorkspace({ store: hostWorkspace, storage: legacyLocalStorage(), paneIds: ids })
+  }
+  if (!paneDataRestored) {
+    // 本次打开的第一次有效清单：所有非 dock 的位置都要内容（可能是上次启动留下的）。
+    paneDataRestored = true
+    for (const paneId of ids) if (paneFormOf(paneId) !== 'dock') void preparePaneData(paneId)
+  }
+}
+
+async function hydrateWorkspace(bridge) {
+  const seq = ++workspaceHydrateSeq
+  workspaceReady = false
+  paneDataRestored = false
+  legacyMigrated = false
+  if (!bridge?.request) {
+    hostWorkspace.attachPersistence(null)
+    workspaceReady = true
+    syncWorkspaceForView()
+    return
+  }
+  let loaded = null
+  try {
+    const result = await bridge.request(IPC_CHANNELS.workspaceLoad, {})
+    if (result?.ok) loaded = result.value
+  } catch {
+    loaded = null
+  }
+  if (seq !== workspaceHydrateSeq) return
+  if (loaded && loaded.entries && typeof loaded.entries === 'object') {
+    hostWorkspace.load({ version: loaded.version ?? 1, entries: loaded.entries })
+  }
+  hostWorkspace.attachPersistence((snapshot) => bridge.request(IPC_CHANNELS.workspaceSave, { snapshot }))
+  workspaceReady = true
+  syncWorkspaceForView()
+}
+
+watch([boards, overlayPanes], () => syncWorkspaceForView(), { immediate: true })
+watch([() => props.bridge, () => project.value?.root ?? ''], ([bridge]) => { void hydrateWorkspace(bridge) }, { immediate: true })
 
 /* —— 右键「打开方式」（协议 v1.2 P19）：竖条格与索引窗树行共用一枚宿主菜单 ————————— */
 /** 菜单里的「打开方式」按 pane 的 forms 声明列；slot 排序让 center 优先当形态目标。 */
@@ -890,8 +997,8 @@ function choosePaneForm(entry) {
   if (entry.form === 'dock') {
     const board = boards.value.find((item) => item.id === menu?.boardId)
     // 「停靠栏」是载体整体回到竖条切换：这一格所有 pane 都收回 dock（含收起浮窗、撤掉副栏/全屏）。
-    for (const pane of board?.panes ?? []) setPaneForm(pane.id, 'dock')
-    setPaneForm(entry.paneId, 'dock')
+    for (const pane of board?.panes ?? []) hostWorkspace.dockPane(pane.id)
+    hostWorkspace.dockPane(entry.paneId)
   } else if (entry.form === 'fullscreen') {
     enterFullscreen(entry.paneId)
   } else {
@@ -1104,7 +1211,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onTitlebarPointerDown)
   window.removeEventListener('keydown', onContextMenuKeydown, true)
   window.removeEventListener('pointerdown', onContextMenuPointerDown, true)
-  unsubscribePaneForms()
+  unsubscribeWorkspace()
+  hostWorkspace.attachPersistence(null)
 })
 </script>
 
@@ -1292,47 +1400,64 @@ onBeforeUnmount(() => {
         @update:active-section="activeSection = $event"
       />
 
-      <!-- 协议 v1.1-C / v1.2：悬浮小工具窗。宿主容器与定位全在 FloatingWidget；这里只按 pane id 接线内容。
-           形态是宿主状态：声明 overlay 槽的 pane 在 dock 时是侧缘标签，overlay 时是卡片，fullscreen 时进中栏。 -->
+      <!-- 协议 v1.1-C / v1.2 → M2.5-C：悬浮小工具窗。宿主容器与定位全在 FloatingWidget；
+           一条实例一行（#1 永远在，第二份由「+1」创建），位置／最小化各记各的。
+           状态四轴：placement=overlay 才出现在这一层；minimized=none 是卡片、bubble 是气泡球、collapsed 是侧缘标签。 -->
       <template v-for="pane in overlayPanes" :key="pane.paneId">
-        <FloatingWidget
-          v-if="paneFormOf(pane.paneId) === 'overlay' || paneFormOf(pane.paneId) === 'dock'"
-          :id="pane.paneId"
-          :open="paneFormOf(pane.paneId) === 'overlay'"
-          :title="pane.title"
-          :width="pane.width"
-          :suspend-esc="settingsOpen"
-          @close="setOverlayOpen(pane.paneId, false)"
-          @toggle="setOverlayOpen(pane.paneId, true)"
-          @expand="enterFullscreen(pane.paneId)"
-        >
-          <template v-if="pane.paneId === 'outline.widget'">
-            <p v-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
-            <p v-else-if="!data.outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
-            <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
-              <li v-for="(node, index) in data.outline" :key="node.id ?? `overlay-node-${index}`">
-                <button type="button" class="workspace-nav-item workspace-nav-item--tree nx-tree-row" @click="openOutlineNodeFromWidget(index)">
-                  <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
-                </button>
-              </li>
-            </ul>
-          </template>
-          <p v-else class="nx-overlay-empty">这块悬浮窗还没有内容。</p>
-        </FloatingWidget>
+        <template v-for="instance in overlayInstances(pane.paneId)" :key="`${pane.paneId}-${instance}`">
+          <FloatingWidget
+            v-if="paneState(instance)?.placement === 'overlay'"
+            :instance="instance"
+            :id="pane.paneId"
+            :open="(paneState(instance)?.minimized ?? 'none') === 'none'"
+            :minimized="paneState(instance)?.minimized ?? 'none'"
+            :geometry="geometryOf(instance)"
+            :title="pane.title"
+            :width="pane.width"
+            :suspend-esc="settingsOpen"
+            @close="setOverlayOpen(pane.paneId, false, instance)"
+            @toggle="setOverlayOpen(pane.paneId, true, instance)"
+            @bubble="bubblePane(pane.paneId, instance)"
+            @restore="expandPane(pane.paneId, instance)"
+            @expand="enterFullscreen(pane.paneId)"
+            @duplicate="duplicatePane(pane.paneId)"
+            @geometry="savePaneGeometry(instance, $event)"
+          >
+            <template v-if="pane.paneId === 'outline.widget'">
+              <p v-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
+              <p v-else-if="!data.outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
+              <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
+                <li v-for="(node, index) in data.outline" :key="node.id ?? `overlay-node-${index}`">
+                  <button type="button" class="workspace-nav-item workspace-nav-item--tree nx-tree-row" @click="openOutlineNodeFromWidget(index)">
+                    <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
+                  </button>
+                </li>
+              </ul>
+            </template>
+            <p v-else class="nx-overlay-empty">这块悬浮窗还没有内容。</p>
+          </FloatingWidget>
+        </template>
       </template>
 
       <!-- 中栏 pane 被右键选成浮窗（P18/P21）：同一宿主容器装 CarrierPaneHost，内容渲染不变（P12）。 -->
       <FloatingWidget
         v-for="pane in floatingCenterPanes"
         :key="`float-${pane.id}`"
+        :instance="pane.instance"
         :id="pane.id"
-        :open="true"
+        :open="minimizedOf(pane.id) === 'none'"
+        :minimized="minimizedOf(pane.id)"
+        :geometry="geometryOf(pane.instance)"
         :title="pane.title"
         :width="360"
         :suspend-esc="settingsOpen"
         @close="setOverlayOpen(pane.id, false)"
         @toggle="setOverlayOpen(pane.id, true)"
+        @bubble="bubblePane(pane.id)"
+        @restore="expandPane(pane.id)"
         @expand="enterFullscreen(pane.id)"
+        @duplicate="duplicatePane(pane.id)"
+        @geometry="savePaneGeometry(pane.instance, $event)"
       >
         <CarrierPaneHost :pane="pane" :data="data" />
       </FloatingWidget>

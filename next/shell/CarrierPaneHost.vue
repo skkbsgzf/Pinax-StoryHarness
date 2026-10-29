@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
+import { resolvePaneView } from './viewRegistry.mjs'
 
 /**
  * 核心区里的载体面板：正文的编辑面、构思的编辑面、大纲的编辑面、世界书条目的阅读与编辑面
@@ -8,7 +9,8 @@ import { renderMarkdown } from './mdRender.mjs'
  * 约束的编辑面（工单E2）、资料的阅读与编辑面（工单G1）、剧本的阅读与编辑面（批次26）。
  *
  * 协议 v1.1-A（作者 2026-10-28 裁定）：一个载体＝竖条一格＝一棵纯粹的本域内容树。
- * 中栏视图按载体 paneId 前缀路由，不再靠 selection 类型跨栏串面：
+ * M2.5-C 起视图解析走注册表（next/shell/viewRegistry.mjs）：pane 声明 view 就按类型查，
+ * 没声明时按 paneId 前缀回落（v1 兼容）——外壳里不再写死分支：
  *   novel.* → 正文编辑（选中提案时换审阅面）
  *   outline.* → 大纲编辑
  *   notes.* → 构思编辑
@@ -36,18 +38,18 @@ const props = defineProps({
   data: { type: Object, required: true }
 })
 
-const paneId = computed(() => props.pane?.id ?? '')
-const viewKind = computed(() => {
-  const id = paneId.value
-  // 小说栏只有正文一棵内容树；提案的目标是正文，审阅面随正文留在这块板上（协议 v1.1-A）。
-  if (id.startsWith('novel.')) return props.data.selection?.type === 'proposal' ? 'proposal-review' : 'chapter-editor'
-  if (id.startsWith('outline.')) return 'outline-editor'
-  if (id.startsWith('notes.')) return 'notes-editor'
-  if (id.startsWith('worldbook.')) return 'entry-detail'
-  if (id.startsWith('script.')) return 'script-editor'
-  if (id.startsWith('setting.')) return 'rule-editor'
-  if (id.startsWith('reference.')) return 'document-detail'
-  return 'placeholder'
+/**
+ * 视图解析（M2.5-C 任务二）：pane 声明 `view: 'pinax.view.*'`，宿主查注册表拿内容面；
+ * 没声明时按 id 前缀回落（v1 兼容，见 next/shell/viewRegistry.mjs 的 LEGACY_VIEW_BINDINGS）。
+ * 解析不到就出占位——不再在外壳里按前缀写死七个分支。
+ */
+const viewResolution = computed(() => resolvePaneView(props.pane, props.data))
+const viewKind = computed(() => viewResolution.value?.result?.kind ?? 'placeholder')
+const viewPlaceholderReason = computed(() => {
+  const resolution = viewResolution.value
+  if (!resolution) return '这块 pane 没有声明视图类型（view），宿主也不认它的 id 前缀。'
+  if (!resolution.result) return `视图类型 ${resolution.type} 还没有渲染器（v2 只登记类型名，富视图沙箱不在本批）。`
+  return ''
 })
 
 /**
@@ -702,7 +704,7 @@ function actOnSaveChip() {
     <!-- 只在真的没有对应视图时才显示（批次15 验收修：原来挂在第二条链的 v-else 上，
          提案审阅态会误把占位文案渲染在审阅面之下）。 -->
     <p v-else-if="viewKind === 'placeholder'" class="pane-note">
-      「{{ pane.pluginTitle }}」这块板块的面板视图还没做出来。它的工具和上下文块照常可用——先在右栏问 Pi-Agent。
+      「{{ pane.pluginTitle }}」这块板块的面板视图还没做出来。它的工具和上下文块照常可用——先在右栏问 Pi-Agent。<span v-if="viewPlaceholderReason">（{{ viewPlaceholderReason }}）</span>
     </p>
   </div>
 </template>

@@ -62,12 +62,12 @@ test('资料真清单过校验：四把工具都是载体自有名字，资料/ 
   assert.equal(REFERENCE_CARRIER.tools.every((name) => !kernel.has(name)), true, '四把都是载体自有名字（内核没有同名工具可认领），认领面不虚增；H2 的检索不认领内核 pinax_knowledge_search')
   assert.deepEqual({ ...REFERENCE_CARRIER.dataDirs }, { documents: '资料' })
   assert.ok(PROJECT_KINDS.generic.includes('资料'), '资料/ 必须落在泛型骨架里（它是这块板块的主载体 type）')
-  assert.deepEqual(REFERENCE_CARRIER.scopes, ['file:资料:rw', 'agent:ask'], '资料随编辑面申请 rw；内核写族闸仍把写入点名到自有 save')
+  assert.deepEqual(REFERENCE_CARRIER.permissions, [{ type: 'file', dir: '资料', mode: 'rw' }, 'agent:ask'], 'v2：资料随编辑面申请 rw；内核写族闸仍把写入点名到自有 save')
   assert.equal(REFERENCE_CARRIER.primary.projectKind, 'generic')
   assert.equal(REFERENCE_CARRIER.primary.defaultPane, 'reference.documents')
   assert.equal(REFERENCE_CARRIER.primary.contextProfile, 'setting-research', '档案必须是有只读任务的（setting-field 在只读任务表里查不到，提问会报缺）')
   assert.deepEqual(REFERENCE_CARRIER.context, { providers: ['references'], budgetChars: 12000 }, '块种类必须是档案认识的复数 references')
-  assert.deepEqual(REFERENCE_CARRIER.panes.map((pane) => pane.id), ['reference.board', 'reference.documents'])
+  assert.deepEqual(REFERENCE_CARRIER.contributes.panes.map((pane) => pane.id), ['reference.board', 'reference.documents'])
   assert.equal(BUILT_IN_CARRIER_IDS.includes(REFERENCE_CARRIER_ID), true, '随框架发布：注册表默认装得上这块板块')
 })
 
@@ -76,7 +76,7 @@ test('工具面：资料载体启用后四把工具进面、归属它；内核�
   try {
     assert.equal(opened.value.view.projectKind, 'generic', '资料可以是泛型项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...REFERENCE_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 23, '19 内核 ＋ 资料自有 4（H2 加 pinax_reference_search）')
+    assert.equal(runtime.listTools().length, 24, '19 内核 ＋ 技能读取 1 ＋ 资料自有 4（H2 加 pinax_reference_search）')
     assert.equal(runtime.ownerOf('pinax_document_list'), REFERENCE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_document_read'), REFERENCE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_document_save'), REFERENCE_CARRIER_ID)

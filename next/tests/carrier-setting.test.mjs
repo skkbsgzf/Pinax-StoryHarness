@@ -58,10 +58,10 @@ test('设定真清单过校验：只剩 约束/ 一块目录，两把工具都�
   assert.deepEqual(SETTING_CARRIER.tools, ['pinax_rule_list', 'pinax_rule_save'])
   assert.equal(SETTING_CARRIER.tools.every((name) => !kernel.has(name)), true, '两把都是载体自有（内核只有 pinax_rule_write，不认领）')
   assert.deepEqual({ ...SETTING_CARRIER.dataDirs }, { constraints: '约束' }, '协议 v1.1-A：世界书拆出后设定栏只剩约束一棵内容树')
-  assert.deepEqual(SETTING_CARRIER.scopes, ['file:约束:rw', 'agent:ask'], '协议 v1.1-A：只申请 约束/ 一块目录的 rw；agent:ask 是运行时调用载体工具的前置授权')
+  assert.deepEqual(SETTING_CARRIER.permissions, [{ type: 'file', dir: '约束', mode: 'rw' }, 'agent:ask'], 'v2：只申请 约束/ 一块目录的 rw；agent:ask 是运行时调用载体工具的前置授权')
   assert.deepEqual(validated.value.context.providers, ['rules', 'style'], 'providers 是上下文块种类名；worldbook 块随世界书载体迁出')
-  assert.deepEqual(SETTING_CARRIER.capabilities, ['constraint.rules'])
-  assert.deepEqual(SETTING_CARRIER.panes.map((pane) => pane.id), ['setting.board', 'setting.rules'])
+  assert.deepEqual(SETTING_CARRIER.provides, ['constraint.rules'])
+  assert.deepEqual(SETTING_CARRIER.contributes.panes.map((pane) => pane.id), ['setting.board', 'setting.rules'])
   assert.equal(SETTING_CARRIER.primary.defaultPane, 'setting.rules')
   assert.equal(SETTING_CARRIER.title, '设定', '作者裁定：这一栏仍叫「设定」')
   for (const dir of Object.values(SETTING_CARRIER.dataDirs)) {
@@ -74,7 +74,7 @@ test('工具面：设定载体启用后两把工具进面、归属它，内核 p
   const { workspace, runtime } = await settingProject('setting-surface')
   try {
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...SETTING_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 21, '19 内核 ＋ 设定自有 2')
+    assert.equal(runtime.listTools().length, 22, '19 内核 ＋ 技能读取 1 ＋ 设定自有 2')
     assert.equal(runtime.ownerOf('pinax_rule_list'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_rule_save'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_rule_write'), 'kernel', '内核那把写工具照旧不认领，写族闸点名走自有 save')

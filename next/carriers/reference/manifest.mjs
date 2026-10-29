@@ -18,10 +18,11 @@
 export const REFERENCE_CARRIER_ID = 'pinax.carrier.reference'
 
 export const REFERENCE_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@1',
+  spec: 'pinax-carrier@2',
+  manifestVersion: 2,
   id: REFERENCE_CARRIER_ID,
   title: '资料',
-  version: '1.0.0',
+  version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -35,18 +36,18 @@ export const REFERENCE_CARRIER = Object.freeze({
     documents: '资料'
   }),
 
-  panes: [
-    { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources' },
-    { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document' }
-  ],
+  contributes: Object.freeze({
+    panes: [
+      { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources', view: 'pinax.view.list' },
+      { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document', view: 'pinax.view.reader' }
+    ],
+    // 协议 P14 载体设置注册（工单A 第二步）：本载体暂无设置项——空数组＝设置页不出这一格。
+    settings: []
+  }),
 
-  capabilities: ['reference.documents'],
+  provides: ['reference.documents'],
   requires: [],
 
-  // 协议 P14 载体设置注册（工单A 第二步）：声明格式 [{ id, title }]（id 在本载体命名空间内唯一，
-  // title 是设置页目录项文案；分组由设置页固定为「载体」）。机制示例已由小说的「写作偏好」给出，
-  // 本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
-  settings: [],
   tools: ['pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'],
 
   context: {
@@ -54,7 +55,9 @@ export const REFERENCE_CARRIER = Object.freeze({
     budgetChars: 12000
   },
 
-  scopes: ['file:资料:rw', 'agent:ask']
+  permissions: [{ type: 'file', dir: '资料', mode: 'rw' }, 'agent:ask'],
+
+  subscriptions: ['project.changed']
 })
 
 export default REFERENCE_CARRIER

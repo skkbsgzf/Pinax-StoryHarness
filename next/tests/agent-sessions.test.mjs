@@ -21,19 +21,20 @@ import {
  * 纯 node:test：agentSessions.mjs 不 import Vue，状态机、上限截断与降级路径都能脱离浏览器直接测。
  */
 
-/** 最小的 localStorage 替身：只实现 getItem/setItem，另给 dump() 方便断言键值。 */
-function memoryStorage(initial = {}) {
-  const map = new Map(Object.entries(initial))
+/**
+ * 落盘适配器替身：save 收整份快照（与主进程 sessions:save 同一形状），深拷一份留作断言。
+ * M2.5-B 起状态机不再碰 localStorage，持久化只经这一条 save 口。
+ */
+function recorder() {
+  let latest = null
+  let calls = 0
   return {
-    getItem(key) {
-      return map.has(key) ? map.get(key) : null
+    save(payload) {
+      calls += 1
+      latest = JSON.parse(JSON.stringify(payload))
     },
-    setItem(key, value) {
-      map.set(key, String(value))
-    },
-    dump() {
-      return Object.fromEntries(map)
-    }
+    latest: () => latest,
+    calls: () => calls
   }
 }
 
@@ -47,11 +48,10 @@ function stepClock(start = 1_700_000_000_000, step = 1000) {
 }
 
 test('会话管理：首启建空会话，可新建／切换／改名／删除', () => {
-  const storage = memoryStorage()
-  const store = createSessionStore('D:/proj', { storage, now: stepClock() })
+  const store = createSessionStore('D:/proj', { save: recorder().save, now: stepClock() })
 
+  // 老键名只留给迁移认：新的落盘在 .pinax/sessions/，不再由本模块拼 localStorage 键。
   assert.equal(agentSessionStorageKey('D:/proj'), `${AGENT_SESSION_STORAGE_PREFIX}D:/proj`)
-  assert.equal(store.storageKey, 'agentSessions.D:/proj')
   assert.equal(store.list().length, 1, '无会话时首启自动建一个空会话')
   const first = store.list()[0]
   assert.equal(first.title, DEFAULT_SESSION_TITLE)
@@ -90,7 +90,7 @@ test('会话管理：首启建空会话，可新建／切换／改名／删除',
 })
 
 test('上限：30 个会话、每会话 200 条消息，超限丢最旧', () => {
-  const store = createSessionStore('D:/cap', { storage: memoryStorage(), now: stepClock() })
+  const store = createSessionStore('D:/cap', { save: recorder().save, now: stepClock() })
 
   for (let index = 1; index <= MAX_SESSIONS + 5; index += 1) store.create(`标题${index}`)
   const titles = store.list().map((item) => item.title)
@@ -110,7 +110,7 @@ test('上限：30 个会话、每会话 200 条消息，超限丢最旧', () => 
 })
 
 test('标题自动生成：只认第一条 user 消息，前 24 字，换行收成空格', () => {
-  const store = createSessionStore('D:/title', { storage: memoryStorage(), now: stepClock() })
+  const store = createSessionStore('D:/title', { save: recorder().save, now: stepClock() })
 
   store.append({ role: 'user', text: `${'雨'.repeat(SESSION_TITLE_CHARS + 10)}后面还有很长` })
   assert.equal(store.active().title, '雨'.repeat(SESSION_TITLE_CHARS))
@@ -125,16 +125,9 @@ test('标题自动生成：只认第一条 user 消息，前 24 字，换行收�
   assert.equal(store.active().title, '第一行 第二行', `换行收成一个空格（会话 ${multi.id}）`)
 })
 
-test('存储写失败不崩：降级为内存会话，界面照常（persistent=false）', () => {
-  const hostile = {
-    getItem() {
-      throw new Error('SecurityError: denied')
-    },
-    setItem() {
-      throw new Error('SecurityError: denied')
-    }
-  }
-  const store = createSessionStore('D:/private', { storage: hostile })
+test('落盘失败不崩：降级为内存会话，界面照常（persistent=false）', async () => {
+  // 同步抛（IPC 桥没接好）：不拦提问，但如实说没持久化。
+  const store = createSessionStore('D:/private', { save: () => { throw new Error('ipc 断了') } })
   assert.doesNotThrow(() => store.append({ role: 'user', text: '隐私模式下也能问' }))
   assert.equal(store.snapshot().persistent, false, '落盘失败要如实说')
   assert.equal(store.active().messages.length, 1, '本次会话里照样生效')
@@ -143,53 +136,51 @@ test('存储写失败不崩：降级为内存会话，界面照常（persistent=
   assert.equal(store.snapshot().activeId, created.id, '内存里照样能新建与切换')
   assert.doesNotThrow(() => store.remove(created.id))
 
-  // 只有写失败（配额）时也一样：读得到旧值、写不进去，不拦继续用。
-  const quota = {
-    getItem: () => null,
-    setItem() {
-      throw new Error('QuotaExceededError')
-    }
-  }
-  const tight = createSessionStore('D:/quota', { storage: quota })
-  assert.equal(tight.snapshot().persistent, false)
+  // 异步写盘失败（磁盘满／主进程拒绝）同样只降级：状态机不等它，也不回滚。
+  const tight = createSessionStore('D:/quota', { save: () => Promise.reject(new Error('磁盘满')) })
   assert.doesNotThrow(() => tight.append({ role: 'agent', text: '答' }))
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(tight.snapshot().persistent, false)
   assert.equal(tight.active().messages.length, 1)
 
-  // 完全没有存储（node 环境／沙箱）：不持久化，但 store 的 API 与状态照常。
-  const memoryOnly = createSessionStore('D:/none', { storage: null })
-  assert.equal(memoryOnly.storageKey, 'agentSessions.D:/none')
+  // 没有 save（没打开项目／没桥）：不持久化，但 store 的 API 与状态照常。
+  const memoryOnly = createSessionStore('D:/none')
   assert.equal(memoryOnly.snapshot().persistent, false)
   memoryOnly.append({ role: 'user', text: '只活在内存' })
   assert.equal(memoryOnly.active().messages.length, 1)
 })
 
-test('projectRoot 隔离：每个项目一份键，互不串；没有项目根时不落盘', () => {
-  const storage = memoryStorage()
-  const a = createSessionStore('D:/a', { storage, now: stepClock() })
+test('projectRoot 隔离：每个项目只收到自己那份快照，互不串；没有 save 时不落盘', () => {
+  const saved = new Map()
+  const saver = (root) => (payload) => { saved.set(root, JSON.parse(JSON.stringify(payload))) }
+  const a = createSessionStore('D:/a', { save: saver('D:/a'), now: stepClock() })
   a.append({ role: 'user', text: 'A 的问题' })
-  const b = createSessionStore('D:/b', { storage, now: stepClock() })
+  const b = createSessionStore('D:/b', { save: saver('D:/b'), now: stepClock() })
   assert.equal(b.active().messages.length, 0, '另一个项目读不到 A 的会话')
   b.append({ role: 'user', text: 'B 的问题' })
 
-  assert.deepEqual(Object.keys(storage.dump()).sort(), ['agentSessions.D:/a', 'agentSessions.D:/b'])
+  assert.deepEqual([...saved.keys()].sort(), ['D:/a', 'D:/b'])
+  assert.equal(saved.get('D:/a').sessions[0].messages[0].text, 'A 的问题')
+  assert.equal(saved.get('D:/b').sessions[0].messages[0].text, 'B 的问题')
 
-  // 重新打开 A：消息、标题与当前会话都按磁盘上的那份回来。
-  const again = createSessionStore('D:/a', { storage, now: stepClock() })
+  // 重新打开 A：消息、标题与当前会话都按主进程读回的那份（initial）回来。
+  const again = createSessionStore('D:/a', { initial: saved.get('D:/a'), save: saver('D:/a'), now: stepClock() })
   assert.equal(again.active().messages.length, 1)
   assert.equal(again.active().messages[0].text, 'A 的问题')
   assert.equal(again.active().title, 'A 的问题')
 
-  // 还没打开项目（空根）：没有身份可归属，只活在内存里。
-  const none = createSessionStore('', { storage })
+  // 还没打开项目（空根、没有 save）：只活在内存里，不新写任何快照。
+  const before = saved.size
+  const none = createSessionStore('')
   none.append({ role: 'user', text: '无项目' })
-  assert.equal(none.storageKey, null)
   assert.equal(none.snapshot().persistent, false)
-  assert.equal(Object.keys(storage.dump()).length, 2, '没有项目根不新写键')
+  assert.equal(saved.size, before, '没有 save 不新写快照')
 })
 
 test('持久化往返：多会话与 activeId 落盘，消息形状是 JSON 安全的固定字段', () => {
-  const storage = memoryStorage()
-  const store = createSessionStore('D:/round', { storage, now: stepClock() })
+  const saver = recorder()
+  const store = createSessionStore('D:/round', { save: saver.save, now: stepClock() })
   store.append({
     role: 'user',
     text: '只依据本书资料回答：柯秒是谁？',
@@ -207,7 +198,7 @@ test('持久化往返：多会话与 activeId 落盘，消息形状是 JSON 安�
   const second = store.create()
   store.append({ role: 'user', text: '第二条会话的开头' })
 
-  const saved = JSON.parse(storage.dump()['agentSessions.D:/round'])
+  const saved = saver.latest()
   assert.deepEqual(Object.keys(saved).sort(), ['activeId', 'sessions'])
   assert.equal(saved.activeId, second.id, 'activeId 一起落盘')
   assert.equal(saved.sessions.length, 2)
@@ -221,7 +212,7 @@ test('持久化往返：多会话与 activeId 落盘，消息形状是 JSON 安�
   assert.deepEqual(Object.keys(saved.sessions[0].messages[1].findings[0]).sort(), ['message', 'severity'])
 
   // 读回来还能接着用：updateLast 只改最后一条、dropLast 去掉它。
-  const reopened = createSessionStore('D:/round', { storage, now: stepClock() })
+  const reopened = createSessionStore('D:/round', { initial: saved, save: saver.save, now: stepClock() })
   assert.equal(reopened.snapshot().activeId, second.id)
   reopened.switchTo(saved.sessions[0].id)
   assert.equal(reopened.active().messages.length, 2)
@@ -234,16 +225,15 @@ test('持久化往返：多会话与 activeId 落盘，消息形状是 JSON 安�
   assert.equal(reopened.dropLast(), false, '空了就没什么可丢的')
 
   // 坏数据（不是 JSON／形状不对）当作没存过：不崩、起一个空会话。
-  const broken = memoryStorage({ 'agentSessions.D:/broken': '{不是 json' })
-  assert.doesNotThrow(() => createSessionStore('D:/broken', { storage: broken }))
-  const emptyShape = memoryStorage({ 'agentSessions.D:/shape': JSON.stringify({ sessions: [{ title: '' }, null, 42] }) })
-  const shaped = createSessionStore('D:/shape', { storage: emptyShape })
+  // 旧 localStorage 的解析失败已在迁移那层挡掉；这里兜的是主进程读回结果的形状漂移。
+  assert.doesNotThrow(() => createSessionStore('D:/broken', { initial: '{不是 json' }))
+  const shaped = createSessionStore('D:/shape', { initial: { sessions: [{ title: '' }, null, 42] } })
   assert.equal(shaped.list().length, 1)
   assert.equal(shaped.active().title, DEFAULT_SESSION_TITLE)
 })
 
 test('晚到的回答落回出发的那个会话：切走之后 append(id) 不写进新会话', () => {
-  const store = createSessionStore('D:/late', { storage: memoryStorage(), now: stepClock() })
+  const store = createSessionStore('D:/late', { save: recorder().save, now: stepClock() })
   const first = store.list()[0]
   store.append({ role: 'user', text: 'A 会话的问题' }, first.id)
   const second = store.create('B 会话')
@@ -315,8 +305,8 @@ test('运行过程轨迹（批次29）：事件按白名单清洗、封顶 32 �
   assert.equal(capped.at(-1).round, MAX_TRAIL_EVENTS + 8)
 
   // 随消息落盘再读回来：轨迹还在、形状仍是固定字段（刷新后折叠层不会消失）。
-  const storage = memoryStorage()
-  const store = createSessionStore('D:/trail', { storage, now: stepClock() })
+  const saver = recorder()
+  const store = createSessionStore('D:/trail', { save: saver.save, now: stepClock() })
   store.append({ role: 'user', text: '这一章怎么样？' })
   store.append({
     role: 'agent',
@@ -328,7 +318,7 @@ test('运行过程轨迹（批次29）：事件按白名单清洗、封顶 32 �
       { stage: 'answer', chars: 5, structured: true, roundsUsed: 1 }
     ]
   })
-  const reopened = createSessionStore('D:/trail', { storage, now: stepClock() })
+  const reopened = createSessionStore('D:/trail', { initial: saver.latest(), now: stepClock() })
   const trail = reopened.active().messages.at(-1).trail
   assert.equal(trail.length, 4)
   assert.deepEqual(trail.map((event) => event.stage), ['start', 'envelope', 'model-round', 'answer'])

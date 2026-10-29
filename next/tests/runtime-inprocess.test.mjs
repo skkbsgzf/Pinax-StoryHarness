@@ -25,7 +25,7 @@ async function session(label = 'runtime') {
   return { workspace, root, registry, opened, runtime }
 }
 
-test('运行时是内置一级公民：起得来、列出 19 工具、全程不开端口', async () => {
+test('运行时是内置一级公民：起得来、列出 20 工具、全程不开端口', async () => {
   const { workspace, runtime, registry } = await session()
   try {
     assert.equal(RUNTIME_CONTRACT.builtIn, true)
@@ -34,13 +34,13 @@ test('运行时是内置一级公民：起得来、列出 19 工具、全程不�
 
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 19)
+    assert.equal(started.value.toolCount, 20)
     assert.equal(started.value.portsOpened, 0)
     assert.equal(await probePort(39551), false, 'Next 运行时不该在任何端口上监听')
     assert.equal(registry.ownerOfTool('pinax_chapter_read'), null, 'M1 阶段工具仍由内核持有')
 
     const dock = runtime.dockViewModel()
-    assert.equal(dock.tools.length, 19)
+    assert.equal(dock.tools.length, 20, '19 内核 ＋ 技能读取 1')
     assert.equal(dock.tools.every((tool) => tool.owner === 'kernel'), true)
   } finally {
     await runtime.stop()
@@ -76,7 +76,7 @@ test('M1 没接模型运行器时如实报错，不编一段回答冒充模型',
     assert.equal(answer.ok, false)
     assert.equal(answer.error.code, 'PINAX_DEPENDENCY_UNMET')
     assert.match(answer.error.message, /未接模型运行器/)
-    assert.equal(answer.error.details.toolCount, 19)
+    assert.equal(answer.error.details.toolCount, 20)
   } finally {
     await runtime.stop()
     await workspace.cleanup()
@@ -124,7 +124,7 @@ test('工具归属核对：空注册表＝内核全量；装内置载体后认�
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry.install(plugin.manifest, plugin.impl, plugin.meta)
   const report = toolOwnershipReport(registry)
-  assert.equal(report.kernelCount, 19)
+  assert.equal(report.kernelCount, 19, '内核名单仍是 19：技能读取归运行时原生工具，不进内核清单')
   assert.deepEqual([...report.claimed].sort(), ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read'])
   assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须逐批缩小')
   assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'], '七载体自有名字：正文写口＋提案三把（小说）、大纲写半边、构思这对、世界书写口、剧本三条（批次26）、约束这对、资料三把＋检索（断言同步）')

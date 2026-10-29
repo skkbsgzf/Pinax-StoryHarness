@@ -5,15 +5,16 @@ import ActivityRail from '../shell/ActivityRail.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
-import { resetPaneForms } from '../shell/paneForms.mjs'
+import { hostWorkspace, resetWorkspace } from '../shell/workspace.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 
 /**
- * 多形态打开（P21）的状态是模块级单例：每个用例从 dock 起步，避免上一个用例的形态泄漏；
- * localStorage 仍由用例自己清（持久化用例要在同一用例内跨挂载读回同一份键）。
+ * 工作区四轴（M2.5-C）是模块级单例：每个用例从空工作区起步，避免上一个用例的形态／位置泄漏。
+ * 状态现在落在 `.pinax/workspace.json`（经 bridge 的 workspaceLoad／workspaceSave），
+ * 持久化用例自己在同一用例内跨挂载喂回同一份存档。
  */
 beforeEach(() => {
-  resetPaneForms()
+  resetWorkspace()
 })
 
 /**
@@ -104,9 +105,10 @@ describe('空框架外壳', () => {
     expect(wrapper.text()).toContain('bad.carrier')
     expect(wrapper.text()).toContain('这个项目要创作什么？')
 
-    // 渲染层的外呼只有外壳合同里的这几条：view（读视图）与偏好（D2 主题迁移/持久化）。
+    // 渲染层的外呼只有这几条：view（读视图）、偏好（D2 主题迁移/持久化）、
+    // 以及 M2.5-C 的工作区四轴（workspaceLoad／workspaceSave 是唯一落盘点，坐标与形态都走它）。
     // 它拿不到内核实现，也就没有旁路写盘的可能。
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet]
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -160,13 +162,151 @@ describe('运行时栏', () => {
     await wrapper.find('.authoring-knowledge__send').trigger('click')
     await flushPromises()
 
-    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.runtimeAsk, { question: '这本书现在什么状态？', askId: expect.any(String) })
+    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.runtimeAsk, {
+      question: '这本书现在什么状态？',
+      askId: expect.any(String),
+      writeMode: 'review'
+    })
     expect(wrapper.find('.authoring-knowledge__error').text()).toContain('未接模型运行器')
     expect(wrapper.text()).not.toContain('编造')
     // 工具面折在底部一个折叠层里，默认不摊开。
     expect(wrapper.find('.authoring-knowledge__agent-detail').attributes('open')).toBeUndefined()
     expect(wrapper.findAll('.authoring-knowledge__agent-list li')).toHaveLength(19)
     wrapper.unmount()
+  })
+
+  it('写模式徽章：切自动要二次确认，确认后提问载荷带 auto；再点一次直接回审阅（M2.5-B）', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '好' } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    const badge = () => wrapper.find('.authoring-knowledge__mode-badge')
+    expect(badge().text()).toBe('审阅')
+    expect(badge().attributes('aria-pressed')).toBe('false')
+
+    // 第一次点只问不切：确认条出现，徽章仍是审阅。
+    await badge().trigger('click')
+    expect(wrapper.find('.authoring-knowledge__mode-confirm').exists()).toBe(true)
+    expect(wrapper.find('.authoring-knowledge__mode-confirm-text').text()).toContain('直接写入正文')
+    expect(badge().text()).toBe('审阅')
+    expect(badge().attributes('aria-pressed')).toBe('true')
+
+    // 取消：确认条收起，模式一点没动。
+    await wrapper.find('.authoring-knowledge__mode-confirm-cancel').trigger('click')
+    expect(wrapper.find('.authoring-knowledge__mode-confirm').exists()).toBe(false)
+    expect(badge().text()).toBe('审阅')
+
+    // 再点一次并确认：徽章才是自动，确认条收起。
+    await badge().trigger('click')
+    await wrapper.find('.authoring-knowledge__mode-confirm-ok').trigger('click')
+    expect(wrapper.find('.authoring-knowledge__mode-confirm').exists()).toBe(false)
+    expect(badge().text()).toBe('自动')
+    expect(badge().classes()).toContain('is-auto')
+
+    // 自动模式下的提问把会话真值带上载荷——界面显示什么，发出去的就是什么。
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('改这一章')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    expect(bridge.request).toHaveBeenLastCalledWith(
+      IPC_CHANNELS.runtimeAsk,
+      expect.objectContaining({ question: '改这一章', writeMode: 'auto' })
+    )
+
+    // 从自动降回审阅不设闸：点一下就回去，也不留确认条。
+    await badge().trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__mode-confirm').exists()).toBe(false)
+    expect(badge().text()).toBe('审阅')
+    expect(badge().classes()).toContain('is-review')
+    wrapper.unmount()
+  })
+
+  it('会话走主进程：读回上次的 JSONL，改一次就整份快照写回（M2.5-B）', async () => {
+    const saves = []
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        if (channel === IPC_CHANNELS.sessionsLoad) {
+          return {
+            ok: true,
+            value: {
+              sessions: [{
+                id: 's-wake',
+                title: '上次的会话',
+                createdAt: 1_760_000_000_000,
+                updatedAt: 1_760_000_000_000,
+                messages: [{ id: 'm-old', role: 'agent', text: '上次答过的话', at: '09:00' }],
+                events: [],
+                writeMode: 'review'
+              }],
+              activeId: 's-wake'
+            }
+          }
+        }
+        if (channel === IPC_CHANNELS.sessionsSave) {
+          saves.push(payload.snapshot)
+          return { ok: true, value: { saved: payload.snapshot.sessions.length } }
+        }
+        if (channel === IPC_CHANNELS.runtimeAsk) return { ok: true, value: { source: 'in-process-runner', text: '新答案' } }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      })
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge, projectRoot: 'D:/sessions' } })
+    await flushPromises()
+
+    // 读回：上次那条回答就在面上，不是空会话。
+    expect(wrapper.text()).toContain('上次答过的话')
+    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.sessionsLoad, {})
+
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('接着问')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    // 状态机每变一次交整份快照；最后一份带着两问一答与当前会话 id。
+    expect(saves.length).toBeGreaterThan(0)
+    const latest = saves.at(-1)
+    expect(latest.activeId).toBe('s-wake')
+    expect(latest.sessions[0].messages.map((message) => message.text)).toEqual(['上次答过的话', '接着问', '新答案'])
+    wrapper.unmount()
+  })
+
+  it('老 localStorage 会话迁移：写盘成功才删键；写盘失败保留旧键并在右栏说实话（M2.5-B）', async () => {
+    const key = 'agentSessions.D:/legacy'
+    globalThis.localStorage.setItem(key, JSON.stringify({ sessions: [{ id: 's-old', title: '老会话', messages: [] }], activeId: 's-old' }))
+
+    const imported = []
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        if (channel === IPC_CHANNELS.sessionsImport) {
+          imported.push(payload.legacy)
+          return { ok: true, value: { imported: 1, skipped: 0, warnings: [] } }
+        }
+        if (channel === IPC_CHANNELS.sessionsLoad) return { ok: true, value: { sessions: [], warnings: [], badLines: 0 } }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      })
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge, projectRoot: 'D:/legacy' } })
+    await flushPromises()
+    expect(imported).toHaveLength(1)
+    expect(imported[0].sessions[0].title).toBe('老会话')
+    expect(globalThis.localStorage.getItem(key)).toBe(null, '迁移成功后老键必须消失')
+    expect(wrapper.text()).not.toContain('迁移失败')
+    wrapper.unmount()
+
+    // 主进程拒绝：旧键不许删，右栏把原因写出来。
+    globalThis.localStorage.setItem(key, JSON.stringify({ sessions: [{ id: 's-old' }], activeId: 's-old' }))
+    const refusing = {
+      request: vi.fn(async (channel) => {
+        if (channel === IPC_CHANNELS.sessionsImport) return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '磁盘不可写' } }
+        if (channel === IPC_CHANNELS.sessionsLoad) return { ok: true, value: { sessions: [], warnings: [], badLines: 0 } }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '未预期的通道' } }
+      })
+    }
+    const second = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge: refusing, projectRoot: 'D:/legacy' } })
+    await flushPromises()
+    expect(globalThis.localStorage.getItem(key)).not.toBe(null, '迁移失败绝不能先删键')
+    expect(second.text()).toContain('旧数据还留在浏览器缓存里')
+    second.unmount()
+    globalThis.localStorage.removeItem(key)
   })
 
   it('接了 runner 就把回答排成会话；问句在右、回答在左', async () => {
@@ -1118,7 +1258,8 @@ describe('载体管理面板（工单A1）', () => {
     await flushPromises()
     // 没有 project 就没有面板：carrierSetEnabled/carrierSetPrimary 在通道层同样要求先有项目。
     expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet]
+    // 工作区通道（M2.5-C）随挂载就会走一次读：那是宿主状态，不是项目写入。
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -1839,10 +1980,20 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     }
   }
 
-  function overlayBridge({ handlers = new Map(), nodes = OUTLINE_NODES } = {}) {
+  /**
+   * 工作区存档：缺省给一份空的 `{ version, entries }`，调用方传同一个对象即可跨挂载读回。
+   * save 落在同一个对象上（主进程那份 .pinax/workspace.json 的替身），用例直接读 entries 断言。
+   */
+  function overlayBridge({ handlers = new Map(), nodes = OUTLINE_NODES, workspace = { version: 1, entries: {} } } = {}) {
     const calls = []
     const request = vi.fn(async (channel, payload) => {
       if (channel === IPC_CHANNELS.view) return { ok: true, value: overlayView() }
+      if (channel === IPC_CHANNELS.workspaceLoad) return { ok: true, value: { version: workspace.version ?? 1, entries: workspace.entries ?? {} } }
+      if (channel === IPC_CHANNELS.workspaceSave) {
+        workspace.version = payload?.snapshot?.version ?? 1
+        workspace.entries = payload?.snapshot?.entries ?? {}
+        return { ok: true, value: { version: workspace.version, entries: workspace.entries } }
+      }
       if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
       if (channel === IPC_CHANNELS.runtimeToolCall) {
         calls.push(payload.tool)
@@ -1974,10 +2125,10 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     wrapper.unmount()
   })
 
-  it('位置记忆：拖动写入 localStorage 的 overlay.outline.widget，重新挂载读回同一坐标', async () => {
+  it('位置记忆：拖动写进工作区存档的 outline.widget#1，重新挂载读回同一坐标', async () => {
     globalThis.localStorage?.clear()
-    const bridge = overlayBridge()
-    const wrapper = mount(AppNext, { props: { bridge } })
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
     await flushPromises()
     await openOutlineBoard(wrapper)
     await openWidget(wrapper)
@@ -1989,14 +2140,15 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     window.dispatchEvent(new PointerEvent('pointerup', { clientX: 140, clientY: 130, bubbles: true }))
     await flushPromises()
 
-    const stored = JSON.parse(globalThis.localStorage.getItem('overlay.outline.widget'))
-    expect(stored).toEqual({ left: 40, top: 30 })
+    // 坐标不再进 localStorage：落在工作区四轴的 geometry（M2.5-C）。
+    expect(globalThis.localStorage.getItem('overlay.outline.widget')).toBe(null)
+    expect(workspace.entries['outline.widget#1'].geometry).toMatchObject({ x: 40, y: 30, snap: null })
+    expect(workspace.entries['outline.widget#1'].placement).toBe('overlay')
     expect(wrapper.find('.nx-overlay-widget').attributes('style')).toContain('left: 40px')
     wrapper.unmount()
 
-    // 重新挂载＝形态与位置都读回（P21：paneForm 已存 overlay，浮窗自动开着）；
-    // 若形态没有持久化，再点一次「悬浮」也走到同一断言——位置记忆键仍是 overlay.<paneId>。
-    const second = mount(AppNext, { props: { bridge: overlayBridge() } })
+    // 重新挂载＝从同一份存档读回形态与位置（浮窗仍然开着）。
+    const second = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
     await flushPromises()
     await openOutlineBoard(second)
     if (!second.find('.nx-overlay-widget').exists()) await openWidget(second)
@@ -2006,11 +2158,99 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     second.unmount()
     globalThis.localStorage?.clear()
   })
+
+  it('缩成气泡球：卡片退场、气泡留在原坐标；点气泡展开回原位置（最小化不啃 geometry）', async () => {
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+
+    // 先把它拖到一个可辨认的位置。
+    const head = wrapper.find('.nx-overlay-head').element
+    head.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 260, clientY: 190, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 260, clientY: 190, bubbles: true }))
+    await flushPromises()
+    expect(workspace.entries['outline.widget#1'].geometry).toMatchObject({ x: 160, y: 90 })
+
+    // 缩成气泡球：同一实例 placement 仍是 overlay，只换 minimized 这一轴。
+    await wrapper.find('[aria-label="缩成气泡球"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
+    const bubble = wrapper.find('.nx-overlay-bubble')
+    expect(bubble.exists()).toBe(true)
+    expect(bubble.attributes('data-overlay-instance')).toBe('outline.widget#1')
+    expect(bubble.attributes('data-minimized')).toBe('bubble')
+    expect(hostWorkspace.get('outline.widget#1').minimized).toBe('bubble')
+    expect(hostWorkspace.get('outline.widget#1').placement).toBe('overlay')
+    // 气泡保留坐标（气泡球出现在原处，而不是弹回右上角默认位）。
+    expect(bubble.attributes('style')).toContain('left: 160px')
+
+    // 点气泡展开：回到卡片，位置没被最小化这一轴啃掉。
+    await bubble.trigger('click')
+    await flushPromises()
+    const card = wrapper.find('.nx-overlay-widget')
+    expect(card.exists()).toBe(true)
+    expect(card.attributes('style')).toContain('left: 160px')
+    expect(card.attributes('style')).toContain('top: 90px')
+    expect(hostWorkspace.get('outline.widget#1').minimized).toBe('none')
+    wrapper.unmount()
+    globalThis.localStorage?.clear()
+  })
+
+  it('同一 pane 开两份（+1）：实例 id 是 outline.widget#2，位置／最小化不串', async () => {
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+
+    // 把 #1 拖到一个可辨认的位置。
+    const head = wrapper.find('.nx-overlay-head').element
+    head.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 140, clientY: 130, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 140, clientY: 130, bubbles: true }))
+    await flushPromises()
+
+    // 再开一份：#2 出现在同一块 pane 上，缺省落在右上角（没有继承 #1 的坐标）。
+    await wrapper.find('[data-overlay-instance="outline.widget#1"] [aria-label="再开一份"]').trigger('click')
+    await flushPromises()
+    const widgets = wrapper.findAll('.nx-overlay-widget')
+    expect(widgets.map((node) => node.attributes('data-overlay-instance'))).toEqual(['outline.widget#1', 'outline.widget#2'])
+    expect(widgets[0].attributes('style')).toContain('left: 40px')
+    expect(hostWorkspace.get('outline.widget#2').geometry?.x ?? null).not.toBe(40)
+
+    // 拖 #2：只改 #2 的坐标，#1 原样。
+    const head2 = widgets[1].find('.nx-overlay-head').element
+    head2.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 300, clientY: 200, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 300, clientY: 200, bubbles: true }))
+    await flushPromises()
+    expect(hostWorkspace.get('outline.widget#1').geometry.x).toBe(40)
+    expect(hostWorkspace.get('outline.widget#2').geometry.x).toBe(200)
+
+    // 收起 #2：只有 #2 变侧缘标签，#1 的卡片还在。
+    await wrapper.find('[data-overlay-instance="outline.widget#2"] [aria-label="收起悬浮窗"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('outline.widget#1').minimized).toBe('none')
+    expect(hostWorkspace.get('outline.widget#2').minimized).toBe('collapsed')
+    expect(wrapper.findAll('.nx-overlay-widget')).toHaveLength(1)
+    const tabs = wrapper.findAll('.nx-overlay-tab')
+    expect(tabs.map((node) => node.attributes('data-overlay-instance'))).toEqual(['outline.widget#2'])
+    wrapper.unmount()
+    globalThis.localStorage?.clear()
+  })
 })
 
 describe('多形态打开（协议 v1.2 P18–P21）', () => {
   afterEach(() => {
-    resetPaneForms()
+    resetWorkspace()
     globalThis.localStorage?.clear()
   })
 
@@ -2062,10 +2302,16 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     }
   }
 
-  function multiFormBridge() {
+  function multiFormBridge({ workspace = { version: 1, entries: {} } } = {}) {
     const request = vi.fn(async (channel, payload) => {
       if (channel === IPC_CHANNELS.view) return { ok: true, value: multiFormView() }
       if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { theme: 'light' } }
+      if (channel === IPC_CHANNELS.workspaceLoad) return { ok: true, value: { version: workspace.version ?? 1, entries: workspace.entries ?? {} } }
+      if (channel === IPC_CHANNELS.workspaceSave) {
+        workspace.version = payload?.snapshot?.version ?? 1
+        workspace.entries = payload?.snapshot?.entries ?? {}
+        return { ok: true, value: { version: workspace.version, entries: workspace.entries } }
+      }
       if (channel === IPC_CHANNELS.runtimeToolCall) {
         if (payload.tool === 'pinax_outline_read') {
           return {
@@ -2109,9 +2355,10 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
   }
 
   it('右键竖条格按 forms 声明列「打开方式」；选分屏→目标面板进副栏、主 pane 不变；树行右键同入口', async () => {
-    resetPaneForms()
+    resetWorkspace()
     globalThis.localStorage?.clear()
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge() } })
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
     await flushPromises()
 
     const outlineRail = railByName(wrapper, '大纲')
@@ -2135,7 +2382,9 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(wrapper.find('.nx-split-side [data-pane-id="outline.editor"]').exists()).toBe(true)
     const sideWidth = Number(/width:\s*(\d+)px/u.exec(wrapper.find('.nx-split-side').attributes('style') ?? '')?.[1] ?? 0)
     expect(sideWidth).toBeGreaterThanOrEqual(420)
-    expect(globalThis.localStorage.getItem('paneForm.outline.editor')).toBe('split')
+    // 形态落进工作区四轴（M2.5-C）：内存与存档两处一致。
+    expect(hostWorkspace.get('outline.editor#1').placement).toBe('split')
+    expect(workspace.entries['outline.editor#1'].placement).toBe('split')
 
     // 分界可拖：往左 100px，副栏变宽 100px（与三栏 .resizer 同一套手势）。
     wrapper.find('.nx-split-divider').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 900, bubbles: true }))
@@ -2171,7 +2420,7 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
   })
 
   it('未声明 forms 的载体：右键只给说明，不伪造任何形态', async () => {
-    resetPaneForms()
+    resetWorkspace()
     globalThis.localStorage?.clear()
     const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
     await flushPromises()
@@ -2188,9 +2437,10 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
   })
 
   it('浮窗吸附：拖到左缘吸附成半屏 dock，再拖离恢复浮动态', async () => {
-    resetPaneForms()
+    resetWorkspace()
     globalThis.localStorage?.clear()
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge() } })
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
     await flushPromises()
     await openOutlineWidget(wrapper)
 
@@ -2205,9 +2455,9 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     const snapped = wrapper.find('.nx-overlay-widget')
     expect(snapped.classes()).toContain('is-snapped-left')
     expect(snapped.attributes('data-snap')).toBe('left')
-    expect(JSON.parse(globalThis.localStorage.getItem('overlay.outline.widget')).snap).toBe('left')
+    expect(workspace.entries['outline.widget#1'].geometry.snap).toBe('left')
 
-    // 从吸附态拖离 → 回浮动态；位置落盘不再带 snap。
+    // 从吸附态拖离 → 回浮动态；存档里的 snap 清掉（geometry 其余轴保留）。
     snapped.find('.nx-overlay-head').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
     await flushPromises()
     window.dispatchEvent(new PointerEvent('pointermove', { clientX: 320, clientY: 100, bubbles: true }))
@@ -2216,17 +2466,18 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
 
     const floating = wrapper.find('.nx-overlay-widget')
     expect(floating.classes()).not.toContain('is-snapped-left')
-    const stored = JSON.parse(globalThis.localStorage.getItem('overlay.outline.widget'))
-    expect(stored.snap).toBeUndefined()
-    expect(stored.left).toBeGreaterThan(32)
-    expect(floating.attributes('style')).toContain(`left: ${stored.left}px`)
+    const stored = workspace.entries['outline.widget#1'].geometry
+    expect(stored.snap).toBe(null)
+    expect(stored.x).toBeGreaterThan(32)
+    expect(floating.attributes('style')).toContain(`left: ${stored.x}px`)
     wrapper.unmount()
   })
 
   it('扩至全屏：占满中栏，点「还原浮窗」回到浮动态', async () => {
-    resetPaneForms()
+    resetWorkspace()
     globalThis.localStorage?.clear()
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge() } })
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
     await flushPromises()
     await openOutlineWidget(wrapper)
 
@@ -2242,13 +2493,14 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(wrapper.find('.col-center [data-pane-id="outline.widget"]').exists()).toBe(true)
     expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
     expect(wrapper.find('.nx-overlay-tab').exists()).toBe(false)
-    expect(globalThis.localStorage.getItem('paneForm.outline.widget')).toBe('fullscreen')
+    expect(workspace.entries['outline.widget#1'].placement).toBe('fullscreen')
 
     await bar.find('.nx-form-bar-action').trigger('click')
     await flushPromises()
     expect(wrapper.find('.nx-form-bar').exists()).toBe(false)
     expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
-    expect(globalThis.localStorage.getItem('paneForm.outline.widget')).toBe('overlay')
+    // 还原目标是进全屏前的位置（restore 轴记住 overlay），不是外壳里的补丁 ref。
+    expect(workspace.entries['outline.widget#1'].placement).toBe('overlay')
     wrapper.unmount()
   })
 })

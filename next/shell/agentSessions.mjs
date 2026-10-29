@@ -1,22 +1,24 @@
 /**
- * Agent 会话存储（批次27 · 任务一）：多会话 ＋ localStorage 持久化。
+ * Agent 会话状态机（批次27 起）：多会话 ＋ 可注入的落盘适配器。
  *
  * 作者原话：「参考 dsh，需要有会话管理」。批次25 之前右栏只有一份内存里的 messages，
- * 刷新即丢、也开不了第二个话题。这份模块把会话做成一个真正的存储：
- *   - 按项目根隔离：键 `agentSessions.<projectRoot>`（与 paneForm.<paneId> / overlay.<paneId>
- *     同一先例：渲染层的 localStorage 例外，键由本模块按项目根拼出，别处不另写键）；
+ * 刷新即丢、也开不了第二个话题。这份模块把会话做成一个真正的状态机：
+ *   - 状态全在内存里（同步、可测）；落盘交给注入的 `save(payload)`（M2.5-B：主进程写 JSONL）；
  *   - 上限：30 个会话、每会话 200 条消息，超限丢最旧（丢的是「最早的」，不是「正在看的」）；
  *   - 标题：自动取第一条 user 消息前 24 字；手动 rename 之后不再自动改；
- *   - 首启自动建一个空会话；没有项目根时不落盘（没有身份可归属），照样能问。
+ *   - 首启自动建一个空会话；没有 save（没打开项目／没有桥）时不落盘，照样能问。
  *
- * 落盘失败（隐私模式／配额／沙箱 SecurityError）不崩：降级为内存会话，界面照常，
- * 只是这次关掉窗口就没了——`snapshot().persistent` 如实报这件事。
+ * 本模块不再直接碰 localStorage：`initial` 是主进程读回的那份会话，`save` 是回写口。
+ * 落盘失败不崩：降级为内存会话，界面照常，`snapshot().persistent` 如实报这件事。
  *
- * 纯数据模块，不 import Vue：node:test 能直接测状态机、上限截断与降级路径；
+ * 纯数据模块，不 import Vue、不 import fs：node:test 能直接测状态机、上限截断与降级路径；
  * 渲染层用 subscribe() 把快照接进 ref（与 paneForms.mjs 同一套「宿主一份真相」）。
  */
 
-/** 持久化键前缀：`agentSessions.<projectRoot>`（键名带项目根，由本模块拼）。 */
+/**
+ * 老 localStorage 键前缀：`agentSessions.<projectRoot>`。
+ * M2.5-B 起会话存 `.pinax/sessions/`，这个前缀只留给一次性迁移（sessionMigration.mjs）认老键。
+ */
 export const AGENT_SESSION_STORAGE_PREFIX = 'agentSessions.'
 
 /** 会话上限：超了丢最旧。 */
@@ -36,22 +38,30 @@ export const SESSION_TITLE_CHARS = 24
 export const MAX_TRAIL_EVENTS = 32
 
 /** 运行过程事件只有这五种阶段（与 next/runtime/runnerAdvisor.mjs 的发射点一一对应）。 */
-export const TRAIL_STAGES = Object.freeze(['start', 'envelope', 'model-round', 'answer', 'failed'])
+export const TRAIL_STAGES = Object.freeze([
+  'start',
+  'envelope',
+  'model-round',
+  // M2.5-A：工具循环接上后，这几段是运行器真会发的事件（循环默认关，关着时一条都不会出现）。
+  'step',
+  'tool-start',
+  'tool-end',
+  'tool-denied',
+  'tool-dropped',
+  'tool-unknown',
+  'proposal-created',
+  'answer',
+  'failed'
+])
+
+/** 断点只认「一条链上的五个阶段」：工具事件是链上的旁支，不能冒充 failed.atStage。 */
+export const TRAIL_BREAKPOINT_STAGES = Object.freeze(['start', 'envelope', 'model-round', 'answer'])
 
 /** 还没有人说话时的会话名。 */
 export const DEFAULT_SESSION_TITLE = '新会话'
 
 export function agentSessionStorageKey(projectRoot) {
   return `${AGENT_SESSION_STORAGE_PREFIX}${String(projectRoot ?? '').trim()}`
-}
-
-/** 取浏览器存储：属性访问本身也可能抛（沙箱 iframe 的 SecurityError），拿不到就按「不持久化」跑。 */
-function defaultStorage() {
-  try {
-    return globalThis.localStorage ?? null
-  } catch {
-    return null
-  }
 }
 
 /** 小时:分钟，与老版会话的时间戳同一形状（RuntimeDock 原来那行 toLocaleTimeString）。 */
@@ -130,10 +140,56 @@ export function sanitizeTrailEvent(raw) {
       roundsUsed: cleanCount(raw.roundsUsed)
     }
   }
+  if (raw.stage === 'step') {
+    return {
+      stage: 'step',
+      step: cleanCount(raw.step),
+      tools: cleanList(raw.tools, 8)
+    }
+  }
+  if (raw.stage === 'tool-start' || raw.stage === 'tool-unknown') {
+    return { stage: raw.stage, name: cleanText(raw.name, 80), callId: cleanText(raw.callId, 80) }
+  }
+  if (raw.stage === 'tool-end') {
+    return {
+      stage: 'tool-end',
+      name: cleanText(raw.name, 80),
+      callId: cleanText(raw.callId, 80),
+      ok: raw.ok === true,
+      ms: cleanCount(raw.ms)
+    }
+  }
+  if (raw.stage === 'tool-denied') {
+    return {
+      stage: 'tool-denied',
+      name: cleanText(raw.name, 80),
+      callId: cleanText(raw.callId, 80),
+      code: cleanText(raw.code, 80)
+    }
+  }
+  if (raw.stage === 'tool-dropped') {
+    // dropped 的每一项是 { name, reason }：只留这两个确定字段，理由不自由发挥。
+    return {
+      stage: 'tool-dropped',
+      dropped: (Array.isArray(raw.dropped) ? raw.dropped : [])
+        .filter((item) => item && typeof item === 'object')
+        .slice(0, 8)
+        .map((item) => ({ name: cleanText(item.name, 80), reason: cleanText(item.reason, 40) }))
+        .filter((item) => item.name)
+    }
+  }
+  if (raw.stage === 'proposal-created') {
+    return {
+      stage: 'proposal-created',
+      name: cleanText(raw.name, 80),
+      callId: cleanText(raw.callId, 80),
+      proposalId: cleanText(raw.proposalId, 120)
+    }
+  }
   return {
     stage: 'failed',
     code: cleanText(raw.code, 80),
-    atStage: TRAIL_STAGES.includes(raw.atStage) && raw.atStage !== 'failed' ? raw.atStage : 'start'
+    atStage: TRAIL_BREAKPOINT_STAGES.includes(raw.atStage) ? raw.atStage : 'start'
   }
 }
 
@@ -152,6 +208,13 @@ export function trailStageLabel(stage) {
     start: '开始',
     envelope: '组装上下文',
     'model-round': '模型轮次',
+    step: '工具回合',
+    'tool-start': '调用工具',
+    'tool-end': '工具返回',
+    'tool-denied': '写入被拒',
+    'tool-dropped': '工具未披露',
+    'tool-unknown': '越界工具',
+    'proposal-created': '生成提案',
     answer: '回答'
   }
   return labels[stage] ?? '未知步骤'
@@ -180,6 +243,28 @@ export function describeTrailEvent(event) {
   if (event.stage === 'failed') {
     return { stage: event.stage, label: '中断', detail: `${event.code || '未知错误'} · 断在${trailStageLabel(event.atStage)}` }
   }
+  if (event.stage === 'step') {
+    return { stage: event.stage, label: `工具第 ${event.step} 步`, detail: `${Array.isArray(event.tools) ? event.tools.length : 0} 把可用` }
+  }
+  if (event.stage === 'tool-start') {
+    return { stage: event.stage, label: '调用工具', detail: event.name }
+  }
+  if (event.stage === 'tool-end') {
+    return { stage: event.stage, label: event.ok ? '工具返回' : '工具出错', detail: `${event.name} · ${event.ms}ms` }
+  }
+  if (event.stage === 'tool-denied') {
+    return { stage: event.stage, label: '写入被拒', detail: `${event.name} · ${event.code}` }
+  }
+  if (event.stage === 'tool-dropped') {
+    const names = (Array.isArray(event.dropped) ? event.dropped : []).map((item) => item?.name).filter(Boolean)
+    return { stage: event.stage, label: '工具未披露', detail: names.join('、') }
+  }
+  if (event.stage === 'tool-unknown') {
+    return { stage: event.stage, label: '越界工具', detail: `${event.name}（未执行）` }
+  }
+  if (event.stage === 'proposal-created') {
+    return { stage: event.stage, label: '生成提案', detail: `${event.name} · ${event.proposalId}` }
+  }
   return null
 }
 
@@ -191,9 +276,36 @@ export function describeRuntimeProgress(event) {
   if (!event || typeof event !== 'object') return ''
   if (event.stage === 'envelope') return `正在组装上下文（${event.blocks} 块 · ${event.chars} 字）`
   if (event.stage === 'model-round') return `模型第 ${event.round} 轮`
+  if (event.stage === 'step') return `工具第 ${event.step} 步`
+  if (event.stage === 'tool-start') return `正在调用 ${event.name}`
+  if (event.stage === 'proposal-created') return '已生成提案，等你采纳'
   if (event.stage === 'answer') return '正在整理回答'
   if (event.stage === 'failed') return '这一步中断了'
   return ''
+}
+
+/**
+ * 写模式（M2.5-B）：会话级真值。词表与 next/runtime/writePolicy 一致，但这里不 import 运行时
+ * ——渲染层必须保持薄，词表只有三个值，重复一份不构成漂移风险。
+ */
+export const WRITE_MODES = Object.freeze(['review', 'auto', 'blocked'])
+export const MAX_SESSION_EVENTS = 200
+
+/** 会话事件：目前只有「模式切换」一种（谁、何时、从什么切到什么）。未知类型不带进存储。 */
+export function sanitizeSessionEvent(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  if (raw.kind !== 'mode') return null
+  const from = WRITE_MODES.includes(raw.from) ? raw.from : null
+  const to = WRITE_MODES.includes(raw.to) ? raw.to : null
+  if (!from || !to) return null
+  return {
+    kind: 'mode',
+    from,
+    to,
+    // 能切模式的只有作者本人；这里不臆造别的来源。
+    by: 'author',
+    at: cleanText(raw.at, 40)
+  }
 }
 
 /**
@@ -246,7 +358,8 @@ function summaryOf(session) {
     title: session.title,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
-    messageCount: session.messages.length
+    messageCount: session.messages.length,
+    writeMode: session.writeMode
   }
 }
 
@@ -267,10 +380,9 @@ function summaryOf(session) {
  *   snapshot() / subscribe()→ 渲染层的唯一真相源（结构与 paneForms 的快照同一用法）
  */
 export function createSessionStore(projectRoot, options = {}) {
-  const storage = options.storage === undefined ? defaultStorage() : options.storage
   const clock = typeof options.now === 'function' ? options.now : () => Date.now()
   const root = String(projectRoot ?? '').trim()
-  const storageKey = root ? agentSessionStorageKey(root) : null
+  const save = typeof options.save === 'function' ? options.save : null
   const listeners = new Set()
   const sessions = []
   let activeId = null
@@ -285,18 +397,6 @@ export function createSessionStore(projectRoot, options = {}) {
   }
   const nextId = (prefix) => `${prefix}-${stamp().toString(36)}-${(++counter).toString(36)}`
 
-  function readStored() {
-    if (!storageKey || !storage) return null
-    try {
-      const raw = storage.getItem(storageKey)
-      if (typeof raw !== 'string' || !raw) return null
-      const parsed = JSON.parse(raw)
-      return parsed && typeof parsed === 'object' ? parsed : null
-    } catch {
-      return null
-    }
-  }
-
   function normalizeSession(raw) {
     if (!raw || typeof raw !== 'object') return null
     const messages = (Array.isArray(raw.messages) ? raw.messages : [])
@@ -307,6 +407,10 @@ export function createSessionStore(projectRoot, options = {}) {
     const updatedAt = Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : createdAt
     const title = cleanText(raw.title, 120).trim() || DEFAULT_SESSION_TITLE
     const renamed = raw.renamed === true
+    const events = (Array.isArray(raw.events) ? raw.events : [])
+      .map(sanitizeSessionEvent)
+      .filter(Boolean)
+      .slice(-MAX_SESSION_EVENTS)
     return {
       id: cleanText(raw.id, 80).trim() || nextId('s'),
       title,
@@ -315,6 +419,9 @@ export function createSessionStore(projectRoot, options = {}) {
       renamed,
       // 名字不是缺省名又没被手动改过 → 只可能是自动标题，别让下一条 user 消息把它重写。
       autoTitled: raw.autoTitled === true || (!renamed && title !== DEFAULT_SESSION_TITLE),
+      // 写模式是会话真值：未知值一律回落 review（与运行时同一条口径）。
+      writeMode: WRITE_MODES.includes(raw.writeMode) ? raw.writeMode : 'review',
+      events,
       messages
     }
   }
@@ -348,6 +455,8 @@ export function createSessionStore(projectRoot, options = {}) {
       title: session.title,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+      writeMode: session.writeMode,
+      events: session.events.map((event) => ({ ...event })),
       messages: session.messages.map(copyMessage)
     }
   }
@@ -356,12 +465,13 @@ export function createSessionStore(projectRoot, options = {}) {
     const current = active()
     return {
       projectRoot: root,
-      storageKey,
-      persistent: Boolean(storageKey && storage) && !degraded,
+      persistent: Boolean(save) && !degraded,
       sessions: list(),
       activeId: current?.id ?? null,
       title: current?.title ?? '',
       messages: current?.messages ?? [],
+      writeMode: current?.writeMode ?? 'review',
+      events: current?.events ?? [],
       busy
     }
   }
@@ -377,10 +487,23 @@ export function createSessionStore(projectRoot, options = {}) {
     }
   }
 
+  /**
+   * 落盘：save 可以是异步（主进程写 JSONL）。同步抛错与 Promise 拒绝都只降级，
+   * 不打断状态机——回答还在，作者还能接着问；`persistent` 会变 false。
+   */
   function persist() {
-    if (!storageKey || !storage) return false
+    if (!save) return false
     try {
-      storage.setItem(storageKey, JSON.stringify({ sessions, activeId }))
+      const returned = save({ sessions, activeId })
+      if (returned && typeof returned.then === 'function') {
+        returned.then(
+          () => {},
+          () => {
+            degraded = true
+            notify()
+          }
+        )
+      }
       degraded = false
       return true
     } catch {
@@ -419,6 +542,8 @@ export function createSessionStore(projectRoot, options = {}) {
       updatedAt: timestamp,
       renamed: Boolean(manual),
       autoTitled: false,
+      writeMode: 'review',
+      events: [],
       messages: []
     }
     sessions.push(session)
@@ -520,8 +645,46 @@ export function createSessionStore(projectRoot, options = {}) {
     notify()
   }
 
-  // —— 首启：把已存的会话读回来；一条都没有就建一个空会话 ——
-  const stored = readStored()
+  /**
+   * 切写模式（会话真值）：未知值回落 review，不猜。切成功写一条会话事件（从什么切到什么、何时），
+   * 事件与模式都随会话落盘——徽章显示的是真值，不是组件默认值。
+   */
+  function setWriteMode(mode, sessionId = null) {
+    const session = targetSession(sessionId)
+    if (!session) return false
+    const next = WRITE_MODES.includes(mode) ? mode : 'review'
+    if (next === session.writeMode) return true
+    const from = session.writeMode
+    session.writeMode = next
+    session.events.push({ kind: 'mode', from, to: next, by: 'author', at: formatClock(stamp()) })
+    if (session.events.length > MAX_SESSION_EVENTS) {
+      session.events.splice(0, session.events.length - MAX_SESSION_EVENTS)
+    }
+    session.updatedAt = stamp()
+    persist()
+    notify()
+    return true
+  }
+
+  /** 通用会话事件入口：目前只有模式切换走它，将来别的「会话级事实」也从这里进。 */
+  function recordEvent(event, sessionId = null) {
+    const session = targetSession(sessionId)
+    // 时刻由存储补：调用方没给 at 时留空会让事件丢掉「何时发生」这半个事实。
+    const stamped = event && typeof event === 'object' && !event.at ? { ...event, at: formatClock(stamp()) } : event
+    const clean = sanitizeSessionEvent(stamped)
+    if (!session || !clean) return null
+    session.events.push(clean)
+    if (session.events.length > MAX_SESSION_EVENTS) {
+      session.events.splice(0, session.events.length - MAX_SESSION_EVENTS)
+    }
+    session.updatedAt = stamp()
+    persist()
+    notify()
+    return { ...clean }
+  }
+
+  // —— 首启：把主进程读回的会话（initial）装进来；一条都没有就建一个空会话 ——
+  const stored = options.initial && typeof options.initial === 'object' ? options.initial : null
   if (stored) {
     const seen = new Set()
     for (const raw of Array.isArray(stored.sessions) ? stored.sessions : []) {
@@ -538,7 +701,6 @@ export function createSessionStore(projectRoot, options = {}) {
   if (!sessions.length) create()
 
   return {
-    storageKey,
     list,
     active,
     switchTo,
@@ -548,6 +710,8 @@ export function createSessionStore(projectRoot, options = {}) {
     append,
     updateLast,
     dropLast,
+    setWriteMode,
+    recordEvent,
     setBusy,
     isBusy: () => busy,
     snapshot,

@@ -57,6 +57,32 @@ const sessionRoot = ref(null)
 const mode = computed(() => props.mode)
 
 /**
+ * 切到 auto 需要一次显式确认（M2.5-B）：这是「AI 产出直接写正文」的那一档，
+ * 一次误点不该把后面所有提问都改成直写。review 回退不需要确认——回到更安全的档位永远允许。
+ */
+const pendingAuto = ref(false)
+const modeLabel = computed(() => ({ review: '审阅', auto: '自动', blocked: '锁定' }[props.mode] ?? '审阅'))
+watch(() => props.mode, () => { pendingAuto.value = false })
+
+function requestMode() {
+  if (props.mode === 'auto') {
+    pendingAuto.value = false
+    emit('update:mode', 'review')
+    return
+  }
+  pendingAuto.value = true
+}
+
+function confirmAuto() {
+  pendingAuto.value = false
+  emit('update:mode', 'auto')
+}
+
+function cancelAuto() {
+  pendingAuto.value = false
+}
+
+/**
  * 从提示层选中的命令：作者可能在模板上继续改，所以它不写进草稿（命令词本身不留在草稿里），
  * 只在提交时随草稿一起交给 RuntimeDock 做路由；草稿被清空就作废（那是新的一问）。
  */
@@ -300,8 +326,9 @@ onBeforeUnmount(() => {
           class="authoring-knowledge__mode-badge"
           :class="mode === 'review' ? 'is-review' : 'is-auto'"
           :title="mode === 'review' ? '审阅模式：AI 产出走提案，确认后才落盘' : '自动模式：AI 产出直接写入（慎用）'"
-          @click="emit('update:mode', mode === 'review' ? 'auto' : 'review')"
-        >{{ mode === 'review' ? '审阅' : '自动' }}</button>
+          :aria-pressed="pendingAuto.toString()"
+          @click="requestMode"
+        >{{ modeLabel }}</button>
       </div>
 
       <div v-if="sessionOpen" class="authoring-knowledge__sessions" role="dialog" aria-label="会话列表">
@@ -345,6 +372,12 @@ onBeforeUnmount(() => {
         </ul>
       </div>
     </header>
+
+    <div v-if="pendingAuto" class="authoring-knowledge__mode-confirm" role="alertdialog" aria-label="切换到自动模式">
+      <span class="authoring-knowledge__mode-confirm-text">自动模式下，AI 的产出会直接写入正文，不再走提案。只对当前项目生效。</span>
+      <button type="button" class="authoring-knowledge__mode-confirm-ok" @click="confirmAuto">确认切换</button>
+      <button type="button" class="authoring-knowledge__mode-confirm-cancel" @click="cancelAuto">取消</button>
+    </div>
 
     <div class="authoring-knowledge__body">
       <div v-if="!messages.length" class="authoring-knowledge__intro">
@@ -572,6 +605,10 @@ onBeforeUnmount(() => {
 .authoring-knowledge__mode-badge { flex: none; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
 .authoring-knowledge__mode-badge.is-review { color: var(--accent, var(--accent)); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
 .authoring-knowledge__mode-badge.is-auto { color: var(--signal-warm, var(--signal-warm)); border-color: color-mix(in srgb, var(--signal-warm) 32%, transparent); }
+.authoring-knowledge__mode-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--signal-warm, currentColor) 32%, transparent); border-radius: var(--nx-radius-xs, 8px); background: color-mix(in srgb, var(--signal-warm, currentColor) 6%, transparent); font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
+.authoring-knowledge__mode-confirm-text { flex: 1 1 180px; }
+.authoring-knowledge__mode-confirm-ok, .authoring-knowledge__mode-confirm-cancel { flex: none; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
+.authoring-knowledge__mode-confirm-ok { color: var(--signal-warm, currentColor); border-color: color-mix(in srgb, var(--signal-warm, currentColor) 32%, transparent); }
 .authoring-knowledge__slash-hint { display: flex; flex-wrap: wrap; gap: 6px 8px; padding: 6px 4px 0; font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
 .authoring-knowledge__slash-item { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); cursor: pointer; }
 .authoring-knowledge__slash-item.is-active, .authoring-knowledge__slash-item:hover { color: var(--archive-ink); background: var(--nav-hover); border-color: var(--border-strong); }

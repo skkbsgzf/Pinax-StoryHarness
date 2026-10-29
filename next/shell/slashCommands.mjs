@@ -16,31 +16,37 @@
 /**
  * 四条命令：name＝命令词，desc＝提示层的一句话，template＝填进草稿的问句，
  * omit＝这次提问要跳过的上下文块种（块种清单见 shared/agentContextProfiles.js）。
+ * skill（M2.5-B）：命令指向的方法说明书名。命令是入口，技能是方法，两者不合并——
+ * 只有「确实有对应技能包」的命令才带这一项，其余留空，别为凑齐而虚构方法。
  */
 export const SLASH_COMMANDS = Object.freeze([
   Object.freeze({
     name: '/审阅',
     desc: '审阅当前正文',
     template: '请以审稿人视角审阅当前正文：问题按严重度列出，每条配一句可执行动作。',
-    omit: Object.freeze([])
+    omit: Object.freeze([]),
+    skill: null
   }),
   Object.freeze({
     name: '/大纲',
     desc: '梳理大纲结构',
     template: '请梳理当前项目的大纲结构：主线走向、悬而未决的线头、结构上的风险。',
-    omit: Object.freeze(['scene', 'memory', 'history'])
+    omit: Object.freeze(['scene', 'memory', 'history']),
+    skill: 'outline-restructure'
   }),
   Object.freeze({
     name: '/总结',
     desc: '总结当前项目',
     template: '请总结当前项目的核心内容：一句话主线＋各板块要点。',
-    omit: Object.freeze(['style'])
+    omit: Object.freeze(['style']),
+    skill: null
   }),
   Object.freeze({
     name: '/资料',
     desc: '只依据本书资料',
     template: '请只依据本书资料（世界书/资料/规则）回答：',
-    omit: Object.freeze(['scene', 'memory', 'outline'])
+    omit: Object.freeze(['scene', 'memory', 'outline']),
+    skill: null
   })
 ])
 

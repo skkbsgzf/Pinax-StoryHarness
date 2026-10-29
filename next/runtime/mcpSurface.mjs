@@ -1,6 +1,8 @@
 import { createPinaxMcpServer, tools as kernelTools } from '../../server/mcp/createMcpServer.js'
 import { collectCarrierTools, createAggregatedMcpServer } from './surfaceAggregate.mjs'
 import { KERNEL_WRITE_TOOL_NAMES, guardKernelToolCall } from './kernelWriteGuard.mjs'
+import { loadSkills } from '../skills/loadSkills.mjs'
+import { createSkillTools, SKILL_READ_TOOL } from './skillTools.mjs'
 
 /**
  * 运行时的工具面（WP3 → M2 · WP6）。
@@ -50,19 +52,33 @@ export function createMcpSurface(options = {}) {
  * 否则「运行时不改原稿」就只在装了板块的项目里成立。
  * `aggregated` 仍按「有没有载体工具进面」记账，右栏与验收读它。
  */
-export async function createRuntimeSurface({ registry, view, fileService, advisorBaseUrl, projectRoot } = {}) {
+export async function createRuntimeSurface({ registry, view, fileService, advisorBaseUrl, projectRoot, skillsDir } = {}) {
   const kernelServer = createPinaxMcpServer({ name: SURFACE_NAME, version: SURFACE_VERSION, advisorBaseUrl })
   const { map, missing } = collectCarrierTools({ registry, view, fileService })
   const root = projectRoot ?? view?.root ?? fileService?.root ?? null
+  // 技能装载：tools 必须都在这一刻的面上（内核 ∪ 载体 ∪ 技能读取自己），缺一把就不装载并记账。
+  const availableTools = [...kernelToolNames(), ...map.keys(), SKILL_READ_TOOL]
+  const loaded = await loadSkills({ ...(skillsDir ? { dir: skillsDir } : {}), availableTools })
+  const nativeMap = createSkillTools({ skills: loaded.skills })
   const guard = (tool, args) => guardKernelToolCall({ tool, args, root, registry })
-  const aggregated = await createAggregatedMcpServer({ kernelServer, carrierMap: map, guard, name: SURFACE_NAME, version: SURFACE_VERSION })
+  const aggregated = await createAggregatedMcpServer({ kernelServer, carrierMap: map, nativeMap, guard, name: SURFACE_NAME, version: SURFACE_VERSION })
   return {
     server: aggregated.server,
     carrierCount: map.size,
     carrierToolNames: [...map.keys()],
     missingImplementations: missing,
     aggregated: map.size > 0,
-    writeGuard: { tools: KERNEL_WRITE_TOOL_NAMES, projectRoot: root }
+    writeGuard: { tools: KERNEL_WRITE_TOOL_NAMES, projectRoot: root },
+    skills: {
+      names: loaded.skills.map((skill) => skill.name),
+      rejected: loaded.rejected,
+      catalog: loaded.skills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        tools: [...skill.tools],
+        output: skill.output
+      }))
+    }
   }
 }
 

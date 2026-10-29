@@ -13,10 +13,11 @@
 export const WORLDBOOK_CARRIER_ID = 'pinax.carrier.worldbook'
 
 export const WORLDBOOK_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@1',
+  spec: 'pinax-carrier@2',
+  manifestVersion: 2,
   id: WORLDBOOK_CARRIER_ID,
   title: '世界书',
-  version: '1.0.0',
+  version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -30,16 +31,18 @@ export const WORLDBOOK_CARRIER = Object.freeze({
     entries: '世界书'
   }),
 
-  panes: [
-    { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook' },
-    { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list' }
-  ],
+  contributes: Object.freeze({
+    panes: [
+      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree' },
+      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.reader' }
+    ],
+    // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
+    settings: []
+  }),
 
-  capabilities: ['setting.entries'],
+  provides: ['setting.entries'],
   requires: [],
 
-  // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
-  settings: [],
   tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'],
 
   context: {
@@ -49,7 +52,9 @@ export const WORLDBOOK_CARRIER = Object.freeze({
 
   // agent:ask 是运行时调用载体工具的前置授权（next/kernel/scopeGrant.mjs:59）：缺了它，这一栏的
   // 读写工具在运行时面上会被整组拒掉。与小说/资料同一口径。
-  scopes: ['file:世界书:rw', 'agent:ask']
+  permissions: [{ type: 'file', dir: '世界书', mode: 'rw' }, 'agent:ask'],
+
+  subscriptions: ['project.changed']
 })
 
 export default WORLDBOOK_CARRIER

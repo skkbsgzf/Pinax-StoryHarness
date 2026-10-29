@@ -4,6 +4,7 @@ import AssistantDialog from './AssistantDialog.vue'
 import { IPC_CHANNELS, IPC_PUSH } from './ipcContract.mjs'
 import {
   MAX_TRAIL_EVENTS,
+  agentSessionStorageKey,
   createSessionStore,
   describeRuntimeProgress,
   formatClock,
@@ -12,6 +13,7 @@ import {
 } from './agentSessions.mjs'
 import { resolveSlash, slashMessageFields } from './slashCommands.mjs'
 import { matchReference, parseRefs, referenceKindLabel, resolveRefs, withRefs } from './agentReferences.mjs'
+import { legacyLocalStorage, migrateLegacySessions } from './sessionMigration.mjs'
 
 /**
  * 右栏：Agent 的对话框。
@@ -44,17 +46,69 @@ const props = defineProps({
 
 let store = createSessionStore(props.projectRoot)
 let unsubscribe = null
+/** 换项目/换桥时旧的那次读盘结果不能再盖回来：序号一乱就丢。 */
+let hydrateSeq = 0
 const snapshot = ref(store.snapshot())
+const migrationNotice = ref('')
 
 /** store 是纯数据模块（node:test 直接测），快照经订阅进 ref——与 paneForms 的宿主同一套。 */
-function bindStore(projectRoot) {
+function attachStore(projectRoot, options = {}) {
   if (unsubscribe) unsubscribe()
-  store = createSessionStore(projectRoot)
+  store = createSessionStore(projectRoot, options)
   snapshot.value = store.snapshot()
   unsubscribe = store.subscribe((next) => { snapshot.value = next })
 }
-bindStore(props.projectRoot)
-watch(() => props.projectRoot, (root) => bindStore(root))
+
+/**
+ * 会话的真相在磁盘（`.pinax/sessions/`，主进程写 JSONL）。
+ * 1) 老 localStorage 键迁移：写盘成功才删；失败保留并把原因显示在右栏底部。
+ * 2) 读回会话；读不到（没有项目/主进程未接/通道失败）就从空会话起步，不假装有历史。
+ * 3) 之后每次状态变化交整份快照给主进程；按顺序串着发，晚到的旧快照不能覆盖新快照。
+ */
+async function hydrateStore(projectRoot, bridge) {
+  const seq = ++hydrateSeq
+  if (!projectRoot || !bridge?.request) {
+    attachStore(projectRoot)
+    return
+  }
+  const migration = await migrateLegacySessions({
+    storage: legacyLocalStorage(),
+    key: agentSessionStorageKey(projectRoot),
+    importVia: (legacy) => bridge.request(IPC_CHANNELS.sessionsImport, { legacy })
+  }).catch(() => null)
+  if (seq !== hydrateSeq) return
+  migrationNotice.value = migration && !migration.ok && migration.kept
+    ? '老会话迁移失败（' + migration.reason + '）：旧数据还留在浏览器缓存里，没有删。'
+    : ''
+
+  let initial = null
+  try {
+    const loaded = await bridge.request(IPC_CHANNELS.sessionsLoad, {})
+    if (loaded?.ok && Array.isArray(loaded.value?.sessions)) initial = loaded.value
+  } catch {
+    initial = null
+  }
+  if (seq !== hydrateSeq) return
+
+  let saveChain = Promise.resolve()
+  attachStore(projectRoot, {
+    initial,
+    save: (payload) => {
+      // 拷贝一份再排队：排队期间状态机还会继续改，交出去的必须是变化发生那一刻的快照。
+      const frozen = JSON.parse(JSON.stringify(payload))
+      saveChain = saveChain.then(
+        () => bridge.request(IPC_CHANNELS.sessionsSave, { snapshot: frozen }),
+        () => bridge.request(IPC_CHANNELS.sessionsSave, { snapshot: frozen })
+      )
+      return saveChain
+    }
+  })
+}
+watch(
+  [() => props.projectRoot, () => props.bridge],
+  ([root, bridge]) => { void hydrateStore(root, bridge) },
+  { immediate: true }
+)
 
 const messages = computed(() => snapshot.value.messages)
 const sessions = computed(() => snapshot.value.sessions)
@@ -62,6 +116,12 @@ const activeSessionId = computed(() => snapshot.value.activeId)
 const busy = computed(() => snapshot.value.busy)
 const canAsk = computed(() => Boolean(props.bridge?.request))
 const tools = computed(() => props.runtime.tools.map((tool) => ({ name: tool.name })))
+/** 写模式是**会话真值**（M2.5-B）：徽章显示 store 里那一条，不是组件默认值。 */
+const writeMode = computed(() => snapshot.value.writeMode ?? 'review')
+
+function changeMode(next) {
+  store.setWriteMode(next)
+}
 
 /** 上一问的原文与 omit：重试要一模一样地再问一次（引用摘要已经拼在原文里了）。 */
 const lastQuestion = ref(null)
@@ -204,19 +264,21 @@ async function ask(input) {
       if (notes.length) store.updateLast({ notes }, sessionId)
     }
 
-    await runQuestion(withRefs(fields.text, resolved), fields.omit, sessionId)
+    await runQuestion(withRefs(fields.text, resolved), fields.omit, sessionId, routed?.command?.skill ?? null)
   } finally {
     endWork()
   }
 }
 
 /** 真正发出去的那一下（重试也走这里）：只管请求与记录，忙态由调用方包住。 */
-async function runQuestion(question, omit = [], sessionId = null) {
-  lastQuestion.value = { question, omit: Array.isArray(omit) ? [...omit] : [], sessionId }
+async function runQuestion(question, omit = [], sessionId = null, skill = null) {
+  lastQuestion.value = { question, omit: Array.isArray(omit) ? [...omit] : [], sessionId, skill }
   const askId = beginAsk()
-  const payload = { question, askId }
-  // omit 只在真的有条目时才进载荷：没有剪裁的提问保持老的 { question } 形状。
+  // writeMode 每一问都带上：写策略在主进程现造，切了模式立刻生效，不靠缓存。
+  const payload = { question, askId, writeMode: writeMode.value }
+  // omit／skill 只在真有时才进载荷：没有剪裁与方法的提问保持老的 { question, askId } 形状。
   if (lastQuestion.value.omit.length) payload.context = { omit: lastQuestion.value.omit }
+  if (skill) payload.skill = skill
 
   let result
   try {
@@ -262,7 +324,7 @@ function retry() {
   if (messages.value.at(-1)?.failed) store.dropLast()
   beginWork()
   // 重试发生在作者此刻看着的会话里：这条失败的回答就在这儿。
-  void runQuestion(last.question, last.omit, snapshot.value.activeId).finally(() => endWork())
+  void runQuestion(last.question, last.omit, snapshot.value.activeId, last.skill ?? null).finally(() => endWork())
 }
 
 function newSession() {
@@ -291,17 +353,20 @@ function removeSession(id) {
       :title="runtime.title"
       :thinking="thinkingText"
       :tools="tools"
+      :mode="writeMode"
       :sessions="sessions"
       :active-session-id="activeSessionId"
       :references="references"
       :suspend-esc="suspendEsc"
       @send="ask"
       @retry="retry"
+      @update:mode="changeMode"
       @new-session="newSession"
       @switch-session="switchSession"
       @rename-session="renameSession"
       @remove-session="removeSession"
     />
     <p v-if="!canAsk" class="dock-hint">渲染层未接主进程桥（preload 的 pinaxNext 通道）。</p>
+    <p v-if="migrationNotice" class="dock-hint dock-hint--warn">{{ migrationNotice }}</p>
   </aside>
 </template>

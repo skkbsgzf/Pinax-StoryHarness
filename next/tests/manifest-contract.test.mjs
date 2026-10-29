@@ -57,7 +57,7 @@ test('缺省可选项：未声明 requires 视作无依赖', () => {
   assert.deepEqual(result.value.requires, [])
 })
 
-test('settings 声明合法即原样透传（P14：载体设置进统一目录的唯一数据源）', () => {
+test('settings 声明合法即归一化透传（v1 的 { id, title } 读成 section；边界一并钉住）', () => {
   // 边界一并钉住：title 恰好 40 字仍合法；第二条声明证明多条按声明顺序保留。
   const declared = [
     { id: 'novel.writing', title: '写作偏好' },
@@ -65,7 +65,7 @@ test('settings 声明合法即原样透传（P14：载体设置进统一目录�
   ]
   const result = validateCarrierManifest(withMutation(FIXTURE_NOVEL, (m) => { m.settings = declared }))
   assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
-  assert.deepEqual(result.value.settings, declared)
+  assert.deepEqual(result.value.settings, declared.map((item) => ({ ...item, type: 'section' })))
 })
 
 test('settings 缺省＝空数组：没声明的载体在设置页不出目录项', () => {

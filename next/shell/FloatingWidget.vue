@@ -1,85 +1,76 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 /**
- * 悬浮窗的宿主容器（协议 v1.1-C 首个实现，工单C；协议 v1.2 P20 补吸附与扩屏）。
+ * 悬浮窗的宿主容器（协议 v1.1-C 首个实现；协议 v1.2 P20 吸附扩屏；M2.5-C 四轴工作区）。
  *
  * 分工（合同层写死在 next/kernel/carrierManifest.mjs 的 overlay 槽位注释里）：
  *   载体只声明「要有这一枚悬浮窗」与它的宽度（width，200–600，缺省 300）；
- *   定位、拖动、收起/展开、吸附、位置记忆全部归宿主——载体 SFC 不许自带拖拽/定位逻辑。
- * 形态：absolute 定位卡片，默认贴核心区右上角；拖动句柄是标题条（按钮上不触发拖动）。
- * 收起态＝右侧缘一枚小标签，点它展开（emit toggle）。
- * z-index 高于编辑器、低于统一二级页：走老 token --z-floating-dock（240 < popover 400 < modal 800）。
- * Esc 收起；统一二级页开着时 Esc 先归它（挂起由外壳经 suspendEsc 传入）。
+ *   定位、拖动、展开/收起/气泡、吸附、位置记忆全部归宿主——载体 SFC 不许自带拖拽/定位逻辑。
  *
- * 协议 v1.2 P20：
- *   - 吸附：拖到左右边缘（32px 内）松手 → 半屏 dock（左右贴边）；从吸附态拖离 → 回到浮动态。
- *     吸附是 overlay 形态的子状态，不是第五种形态；状态随位置一起记忆，切换形态仍走宿主
- *     paneForms.mjs 的 setPaneForm（全屏由「扩至全屏」按钮 emit expand，外壳改 form）。
- *   - 扩至全屏：标题条上的「全屏」按钮只发事件，宿主把 form 改成 fullscreen；本组件不搬内容。
+ * M2.5-C 起状态不再写 localStorage：位置（geometry）与最小化（minimized）都是工作区四轴的一部分，
+ * 由外壳持在 next/shell/workspace.mjs 并按实例落 `.pinax/workspace.json`。本组件只做三件事：
+ *   拖动时算本地坐标（为了手感，不每一帧都回宿主）；
+ *   松手时 emit('geometry', { x, y, w, h, snap })；
+ *   emit 开合/全屏/气泡/再开一份，自己不决定状态。
  *
- * 位置记忆（localStorage 例外之一，门禁例外见 next/tests/visual-contract.test.mjs）：
- * 键 `overlay.<id>`，id 就是 pane id（每载体至多一个悬浮窗，后续载体照此声明、宿主按键区分）。
- * 值 { left, top } 相对 offsetParent（.next-shell）；吸附时多一枚 snap:'left'|'right'。
- * 读写都 try/catch——持久化失败不拦拖动。收起状态不落盘（形态归 paneForms 的 paneForm.<id>）。
+ * 三种呈现（同一枚实例，placement 都是 overlay）：
+ *   minimized='none'      → 卡片；
+ *   minimized='bubble'    → 气泡球（作者原话「可以缩成气泡球」），点它展开；
+ *   minimized='collapsed' → 右侧缘小标签（收起），点它展开。
+ *
+ * 层序走老 token --z-floating-dock（240 < popover 400 < modal 800）；统一二级页开着时 Esc 先归它。
  */
 const props = defineProps({
-  /** pane id（如 outline.widget）：位置记忆键 overlay.<id> 由它拼出。 */
+  /** 实例 id：`<paneId>#<n>`（同一块 pane 可以开两份，状态各记各的）。 */
+  instance: { type: String, required: true },
+  /** pane 声明 id（如 outline.widget）；只用于数据属性与无障碍标签。 */
   id: { type: String, required: true },
-  /** 展开态；false 时只留侧缘小标签。 */
+  /** 展开态（placement=overlay 且 minimized=none）。 */
   open: { type: Boolean, default: false },
+  /** 最小化状态：none｜bubble｜collapsed（仅 placement=overlay 时由外壳传入）。 */
+  minimized: { type: String, default: 'none' },
   title: { type: String, default: '' },
   /** 合同校验过的宽度（200–600，缺省 300）；宿主只消费，不在这里再猜。 */
   width: { type: Number, default: 300 },
+  /** 工作区里的 geometry：{ x, y, w, h, snap }；null＝还没拖过，走 CSS 默认右上角。 */
+  geometry: { type: Object, default: null },
   /** 统一二级页开着时为 true：Esc 先关弹窗，不收起悬浮窗（工单C 边界）。 */
   suspendEsc: { type: Boolean, default: false }
 })
-const emit = defineEmits(['close', 'toggle', 'expand'])
+const emit = defineEmits(['close', 'toggle', 'expand', 'bubble', 'restore', 'geometry', 'duplicate'])
 
 const card = ref(null)
-/** { left, top }（相对 offsetParent）；null＝还没拖过，走 CSS 默认的右上角偏移。 */
+/** { x, y } 相对 offsetParent；null＝还没拖过，走 CSS 默认的右上角偏移。 */
 const position = ref(null)
-/** 吸附边：'left' | 'right' | null。吸附态走 CSS 半屏，不消费 left/top 内联坐标。 */
+/** 吸附边：'left' | 'right' | null。吸附态走 CSS 半屏，不消费 x/y 内联坐标。 */
 const snapped = ref(null)
 const dragging = ref(false)
 /** 拖到边缘多少 px 内算吸附（布局 px，允许）。 */
 const SNAP_EDGE = 32
 
-const storageKey = computed(() => `overlay.${props.id}`)
+/** 外部状态变化（换项目读回存档、别人改了这条实例）时要跟上；拖动中不覆盖手感。 */
+watch(() => props.geometry, (value) => {
+  if (dragging.value) return
+  if (!value) {
+    position.value = null
+    snapped.value = null
+    return
+  }
+  position.value = { x: Math.max(0, Math.round(Number(value.x) || 0)), y: Math.max(0, Math.round(Number(value.y) || 0)) }
+  snapped.value = value.snap === 'left' || value.snap === 'right' ? value.snap : null
+}, { immediate: true })
 
 const cardStyle = computed(() => {
   if (snapped.value) return {}
   const style = { width: `${props.width}px` }
   if (!position.value) return style
-  return { ...style, left: `${position.value.left}px`, top: `${position.value.top}px`, right: 'auto' }
+  return { ...style, left: `${position.value.x}px`, top: `${position.value.y}px`, right: 'auto' }
 })
 
-const tabStyle = computed(() => (position.value ? { top: `${Math.max(8, position.value.top)}px` } : {}))
+const tabStyle = computed(() => (position.value ? { top: `${Math.max(8, position.value.y)}px` } : {}))
 
-function readPosition() {
-  try {
-    const raw = globalThis.localStorage?.getItem(storageKey.value)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!Number.isFinite(parsed?.left) || !Number.isFinite(parsed?.top)) return null
-    return {
-      left: Math.max(0, Math.round(parsed.left)),
-      top: Math.max(0, Math.round(parsed.top)),
-      snap: parsed.snap === 'left' || parsed.snap === 'right' ? parsed.snap : null
-    }
-  } catch {
-    return null
-  }
-}
-
-function persistPosition(value) {
-  if (!value) return
-  try {
-    globalThis.localStorage?.setItem(storageKey.value, JSON.stringify(value))
-  } catch {
-    // 持久化失败（隐私模式/配额）不拦拖动：位置在这次会话里仍然生效。
-  }
-}
+const bubbleStyle = computed(() => (position.value ? { left: `${Math.max(8, position.value.x)}px`, top: `${Math.max(8, position.value.y)}px` } : {}))
 
 function onKeydown(event) {
   if (event.key !== 'Escape' || !props.open || props.suspendEsc) return
@@ -88,11 +79,6 @@ function onKeydown(event) {
 }
 
 onMounted(() => {
-  const saved = readPosition()
-  if (saved) {
-    position.value = { left: saved.left, top: saved.top }
-    snapped.value = saved.snap
-  }
   globalThis.document?.addEventListener?.('keydown', onKeydown)
 })
 onBeforeUnmount(() => {
@@ -112,18 +98,19 @@ function startDrag(event) {
   dragSession = {
     startX: event.clientX,
     startY: event.clientY,
-    left: rect.left - parentRect.left,
-    top: rect.top - parentRect.top,
+    x: rect.left - parentRect.left,
+    y: rect.top - parentRect.top,
     parentWidth: parentRect.width || 0,
     // 吸附态的卡片是半屏宽；一松手就按浮动宽度算可拖区，所以这里用 props.width。
     maxLeft: Math.max(0, (parentRect.width || 0) - (snapped.value ? props.width : rect.width)),
     maxTop: Math.max(0, (parentRect.height || 0) - rect.height),
+    height: rect.height,
     wasSnapped: Boolean(snapped.value),
     unsnapped: false,
     moved: false
   }
   dragging.value = true
-  position.value = { left: Math.round(dragSession.left), top: Math.round(dragSession.top) }
+  position.value = { x: Math.round(dragSession.x), y: Math.round(dragSession.y) }
   globalThis.addEventListener?.('pointermove', onDragMove)
   globalThis.addEventListener?.('pointerup', endDrag)
   event.preventDefault?.()
@@ -141,28 +128,30 @@ function onDragMove(event) {
     dragSession.maxLeft = Math.max(0, dragSession.parentWidth - props.width)
   }
   dragSession.moved = true
-  const left = Math.min(dragSession.maxLeft, Math.max(0, dragSession.left + (event.clientX - dragSession.startX)))
-  const top = Math.min(dragSession.maxTop, Math.max(0, dragSession.top + (event.clientY - dragSession.startY)))
-  position.value = { left: Math.round(left), top: Math.round(top) }
+  const x = Math.min(dragSession.maxLeft, Math.max(0, dragSession.x + (event.clientX - dragSession.startX)))
+  const y = Math.min(dragSession.maxTop, Math.max(0, dragSession.y + (event.clientY - dragSession.startY)))
+  position.value = { x: Math.round(x), y: Math.round(y) }
 }
 
 /** 松手时的吸附判定：左右边缘 32px 内 → 半屏 dock；否则保持浮动态。 */
 function detectSnap() {
   if (!dragSession || !position.value) return null
-  if (position.value.left <= SNAP_EDGE) return 'left'
-  if (dragSession.maxLeft - position.value.left <= SNAP_EDGE) return 'right'
+  if (position.value.x <= SNAP_EDGE) return 'left'
+  if (dragSession.maxLeft - position.value.x <= SNAP_EDGE) return 'right'
   return null
 }
 
 function endDrag() {
   if (!dragSession) return
   if (dragSession.moved) snapped.value = detectSnap()
-  const value = {
-    left: Math.round(position.value?.left ?? 0),
-    top: Math.round(position.value?.top ?? 0)
+  const geometry = {
+    x: Math.round(position.value?.x ?? 0),
+    y: Math.round(position.value?.y ?? 0),
+    w: props.width,
+    h: Math.round(dragSession.height || 0) || undefined,
+    snap: snapped.value ?? null
   }
-  if (snapped.value) value.snap = snapped.value
-  persistPosition(value)
+  emit('geometry', geometry)
   stopDrag()
 }
 
@@ -189,11 +178,28 @@ function stopDrag() {
     role="region"
     :aria-label="`${title || '大纲'}悬浮窗`"
     :data-overlay-id="id"
+    :data-overlay-instance="instance"
     :data-snap="snapped"
   >
     <div class="nx-overlay-head" @pointerdown="startDrag">
       <span class="nx-overlay-title">{{ title }}</span>
       <span class="nx-overlay-actions">
+        <button
+          type="button"
+          class="control-quiet nx-overlay-duplicate"
+          aria-label="再开一份"
+          title="再开一份"
+          @pointerdown.stop
+          @click="emit('duplicate')"
+        >+1</button>
+        <button
+          type="button"
+          class="control-quiet nx-overlay-bubble-btn"
+          aria-label="缩成气泡球"
+          title="缩成气泡球"
+          @pointerdown.stop
+          @click="emit('bubble')"
+        >●</button>
         <button
           type="button"
           class="control-quiet nx-overlay-expand"
@@ -217,12 +223,29 @@ function stopDrag() {
   </div>
 
   <button
+    v-else-if="minimized === 'bubble'"
+    type="button"
+    class="control-quiet nx-overlay-bubble"
+    :style="bubbleStyle"
+    :aria-label="`展开${title || '大纲'}气泡`"
+    :data-overlay-id="id"
+    :data-overlay-instance="instance"
+    :data-minimized="minimized"
+    @click="emit('restore')"
+  >
+    <span class="nx-overlay-bubble-dot" aria-hidden="true" />
+    <span class="nx-overlay-bubble-label">{{ title }}</span>
+  </button>
+
+  <button
     v-else
     type="button"
     class="control-quiet nx-overlay-tab"
     :style="tabStyle"
     :aria-label="`展开${title || '大纲'}悬浮窗`"
     :data-overlay-id="id"
+    :data-overlay-instance="instance"
+    :data-minimized="minimized || 'collapsed'"
     @click="emit('toggle')"
   >{{ title }}</button>
 </template>

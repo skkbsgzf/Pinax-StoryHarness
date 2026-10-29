@@ -72,10 +72,19 @@ test('M2 口径：next/carriers 发布七块载体，目录不重叠且落在中
       assert.equal(skeletonUnion.has(dir), true, `${manifest.id} 的目录「${dir}」不在固化骨架里`)
       assert.equal(dirs.has(dir), false, `目录「${dir}」被两块板块同时认领（C3 一目录一主人）`)
       dirs.add(dir)
-      const scope = manifest.scopes.find((item) => item.startsWith(`file:${dir}:`))
+      // 工单 C：v2 把文件权限写成对象 { type:'file', dir, mode }；v1 的 scopes 串仍可读。
+      const filePermissions = Array.isArray(manifest.permissions)
+        ? manifest.permissions
+          .filter((item) => typeof item === 'object' && item?.type === 'file')
+          .map((item) => `file:${item.dir}:${item.mode ?? 'r'}`)
+        : []
+      const scope = filePermissions.find((item) => item.startsWith(`file:${dir}:`))
       assert.ok(scope, `${manifest.id} 认领了「${dir}」却没申请 file:${dir}:r|rw`)
     }
-    for (const scope of manifest.scopes.filter((item) => item.startsWith('file:'))) {
+    for (const scope of (Array.isArray(manifest.permissions) ? manifest.permissions : [])
+      .filter((item) => typeof item === 'object' && item?.type === 'file')
+      .map((item) => `file:${item.dir}:${item.mode ?? 'r'}`)
+      .filter((item) => item.startsWith('file:'))) {
       const dir = scope.split(':')[1]
       assert.ok(Object.values(manifest.dataDirs).includes(dir), `${manifest.id} 申请了未认领的目录权限：${scope}`)
     }

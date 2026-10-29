@@ -359,60 +359,50 @@ test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目
 
 /**
  * R3-1／D2：主题的权威来源迁到偏好 JSON，next/shell 源码不得再出现 localStorage。
- * 例外只有四处，都有明确边界：
+ * 例外只有三处，都有明确边界：
  *   1) theme.mjs 里带 legacy-localstorage-bridge 标记的过渡双写块（老前端退役后删）；
- *   2) FloatingWidget.vue 的悬浮窗位置/吸附记忆（协议 v1.1-C/P20 明确允许）——
- *      只许用 `overlay.<paneId>` 这一条键，读写都必须走 storageKey.value，不许出现第二条键；
- *   3) paneForms.mjs 的打开形态记忆（协议 v1.2 P21 明确要求）——
- *      只许用 `paneForm.<paneId>` 这一条键，键名由宿主拼（载体的 forms 声明本身不落盘）；
- *   4) agentSessions.mjs 的会话存储（批次27 工单 §1 明确要求）——
- *      只许用 `agentSessions.<projectRoot>` 这一条键，键名由本模块拼（换项目＝另一份会话）；
- *   5) entriesView.mjs 的世界书视图记忆（批次28 工单3 明确要求）——
+ *   2) sessionMigration.mjs 的老会话迁移（M2.5-B 工单 §3）——
+ *      只读老键 `agentSessions.<projectRoot>`、写盘成功后 removeItem；**不许 setItem**；
+ *   3) workspaceMigration.mjs 的老工作区迁移（M2.5-C 工单 §1）——
+ *      只读老键 `paneForm.<paneId>` / `overlay.<paneId>`，搬进 .pinax/workspace.json 成功后 removeItem；
+ *      **不许 setItem**。迁移跑完老键就没了，这块例外随之一并退役；
+ *   4) entriesView.mjs 的世界书视图记忆（批次28 工单3 明确要求）——
  *      只许用 `entriesView.<projectRoot>` 这一条键，键名由本模块拼（换项目＝各记各的视图）。
+ * FloatingWidget／paneForms 的 localStorage 记忆已在 M2.5-C 删掉：位置与形态的真相在 workspace.json。
  * 这个例外是会退役的：双写块删掉后为 0 处访问，断言仍通过；其它文件一旦出现 localStorage 立刻红。
  */
-test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双写、FloatingWidget 位置记忆、paneForms 形态记忆、会话存储与条目视图记忆）', async () => {
+test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双写、会话迁移、工作区迁移与条目视图记忆）', async () => {
   const files = (await walk(shellDir)).filter((file) => /\.(mjs|js|vue|html)$/u.test(file))
   const offenders = []
   for (const file of files) {
     if (file.endsWith('theme.mjs')) continue
     // 注释里提到这个词不算使用（theme 迁移的说明文字要能写清楚）；只看去掉注释后的源码。
     const text = stripComments(await readFile(file, 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
-    if (file.endsWith('paneForms.mjs')) {
-      // 打开形态记忆（协议 v1.2 P21）：键必须是 paneForm.<paneId>，且由宿主拼（不许写死第二条键）。
-      assert.match(text, /PANE_FORM_STORAGE_PREFIX = 'paneForm\.'/u,
-        '形态记忆的键前缀必须是 paneForm.（P21：键名带 paneId，由宿主拼）')
-      assert.match(text, /`\$\{keyPrefix\}\$\{paneId\}`/u,
-        '形态记忆的键必须由前缀 + paneId 拼出')
+    if (file.endsWith('sessionMigration.mjs')) {
+      // 老会话迁移（M2.5-B）：只读老键、成功后删；不许写（新会话的真相在 .pinax/sessions/）。
+      assert.match(text, /export function legacyLocalStorage/u,
+        '迁移模块必须把 localStorage 访问收在 legacyLocalStorage 一个函数里')
       const accesses = text.match(/[^\n]*\.localStorage[^\n]*/gu) ?? []
-      assert.ok(accesses.length > 0, 'paneForms 应负责形态记忆的读写')
+      assert.ok(accesses.length > 0, '迁移模块负责读老键')
       for (const line of accesses) {
-        assert.match(line, /storage/iu, `localStorage 访问必须经 storage 抽象（键 paneForm.<paneId>）：${line.trim()}`)
+        assert.match(line, /globalThis\.localStorage/u, `localStorage 访问必须走 globalThis.localStorage（沙箱里可能抛）：${line.trim()}`)
       }
+      assert.doesNotMatch(text, /\.setItem\s*\(/u, '迁移只读不写：会话不再写 localStorage')
       continue
     }
-    if (file.endsWith('agentSessions.mjs')) {
-      // 会话存储（批次27）：键必须是 agentSessions.<projectRoot>，且由本模块拼（不许写死第二条键）。
-      assert.match(text, /AGENT_SESSION_STORAGE_PREFIX = 'agentSessions\.'/u,
-        '会话存储的键前缀必须是 agentSessions.（键名带项目根）')
-      assert.match(text, /`\$\{AGENT_SESSION_STORAGE_PREFIX\}\$\{/u,
-        '会话存储的键必须由前缀 + 项目根拼出')
+    if (file.endsWith('workspaceMigration.mjs')) {
+      // 老工作区迁移（M2.5-C）：只读 paneForm.<paneId> / overlay.<paneId>，成功后删；
+      // 新真相在 .pinax/workspace.json，迁移之后 localStorage 不再是任何位置数据的来源。
+      assert.match(text, /export function legacyLocalStorage/u,
+        '工作区迁移必须把 localStorage 访问收在 legacyLocalStorage 一个函数里')
+      assert.match(text, /LEGACY_PANE_FORM_PREFIX = 'paneForm\.'/u, '迁移要读老键 paneForm.(paneId)')
+      assert.match(text, /LEGACY_OVERLAY_PREFIX = 'overlay\.'/u, '迁移要读老键 overlay.(paneId)')
       const accesses = text.match(/[^\n]*\.localStorage[^\n]*/gu) ?? []
-      assert.ok(accesses.length > 0, 'agentSessions 应负责会话的读写')
+      assert.ok(accesses.length > 0, '迁移模块负责读老键')
       for (const line of accesses) {
-        assert.match(line, /storage/iu, `localStorage 访问必须经 storage 抽象（键 agentSessions.<projectRoot>）：${line.trim()}`)
+        assert.match(line, /globalThis\.localStorage/u, `localStorage 访问必须走 globalThis.localStorage（沙箱里可能抛）：${line.trim()}`)
       }
-      continue
-    }
-    if (file.endsWith('FloatingWidget.vue')) {
-      // 悬浮窗位置记忆：键必须由 pane id 拼出，且每次访问都必须用 storageKey.value（不许写死第二条键）。
-      assert.match(text, /const storageKey = computed\(\(\) => `overlay\.\$\{props\.id\}`\)/u,
-        '悬浮窗位置记忆的键必须是 overlay.<paneId>（键名带 paneId）')
-      const accesses = text.match(/[^\n]*\.localStorage[^\n]*/gu) ?? []
-      assert.ok(accesses.length > 0, 'FloatingWidget 应负责位置记忆的读写')
-      for (const line of accesses) {
-        assert.match(line, /storageKey\.value/u, `localStorage 访问必须走 overlay.<paneId> 这一条键：${line.trim()}`)
-      }
+      assert.doesNotMatch(text, /\.setItem\s*\(/u, '迁移只读不写：位置与形态不再写 localStorage')
       continue
     }
     if (file.endsWith('entriesView.mjs')) {
@@ -430,7 +420,7 @@ test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双�
     }
     if (text.includes('localStorage')) offenders.push(file)
   }
-  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块、FloatingWidget 的 overlay 位置记忆、paneForms 的形态记忆、agentSessions 的会话存储与 entriesView 的视图记忆，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块、sessionMigration 的老会话迁移、workspaceMigration 的老工作区迁移与 entriesView 的视图记忆，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
 
   const theme = await readFile(join(shellDir, 'theme.mjs'), 'utf-8')
   const accesses = (theme.match(/\.localStorage/g) ?? []).length
@@ -443,14 +433,14 @@ test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双�
 })
 
 /**
- * 协议 v1.1-C（工单C）：悬浮小工具窗＝宿主容器＋载体声明。
+ * 协议 v1.1-C（工单C）→ M2.5-C：悬浮小工具窗＝宿主容器＋载体声明。
  * 三条边界都可机读：
- *   1) FloatingWidget 是唯一宿主——拖动句柄、Esc、位置记忆（overlay.<paneId>）都在它身上；
- *      载体 SFC 一律不许自带拖拽/定位逻辑；
+ *   1) FloatingWidget 是唯一宿主——拖动句柄、Esc、位置回传（emit geometry）都在它身上；
+ *      位置与最小化的真相在 workspace 四轴（.pinax/workspace.json），组件自己不落盘；
  *   2) AppNext 只接线开合与内容，不许维护悬浮窗的硬编码坐标表（位置归宿主）；
  *   3) outline manifest 声明 overlay pane，层序 token 必须低于统一二级页。
  */
-test('协议 v1.1-C：FloatingWidget 是悬浮窗宿主容器（拖动／收起／Esc／位置记忆都在宿主）', async () => {
+test('协议 v1.1-C：FloatingWidget 是悬浮窗宿主容器（拖动／气泡／几何回传／Esc 都在宿主）', async () => {
   const widgetPath = join(shellDir, 'FloatingWidget.vue')
   assert.equal(await exists(widgetPath), true, 'next/shell/FloatingWidget.vue 必须存在（悬浮窗宿主容器）')
   const widget = await readFile(widgetPath, 'utf-8')
@@ -460,13 +450,17 @@ test('协议 v1.1-C：FloatingWidget 是悬浮窗宿主容器（拖动／收起�
     'Escape',
     "emit('close')",
     "emit('toggle')",
+    "emit('bubble')",
+    "emit('restore')",
+    "emit('geometry',",
     'getBoundingClientRect',
-    'overlay.${props.id}',
-    'storageKey.value'
+    'data-overlay-instance',
+    'props.geometry'
   ]) {
     assert.ok(widget.includes(needle), `FloatingWidget 缺宿主职责：${needle}`)
   }
   assert.ok(widget.includes('nx-overlay-tab'), '收起态要有侧缘小标签（点击展开）')
+  assert.ok(widget.includes('nx-overlay-bubble'), '气泡态要有气泡球（点击展开）')
   assert.ok(widget.includes('<slot />'), '内容经插槽由外壳注入，宿主不自造载体内容')
 })
 
@@ -515,17 +509,31 @@ test('协议 v1.1-C：outline manifest 声明 overlay pane；层序高于编辑�
  *   - 右键「打开方式」是宿主菜单，条目只来自 manifest.panes 的 forms 声明；
  *   - 浮窗吸附/扩屏是宿主容器职责（P20），分屏副栏 ≥420px（P10/P11）。
  */
-test('协议 v1.2 P18–P21：形态词表归宿主，载体 SFC 不含形态切换；浮窗吸附/扩屏与分屏副栏就位', async () => {
+test('协议 v1.2 P18–P21 → M2.5-C：形态词表归宿主，状态在 workspace 四轴；浮窗吸附/扩屏与分屏副栏就位', async () => {
   const formsPath = join(shellDir, 'paneForms.mjs')
-  assert.equal(await exists(formsPath), true, 'next/shell/paneForms.mjs 必须存在（P21 宿主统一 API）')
+  assert.equal(await exists(formsPath), true, 'next/shell/paneForms.mjs 必须存在（宿主形态词表）')
   const forms = await readFile(formsPath, 'utf-8')
   assert.match(forms, /PANE_FORMS = Object\.freeze\(\['dock', 'split', 'overlay', 'fullscreen'\]\)/u,
     'P18 词表必须是 dock/split/overlay/fullscreen')
-  assert.match(forms, /export function setPaneForm\(paneId, form\)/u, 'P21 宿主统一 API：setPaneForm(paneId, form)')
-  assert.match(forms, /paneForm\./u, 'P21 持久化键 paneForm.<paneId>')
+  assert.match(forms, /PANE_FORM_STORAGE_PREFIX = 'paneForm\.'/u, '老键前缀 paneForm.（迁移只用一次）')
+  assert.doesNotMatch(forms, /\.localStorage/u, '形态记忆归 workspace（主进程通道），词表模块不碰浏览器缓存')
+
+  // M2.5-C：状态机在 workspace.mjs，四轴一个不少：placement / minimized / geometry / restore。
+  const workspace = await readFile(join(shellDir, 'workspace.mjs'), 'utf-8')
+  for (const needle of [
+    "PLACEMENTS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen'])",
+    "MINIMIZED_MODES = Object.freeze(['none', 'bubble', 'collapsed'])",
+    'export function createWorkspaceStore',
+    'export function instanceIdFor',
+    'restorePlacement',
+    'setGeometry'
+  ]) {
+    assert.ok(workspace.includes(needle), `工作区四轴缺：${needle}`)
+  }
+  assert.doesNotMatch(workspace, /\.localStorage/u, '工作区状态只经主进程通道读写，渲染层不写 localStorage')
 
   const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
-  for (const needle of ['nx-context-menu', '打开方式', 'setPaneForm', 'nx-split', 'nx-split-side', 'data-split="side"']) {
+  for (const needle of ['nx-context-menu', '打开方式', 'setPaneForm', 'hostWorkspace', 'nx-split', 'nx-split-side', 'data-split="side"']) {
     assert.ok(app.includes(needle), `AppNext 缺多形态打开的落点：${needle}`)
   }
   assert.match(app, /sanitizePaneForms\(pane\.forms\)/u, '右键菜单必须按 manifest.panes 的 forms 声明列（P18）')

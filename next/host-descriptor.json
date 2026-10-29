@@ -1,0 +1,21 @@
+{
+  "descriptorVersion": 1,
+  "host": "pinax-next-shell",
+  "kernelContract": "1",
+  "trustMode": "same-process",
+  "slots": ["left-dock", "center", "overlay"],
+  "reservedSlots": ["right", "top-menu"],
+  "forms": ["dock", "split", "overlay", "fullscreen"],
+  "views": [
+    "pinax.view.tree",
+    "pinax.view.list",
+    "pinax.view.editor",
+    "pinax.view.reader",
+    "pinax.view.diff",
+    "pinax.view.graph",
+    "pinax.view.custom"
+  ],
+  "uiLayers": ["shell-chrome", "pane-content", "floating-overlay"],
+  "supportsPopout": false,
+  "platforms": ["electron"]
+}

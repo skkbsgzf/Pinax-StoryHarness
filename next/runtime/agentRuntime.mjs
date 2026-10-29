@@ -2,6 +2,7 @@ import { fail, ok, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { buildGrantTable, canPerform } from '../kernel/scopeGrant.mjs'
 import { createRuntimeSurface } from './mcpSurface.mjs'
 import { connectInProcess } from './transportInProcess.mjs'
+import { normalizeWriteMode } from './writePolicy.mjs'
 import { RUNTIME_CONTRACT, RUNTIME_ID } from './runtimeContract.mjs'
 
 /**
@@ -30,7 +31,7 @@ export function createAgentRuntime(options = {}) {
       if (link) return ok({ already: true, toolCount: toolCache?.length ?? 0 })
       const surface = options.surface
         ? { server: options.surface, carrierCount: 0, carrierToolNames: [], missingImplementations: [], aggregated: false }
-        : await createRuntimeSurface({ registry, view: options.view, fileService, advisorBaseUrl: options.advisorBaseUrl })
+        : await createRuntimeSurface({ registry, view: options.view, fileService, advisorBaseUrl: options.advisorBaseUrl, skillsDir: options.skillsDir })
       surfaceState = surface
       link = await connectInProcess(surface.server, { clientName: options.clientName ?? 'pinax-next-shell' })
       toolCache = await link.listTools()
@@ -65,8 +66,14 @@ export function createAgentRuntime(options = {}) {
         carrierToolNames: surfaceState?.carrierToolNames ?? [],
         aggregated: surfaceState?.aggregated ?? false,
         missingImplementations: surfaceState?.missingImplementations ?? [],
-        writeGuard: surfaceState?.writeGuard ?? null
+        writeGuard: surfaceState?.writeGuard ?? null,
+        skills: surfaceState?.skills ?? { names: [], rejected: [], catalog: [] }
       }
+    },
+
+    /** 技能清单（渐进披露的那一行描述）：装载失败的那几条也在 rejected 里，不静默吞。 */
+    skills() {
+      return runtime.surfaceInfo().skills
     },
 
     /**
@@ -109,9 +116,22 @@ export function createAgentRuntime(options = {}) {
       if (!grant.ok) return grant
       if (typeof runner === 'function') {
         const onEvent = typeof options?.onEvent === 'function' ? options.onEvent : null
+        // 写模式（M2.5-B）：未知值一律回落 review，不猜作者意图。只有策略值，不在这里落盘。
+        const writeMode = normalizeWriteMode(options?.writeMode)
+        const skillName = String(options?.skill ?? '').trim()
+        let skill = null
+        if (skillName) {
+          skill = runtime.skills().catalog.find((entry) => entry.name === skillName) ?? null
+          if (!skill) {
+            return fail('INVALID_INPUT', `没有这个技能：${skillName}（技能未装载或名字不对；看右栏工具清单里的 rejected 记账）`, {
+              skill: skillName,
+              rejected: runtime.skills().rejected
+            })
+          }
+        }
         let answered = null
         try {
-          answered = await runner({ question: text, context, runtime, onEvent })
+          answered = await runner({ question: text, context, runtime, onEvent, writeMode, skill })
         } catch (error) {
           return fail('IO_FAILED', `运行时执行失败：${String(error?.message || error)}`, { code: error?.code ?? NEXT_ERROR_CODES.IO_FAILED })
         }

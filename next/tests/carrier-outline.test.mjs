@@ -65,11 +65,11 @@ test('大纲真清单过校验：只认领 pinax_outline_read，大纲/ 申请 r
   assert.deepEqual(OUTLINE_CARRIER.tools.filter((name) => kernel.has(name)), ['pinax_outline_read'], '只读名从内核认领；保存是载体自有写入口')
   assert.equal(kernel.has('pinax_outline_save'), false, 'pinax_outline_save 是载体自有（内核只有 pinax_outline_read）')
   assert.deepEqual({ ...OUTLINE_CARRIER.dataDirs }, { outline: '大纲' })
-  assert.deepEqual(OUTLINE_CARRIER.scopes, ['file:大纲:rw', 'agent:ask'], '协议 v1.1-A：只申请 大纲/ 一块目录的 rw；agent:ask 是运行时调用载体工具的前置授权')
-  assert.deepEqual(OUTLINE_CARRIER.capabilities, ['outline.tree'])
+  assert.deepEqual(OUTLINE_CARRIER.permissions, [{ type: 'file', dir: '大纲', mode: 'rw' }, 'agent:ask'], 'v2：只申请 大纲/ 一块目录的 rw；agent:ask 是运行时调用载体工具的前置授权')
+  assert.deepEqual(OUTLINE_CARRIER.provides, ['outline.tree'])
   assert.deepEqual(OUTLINE_CARRIER.context, { providers: ['outline'], budgetChars: 20000 })
   // 协议 v1.1-C / 工单C：第三枚是悬浮小工具窗（overlay），宽度过合同校验（200–600，缺省 300）。
-  assert.deepEqual(OUTLINE_CARRIER.panes.map((pane) => pane.id), ['outline.tree', 'outline.editor', 'outline.widget'])
+  assert.deepEqual(OUTLINE_CARRIER.contributes.panes.map((pane) => pane.id), ['outline.tree', 'outline.editor', 'outline.widget'])
   const widget = validated.value.panes.find((pane) => pane.id === 'outline.widget')
   assert.equal(widget.slot, 'overlay')
   assert.equal(widget.width, 300, '宿主 FloatingWidget 按这个宽度渲染；校验器保留 width')
@@ -88,7 +88,7 @@ test('工具面：大纲载体启用后两把工具进面、归属它，内核�
   try {
     assert.equal(opened.value.view.projectKind, 'generic', '大纲可以是泛型项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...OUTLINE_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 20, '19 内核 ＋ 大纲自有 1 个新名字（outline_save）；outline_read 是认领名不虚增')
+    assert.equal(runtime.listTools().length, 21, '19 内核 ＋ 技能读取 1 ＋ 大纲自有 1 个新名字（outline_save）；outline_read 是认领名不虚增')
     assert.equal(runtime.ownerOf('pinax_outline_read'), OUTLINE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_outline_save'), OUTLINE_CARRIER_ID)
     const tools = new Map(runtime.listTools().map((tool) => [tool.name, tool]))
