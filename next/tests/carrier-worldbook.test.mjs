@@ -412,7 +412,7 @@ test('世界书元数据（工单C）：非法 meta 一律 INVALID_INPUT（非�
       ['数组里有空白元素', { tags: ['主角', '   '] }],
       ['数组里有非字符串元素', { keys: ['柯秒', 42] }],
       ['summary 超 500 字', { summary: '长'.repeat(501) }],
-      ['未知字段（relations 不在口里）', { relations: [] }],
+      ['未知字段（id 不在口里）', { id: 'x' }],
       ['meta 不是对象', ['柯秒']]
     ]) {
       const result = await runtime.callTool('pinax_worldbook_save', { ...base, meta })
@@ -473,6 +473,188 @@ test('世界书上下文块：取数口与工具同源；按提问命中排序�
     assert.deepEqual(absent.blocks, [])
     assert.match(absent.warnings.join('\n'), /取不到/)
   } finally {
+    await workspace.cleanup()
+  }
+})
+
+/**
+ * 探针：把一条带 links ＋ relations 的契约条目直接落盘（工装目录，不碰作者原稿）。
+ * 关系边故意带 src（旧数据里的来源证明），用来证「读回来归一掉 src、保存时它也不收」。
+ */
+async function seedRelationEntry(opened) {
+  const written = await opened.value.fileService.write({
+    pluginId: WORLDBOOK_CARRIER_ID,
+    dir: '世界书',
+    file: '地点·钟楼.md',
+    text: serializeWorldbookEntryFile({
+      id: 'wb-hub-3',
+      name: '地点·钟楼',
+      type: 'location',
+      keys: ['钟楼'],
+      tags: ['地标'],
+      links: ['wb-char-1', 'wb-place-2', 'wb-extra'],
+      relations: [{ to: 'wb-char-1', type: 'event', stance: '目击', covert: true, weight: 2, src: 'declared' }],
+      content: '巷尾的钟楼，钟停在雨夜。'
+    }),
+    expectedRevision: 0
+  })
+  assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+  return written.value.relativePath
+}
+
+test('世界书关系边（批次28 · 工单2a）：read 把 relations 归一成作者能编辑的五栏，没有就是空数组', async () => {
+  const { workspace, opened, runtime } = await worldbookProject('worldbook-relations-read', { fill: true })
+  try {
+    await seedRelationEntry(opened)
+
+    const read = await runtime.callTool('pinax_worldbook_read', { id: 'wb-hub-3' })
+    assert.equal(read.value.payload.ok, true, JSON.stringify(read.value.payload))
+    assert.deepEqual(read.value.payload.entry.relations, [
+      { to: 'wb-char-1', type: 'event', stance: '目击', covert: true, weight: 2 }
+    ], 'src 是来源证明：读回来不带；其余五栏按原值给出')
+
+    // frontmatter 里没有 relations：空数组，而不是「没读到」。
+    const plain = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.deepEqual(plain.value.payload.entry.relations, [])
+
+    // 裸 md 也一样是空数组。
+    const bare = await runtime.callTool('pinax_worldbook_read', { name: '随手记' })
+    assert.equal(bare.value.payload.entry.contract, false)
+    assert.deepEqual(bare.value.payload.entry.relations, [])
+
+    // 列表把摘要也带回（表格视图那一列），但列表不背关系边（详情面才需要）。
+    const listed = await runtime.callTool('pinax_worldbook_list', {})
+    assert.equal(listed.value.payload.entries.some((entry) => entry.summary === undefined), false, '每条都要带 summary 字段')
+    assert.equal('relations' in listed.value.payload.entries[0], false, '列表不带关系边：那是详情面的事')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书关系边（批次28 · 工单2a）：meta.relations 校验——合法上限放行，坏形状与 src 一律 INVALID_INPUT', async () => {
+  const { workspace, runtime } = await worldbookProject('worldbook-relations-validate', { fill: true })
+  try {
+    const read = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    const entry = read.value.payload.entry
+    const base = { path: entry.path, text: '一次都不该落盘的正文。', expectedRevision: entry.revision }
+
+    for (const [label, relations] of [
+      ['不是数组', { to: 'wb-place-2' }],
+      ['超过 32 条', Array.from({ length: 33 }, (_item, index) => ({ to: `wb-${index}` }))],
+      ['条目不是对象', ['wb-place-2']],
+      ['缺 to', { type: '师徒' }],
+      ['to 是空白串', { to: '   ' }],
+      ['to 超 80 字', { to: '长'.repeat(81) }],
+      ['type 超 32 字', { to: 'wb-place-2', type: '型'.repeat(33) }],
+      ['stance 不是字符串', { to: 'wb-place-2', stance: 5 }],
+      ['covert 不是布尔', { to: 'wb-place-2', covert: 'yes' }],
+      ['weight 不是数字', { to: 'wb-place-2', weight: '2' }],
+      ['src 是来源证明，不收', { to: 'wb-place-2', src: 'declared' }],
+      ['陌生字段', { to: 'wb-place-2', note: '随手写的' }]
+    ]) {
+      const rejected = await runtime.callTool('pinax_worldbook_save', { ...base, meta: { relations } })
+      assert.equal(rejected.value.payload.ok, false, label)
+      assert.equal(rejected.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT, label)
+    }
+    // 拒的原因要说人话（不是一句「参数不对」）：src 那条要点名它为什么不在口里。
+    const srcRejected = await runtime.callTool('pinax_worldbook_save', { ...base, meta: { relations: [{ to: 'wb-place-2', src: 'declared' }] } })
+    assert.match(srcRejected.value.payload.message, /src/)
+
+    // 全被拒：盘上版本与正文都没动。
+    const reread = await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })
+    assert.equal(reread.value.payload.entry.revision, entry.revision)
+    assert.match(reread.value.payload.entry.content, /停摆的表/)
+    assert.doesNotMatch(reread.value.payload.entry.content, /一次都不该落盘/)
+
+    // 边界合法：32 条、to 恰 80 字、type 恰 32 字、空串 type 当作没填。
+    const boundary = await runtime.callTool('pinax_worldbook_save', {
+      ...base,
+      text: '关系边界的一笔。',
+      meta: {
+        relations: [
+          { to: '长'.repeat(80), type: '型'.repeat(32), stance: '中立', covert: false, weight: 1 },
+          ...Array.from({ length: 30 }, (_item, index) => ({ to: `wb-edge-${index}` })),
+          { to: 'wb-place-2', type: '  ' }
+        ]
+      }
+    })
+    assert.equal(boundary.value.payload.ok, true, JSON.stringify(boundary.value.payload))
+    const boundaryEntry = (await runtime.callTool('pinax_worldbook_read', { id: 'wb-char-1' })).value.payload.entry
+    assert.equal(boundaryEntry.relations.length, 32)
+    assert.equal(boundaryEntry.relations[0].to.length, 80)
+    assert.equal('type' in boundaryEntry.relations[0], true)
+    assert.equal(boundaryEntry.relations[0].covert, undefined, 'covert:false 不落空字段（省略即不是暗线）')
+    assert.equal('type' in boundaryEntry.relations[31], false, '空串 type 当作没填，不落一个空字段')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书关系边（批次28 · 工单2a）：保存后 frontmatter 往返无损——relations 进、再读出一致、links 去重不被破坏', async () => {
+  const { workspace, opened, runtime } = await worldbookProject('worldbook-relations-roundtrip', { fill: true })
+  try {
+    const path = await seedRelationEntry(opened)
+    const before = await runtime.callTool('pinax_worldbook_read', { name: '地点·钟楼' })
+    assert.equal(before.value.payload.entry.path, path)
+
+    const nextRelations = [
+      { to: 'wb-place-2', type: '师徒', stance: '护着', covert: true, weight: 3 },
+      { to: 'wb-hub-3', type: '敌对' }
+    ]
+    const saved = await runtime.callTool('pinax_worldbook_save', {
+      path,
+      text: '钟楼在雨夜里响了一声。',
+      expectedRevision: before.value.payload.entry.revision,
+      meta: { relations: nextRelations }
+    })
+    assert.equal(saved.value.payload.ok, true, JSON.stringify(saved.value.payload))
+    assert.equal(saved.value.payload.revision, before.value.payload.entry.revision + 1)
+
+    // 再读：关系整份换成新的，五栏原样带回。
+    const after = await runtime.callTool('pinax_worldbook_read', { name: '地点·钟楼' })
+    assert.deepEqual(after.value.payload.entry.relations, nextRelations)
+    assert.equal(after.value.payload.entry.content, '钟楼在雨夜里响了一声。')
+
+    // 磁盘取证：frontmatter 仍是契约条目，relations 是富关系层，links 是「纯 id 层 ∪ 关系目标」去重合成。
+    const direct = await opened.value.fileService.read({ pluginId: WORLDBOOK_CARRIER_ID, dir: '世界书', file: '地点·钟楼.md' })
+    assert.equal(direct.ok, true, JSON.stringify(direct.error ?? {}))
+    const parsed = parseWorldbookEntryFile(direct.value.text)
+    assert.equal(parsed.ok, true, '落盘仍是契约条目')
+    assert.deepEqual(parsed.entry.relations, nextRelations, 'relations 进 frontmatter 再解析回来一字不差')
+    assert.deepEqual(parsed.entry.links, ['wb-extra'], '纯 id 层只剩不重复于关系目标的那几条（wb-place-2 已并入关系层）')
+    assert.equal(parsed.entry.id, 'wb-hub-3', 'id 没被 meta 洗掉')
+
+    // 合成后的 links 行里每个目标只出现一次（∪ 去重）。
+    const linksLine = direct.value.text.split('\n').find((line) => line.startsWith('links:'))
+    assert.ok(linksLine, 'frontmatter 里要有 links 行')
+    const targets = linksLine
+      .replace(/^links:\s*/u, '')
+      .split(',')
+      .map((token) => token.trim().replace(/^['[]+|['\]]+$/gu, ''))
+      .filter(Boolean)
+    assert.equal(new Set(targets).size, targets.length, `links 有重复项：${linksLine}`)
+    for (const id of ['wb-place-2', 'wb-extra', 'wb-hub-3']) {
+      assert.equal(targets.filter((token) => token === id).length, 1, `${id} 在 links 里应恰好出现一次`)
+    }
+    // 原来只活在关系层里的 wb-char-1：那条关系被整份换掉后，它既不回 links 也不在 relations 里。
+    assert.equal(targets.includes('wb-char-1'), false, '被换掉的那条关系不会残留成一条没有类型的关系')
+
+    // 清空关系：传 [] 就是把富关系层清掉；纯 id 层只剩真正独立于关系的那些（wb-extra）。
+    const cleared = await runtime.callTool('pinax_worldbook_save', {
+      path,
+      text: '钟楼不响了。',
+      expectedRevision: after.value.payload.entry.revision,
+      meta: { relations: [] }
+    })
+    assert.equal(cleared.value.payload.ok, true, JSON.stringify(cleared.value.payload))
+    const clearedEntry = await runtime.callTool('pinax_worldbook_read', { name: '地点·钟楼' })
+    assert.deepEqual(clearedEntry.value.payload.entry.relations, [])
+    const clearedParsed = parseWorldbookEntryFile((await opened.value.fileService.read({ pluginId: WORLDBOOK_CARRIER_ID, dir: '世界书', file: '地点·钟楼.md' })).value.text)
+    assert.deepEqual(clearedParsed.entry.links, ['wb-extra'], '关系整份清空后，只有关系层之外那条独立 links 留了下来')
+  } finally {
+    await runtime.stop()
     await workspace.cleanup()
   }
 })

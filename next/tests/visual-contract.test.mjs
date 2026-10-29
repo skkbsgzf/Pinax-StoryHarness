@@ -366,10 +366,12 @@ test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目
  *   3) paneForms.mjs 的打开形态记忆（协议 v1.2 P21 明确要求）——
  *      只许用 `paneForm.<paneId>` 这一条键，键名由宿主拼（载体的 forms 声明本身不落盘）；
  *   4) agentSessions.mjs 的会话存储（批次27 工单 §1 明确要求）——
- *      只许用 `agentSessions.<projectRoot>` 这一条键，键名由本模块拼（换项目＝另一份会话）。
+ *      只许用 `agentSessions.<projectRoot>` 这一条键，键名由本模块拼（换项目＝另一份会话）；
+ *   5) entriesView.mjs 的世界书视图记忆（批次28 工单3 明确要求）——
+ *      只许用 `entriesView.<projectRoot>` 这一条键，键名由本模块拼（换项目＝各记各的视图）。
  * 这个例外是会退役的：双写块删掉后为 0 处访问，断言仍通过；其它文件一旦出现 localStorage 立刻红。
  */
-test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双写、FloatingWidget 位置记忆、paneForms 形态记忆与会话存储）', async () => {
+test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双写、FloatingWidget 位置记忆、paneForms 形态记忆、会话存储与条目视图记忆）', async () => {
   const files = (await walk(shellDir)).filter((file) => /\.(mjs|js|vue|html)$/u.test(file))
   const offenders = []
   for (const file of files) {
@@ -413,9 +415,22 @@ test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双�
       }
       continue
     }
+    if (file.endsWith('entriesView.mjs')) {
+      // 世界书视图记忆（批次28 · 工单3）：键必须是 entriesView.<projectRoot>，且由本模块拼。
+      assert.match(text, /ENTRIES_VIEW_STORAGE_PREFIX = 'entriesView\.'/u,
+        '视图记忆的键前缀必须是 entriesView.（键名带项目根）')
+      assert.match(text, /`\$\{ENTRIES_VIEW_STORAGE_PREFIX\}\$\{/u,
+        '视图记忆的键必须由前缀 + 项目根拼出')
+      const accesses = text.match(/[^\n]*\.localStorage[^\n]*/gu) ?? []
+      assert.ok(accesses.length > 0, 'entriesView 应负责视图记忆的读写')
+      for (const line of accesses) {
+        assert.match(line, /storage/iu, `localStorage 访问必须经 storage 抽象（键 entriesView.<projectRoot>）：${line.trim()}`)
+      }
+      continue
+    }
     if (text.includes('localStorage')) offenders.push(file)
   }
-  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块、FloatingWidget 的 overlay 位置记忆与 paneForms 的形态记忆，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块、FloatingWidget 的 overlay 位置记忆、paneForms 的形态记忆、agentSessions 的会话存储与 entriesView 的视图记忆，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
 
   const theme = await readFile(join(shellDir, 'theme.mjs'), 'utf-8')
   const accesses = (theme.match(/\.localStorage/g) ?? []).length

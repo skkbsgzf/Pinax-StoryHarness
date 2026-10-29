@@ -2082,3 +2082,304 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     wrapper.unmount()
   })
 })
+
+describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
+  const OUTLINE_NODES = [
+    { id: 'n1', title: '开场：雨夜进城' },
+    { id: 'n2', title: '第一折：停摆的表' },
+    { id: 'n3', title: '第二折：钟楼' }
+  ]
+  const OUTLINE_EDGES = [{ from: 'n1', to: 'n2' }]
+  const LONG_SUMMARY = '雪夜醒来的主角，袖中有一枚停摆的表，表针在雨夜重新走了起来，她却记不得自己是谁，也记不得这座城。'
+  const ENTRIES = [
+    { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, summary: LONG_SUMMARY, path: '世界书/人物·柯秒.md', revision: 1, contract: true },
+    { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
+  ]
+
+  /** 在 carrierView 上补世界书与大纲两块板（各自的目录窗 pane 前缀决定索引窗画哪棵树）。 */
+  function writingView() {
+    const base = carrierView()
+    const worldbook = {
+      id: 'pinax.carrier.worldbook',
+      title: '世界书',
+      primary: { projectKind: 'generic' },
+      isPrimary: false,
+      isEnabled: true,
+      capabilities: ['setting.entries'],
+      requires: [],
+      scopes: ['file:世界书:rw', 'agent:ask'],
+      dataDirs: ['世界书'],
+      settings: [],
+      tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'],
+      context: { providers: ['worldbook'], budgetChars: 20000 },
+      panes: [
+        { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'library' },
+        { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'library' }
+      ]
+    }
+    const outline = {
+      id: 'pinax.carrier.outline',
+      title: '大纲',
+      primary: { projectKind: 'generic' },
+      isPrimary: false,
+      isEnabled: true,
+      capabilities: ['outline.tree'],
+      requires: [],
+      scopes: ['file:大纲:rw', 'agent:ask'],
+      dataDirs: ['大纲'],
+      settings: [],
+      tools: ['pinax_outline_read', 'pinax_outline_save'],
+      context: { providers: ['outline'], budgetChars: 20000 },
+      panes: [
+        { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline' },
+        { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list' }
+      ]
+    }
+    return {
+      ...base,
+      project: { ...base.project, root: 'D:/tmp/大梦' },
+      carriers: [...base.carriers, worldbook, outline],
+      left: [
+        ...base.left,
+        { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'library', pluginId: 'pinax.carrier.worldbook', pluginTitle: '世界书' },
+        { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
+      ],
+      center: [
+        ...base.center,
+        { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'library', pluginId: 'pinax.carrier.worldbook', pluginTitle: '世界书' },
+        { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
+      ]
+    }
+  }
+
+  function writingBridge({ nodes = OUTLINE_NODES, edges = OUTLINE_EDGES, entries = ENTRIES } = {}) {
+    const calls = []
+    // 条目夹具是模块级常量：这里拷一份，保存用例改的是这一次挂载自己的账。
+    const book = entries.map((item) => ({ ...item }))
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: writingView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        calls.push({ tool: payload.tool, args: payload.args })
+        if (payload.tool === 'pinax_chapter_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: 1, truncated: false, chapters: [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }] } } }
+        }
+        if (payload.tool === 'pinax_chapter_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: 0, title: '雨夜', file: payload.args.file }, text: '雨夜。', totalChars: 3, truncated: false, revision: 1 } } }
+        }
+        if (payload.tool === 'pinax_outline_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.outline', payload: { ok: true, source: '大纲/outline.json', nodes, edges, nodeTotal: nodes.length, truncated: false, revision: 1, warning: null } } }
+        }
+        if (payload.tool === 'pinax_outline_save') {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.outline', payload: { ok: true, file: '大纲/outline.json', revision: 2, nodeTotal: payload.args.nodes?.length ?? 0 } } }
+        }
+        if (payload.tool === 'pinax_worldbook_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, total: book.length, truncated: false, warnings: [], skippedDirs: [], projectRoot: 'D:/tmp/大梦', entries: book } } }
+        }
+        if (payload.tool === 'pinax_worldbook_read') {
+          const hit = book.find((item) => (item.id && item.id === payload.args.id) || item.name === payload.args.name)
+          if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '没有这条' } } }
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, entry: { ...hit, keys: hit.aliases, relations: Array.isArray(hit.relations) ? hit.relations : [], content: '冷穿越剧版主角，醒来在雪夜。', contentChars: 16, contentTruncated: false }, warnings: [] } } }
+        }
+        if (payload.tool === 'pinax_worldbook_save') {
+          const index = book.findIndex((item) => item.path === payload.args.path)
+          if (index < 0) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: '没有这条' } } }
+          const hit = book[index]
+          const next = { ...hit, revision: hit.revision + 1, content: payload.args.text }
+          if (Array.isArray(payload.args.meta?.relations)) next.relations = payload.args.meta.relations.map((relation) => ({ ...relation }))
+          book.splice(index, 1, next)
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, file: next.path, revision: next.revision, created: false } } }
+        }
+      }
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    return { request, calls }
+  }
+
+  async function openBoard(wrapper, label) {
+    const rail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === label)
+    expect(rail, `竖条应有「${label}」这一格`).toBeTruthy()
+    await rail.trigger('click')
+    await flushPromises()
+  }
+
+  it('大纲树按 edges 缩进（不再有「·」记号），编辑面有备注与删除／上移／下移，全部只改草稿', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '大纲')
+
+    const rows = wrapper.findAll('.nx-index-window .nx-tree-item')
+    expect(rows).toHaveLength(3)
+    expect(rows.map((row) => row.element.style.paddingInlineStart)).toEqual(['10px', '24px', '10px'])
+    expect(wrapper.find('.nx-outline-mark').exists()).toBe(false)
+
+    // 点第一行：中栏出现备注输入与三个节点操作按钮；首行上移禁用、下移可用。
+    await rows[0].trigger('click')
+    await flushPromises()
+    const paneNow = () => wrapper.find('[data-pane-id="outline.editor"]')
+    expect(paneNow().exists()).toBe(true)
+    const note = paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]')
+    expect(note.exists()).toBe(true)
+    expect(note.attributes('maxlength')).toBe('200')
+    expect(paneNow().find('.outline-remove').text()).toBe('删除节点')
+    expect(paneNow().find('.outline-move-up').attributes('disabled')).toBeDefined()
+    expect(paneNow().find('.outline-move-down').attributes('disabled')).toBeUndefined()
+
+    // 备注只进草稿；按保存才随整份文档走（nodes 透传，不改工具合同）。
+    await note.setValue('开场要落一场雨')
+    expect(bridge.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(0)
+    await paneNow().find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+    const saved = bridge.calls.filter((call) => call.tool === 'pinax_outline_save')
+    expect(saved).toHaveLength(1)
+    expect(saved[0].args.nodes[0].note).toBe('开场要落一场雨')
+    expect(saved[0].args.edges).toEqual(OUTLINE_EDGES)
+
+    // 下移：与同深度相邻节点互换（跨层不动），保存载荷里的顺序跟着变。
+    await paneNow().find('.outline-move-down').trigger('click')
+    await flushPromises()
+    await paneNow().find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+    const moved = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
+    expect(moved.args.nodes.map((node) => node.id)).toEqual(['n3', 'n2', 'n1'])
+    expect(moved.args.edges).toEqual(OUTLINE_EDGES)
+
+    // 删除节点：连同它的连线一起从草稿里删掉；头部节点数当场变。
+    await paneNow().find('.outline-remove').trigger('click')
+    await flushPromises()
+    expect(paneNow().find('.editor-meta').text()).toContain('共 2 个节点')
+    await paneNow().find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+    const removed = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
+    expect(removed.args.nodes.map((node) => node.id)).toEqual(['n3', 'n2'])
+    expect(removed.args.edges).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('世界书条目表格：切换控件在区标题行，表格列齐、截摘要 40 字，行点击与列表同一个 openEntry', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    // 默认是列表视图：两行条目，没有表格。
+    expect(wrapper.find('.nx-index-window .nx-tree-item').exists()).toBe(true)
+    expect(wrapper.find('[data-test="entries-table"]').exists()).toBe(false)
+    const toggle = wrapper.find('[data-test="entries-view-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.attributes('aria-label')).toBe('切换为表格视图')
+    expect(toggle.text()).toBe('表')
+
+    await toggle.trigger('click')
+    await flushPromises()
+
+    const table = wrapper.find('[data-test="entries-table"]')
+    expect(table.exists()).toBe(true)
+    expect(table.findAll('th').map((th) => th.text())).toEqual(['名称', '类型', '关键词', '字数', '摘要'])
+    const bodyRows = table.findAll('tbody tr')
+    expect(bodyRows).toHaveLength(2)
+    expect(bodyRows[0].findAll('td').map((td) => td.text())).toEqual([
+      '人物·柯秒',
+      'character',
+      '柯秒',
+      '18',
+      `${LONG_SUMMARY.slice(0, 40)}…`
+    ])
+    expect(bodyRows[1].text()).toContain('随手记')
+    // 表格里不再重复列表那一列版本／未建档脚注（未建档在详情面看）。
+    expect(wrapper.find('[data-test="entries-view-toggle"]').attributes('aria-label')).toBe('切换为列表视图')
+    expect(wrapper.find('[data-test="entries-view-toggle"]').text()).toBe('列')
+
+    // 行点击＝打开该条目（与列表同一 openEntry）：走 read、中栏换成条目详情。
+    await bodyRows[0].trigger('click')
+    await flushPromises()
+    const lastRead = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_read').at(-1)
+    expect(lastRead.args).toEqual({ id: 'wb-1' })
+    expect(wrapper.find('[data-pane-id="worldbook.entries"]').text()).toContain('人物·柯秒')
+
+    // 状态按项目根落 localStorage（照 paneForm 先例）。
+    expect(globalThis.localStorage.getItem('entriesView.D:/tmp/大梦')).toBe('table')
+    wrapper.unmount()
+
+    // 重新挂载读回同一份选择：还是表格视图。
+    const again = mount(AppNext, { props: { bridge: writingBridge() } })
+    await flushPromises()
+    await openBoard(again, '世界书')
+    expect(again.find('[data-test="entries-table"]').exists()).toBe(true)
+    // 切回列表：状态同样落盘。
+    await again.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    expect(again.find('[data-test="entries-table"]').exists()).toBe(false)
+    expect(globalThis.localStorage.getItem('entriesView.D:/tmp/大梦')).toBe('list')
+    again.unmount()
+  })
+
+  it('世界书条目表格：没有条目时给一行说明，不摆空表格', async () => {
+    globalThis.localStorage?.clear()
+    const wrapper = mount(AppNext, { props: { bridge: writingBridge({ entries: [] }) } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="entries-table"]').exists()).toBe(false)
+    expect(wrapper.find('.nx-index-window').text()).toContain('这一栏还没有条目。')
+    wrapper.unmount()
+  })
+
+  it('世界书关系边编辑（批次28 · 工单2b）：行编辑随 meta.relations 落盘，阅读态按「目标 · 类型 · 立场」显示', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    const paneNow = () => wrapper.find('[data-pane-id="worldbook.entries"]')
+    await wrapper.findAll('.nx-index-window .nx-tree-item')[0].trigger('click')
+    await flushPromises()
+    expect(paneNow().find('[data-test="entry-relations-read"]').exists()).toBe(false, '没有关系就不摆这块')
+
+    await paneNow().find('.entry-edit').trigger('click')
+    await flushPromises()
+    const relations = paneNow().find('[data-test="entry-relations"]')
+    expect(relations.exists()).toBe(true)
+    expect(relations.findAll('.entry-relation-row')).toHaveLength(0)
+    expect(relations.find('.entry-relation-add').text()).toBe('加一条关系')
+    // 目标输入的候选来自当前条目清单（datalist），不新增工具调用。
+    expect(relations.find('datalist option').attributes('value')).toBe('人物·柯秒')
+
+    await relations.find('.entry-relation-add').trigger('click')
+    await flushPromises()
+    expect(paneNow().findAll('.entry-relation-row')).toHaveLength(1)
+    await paneNow().find('[aria-label="关系目标"]').setValue('地点·槐巷')
+    await paneNow().find('[aria-label="关系类型"]').setValue('师徒')
+    await paneNow().find('[aria-label="关系立场"]').setValue('护着')
+    await paneNow().find('.entry-relation-covert input[type="checkbox"]').setValue(true)
+
+    await paneNow().find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+    const saved = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1)
+    expect(saved.args.meta.relations).toEqual([{ to: '地点·槐巷', type: '师徒', stance: '护着', covert: true }])
+
+    // 阅读态：目标 · 类型 · 立场（三栏都有就三栏都显示）。
+    const read = paneNow().find('[data-test="entry-relations-read"]')
+    expect(read.exists()).toBe(true)
+    expect(read.findAll('li').map((li) => li.text())).toEqual(['地点·槐巷 · 师徒 · 护着'])
+
+    // 删行：草稿里那条没了，保存时 relations 传空数组（＝清空）。
+    await paneNow().find('.entry-edit').trigger('click')
+    await flushPromises()
+    await paneNow().find('.entry-relation-remove').trigger('click')
+    await flushPromises()
+    expect(paneNow().find('.entry-relation-row').exists()).toBe(false)
+    await paneNow().find('.editor-foot .control-primary').trigger('click')
+    await flushPromises()
+    const cleared = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1)
+    expect(cleared.args.meta.relations).toEqual([])
+    expect(paneNow().find('[data-test="entry-relations-read"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})

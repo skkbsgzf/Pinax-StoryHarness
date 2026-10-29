@@ -18,15 +18,25 @@ import { WORLDBOOK_CARRIER, WORLDBOOK_CARRIER_ID } from './manifest.mjs'
  * text 的语义（调度方裁定 dwfq-f2369ffa-2）：保存的是正文；现有文件能解析出 frontmatter 的
  * （契约条目），id/type/keys/tags/relations 原样保留、只把正文换成 text——否则面板一保存
  * 就把条目建档信息洗掉，openEntry 按 id 重读的链路也会断；裸 md 与新建文件按原样整份写。
- * 元数据口（工单C）：pinax_worldbook_save 的可选 meta＝{ keys?, tags?, summary? }，在契约条目上
- * 覆盖解析出的对应字段（未提供的字段保持原值，id/type/relations 一律不给改）；裸 md 与新建
- * 提供 meta 即 INVALID_INPUT——新建条目请先保存正文建档，再改关键词／标签。
+ * 元数据口（工单C／批次28 · 工单2a）：pinax_worldbook_save 的可选 meta＝
+ * { keys?, tags?, summary?, relations? }，在契约条目上覆盖解析出的对应字段（未提供的字段保持原值，
+ * id/type 一律不给改）；裸 md 与新建提供 meta 即 INVALID_INPUT——新建条目请先保存正文建档，
+ * 再改关键词／标签／关系。relations 整份覆盖（最多 32 条）：每项只收 to ／ type ／ stance ／ covert ／ weight，
+ * src 是来源证明而不是作者编辑的东西，递进来直接拒；落盘仍走 shared/worldbookFileContract.js 的
+ * serializeWorldbookEntryFile（它与 links 的 ∪ 去重是同一份实现，这里不写第二套 YAML 子集）。
  */
 const MAX_CONTENT_CHARS = 200_000
 /** 元数据口的一句话摘要上限（工单C）：超过就不落盘，不静默截断。 */
 const MAX_SUMMARY_CHARS = 500
-/** meta 只开这三个字段：relations 归关系图域、id 是稳定标识、type 走建档（工单C 边界）。 */
-const META_FIELDS = Object.freeze(['keys', 'tags', 'summary'])
+/** 关系口（批次28 · 工单2a）：一条关系的目标／类型／立场长度上限与条数上限。 */
+const MAX_RELATIONS = 32
+const MAX_RELATION_TARGET_CHARS = 80
+const MAX_RELATION_LABEL_CHARS = 32
+/** meta 开四个字段：keys／tags／summary 是元数据，relations 是作者手编的关系边（批次28 起）。
+ *  id 是稳定标识、type 走建档，两者都不在这个口里；src 是来源证明，不收。 */
+const META_FIELDS = Object.freeze(['keys', 'tags', 'summary', 'relations'])
+/** 关系边里作者能改的字段；src（来源证明）与未知字段一律拒。 */
+const RELATION_FIELDS = Object.freeze(['to', 'type', 'stance', 'covert', 'weight'])
 const WORLDBOOK_DIR = WORLDBOOK_CARRIER.dataDirs.entries
 
 export function createWorldbookTools(context = {}) {
@@ -107,6 +117,8 @@ export function createWorldbookTools(context = {}) {
             tags: entry.tags,
             aliases: entry.keys,
             chars: entry.chars,
+            // 摘要随列表带回（批次28 · 工单3）：索引窗的表格视图要一列摘要，不为它多发一次 read。
+            summary: typeof entry.summary === 'string' ? entry.summary : '',
             path: entry.path,
             revision: entry.revision,
             contract: entry.contract
@@ -174,7 +186,9 @@ export function createWorldbookTools(context = {}) {
             // 收口包②（调度方裁定 dwfq-5c79bf4a-1）：摘要随读返回，阅读态 meta 行才有东西可显示。
             // 裸 md 没有 frontmatter，按空串返回（不是「没读到」）。
             summary: typeof hit.summary === 'string' ? hit.summary : '',
-            relations: hit.relations,
+            // 关系（批次28 · 工单2a）：阅读态要按「目标 · 类型 · 立场」显示，所以归一成作者能编辑的那几栏；
+            // frontmatter 里没有 relations 就是空数组（不是「没读到」）。src 不进返回值——它是来源证明。
+            relations: relationsForRead(hit.relations),
             path: hit.path,
             revision: hit.revision,
             contract: hit.contract,
@@ -189,7 +203,7 @@ export function createWorldbookTools(context = {}) {
     {
       name: 'pinax_worldbook_save',
       title: '保存世界书条目（世界书载体）',
-      description: '作者确认后的设定落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。保存的是条目正文：契约条目保留既有 frontmatter（id/type/keys/relations 不变），裸 md 与新建文件按原样整份写。可选 meta 只改已建档条目的元数据（keys 关键词／tags 标签／summary 摘要），未提供的字段保持原值；裸 md 与新建带 meta 即拒（先保存正文建档再改）。写 世界书/ 走文件服务三道闸（归属＋file:世界书:rw＋并发）。',
+      description: '作者确认后的设定落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。保存的是条目正文：契约条目保留既有 frontmatter（id/type/keys 保持不变），裸 md 与新建文件按原样整份写。可选 meta 只改已建档条目的元数据（keys 关键词／tags 标签／summary 摘要／relations 关系边），未提供的字段保持原值；裸 md 与新建带 meta 即拒（先保存正文建档再改）。写 世界书/ 走文件服务三道闸（归属＋file:世界书:rw＋并发）。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -201,7 +215,7 @@ export function createWorldbookTools(context = {}) {
           meta: {
             type: 'object',
             additionalProperties: false,
-            description: '可选：改条目元数据。只对已按世界书文件契约建档（有 frontmatter）的条目生效——未提供的字段保持原值；传空数组／空串表示清空该字段。裸 md 与新建文件提供 meta 即拒（新建请先保存正文建档，再改关键词／标签）；id 是稳定标识、relations 归关系图域，两者都不在这个口里。',
+            description: '可选：改条目元数据。只对已按世界书文件契约建档（有 frontmatter）的条目生效——未提供的字段保持原值；传空数组／空串表示清空该字段。裸 md 与新建文件提供 meta 即拒（新建请先保存正文建档，再改关键词／标签／关系）；id 是稳定标识、type 走建档，两者都不在这个口里。',
             properties: {
               keys: {
                 type: 'array',
@@ -217,6 +231,23 @@ export function createWorldbookTools(context = {}) {
                 type: 'string',
                 maxLength: MAX_SUMMARY_CHARS,
                 description: `一句话摘要（≤${MAX_SUMMARY_CHARS} 字）：覆盖 frontmatter 的 summary；传空串清空。`
+              },
+              relations: {
+                type: 'array',
+                maxItems: MAX_RELATIONS,
+                description: `关系边（整份覆盖，最多 ${MAX_RELATIONS} 条）：每项 { to, type?, stance?, covert?, weight? }；to 是目标条目的 id 或名称（非空，≤${MAX_RELATION_TARGET_CHARS} 字），type／stance 各 ≤${MAX_RELATION_LABEL_CHARS} 字，covert 是暗线标记，weight 是数字。src 是来源证明，不收。传 [] 清空全部关系。`,
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['to'],
+                  properties: {
+                    to: { type: 'string', minLength: 1, maxLength: MAX_RELATION_TARGET_CHARS },
+                    type: { type: 'string', maxLength: MAX_RELATION_LABEL_CHARS },
+                    stance: { type: 'string', maxLength: MAX_RELATION_LABEL_CHARS },
+                    covert: { type: 'boolean' },
+                    weight: { type: 'number' }
+                  }
+                }
               }
             }
           }
@@ -256,10 +287,13 @@ export function createWorldbookTools(context = {}) {
         }
         const entry = parsed?.ok ? { ...parsed.entry, content: args.text } : null
         if (entry && meta) {
-          // 未提供的字段保持原值；id/type/relations 不在 meta 里，天然动不到（工单C 边界）。
+          // 未提供的字段保持原值；id/type 不在 meta 里，天然动不到（工单C 边界）。
           if (meta.keys !== undefined) entry.keys = meta.keys
           if (meta.tags !== undefined) entry.tags = meta.tags
           if (meta.summary !== undefined) entry.summary = meta.summary
+          // relations 整份覆盖（批次28 · 工单2a）：序列化时 links = entry.links ∪ relations[].to 去重合成，
+          // 解析时再减回去——纯 id 层那一批 links 不会因为换了关系而丢。
+          if (meta.relations !== undefined) entry.relations = meta.relations
         }
         const body = entry ? serializeWorldbookEntryFile(entry) : args.text
 
@@ -284,15 +318,15 @@ function toDirRelative(dir, path) {
 }
 
 /**
- * meta 形状校验（工单C）：只认 keys / tags / summary。
+ * meta 形状校验（工单C／批次28 · 工单2a）：只认 keys / tags / summary / relations。
  * 数组元素必须是非空字符串（trim 后落盘）；summary 是字符串且 ≤500 字（传空串＝清空），
  * 超长不静默截断。多写的字段直接拒——声明了却不生效正是作者最怕的那种「保存了但没变」。
  */
 function normalizeEntryMeta(meta) {
-  if (!isPlainObject(meta)) return fail('INVALID_INPUT', 'meta 必须是对象：{ keys?, tags?, summary? }')
+  if (!isPlainObject(meta)) return fail('INVALID_INPUT', 'meta 必须是对象：{ keys?, tags?, summary?, relations? }')
   for (const key of Object.keys(meta)) {
     if (!META_FIELDS.includes(key)) {
-      return fail('INVALID_INPUT', `meta 含未知字段 "${key}"：可改的元数据只有 keys / tags / summary（id 是稳定标识、relations 归关系图域，都不在这个口里）`, { key })
+      return fail('INVALID_INPUT', `meta 含未知字段 "${key}"：可改的元数据只有 keys / tags / summary / relations（id 是稳定标识、type 走建档，都不在这个口里）`, { key })
     }
   }
   const out = {}
@@ -315,7 +349,91 @@ function normalizeEntryMeta(meta) {
     }
     out.summary = meta.summary
   }
+  if (meta.relations !== undefined) {
+    const relations = normalizeRelationsMeta(meta.relations)
+    if (!relations.ok) return relations
+    out.relations = relations.value
+  }
   return ok(out)
+}
+
+/**
+ * 关系边数组校验（批次28 · 工单2a）：最多 32 条；每项 { to, type?, stance?, covert?, weight? }。
+ * 只收作者能改的五栏：src 是来源证明（读回来的边带 src），递进来就明说拒，不悄悄吞掉。
+ * 空串的 type／stance 当作「没填」（不落一个空字段），而不是落一个空字符串。
+ */
+function normalizeRelationsMeta(relations) {
+  if (!Array.isArray(relations)) return fail('INVALID_INPUT', 'meta.relations 必须是数组（一条一项）', { got: typeof relations })
+  if (relations.length > MAX_RELATIONS) {
+    return fail('INVALID_INPUT', `meta.relations 最多 ${MAX_RELATIONS} 条`, { got: relations.length })
+  }
+  const out = []
+  for (const [index, relation] of relations.entries()) {
+    if (!isPlainObject(relation)) {
+      return fail('INVALID_INPUT', `meta.relations[${index}] 必须是对象：{ to, type?, stance?, covert?, weight? }`, { got: relation === null ? 'null' : typeof relation })
+    }
+    for (const key of Object.keys(relation)) {
+      if (!RELATION_FIELDS.includes(key)) {
+        return fail('INVALID_INPUT', `meta.relations[${index}] 含不可编辑字段 "${key}"：只收 to / type / stance / covert / weight（src 是来源证明，不是作者编辑的东西）`, { index, key })
+      }
+    }
+    if (typeof relation.to !== 'string' || !relation.to.trim()) {
+      return fail('INVALID_INPUT', `meta.relations[${index}].to 必须是非空字符串（目标条目）`, { index })
+    }
+    const to = relation.to.trim()
+    if (to.length > MAX_RELATION_TARGET_CHARS) {
+      return fail('INVALID_INPUT', `meta.relations[${index}].to 超出上限 ${MAX_RELATION_TARGET_CHARS} 字`, { index, got: to.length })
+    }
+    const edge = { to }
+    for (const field of ['type', 'stance']) {
+      if (relation[field] === undefined) continue
+      if (typeof relation[field] !== 'string') {
+        return fail('INVALID_INPUT', `meta.relations[${index}].${field} 必须是字符串`, { index, field })
+      }
+      const value = relation[field].trim()
+      if (value.length > MAX_RELATION_LABEL_CHARS) {
+        return fail('INVALID_INPUT', `meta.relations[${index}].${field} 超出上限 ${MAX_RELATION_LABEL_CHARS} 字`, { index, field, got: value.length })
+      }
+      if (value) edge[field] = value
+    }
+    if (relation.covert !== undefined) {
+      if (typeof relation.covert !== 'boolean') {
+        return fail('INVALID_INPUT', `meta.relations[${index}].covert 必须是布尔值（暗线关系）`, { index, got: typeof relation.covert })
+      }
+      if (relation.covert) edge.covert = true
+    }
+    if (relation.weight !== undefined) {
+      if (typeof relation.weight !== 'number' || !Number.isFinite(relation.weight)) {
+        return fail('INVALID_INPUT', `meta.relations[${index}].weight 必须是数字`, { index, got: typeof relation.weight })
+      }
+      edge.weight = relation.weight
+    }
+    out.push(edge)
+  }
+  return ok(out)
+}
+
+/**
+ * 读回来的 relations 归一（批次28 · 工单2a）：只剩 to ／ type ／ stance ／ covert ／ weight 五栏，
+ * src 与陌生字段不带出（那是来源证明与别的工具写的账，不是作者在面板上编辑的东西）。
+ * 没有目标的行不算一条关系，直接丢——空 to 在界面上也没有可显示的内容。
+ */
+function relationsForRead(relations) {
+  if (!Array.isArray(relations)) return []
+  const out = []
+  for (const relation of relations) {
+    if (!isPlainObject(relation)) continue
+    const to = typeof relation.to === 'string' ? relation.to.trim() : ''
+    if (!to) continue
+    const edge = { to }
+    for (const field of ['type', 'stance']) {
+      if (typeof relation[field] === 'string' && relation[field].trim()) edge[field] = relation[field].trim()
+    }
+    if (relation.covert === true) edge.covert = true
+    if (typeof relation.weight === 'number' && Number.isFinite(relation.weight)) edge.weight = relation.weight
+    out.push(edge)
+  }
+  return out
 }
 
 function isPlainObject(value) {

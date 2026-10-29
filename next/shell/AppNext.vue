@@ -1186,6 +1186,7 @@ onBeforeUnmount(() => {
           :data="data"
           :archive="view?.archive ?? []"
           :width="indexWidth"
+          :project-root="view?.project?.root ?? ''"
           @collapse="indexOpen = false"
           @history="openHistoryFor"
           @overlay="toggleBoardOverlay"

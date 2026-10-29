@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { IPC_CHANNELS } from './ipcContract.mjs'
+import { canMoveNode, moveNode, outlineDepths, removeNode } from './outlineTree.mjs'
 
 /**
  * 板块数据（章节／大纲／构思／条目／约束／资料）的单一归属。
@@ -89,8 +90,10 @@ export function useBoardData(bridge) {
     entryDraft: '',
     /** 条目元数据草稿（工单C／收口包②）：frontmatter 的 keys／tags 在界面上是逗号分隔字符串，
      *  保存时再拆成数组随 pinax_worldbook_save 的 meta 传（裸 md 没有 frontmatter，不进这三栏）。
-     *  summary 是原样的字符串：空串＝清空（与工具 schema 的「传空串清空」同一口径），不在这里做截断。 */
-    entryMetaDraft: { keys: '', tags: '', summary: '' },
+     *  summary 是原样的字符串：空串＝清空（与工具 schema 的「传空串清空」同一口径），不在这里做截断。
+     *  relations（批次28 · 工单2b）：一行一条富关系 { to, type, stance, covert, weight? }，整份覆盖落盘；
+     *  src 是来源证明而不是作者编辑的东西，草稿不接、保存不带。 */
+    entryMetaDraft: { keys: '', tags: '', summary: '', relations: [] },
     listWarnings: [],
     entryWarnings: [],
     selection: { type: null, item: null }
@@ -762,7 +765,11 @@ export function useBoardData(bridge) {
     state.entryMetaDraft = {
       keys: joinMetaList(state.entry.keys),
       tags: joinMetaList(state.entry.tags),
-      summary: typeof state.entry.summary === 'string' ? state.entry.summary : ''
+      summary: typeof state.entry.summary === 'string' ? state.entry.summary : '',
+      // 关系整份进草稿（批次28 · 工单2b）：没带的 weight 原样留着，作者只改目标／类型／立场／暗线。
+      relations: (Array.isArray(state.entry.relations) ? state.entry.relations : [])
+        .map(toRelationDraft)
+        .filter(Boolean)
     }
     state.editingEntry = true
     state.error = null
@@ -771,7 +778,7 @@ export function useBoardData(bridge) {
   function cancelEditEntry() {
     state.editingEntry = false
     state.entryDraft = ''
-    state.entryMetaDraft = { keys: '', tags: '', summary: '' }
+    state.entryMetaDraft = { keys: '', tags: '', summary: '', relations: [] }
     state.error = null
   }
 
@@ -786,6 +793,31 @@ export function useBoardData(bridge) {
     state.entryMetaDraft = { ...state.entryMetaDraft, [field]: String(value ?? '') }
   }
 
+  /** 关系行编辑（批次28 · 工单2b）：to／type／stance 走字符串，covert 是布尔（暗线）。
+   *  只改草稿；空目标行在保存时丢掉（工具拒空 to，界面不该把半截行递过去）。 */
+  function setEntryRelation(index, field, value) {
+    const rows = state.entryMetaDraft.relations
+    const row = Array.isArray(rows) ? rows[index] : null
+    if (!row) return
+    if (field === 'covert') row.covert = value === true
+    else if (field === 'to' || field === 'type' || field === 'stance') row[field] = String(value ?? '')
+  }
+
+  function addEntryRelation() {
+    state.entryMetaDraft = {
+      ...state.entryMetaDraft,
+      relations: [...state.entryMetaDraft.relations, { to: '', type: '', stance: '', covert: false }]
+    }
+  }
+
+  function removeEntryRelation(index) {
+    if (!Array.isArray(state.entryMetaDraft.relations)) return
+    state.entryMetaDraft = {
+      ...state.entryMetaDraft,
+      relations: state.entryMetaDraft.relations.filter((_row, cursor) => cursor !== index)
+    }
+  }
+
   async function saveEntry() {
     if (!state.entry || !state.entryDraft) return
     state.busy = true
@@ -798,7 +830,9 @@ export function useBoardData(bridge) {
         keys: splitMetaList(state.entryMetaDraft.keys),
         tags: splitMetaList(state.entryMetaDraft.tags),
         // 摘要按原话落盘；首尾空白不算内容，整栏留空＝空串＝清空。
-        summary: String(state.entryMetaDraft.summary ?? '').trim()
+        summary: String(state.entryMetaDraft.summary ?? '').trim(),
+        // 关系整份覆盖（批次28 · 工单2b）：空目标行不递（那是还没填的行，不是「删掉这条关系」）。
+        relations: relationPayload(state.entryMetaDraft.relations)
       }
     }
     const saved = await tool('pinax_worldbook_save', payload)
@@ -877,6 +911,56 @@ export function useBoardData(bridge) {
   function setOutlineNodeTitle(index, title) {
     const node = state.outlineDraft?.nodes[index]
     if (node) node.title = title
+  }
+
+  /** 节点备注（批次28 · 工单1c）：note 是节点上的普通字段（工具原样透传），同样只落草稿。
+   *  长度上限由输入框 maxlength 守（200 字），这里不静默截断作者的输入。 */
+  function setOutlineNodeNote(index, note) {
+    const node = state.outlineDraft?.nodes[index]
+    if (node) node.note = String(note ?? '')
+  }
+
+  /**
+   * 删节点（批次28 · 工单1b）：连同它的所有连线一起删。删的只是草稿——有整份草稿兜底，
+   * 不保存就不落盘，所以界面不做二次确认。删光时把草稿收掉：空 nodes 存不进 outline.json
+   * （工具明说不收空文档），硬留着只会给一个按了没反应的保存键。
+   */
+  function removeOutlineNode() {
+    if (!state.outlineDraft || state.outlineNodeIndex === null) return
+    const removedTitle = state.outlineDraft.nodes[state.outlineNodeIndex]?.title ?? ''
+    const result = removeNode(state.outlineDraft, state.outlineNodeIndex)
+    if (!result.ok) return
+    state.error = null
+    if (!result.nodes.length) {
+      state.outlineDraft = null
+      state.outlineNodeIndex = null
+      state.selection = { type: null, item: null }
+      state.notice = `已从草稿删掉最后一个节点「${removedTitle}」：空大纲不能保存（要清空请直接删 大纲/outline.json）`
+      return
+    }
+    state.outlineDraft = { nodes: result.nodes, edges: result.edges }
+    state.outlineNodeIndex = result.index
+    state.notice = `已从草稿删掉「${removedTitle}」（按保存才落盘）`
+    state.selection = { type: 'outline-node', item: { ...result.nodes[result.index], index: result.index } }
+  }
+
+  /** 同级上移／下移（批次28 · 工单1b）：只重排 nodes 数组，不跨层；edges 一个字不改。
+   *  首行上移／末行下移是 no-op（按钮另有禁用态，见 canMoveOutlineNode）。 */
+  function moveOutlineNode(delta) {
+    if (!state.outlineDraft || state.outlineNodeIndex === null) return
+    const result = moveNode(state.outlineDraft, state.outlineNodeIndex, delta)
+    if (!result.changed) return
+    state.error = null
+    state.outlineDraft = { nodes: result.nodes, edges: result.edges }
+    state.outlineNodeIndex = result.index
+    state.notice = '已调整节点顺序（草稿，按保存才落盘）'
+    state.selection = { type: 'outline-node', item: { ...result.nodes[result.index], index: result.index } }
+  }
+
+  /** 这个方向上还动得动吗：与 outlineTree.canMoveNode 同一份判定，按钮禁用态直接读它。 */
+  function canMoveOutlineNode(delta) {
+    if (!state.outlineDraft || state.outlineNodeIndex === null) return false
+    return canMoveNode(state.outlineDraft, state.outlineNodeIndex, delta)
   }
 
   /** 加节点（工单B2）：同级＝插在所选节点后；子级＝同样紧随其后，另记一条 from→to 连线
@@ -1029,12 +1113,19 @@ export function useBoardData(bridge) {
     cancelEditEntry,
     setEntryDraft,
     setEntryMeta,
+    setEntryRelation,
+    addEntryRelation,
+    removeEntryRelation,
     saveEntry,
     loadOutline,
     selectOutlineNode,
     startOutline,
     setOutlineNodeTitle,
+    setOutlineNodeNote,
     addOutlineNode,
+    removeOutlineNode,
+    moveOutlineNode,
+    canMoveOutlineNode,
     saveOutline,
     setDraft
   })
@@ -1088,67 +1179,11 @@ function groupChaptersByVolume(chapters, volumes = null) {
 }
 
 /**
- * 大纲层级（工单G3）：edges 决定每个节点的 depth，索引窗据此缩进。
- * 只有「每条连线的两端都在节点表里、且从根节点出发能把整片森林走完」时才给层级：
- * 无入边的节点是根（depth 0），BFS 向下逐层 +1（同一子节点被多条线指向时取最先到达的最浅一层）。
- * 以下任一情况整份大纲按一级平铺（全部 depth 0）——宁可不缩进，也不给作者编一层不存在的结构：
- *   • 没有 edges（还没连线的草稿是常态）；
- *   • 连线端点缺失／指向不存在的节点（断链）；
- *   • 自环、重复 id、或存在从根到不了的环（整片森林走不完）。
- * edges 两种字段名都认：{ from, to }（本仓 outline.json 的既有形状）与 { source, target }。
+ * 大纲层级（批次18 工单G3 → 批次28 工单1a）：edges 决定每个节点的 depth，索引窗据此缩进。
+ * 算法在 next/shell/outlineTree.mjs 里（纯函数，索引窗与这里共用一份）：无入边的节点是根（depth 0），
+ * BFS 向下逐层 +1；悬空边、自环、重复 id 只会让相关节点留在 0，不会让整棵树炸掉。
+ * depth 是界面字段：草稿与保存载荷都不带它（保存会把它写进 outline.json）。
  */
-function outlineDepths(nodes, edges) {
-  const list = Array.isArray(nodes) ? nodes : []
-  const flat = list.map(() => 0)
-  const links = Array.isArray(edges) ? edges : []
-  if (!list.length || !links.length) return flat
-
-  // id → 下标；缺 id 的节点只能是独立根（连线引用不到它，depth 恒为 0）。
-  const indexById = new Map()
-  for (const [index, node] of list.entries()) {
-    const id = typeof node?.id === 'string' && node.id.trim() ? node.id : null
-    if (!id) continue
-    if (indexById.has(id)) return flat // 重复 id：连线指向谁都不确定
-    indexById.set(id, index)
-  }
-  if (!indexById.size) return flat
-
-  const children = new Map()
-  const indegree = list.map(() => 0)
-  for (const edge of links) {
-    const from = edge?.from ?? edge?.source
-    const to = edge?.to ?? edge?.target
-    if (typeof from !== 'string' || typeof to !== 'string') return flat
-    const parent = indexById.get(from)
-    const child = indexById.get(to)
-    if (parent === undefined || child === undefined || parent === child) return flat
-    if (!children.has(parent)) children.set(parent, [])
-    children.get(parent).push(child)
-    indegree[child] += 1
-  }
-
-  const depths = list.map(() => 0)
-  const visited = list.map(() => false)
-  const queue = []
-  for (let index = 0; index < list.length; index += 1) {
-    if (indegree[index] !== 0) continue
-    visited[index] = true
-    queue.push(index)
-  }
-  for (let cursor = 0; cursor < queue.length; cursor += 1) {
-    const current = queue[cursor]
-    for (const child of children.get(current) ?? []) {
-      if (visited[child]) continue
-      visited[child] = true
-      depths[child] = depths[current] + 1
-      queue.push(child)
-    }
-  }
-  // 有 id 的节点里有走不到的（环）：整份平铺，不给半棵树编层级。
-  for (const index of indexById.values()) if (!visited[index]) return flat
-  return depths
-}
-
 /** 给每个节点贴上 depth（新对象，不改状态里那份文档数据）。 */
 function decorateOutlineNodes(nodes, edges) {
   const list = Array.isArray(nodes) ? nodes : []
@@ -1183,4 +1218,39 @@ function joinMetaList(list) {
     .map((item) => String(item ?? '').trim())
     .filter(Boolean)
     .join('，')
+}
+
+/**
+ * 关系草稿（批次28 · 工单2b）：一条富关系 { to, type?, stance?, covert?, weight? }。
+ * 读回来的 relations 可能带 src（来源证明，工具已不收）——草稿只留作者能改的那几栏；
+ * 目标为空的关系读回来也留一行（如实显示，作者自己删），不在这里悄悄吞掉。
+ * weight 只透传（界面没有这一栏，也绝不因为改了就把它洗掉）。
+ */
+function toRelationDraft(relation) {
+  if (!relation || typeof relation !== 'object') return null
+  const to = typeof relation.to === 'string' ? relation.to : ''
+  const row = { to }
+  if (typeof relation.type === 'string') row.type = relation.type
+  if (typeof relation.stance === 'string') row.stance = relation.stance
+  row.covert = relation.covert === true
+  if (typeof relation.weight === 'number' && Number.isFinite(relation.weight)) row.weight = relation.weight
+  return row
+}
+
+/** 保存载荷里的 relations：空目标行丢掉（界面上的「还没填」不是一条关系），其余原样带上。 */
+function relationPayload(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const to = String(row?.to ?? '').trim()
+      if (!to) return null
+      const out = { to }
+      const type = String(row?.type ?? '').trim()
+      const stance = String(row?.stance ?? '').trim()
+      if (type) out.type = type
+      if (stance) out.stance = stance
+      if (row?.covert === true) out.covert = true
+      if (typeof row?.weight === 'number' && Number.isFinite(row.weight)) out.weight = row.weight
+      return out
+    })
+    .filter(Boolean)
 }

@@ -566,9 +566,9 @@ describe('小说载体', () => {
     await flushPromises()
 
     // 同级：插在「第一折」后面并选中它；子级：再往其后插一个，并记所选→新节点的连线（层级语义在 edges 里）。
-    const addButtons = () => wrapper.findAll('.editor-foot .control-secondary')
-    await addButtons()[0].trigger('click')
-    await addButtons()[1].trigger('click')
+    // 批次28 起脚注里多了上移／下移／删除，按类名点「加」这枚，不靠位置顺序。
+    await wrapper.find('.outline-add-sibling').trigger('click')
+    await wrapper.find('.outline-add-child').trigger('click')
     await wrapper.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
 
@@ -672,8 +672,9 @@ describe('小说载体', () => {
     entry.unmount()
   })
 
-  it('大纲层级（工单G3）：edges 决定缩进深度；断链／无 edges 时全部一级', async () => {
-    // ① 一条 n1→n2 的连线：n1 一级（10px），n2 缩进一级（24px）；只有有子节点的行带「·」记号。
+  it('大纲层级（工单G3／批次28）：edges 决定缩进深度；断链／无 edges 时全部一级', async () => {
+    // ① 一条 n1→n2 的连线：n1 一级（10px），n2 缩进一级（24px）。
+    //    批次28 起层级只由缩进阶梯表达，「·」点标记已下线（缩进本身就说明了父子）。
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -686,8 +687,7 @@ describe('小说载体', () => {
     expect(rows).toHaveLength(2)
     expect(rows[0].element.style.paddingInlineStart).toBe('10px')
     expect(rows[1].element.style.paddingInlineStart).toBe('24px')
-    expect(rows[0].find('.nx-outline-mark').exists()).toBe(true)
-    expect(rows[1].find('.nx-outline-mark').exists()).toBe(false)
+    expect(wrapper.find('.nx-outline-mark').exists()).toBe(false)
     wrapper.unmount()
 
     // depth 是界面字段，不是文档字段：点开节点后草稿里不能带着它（否则保存会把 depth 写进 outline.json）。
@@ -703,7 +703,7 @@ describe('小说载体', () => {
     await altData.loadOutline()
     expect(altData.outline.map((node) => node.depth)).toEqual([0, 1])
 
-    // ② 断链（连线指向不存在的节点）：不造层级，全部一级，也不加记号。
+    // ② 断链（连线指向不存在的节点）：不造层级，全部一级。
     const brokenTools = fakeTools({ outlineEdges: [{ from: 'n1', to: '查无此节点' }] })
     const brokenBridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : brokenTools.request(channel, payload)) }
     const broken = mount(AppNext, { props: { bridge: brokenBridge } })
@@ -712,7 +712,6 @@ describe('小说载体', () => {
     const brokenRows = outlineRows(broken)
     expect(brokenRows).toHaveLength(2)
     expect(brokenRows.map((row) => row.element.style.paddingInlineStart)).toEqual(['10px', '10px'])
-    expect(brokenRows.every((row) => row.find('.nx-outline-mark').exists() === false)).toBe(true)
     broken.unmount()
 
     // ③ 完全没有 edges（还没连线的草稿是常态）：同样全部一级。
@@ -1031,11 +1030,12 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     const saved = tools.calls.find((call) => call.tool === 'pinax_worldbook_save')
     // 工单C：契约条目保存时把元数据一起带上（作者没改就按读到的值回写，不会把 keys/tags/summary 洗掉）。
     // 收口包②：摘要与关键词／标签同一个口，没改也原样回写。
+    // 批次28：relations 也随 meta 整份回写（夹具里读回来是空数组，保存就带回空数组＝不强塞关系）。
     expect(saved.args).toEqual({
       path: '世界书/人物·柯秒.md',
       text: '冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。',
       expectedRevision: 1,
-      meta: { keys: ['柯秒'], tags: ['主角'], summary: '雪夜醒来的主角，袖中有一枚停摆的表。' }
+      meta: { keys: ['柯秒'], tags: ['主角'], summary: '雪夜醒来的主角，袖中有一枚停摆的表。', relations: [] }
     })
     // 保存成功：退出编辑态，重读把版本号与正文一起刷新。
     expect(wrapper.find('.entry-text').exists()).toBe(true)
@@ -1093,7 +1093,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     await wrapper.find('.editor-foot .control-primary').trigger('click')
     await flushPromises()
     const saved = tools.calls.find((call) => call.tool === 'pinax_worldbook_save')
-    expect(saved.args.meta).toEqual({ keys: ['柯秒', '秒子'], tags: ['主角', '停摆的表'], summary: '雨夜醒来的主角，袖中的表停了。' })
+    expect(saved.args.meta).toEqual({ keys: ['柯秒', '秒子'], tags: ['主角', '停摆的表'], summary: '雨夜醒来的主角，袖中的表停了。', relations: [] })
     // 保存后回到阅读态：摘要以磁盘（工具重读）为准，不拿草稿自说自话。
     expect(wrapper.find('.entry-text').exists()).toBe(true)
     expect(wrapper.find('.entry-meta').text()).toContain('摘要：雨夜醒来的主角，袖中的表停了。')

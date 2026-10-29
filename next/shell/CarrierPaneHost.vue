@@ -78,6 +78,20 @@ function clipSummary(value) {
 }
 
 /**
+ * 阅读态的关系（批次28 · 工单2b）：一行一条「目标 · 类型 · 立场」。
+ * 只显示读回来的那几栏；target 为空的行（作者还没填完的草稿）不在这里占位——
+ * 阅读态看的是磁盘上的条目，不是草稿。没有关系时整块不出现。
+ */
+const entryRelations = computed(() => (Array.isArray(props.data.entry?.relations) ? props.data.entry.relations : [])
+  .filter((relation) => typeof relation?.to === 'string' && relation.to.trim()))
+function relationLine(relation) {
+  return [relation?.to, relation?.type, relation?.stance]
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
  * 资料板检索（工单H2）：输入在面板头部，结果只走 knowledge:search 通道（主进程 knowledgeService，
  * worker 线程、零 HTTP）。命中若指向「资料/」下的文件，点击回到 pinax_document_read 打开原文；
  * 否则只展示片段（知识库卡／归档片段没有可直接打开的原文）。
@@ -181,7 +195,8 @@ function onPaneKeydown(event) {
   if (String(event.key ?? '').toLowerCase() !== 's') return
   // 只认真正的编辑器（textarea／大纲标题输入框）：提案的 pre 也挂 .editor-area，不能当编辑区。
   // 收口包②：条目摘要也是编辑面的一部分，在摘要栏里按 Ctrl+S 同样落这次保存。
-  if (!event.target?.matches?.('textarea.editor-area, textarea.entry-meta-summary, input.outline-title')) return
+  // 批次28：大纲节点备注（textarea.outline-note）同样属于大纲草稿，按 Ctrl+S 落整份保存。
+  if (!event.target?.matches?.('textarea.editor-area, textarea.entry-meta-summary, textarea.outline-note, input.outline-title')) return
   event.preventDefault()
   void saveCurrent()
 }
@@ -333,15 +348,41 @@ function actOnSaveChip() {
           aria-label="大纲节点标题"
           @input="data.setOutlineNodeTitle(data.outlineNodeIndex, $event.target.value)"
         >
+        <!-- 节点备注（批次28 · 工单1c）：这一节要写什么，一句话；note 是节点上的普通字段，
+             随整份草稿保存走（工具原样透传，不需要改合同）。 -->
+        <textarea
+          class="nx-field outline-note"
+          :value="data.outlineDraft.nodes[data.outlineNodeIndex]?.note ?? ''"
+          maxlength="200"
+          rows="2"
+          placeholder="这一节要写什么（一句话）"
+          spellcheck="false"
+          aria-label="大纲节点备注（最多 200 字）"
+          @input="data.setOutlineNodeNote(data.outlineNodeIndex, $event.target.value)"
+        />
         <div class="editor-foot">
-          <button type="button" class="control-secondary" @click="data.addOutlineNode('sibling')">在后面加同级节点</button>
-          <button type="button" class="control-secondary" @click="data.addOutlineNode('child')">加子节点</button>
+          <!-- 节点操作（批次28 · 工单1b）：只改草稿，按保存才落盘。首行上移／末行下移禁用（no-op 不给假动作）。 -->
+          <button
+            type="button"
+            class="control-secondary outline-move outline-move-up"
+            :disabled="!data.canMoveOutlineNode(-1)"
+            @click="data.moveOutlineNode(-1)"
+          >上移</button>
+          <button
+            type="button"
+            class="control-secondary outline-move outline-move-down"
+            :disabled="!data.canMoveOutlineNode(1)"
+            @click="data.moveOutlineNode(1)"
+          >下移</button>
+          <button type="button" class="control-secondary outline-remove" @click="data.removeOutlineNode()">删除节点</button>
+          <button type="button" class="control-secondary outline-add outline-add-sibling" @click="data.addOutlineNode('sibling')">在后面加同级节点</button>
+          <button type="button" class="control-secondary outline-add outline-add-child" @click="data.addOutlineNode('child')">加子节点</button>
           <!-- P3：版本号不进按钮文案——版本在头部 meta 与历史面板看。 -->
           <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy" @click="data.saveOutline()">
             {{ data.busy ? '写入中…' : '保存' }}
           </button>
         </div>
-        <p class="pane-hint">大纲按整份覆盖保存：改名与新增先记在草稿上，按保存才写 大纲/outline.json；层级关系记在连线上。</p>
+        <p class="pane-hint">大纲按整份覆盖保存：改名、备注、增删与排序都先记在草稿上，按保存才写 大纲/outline.json；层级关系记在连线上。</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一个大纲节点。</p>
     </template>
@@ -472,10 +513,62 @@ function actOnSaveChip() {
             />
             <span class="entry-meta-count" aria-hidden="true">{{ data.entryMetaDraft.summary.length }}/500</span>
           </label>
+          <!-- 关系（批次28 · 工单2b）：frontmatter 的 relations 一行一条，整份随 meta 落盘。
+               目标用 datalist 提示当前条目名（作者可以直接写 id 或名字，跟正文引用同一口径）；
+               暗线＝covert；weight 没有这一栏，作者改别的字段时它原样带回，不会被洗掉。 -->
+          <div class="entry-relations" data-test="entry-relations">
+            <span class="entry-meta-label">关系</span>
+            <ul v-if="data.entryMetaDraft.relations.length" class="entry-relation-rows">
+              <li v-for="(relation, index) in data.entryMetaDraft.relations" :key="`rel-${index}`" class="entry-relation-row">
+                <input
+                  class="nx-field entry-relation-target"
+                  list="entry-relation-targets"
+                  :value="relation.to"
+                  spellcheck="false"
+                  placeholder="目标条目"
+                  aria-label="关系目标"
+                  @input="data.setEntryRelation(index, 'to', $event.target.value)"
+                >
+                <input
+                  class="nx-field entry-relation-type"
+                  :value="relation.type ?? ''"
+                  spellcheck="false"
+                  placeholder="类型（师徒／敌对／亲属）"
+                  aria-label="关系类型"
+                  @input="data.setEntryRelation(index, 'type', $event.target.value)"
+                >
+                <input
+                  class="nx-field entry-relation-stance"
+                  :value="relation.stance ?? ''"
+                  spellcheck="false"
+                  placeholder="立场"
+                  aria-label="关系立场"
+                  @input="data.setEntryRelation(index, 'stance', $event.target.value)"
+                >
+                <label class="entry-relation-covert">
+                  <input
+                    type="checkbox"
+                    :checked="relation.covert === true"
+                    @change="data.setEntryRelation(index, 'covert', $event.target.checked)"
+                  >
+                  <span>暗线</span>
+                </label>
+                <button type="button" class="control-quiet entry-relation-remove" :aria-label="`删除第 ${index + 1} 条关系`" @click="data.removeEntryRelation(index)">删行</button>
+              </li>
+            </ul>
+            <datalist id="entry-relation-targets">
+              <option v-for="item in data.entries" :key="item.path" :value="item.name" />
+            </datalist>
+            <button type="button" class="control-secondary entry-relation-add" @click="data.addEntryRelation()">加一条关系</button>
+          </div>
         </div>
         <p v-else-if="data.editingEntry" class="pane-hint entry-meta-bare" data-test="entry-meta-bare">
           这篇没有 frontmatter（未按世界书文件契约建档），关键词／标签／摘要改不了；保存仍按原样整份写正文。
         </p>
+        <!-- 阅读态的关系（批次28 · 工单2b）：一行一条「目标 · 类型 · 立场」；没有关系就不摆这块。 -->
+        <ul v-if="!data.editingEntry && entryRelations.length" class="entry-relations-read" data-test="entry-relations-read">
+          <li v-for="(relation, index) in entryRelations" :key="`rel-read-${index}`">{{ relationLine(relation) }}</li>
+        </ul>
         <textarea
           v-if="data.editingEntry"
           class="editor-area"
@@ -496,7 +589,6 @@ function actOnSaveChip() {
         <p v-if="data.entry.contentTruncated" class="pane-notice">只显示前 {{ data.entry.content.length }} 字，全篇 {{ data.entry.contentChars }} 字。</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一条设定。</p>
-      <p v-if="data.entry?.relations?.length" class="pane-hint">关系字段 {{ data.entry.relations.length }} 条（面板第一批只列不画图）。</p>
       <ul v-if="data.entryWarnings.length" class="pane-warn">
         <li v-for="(warning, index) in data.entryWarnings" :key="`e-${index}`">{{ warning }}</li>
       </ul>
@@ -753,6 +845,80 @@ function actOnSaveChip() {
 }
 .entry-meta-bare {
   margin: 0 0 8px;
+}
+
+/* 关系区（批次28 · 工单2b）：整行独占，一行一条；输入仍是 .nx-field primitive，这里只调排布。
+   目标／类型／立场三栏按 1.2 : 1 : 1 分宽，暗线是复选框＋小字，删行收在行尾。 */
+.entry-relations {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.entry-relation-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.entry-relation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.entry-relation-row .nx-field {
+  flex: 1 1 120px;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+.entry-relation-row .entry-relation-target {
+  flex-grow: 1.2;
+}
+.entry-relation-covert {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.entry-relation-remove {
+  flex: none;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: var(--nx-fs-2xs);
+}
+.entry-relation-add {
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--nx-fs-2xs);
+}
+
+/* 阅读态的关系行：一条一行，前缀点做得比正文轻，不抢正文的注意力。 */
+.entry-relations-read {
+  margin: 0 0 8px;
+  padding-inline-start: 1.2em;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 大纲节点备注（批次28 · 工单1c）：标题下面一条两行高的输入，度量随 .nx-field。 */
+.outline-note {
+  margin-top: 6px;
+  min-height: 48px;
+  line-height: 1.6;
+  resize: vertical;
 }
 
 /* 摘要一栏（收口包②）：独占整行——label 顶对齐，textarea 占满剩余宽度，右侧一枚字数说明。

@@ -2,6 +2,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchTooltip.js'
+import { outlineDepths as depthsOfOutline } from './outlineTree.mjs'
+import { nextEntriesView, readEntriesView, writeEntriesView } from './entriesView.mjs'
 
 /**
  * 索引窗：竖条右边那一栏——会话管理／文件结构管理那件事就落在这里。
@@ -29,7 +31,9 @@ const props = defineProps({
   /** useBoardData 的返回值：索引窗与核心区看的是同一份数据。 */
   data: { type: Object, required: true },
   archive: { type: Array, default: () => [] },
-  width: { type: Number, default: 256 }
+  width: { type: Number, default: 256 },
+  /** 当前项目根：只用来拼界面偏好的 localStorage 键（entriesView.<projectRoot>，照 paneForm 先例）。 */
+  projectRoot: { type: String, default: '' }
 })
 const emit = defineEmits(['collapse', 'history', 'overlay', 'context-menu'])
 
@@ -77,28 +81,40 @@ const chapterGroups = computed(() => {
 })
 
 /**
- * 哪些大纲行有子节点：只看 edges，两种字段名都认（{from,to} / {source,target}）；
- * 端点缺失或指向不存在的节点的连线不算——不拿断链给行头加记号。
- * depth（缩进层级）由 useBoardData 的 loadOutline／saveOutline 贴上，这里只负责画。
+ * 大纲缩进层级（批次28 · 工单1a）：edges → 每个节点的 depth，索引窗按它做缩进阶梯，
+ * 不再用「·」点标记父子（缩进本身就说明了层级）。
+ * 算法在 next/shell/outlineTree.mjs（纯函数，useBoardData 与这里共用一份）：
+ * 无入边的节点是一级（depth 0），BFS 向下逐层 +1；悬空边、自环、重复 id 只让相关节点留在 0，
+ * 不会让整棵树崩掉；没有 edges 时整份一级（还没连线的草稿是常态）。
  */
-const outlineParentIds = computed(() => {
-  const nodes = props.data.outline ?? []
-  const known = new Set()
-  for (const node of nodes) {
-    if (typeof node?.id === 'string' && node.id.trim()) known.add(node.id)
-  }
-  const parents = new Set()
-  for (const edge of props.data.outlineEdges ?? []) {
-    const from = edge?.from ?? edge?.source
-    const to = edge?.to ?? edge?.target
-    if (typeof from !== 'string' || typeof to !== 'string') continue
-    if (!known.has(from) || !known.has(to) || from === to) continue
-    parents.add(from)
-  }
-  return parents
-})
-const hasOutlineChildren = (node) => typeof node?.id === 'string' && outlineParentIds.value.has(node.id)
+const outlineDepths = computed(() => depthsOfOutline(props.data.outline ?? [], props.data.outlineEdges ?? []))
+/** 缩进阶梯：一级 10px 起，每层 +14px（布局尺寸可按像素；字号仍走 token）。 */
+const outlineIndent = (index) => 10 + (outlineDepths.value[index] ?? 0) * 14
 const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-node' && props.data.selection.item?.index === index
+
+/**
+ * 世界书条目的列表/表格视图（批次28 · 工单3）：只这一栏有，别的栏不加。
+ * 状态进 localStorage（`entriesView.<projectRoot>`，照 paneForm.<paneId> 的先例）——
+ * 读写都收在 next/shell/entriesView.mjs 里，这里只把它接进一个 ref；
+ * 键随项目根换（换项目＝各记各的），读失败按 list 起步，不把界面顶成空白。
+ */
+const entriesView = ref('list')
+
+function toggleEntriesView() {
+  entriesView.value = nextEntriesView(entriesView.value)
+  writeEntriesView(props.projectRoot, entriesView.value)
+}
+
+watch(() => props.projectRoot, () => {
+  entriesView.value = readEntriesView(props.projectRoot)
+}, { immediate: true })
+
+/** 表格里的摘要列只占一格：截 40 字（截断只发生在显示上，磁盘与详情面仍是全文）。 */
+const TABLE_SUMMARY_CHARS = 40
+function clipTableSummary(value) {
+  const text = String(value ?? '').trim()
+  return text.length > TABLE_SUMMARY_CHARS ? `${text.slice(0, TABLE_SUMMARY_CHARS)}…` : text
+}
 
 async function createChapter() {
   const title = newTitle.value.trim()
@@ -265,8 +281,8 @@ watch(() => props.board?.id, () => {
       </template>
 
       <!-- 大纲（协议 v1.1-A：独立一栏，只有大纲那一棵内容树）。
-           行可点选——点行把节点送进中栏的大纲编辑面（改名/加节点在那里）；
-           depth 由 edges 现算（断链/无 edges 全是一级），行头「·」只标有子节点的行。
+           行可点选——点行把节点送进中栏的大纲编辑面（改名/备注/增删/排序在那里）；
+           层级用缩进阶梯表达（depth 由 edges 现算，批次28 起不再用「·」点标记）。
            大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
       <template v-else-if="treeKind === 'outline'">
         <!-- 工单C（协议 v1.1-C）：载体声明了 overlay pane 才出这枚「悬浮」钮——
@@ -288,11 +304,11 @@ watch(() => props.board?.id, () => {
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
               :class="{ 'is-active': isOutlineNodeOpen(index) }"
               :aria-current="isOutlineNodeOpen(index) ? 'page' : null"
-              :style="{ paddingInlineStart: (10 + (node.depth ?? 0) * 14) + 'px' }"
+              :style="{ paddingInlineStart: outlineIndent(index) + 'px' }"
               @click="data.selectOutlineNode(index)"
               @contextmenu.prevent.stop="onRowContextMenu"
             >
-              <span class="workspace-nav-label"><span v-if="hasOutlineChildren(node)" class="nx-outline-mark" aria-hidden="true">·</span>{{ index + 1 }}. {{ node.title }}</span>
+              <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
             </button>
             <button
               type="button"
@@ -370,10 +386,53 @@ watch(() => props.board?.id, () => {
         <p v-if="data.notesError" class="nx-index-error">{{ data.notesError }}</p>
       </template>
 
-      <!-- 世界书（协议 v1.1-A：独立一栏，条目树）。未建档的条目在行尾标出来。 -->
+      <!-- 世界书（协议 v1.1-A：独立一栏，条目树）。未建档的条目在行尾标出来。
+           批次28 · 工单3：区标题行右侧一枚「表／列」切换——表格视图只影响这一栏，
+           状态按项目根落 localStorage；两种视图点行都是同一个 openEntry（不新增工具调用）。 -->
       <template v-else-if="treeKind === 'entries'">
-        <p class="workspace-nav-section">{{ treeDir }}</p>
-        <ul class="nx-tree">
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">{{ treeDir }}</p>
+          <button
+            type="button"
+            class="control-quiet nx-index-view-toggle"
+            data-test="entries-view-toggle"
+            :aria-label="entriesView === 'table' ? '切换为列表视图' : '切换为表格视图'"
+            :aria-pressed="entriesView === 'table' ? 'true' : 'false'"
+            v-workbench-tooltip="{ text: entriesView === 'table' ? '列表视图' : '表格视图', side: 'left' }"
+            @click="toggleEntriesView"
+          >{{ entriesView === 'table' ? '列' : '表' }}</button>
+        </div>
+        <table v-if="entriesView === 'table' && data.entries.length" class="nx-entries-table" data-test="entries-table">
+          <thead>
+            <tr>
+              <th scope="col">名称</th>
+              <th scope="col">类型</th>
+              <th scope="col">关键词</th>
+              <th scope="col">字数</th>
+              <th scope="col">摘要</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="item in data.entries"
+              :key="item.path"
+              class="nx-entries-row"
+              :class="{ 'is-active': isEntryOpen(item) }"
+              :aria-current="isEntryOpen(item) ? 'page' : null"
+              tabindex="0"
+              @click="data.openEntry(item)"
+              @keydown.enter.prevent="data.openEntry(item)"
+              @contextmenu.prevent.stop="onRowContextMenu"
+            >
+              <td class="nx-entries-name">{{ item.name }}</td>
+              <td>{{ item.type }}</td>
+              <td class="nx-entries-keys">{{ (item.aliases ?? []).join('、') }}</td>
+              <td class="nx-entries-chars">{{ item.chars }}</td>
+              <td class="nx-entries-summary">{{ clipTableSummary(item.summary) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <ul v-else class="nx-tree">
           <li v-for="item in data.entries" :key="item.path" class="nx-tree-line">
             <button
               type="button"
@@ -579,10 +638,66 @@ watch(() => props.board?.id, () => {
   padding: 0 6px;
   font-size: var(--nx-fs-2xs);
 }
-/* 大纲层级记号（工单G3）：有子节点的行在标题前点一枚极轻的「·」，不引新图标、不另立一套行形态。 */
-.nx-outline-mark {
-  margin-inline-end: 4px;
-  color: var(--text-muted);
+/* 世界书视图切换（批次28 · 工单3）：区标题行右侧一枚小钮，与「＋」「悬浮」同一条基准线；
+   文案是「表」（切到表格）／「列」（切回列表），命中区压到行高内，不另起一行。 */
+.nx-index-view-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  min-height: 24px;
+  padding: 0 6px;
   font-size: var(--nx-fs-2xs);
 }
-</style>
+/* 条目表格：列宽按内容伸缩，摘要列吃掉剩余宽度；行仍是「点一下打开条目」那件事。 */
+.nx-entries-table {
+  width: 100%;
+  margin: 0 0 8px;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-primary);
+}
+.nx-entries-table th {
+  padding: 2px 4px;
+  text-align: start;
+  font-weight: 500;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--hairline-soft);
+  white-space: nowrap;
+}
+.nx-entries-table td {
+  padding: 3px 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.nx-entries-table th:nth-child(1) { width: 26%; }
+.nx-entries-table th:nth-child(2) { width: 14%; }
+.nx-entries-table th:nth-child(3) { width: 18%; }
+.nx-entries-table th:nth-child(4) { width: 10%; }
+.nx-entries-row {
+  cursor: pointer;
+}
+.nx-entries-row:hover td {
+  background: var(--nav-hover);
+}
+.nx-entries-row.is-active td {
+  background: var(--nav-selected);
+}
+.nx-entries-row:focus-visible {
+  outline: 2px solid var(--workbench-selected);
+  outline-offset: -2px;
+}
+.nx-entries-name {
+  color: var(--archive-ink);
+}
+.nx-entries-chars {
+  font-variant-numeric: tabular-nums;
+}
+.nx-entries-summary,
+.nx-entries-keys {
+  color: var(--text-muted);
+}</style>
