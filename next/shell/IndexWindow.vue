@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchTooltip.js'
 import { outlineDepths as depthsOfOutline } from './outlineTree.mjs'
@@ -42,10 +42,74 @@ const newTitle = ref('')
 /**
  * 协议 v1.2 P19：索引窗树行的右键也是「打开方式」入口（统一二级页目录项后续批同法）。
  * 这一栏只显示当前板，所以只上报坐标；菜单条目（哪些形态）由宿主按当前载体的 forms 声明列。
+ * 批次31：大纲行例外——右键先开「节点」菜单（上移／下移／删除／加同级／加子节点），
+ * 那些操作原先是大纲编辑面底部那排常驻按钮。打开方式在竖条右键照旧可达。
  */
 function onRowContextMenu(event) {
   emit('context-menu', { x: event.clientX, y: event.clientY })
 }
+
+/**
+ * 大纲行右键菜单（批次31 · P18 第 2 条）：节点操作退到「按需浮现」——
+ * 右键先选中这一行（操作都作用在所选节点上），再在同一位置开出节点菜单。
+ * 样式与通路照批次24 的打开方式菜单：同一套 .nx-context-* 词汇、同样 Esc／点外收起、
+ * 同样按视口钳住坐标；不另起一套菜单皮。
+ */
+const nodeMenu = ref(null)
+const nodeMenuRoot = ref(null)
+const NODE_MENU_WIDTH = 200
+const NODE_MENU_ITEM_HEIGHT = 30
+
+const nodeMenuStyle = computed(() => {
+  const menu = nodeMenu.value
+  if (!menu) return {}
+  const viewportWidth = Number(globalThis.innerWidth) || 0
+  const viewportHeight = Number(globalThis.innerHeight) || 0
+  const menuHeight = 30 + 5 * NODE_MENU_ITEM_HEIGHT + 16
+  const left = Math.max(8, Math.min(menu.x, Math.max(8, viewportWidth - NODE_MENU_WIDTH - 8)))
+  const top = Math.max(8, Math.min(menu.y, Math.max(8, viewportHeight - menuHeight - 8)))
+  return { left: `${left}px`, top: `${top}px` }
+})
+
+function openOutlineNodeMenu(event, index) {
+  props.data.selectOutlineNode(index)
+  nodeMenu.value = { x: event.clientX, y: event.clientY }
+}
+
+function closeNodeMenu() {
+  nodeMenu.value = null
+}
+
+/** 菜单里的一下：先收起菜单，再照旧走 useBoardData 的同一个动作（只改草稿，Ctrl+S 才落盘）。 */
+function runNodeAction(action, payload) {
+  closeNodeMenu()
+  if (action === 'move') props.data.moveOutlineNode(payload)
+  else if (action === 'remove') props.data.removeOutlineNode()
+  else if (action === 'add') props.data.addOutlineNode(payload)
+}
+
+/** Esc 先关菜单；点菜单外也收起（捕获阶段，先于行自己的 click）。 */
+function onNodeMenuKeydown(event) {
+  if (!nodeMenu.value || event.key !== 'Escape') return
+  event.preventDefault()
+  closeNodeMenu()
+}
+
+function onNodeMenuPointerDown(event) {
+  if (!nodeMenu.value) return
+  if (nodeMenuRoot.value?.contains?.(event.target)) return
+  closeNodeMenu()
+}
+
+onMounted(() => {
+  globalThis.addEventListener?.('keydown', onNodeMenuKeydown, true)
+  globalThis.addEventListener?.('pointerdown', onNodeMenuPointerDown, true)
+})
+
+onBeforeUnmount(() => {
+  globalThis.removeEventListener?.('keydown', onNodeMenuKeydown, true)
+  globalThis.removeEventListener?.('pointerdown', onNodeMenuPointerDown, true)
+})
 
 /** 树的口径由板块声明的目录窗 pane 前缀决定（协议 v1.1-A：一载体一棵本域内容树）。 */
 const treeKind = computed(() => {
@@ -286,16 +350,30 @@ watch(() => props.board?.id, () => {
            大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
       <template v-else-if="treeKind === 'outline'">
         <!-- 工单C（协议 v1.1-C）：载体声明了 overlay pane 才出这枚「悬浮」钮——
-             点它由外壳打开 FloatingWidget 的大纲悬浮窗（正文写作时不必切回这一栏）。 -->
-        <div class="nx-index-section-head">
+             点它由外壳打开 FloatingWidget 的大纲悬浮窗（正文写作时不必切回这一栏）。
+             批次31（P18）：区标题行右侧另有一枚 hover 才显形的「＋」——在末尾追一个同级节点；
+             大纲编辑面底部那排节点操作按钮拆掉后，新建入口只剩这里（带 tooltip 说明）。 -->
+        <div class="nx-index-section-head is-outline">
           <p class="workspace-nav-section">{{ treeDir }}</p>
-          <button
-            v-if="board?.overlayPane"
-            type="button"
-            class="control-quiet nx-index-overlay-toggle"
-            aria-label="悬浮大纲"
-            @click="emit('overlay', board.overlayPane.id)"
-          >悬浮</button>
+          <span class="nx-index-section-actions">
+            <button
+              v-if="board?.overlayPane"
+              type="button"
+              class="control-quiet nx-index-overlay-toggle"
+              aria-label="悬浮大纲"
+              @click="emit('overlay', board.overlayPane.id)"
+            >悬浮</button>
+            <button
+              type="button"
+              class="nx-row nx-index-icon-btn nx-index-add-toggle nx-index-append-node"
+              data-test="outline-append-node"
+              aria-label="新建大纲节点"
+              v-workbench-tooltip="{ text: '新建节点（加在末尾）', side: 'left' }"
+              @click="data.appendOutlineNode()"
+            >
+              <WorkbenchIcon name="plus" :size="14" />
+            </button>
+          </span>
         </div>
         <ul class="nx-tree">
           <li v-for="(node, index) in data.outline" :key="node.id ?? `outline-${index}`" class="nx-tree-line">
@@ -306,7 +384,7 @@ watch(() => props.board?.id, () => {
               :aria-current="isOutlineNodeOpen(index) ? 'page' : null"
               :style="{ paddingInlineStart: outlineIndent(index) + 'px' }"
               @click="data.selectOutlineNode(index)"
-              @contextmenu.prevent.stop="onRowContextMenu"
+              @contextmenu.prevent.stop="openOutlineNodeMenu($event, index)"
             >
               <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
             </button>
@@ -584,6 +662,59 @@ watch(() => props.board?.id, () => {
         </ul>
       </template>
     </div>
+
+    <!-- 大纲节点菜单（批次31 · P18 第 2 条）：右键才出现，默认不可见——节点操作退到按需浮现。
+         词汇与行为照批次24 的「打开方式」菜单：.nx-context-* 同一套样式（next-shell.css），
+         Esc／点菜单外收起，坐标按视口钳住。首行上移／末行下移禁用（no-op 不给假动作）。 -->
+    <div
+      v-if="nodeMenu"
+      ref="nodeMenuRoot"
+      class="nx-context-menu"
+      role="menu"
+      aria-label="大纲节点"
+      :style="nodeMenuStyle"
+      @contextmenu.prevent
+    >
+      <p class="nx-context-group">节点</p>
+      <button
+        type="button"
+        class="control-quiet nx-context-item outline-node-move outline-node-move-up"
+        role="menuitem"
+        data-test="outline-node-move-up"
+        :disabled="!data.canMoveOutlineNode(-1)"
+        @click="runNodeAction('move', -1)"
+      >上移</button>
+      <button
+        type="button"
+        class="control-quiet nx-context-item outline-node-move outline-node-move-down"
+        role="menuitem"
+        data-test="outline-node-move-down"
+        :disabled="!data.canMoveOutlineNode(1)"
+        @click="runNodeAction('move', 1)"
+      >下移</button>
+      <button
+        type="button"
+        class="control-quiet nx-context-item outline-node-remove"
+        role="menuitem"
+        data-test="outline-node-remove"
+        @click="runNodeAction('remove')"
+      >删除节点</button>
+      <div class="nx-context-separator" role="separator"></div>
+      <button
+        type="button"
+        class="control-quiet nx-context-item outline-node-add outline-node-add-sibling"
+        role="menuitem"
+        data-test="outline-node-add-sibling"
+        @click="runNodeAction('add', 'sibling')"
+      >加同级节点</button>
+      <button
+        type="button"
+        class="control-quiet nx-context-item outline-node-add outline-node-add-child"
+        role="menuitem"
+        data-test="outline-node-add-child"
+        @click="runNodeAction('add', 'child')"
+      >加子节点</button>
+    </div>
   </aside>
 </template>
 
@@ -641,6 +772,38 @@ watch(() => props.board?.id, () => {
   min-height: 24px;
   padding: 0 6px;
   font-size: var(--nx-fs-2xs);
+}
+/* 区标题行右侧成组的小钮（批次31）：大纲那一行要放「悬浮」与「＋」两枚，
+   所以它们是同一个绝对定位容器里的两枚静态钮（各自不再自己定位）。 */
+.nx-index-section-actions {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.nx-index-section-actions > * {
+  position: static;
+  transform: none;
+}
+.nx-index-section-head.is-outline .workspace-nav-section {
+  padding-inline-end: 72px;
+}
+/* 大纲「＋」（P18 第 2 条：按需浮现）：默认不可见，hover／聚焦这一区才显形。
+   opacity 只管看得见与否——命中区始终在，键盘也能到（focus-visible 直接显形）。 */
+.nx-index-append-node {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.nx-index-section-head:hover .nx-index-append-node,
+.nx-index-section-head:focus-within .nx-index-append-node,
+.nx-index-append-node:focus-visible {
+  opacity: 0.8;
+}
+.nx-index-section-head:hover .nx-index-append-node:hover {
+  opacity: 1;
 }
 /* 世界书视图切换（批次28 · 工单3）：区标题行右侧一枚小钮，与「＋」「悬浮」同一条基准线；
    文案是「表」（切到表格）／「列」（切回列表），命中区压到行高内，不另起一行。 */

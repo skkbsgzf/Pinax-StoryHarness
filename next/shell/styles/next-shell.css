@@ -693,14 +693,18 @@ body {
   color: var(--signal-warm);
   font-style: normal;
 }
+/* 编辑面就是文档本身（批次31 · P18 第 1 条）：正文满幅铺在窗格底色上——
+   没有描边、没有卡片背景、没有圆角，只留呼吸留白（padding）。
+   禁止「中间一个框把内容装进去」：框一出现，作者看到的就是控件，不是稿子。
+   写法说明：textarea 的 UA 描边用 border-style: none 摘掉（P18 门禁要求这一块里
+   不许再出现 border:／border-radius: 的声明——谁把框加回来，那条断言当场红）。 */
 .editor-area {
   width: 100%;
   flex: 1 1 auto;
   min-height: 340px;
   padding: 18px 20px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: var(--radius-control);
-  background: var(--surface-workbench);
+  border-style: none;
+  background: transparent;
   color: var(--archive-ink);
   font-family: var(--font-writing);
   /* 工单B 写作偏好：字号/行高由 AppNext 读到偏好后在根节点写 --writing-*；没写时回退到刻度默认
@@ -712,13 +716,39 @@ body {
 .editor-area:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
-  border-color: transparent;
 }
+/* 文档式输入（批次31 · P18 第 2 条第 4 款）：大纲节点标题＝一行无边框大字，备注＝标题下的第二行。
+   两者都不是「控件」——没有底色、没有描边、没有圆角，焦点只给一层极轻的底纹（不画框）。 */
+.doc-title,
+.doc-field {
+  width: 100%;
+  padding: 2px 0;
+  border-style: none;
+  background: transparent;
+  color: var(--archive-ink);
+  font-family: var(--font-writing);
+}
+.doc-title {
+  font-size: var(--nx-fs-xl);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.doc-field {
+  font-size: var(--nx-fs-md);
+  line-height: 1.7;
+  color: var(--text-primary);
+  resize: none;
+}
+.doc-title:focus-visible,
+.doc-field:focus-visible {
+  outline: 0;
+  background: color-mix(in srgb, var(--archive-ink) 4%, transparent);
+}
+/* 条目／资料／剧本的窗格外壳（批次31 · P18 第 1 条）：不再是一张卡片——
+   正文满幅铺在窗格底色上，只留纵向留白（横向留白由 .center 的 24px 给，
+   正文 textarea 自己还有一层 padding，那是呼吸，不是框）。 */
 .entry-body {
-  padding: 14px 16px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: var(--radius-control);
-  background: var(--surface-workbench-muted);
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -751,6 +781,11 @@ body {
   font-size: var(--nx-fs-lg);
   line-height: 1.85;
   color: var(--archive-ink);
+}
+/* 阅读态与编辑态同一条左边线（P18）：正文的呼吸留白由 .editor-area 的 padding 给，
+   渲染后的 md 阅读面照同一档补上横向留白——切换编辑时文字不会左右跳一下。 */
+.entry-body > .entry-text {
+  padding: 0 20px;
 }
 
 /* —— 窄屏（手机）：桌面那三栏在 390px 上会挤成一团，作者在手机侧要能真试 ——————

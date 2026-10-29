@@ -504,6 +504,65 @@ test('协议 v1.1-C：outline manifest 声明 overlay pane；层序高于编辑�
 })
 
 /**
+ * P18 文档为主合同（批次31，作者 2026-10-29）：
+ * 「我们是一个面向 Obsidian 的 doc 类组件，应该是以文档为主。就算有按钮，也应该在文档的
+ *  一些不显眼的位置去展示。」
+ *
+ * 合同落实成四条机器钉子：
+ *   1) 编辑面＝文档本身：.editor-area 的规则块里没有描边／圆角，底色透明（只留 padding 呼吸）；
+ *   2) 常驻按钮行一律取消：CarrierPaneHost 里 control-primary 出现 0 次
+ *      （大纲／条目／提案三处旧主按钮拆净，保存只剩 Ctrl+S＋chip）；
+ *   3) 控件三分之一「按需浮现」：大纲节点操作只在索引窗树行右键菜单里
+ *      （outline-move／outline-remove／outline-add 这些常驻选择器从编辑面消失）；
+ *   4) 元数据默认折叠：条目信息层是 v-if（收起时字段不在 DOM），不是 v-show。
+ * 面板型界面（提案的两版对照）不受此约束，但它的动作行也不许再长回主按钮皮。
+ */
+test('P18 文档为主：正文去框、常驻保存按钮拆净、节点操作只在右键菜单、条目信息默认折叠', async () => {
+  const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
+
+  // ① 正文满幅：.editor-area 规则块里没有 border:／border-radius:，底色透明。
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  const area = ruleBody(layout, '.editor-area {')
+  assert.ok(area, 'next-shell.css 里没有 .editor-area 规则')
+  assert.doesNotMatch(area, /border\s*:/u, '.editor-area 又画了描边：编辑面就是文档本身，不许「中间一个框把内容装进去」')
+  assert.doesNotMatch(area, /border-radius\s*:/u, '.editor-area 又上了圆角：文档不是卡片')
+  assert.match(area, /background:\s*transparent/u, '.editor-area 的底色应透明（铺在窗格底色上）')
+  assert.match(area, /padding:/u, '.editor-area 要留呼吸留白（padding 不算框）')
+
+  // ② 常驻按钮行取消：模板里一个主按钮都不要（注释里也不许留这个词，免得断言含糊）。
+  const primaries = pane.match(/control-primary/gu) ?? []
+  assert.equal(primaries.length, 0, `CarrierPaneHost 还留着 ${primaries.length} 处常驻主按钮（P18 第 3 条：保存只有 Ctrl+S＋chip）`)
+  assert.ok(!pane.includes('.editor-foot .control-primary'), '编辑面不该再有底部按钮行里的保存键')
+
+  // ③ 大纲：节点操作退到索引窗右键菜单，编辑面只剩无框标题＋无框备注。
+  for (const gone of ['outline-move', 'outline-remove', 'outline-add']) {
+    assert.ok(!pane.includes(gone), `大纲编辑面还留着常驻节点操作选择器：${gone}（应只在树行右键菜单里）`)
+  }
+  assert.match(pane, /class="doc-title outline-title"/u, '大纲节点标题要用 .doc-title（无边框大字）')
+  assert.match(pane, /class="doc-field outline-note"/u, '大纲节点备注要用 .doc-field（标题下的无框第二行）')
+  assert.match(layout, /\.doc-title[\s\S]{0,400}?font-size:\s*var\(--nx-fs-xl\)/u, '.doc-title 字号要升一档（走 --nx-fs-* 刻度）')
+
+  const index = await readFile(join(shellDir, 'IndexWindow.vue'), 'utf-8')
+  for (const key of [
+    'outline-node-move-up',
+    'outline-node-move-down',
+    'outline-node-remove',
+    'outline-node-add-sibling',
+    'outline-node-add-child'
+  ]) {
+    assert.match(index, new RegExp(`data-test="${key}"`, 'u'), `大纲树行右键菜单缺 ${key}（P18 第 2 条：节点操作按需浮现）`)
+  }
+  // 复用批次24 打开方式菜单的同一套词汇，不另起一套菜单皮。
+  assert.match(index, /class="nx-context-menu"/u, '节点菜单要用宿主那套 .nx-context-menu 词汇')
+  assert.match(index, /class="control-quiet nx-context-item/u, '节点菜单条目要走老版控件词汇（control-quiet／nx-context-item）')
+
+  // ④ 条目信息默认折叠：字段容器挂在 entryMetaOpen 上（v-if＝收起时不在 DOM）。
+  assert.match(pane, /data-test="entry-meta-toggle"/u, '编辑面要有一行「条目信息」开关')
+  assert.match(pane, /v-if="entryMetaOpen"[^>]*class="entry-meta-edit"/u, '条目字段容器必须是 v-if="entryMetaOpen"（默认折叠，不是 v-show）')
+  assert.doesNotMatch(pane, /v-show="entryMetaOpen"/u, '折叠层不许用 v-show 假装折叠（字段仍在 DOM 里）')
+})
+
+/**
  * 协议 v1.2 P18–P21（工单A）：多形态打开的机器钉子。
  *   - 形态词表与状态机只在宿主 paneForms.mjs（P18/P21），载体 SFC 不许出现形态切换逻辑；
  *   - 右键「打开方式」是宿主菜单，条目只来自 manifest.panes 的 forms 声明；

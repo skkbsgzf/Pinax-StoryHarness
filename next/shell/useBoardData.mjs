@@ -897,7 +897,8 @@ export function useBoardData(bridge) {
     state.selection = { type: 'outline-node', item: { ...node, index } }
   }
 
-  /** 大纲还没建档时的第一笔：起一份只有一个未命名节点的草稿，改名后保存即建 outline.json。 */
+  /** 大纲还没建档时的第一笔：起一份只有一个未命名节点的草稿，改名后保存即建 outline.json。
+   *  批次31：草稿一起来就把树同步过去（这一行当场出现在索引窗，接着能右键它／用「＋」继续加）。 */
   function startOutline() {
     if (state.outline.length || state.outlineError) return
     state.outlineDraft = { nodes: [{ id: freshOutlineNodeId([]), title: '未命名节点' }], edges: [] }
@@ -905,6 +906,7 @@ export function useBoardData(bridge) {
     state.error = null
     state.notice = ''
     state.selection = { type: 'outline-node', item: { ...state.outlineDraft.nodes[0], index: 0 } }
+    syncOutlineTree()
   }
 
   /** 改名落草稿：行内不改，中栏的标题输入框逐字进草稿，按保存才落盘。 */
@@ -921,6 +923,18 @@ export function useBoardData(bridge) {
   }
 
   /**
+   * 让索引窗那棵树跟着草稿走（批次31 · P18）：节点操作（上移／下移／删除／加同级／加子节点／末尾追加）
+   * 从编辑面底部退到树行右键菜单后，操作的回执必须立刻在树上看得见——否则刚加的节点没有行可点，
+   * 下一手就没法在它下面继续加子节点。只换界面这棵树（depth 现算）与 edges 副本，
+   * 草稿仍是唯一保存来源，修订号不动（落盘仍要 Ctrl+S）。
+   */
+  function syncOutlineTree() {
+    if (!state.outlineDraft) return
+    state.outlineEdges = JSON.parse(JSON.stringify(state.outlineDraft.edges ?? []))
+    state.outline = decorateOutlineNodes(plainOutlineNodes(state.outlineDraft.nodes), state.outlineEdges)
+  }
+
+  /**
    * 删节点（批次28 · 工单1b）：连同它的所有连线一起删。删的只是草稿——有整份草稿兜底，
    * 不保存就不落盘，所以界面不做二次确认。删光时把草稿收掉：空 nodes 存不进 outline.json
    * （工具明说不收空文档），硬留着只会给一个按了没反应的保存键。
@@ -934,6 +948,8 @@ export function useBoardData(bridge) {
     if (!result.nodes.length) {
       state.outlineDraft = null
       state.outlineNodeIndex = null
+      state.outline = []
+      state.outlineEdges = []
       state.selection = { type: null, item: null }
       state.notice = `已从草稿删掉最后一个节点「${removedTitle}」：空大纲不能保存（要清空请直接删 大纲/outline.json）`
       return
@@ -942,10 +958,11 @@ export function useBoardData(bridge) {
     state.outlineNodeIndex = result.index
     state.notice = `已从草稿删掉「${removedTitle}」（按保存才落盘）`
     state.selection = { type: 'outline-node', item: { ...result.nodes[result.index], index: result.index } }
+    syncOutlineTree()
   }
 
   /** 同级上移／下移（批次28 · 工单1b）：只重排 nodes 数组，不跨层；edges 一个字不改。
-   *  首行上移／末行下移是 no-op（按钮另有禁用态，见 canMoveOutlineNode）。 */
+   *  首行上移／末行下移是 no-op（菜单项另有禁用态，见 canMoveOutlineNode）。 */
   function moveOutlineNode(delta) {
     if (!state.outlineDraft || state.outlineNodeIndex === null) return
     const result = moveNode(state.outlineDraft, state.outlineNodeIndex, delta)
@@ -955,6 +972,7 @@ export function useBoardData(bridge) {
     state.outlineNodeIndex = result.index
     state.notice = '已调整节点顺序（草稿，按保存才落盘）'
     state.selection = { type: 'outline-node', item: { ...result.nodes[result.index], index: result.index } }
+    syncOutlineTree()
   }
 
   /** 这个方向上还动得动吗：与 outlineTree.canMoveNode 同一份判定，按钮禁用态直接读它。 */
@@ -974,6 +992,36 @@ export function useBoardData(bridge) {
     nodes.splice(state.outlineNodeIndex + 1, 0, node)
     if (kind === 'child') state.outlineDraft.edges.push({ from: anchor.id, to: node.id })
     selectOutlineNode(state.outlineNodeIndex + 1)
+    syncOutlineTree()
+  }
+
+  /**
+   * 在末尾追一个同级节点（批次31 · P18）：入口在索引窗大纲区标题行那枚 hover 显形的「＋」。
+   * 与 addOutlineNode 的区别是不依赖「当前选中谁」——树还没有草稿时先起一份（同 startOutline），
+   * 有草稿就直接追加，并把新节点选中送进中栏（作者接着改名）。
+   * 只改草稿：按 Ctrl+S 才落盘，与其余节点操作同一口径。
+   */
+  function appendOutlineNode() {
+    if (state.outlineError) return
+    if (!state.outlineDraft) {
+      // 空大纲（还没有 outline.json）：先起一份只有一个未命名节点的草稿（startOutline 的同一语义）。
+      if (!state.outline.length) {
+        startOutline()
+        return
+      }
+      // 有树没草稿：点开第一个节点会把整份文档拷成草稿。
+      selectOutlineNode(0)
+      if (!state.outlineDraft) return
+    }
+    const nodes = state.outlineDraft.nodes
+    const node = { id: freshOutlineNodeId(nodes), title: '未命名节点' }
+    nodes.push(node)
+    const index = nodes.length - 1
+    state.outlineNodeIndex = index
+    state.error = null
+    state.notice = ''
+    state.selection = { type: 'outline-node', item: { ...node, index } }
+    syncOutlineTree()
   }
 
   function freshOutlineNodeId(nodes) {
@@ -1123,6 +1171,7 @@ export function useBoardData(bridge) {
     setOutlineNodeTitle,
     setOutlineNodeNote,
     addOutlineNode,
+    appendOutlineNode,
     removeOutlineNode,
     moveOutlineNode,
     canMoveOutlineNode,

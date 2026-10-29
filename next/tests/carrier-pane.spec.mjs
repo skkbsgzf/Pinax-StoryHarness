@@ -534,9 +534,10 @@ describe('小说载体', () => {
     await outlineRow.trigger('click')
     await flushPromises()
     expect(wrapper.find('[aria-label="大纲节点标题"]').exists()).toBe(true)
-    // 工单C（P2/P3）：头部是统一容器；保存按钮只写「保存」，版本号留在 meta 行。
+    // 工单C（P2/P3）：头部是统一容器；批次31（P18）起常驻保存按钮拆净——保存只有 Ctrl+S，
+    // 结果进头部 chip，版本号留在 meta 行。
     expect(wrapper.find('.nx-pane-header .pane-sub').text()).toContain('大纲')
-    expect(wrapper.find('.editor-foot .control-primary').text()).toBe('保存')
+    expect(wrapper.find('.control-primary').exists()).toBe(false)
 
     await wrapper.find('[aria-label="大纲节点标题"]').setValue('开场：雪夜进城')
     await wrapper.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
@@ -557,21 +558,44 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
-  it('大纲加节点（工单B2）：同级紧随所选、子级多记一条连线；拒绝空 nodes 不发保存', async () => {
+  it('大纲加节点（工单B2 → 批次31）：同级紧随所选、子级多记一条连线；入口在树行右键菜单，保存才落盘', async () => {
     const tools = fakeTools()
-    const data = useBoardData(tools)
-    await data.loadOutline()
-    data.selectOutlineNode(1)
-    const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('outline.editor'), data } })
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
+    await openBoard(wrapper, '大纲')
 
-    // 同级：插在「第一折」后面并选中它；子级：再往其后插一个，并记所选→新节点的连线（层级语义在 edges 里）。
-    // 批次28 起脚注里多了上移／下移／删除，按类名点「加」这枚，不靠位置顺序。
-    await wrapper.find('.outline-add-sibling').trigger('click')
-    await wrapper.find('.outline-add-child').trigger('click')
+    const rows = () => wrapper.findAll('.nx-index-window .nx-tree-item')
+    expect(rows()).toHaveLength(2)
+
+    // 右键「第一折」：菜单当场开出，五项节点操作都在（批次31 起这排操作不再占中栏正文的位置）。
+    rows()[1].element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 180 }))
+    await flushPromises()
+    const menu = wrapper.find('.nx-context-menu')
+    expect(menu.exists()).toBe(true)
+    for (const key of ['outline-node-move-up', 'outline-node-move-down', 'outline-node-remove', 'outline-node-add-sibling', 'outline-node-add-child']) {
+      expect(menu.find(`[data-test="${key}"]`).exists(), `菜单缺 ${key}`).toBe(true)
+    }
+    // 右键先把这一行选中：所有节点操作都作用在所选节点上。
+    expect(rows()[1].classes()).toContain('is-active')
+
+    // 加同级：插在所选之后，树当场长一行（草稿的回执要在树上看得见，不然下一手没有行可点）。
+    await menu.find('[data-test="outline-node-add-sibling"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+    expect(rows()).toHaveLength(3)
+    expect(rows()[2].text()).toContain('3. 未命名节点')
+
+    // 再右键新行「加子节点」：多记一条 from→to 连线（层级语义住在 edges 里）。
+    rows()[2].element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 240 }))
+    await flushPromises()
+    await wrapper.find('[data-test="outline-node-add-child"]').trigger('click')
+    await flushPromises()
+    expect(rows()).toHaveLength(4)
+    expect(tools.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(0)
+
     await wrapper.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
-
     const saved = tools.calls.find((call) => call.tool === 'pinax_outline_save')
     expect(saved.args.nodes).toHaveLength(4)
     expect(saved.args.nodes[1].title).toBe('第一折：停摆的表')
@@ -585,8 +609,8 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
-  it('大纲／条目保存双通道（批次19 H1 收尾）：常驻按钮与 Ctrl+S 都能存，结果只进 .nx-save-chip', async () => {
-    // ① 大纲：常驻「保存」按钮还在，点它即落盘；结果进头部 chip（不再铺常驻 notice）。
+  it('大纲／条目保存单通道（批次31 · P18）：常驻保存按钮拆净，Ctrl+S 落盘，结果只进 .nx-save-chip', async () => {
+    // ① 大纲：编辑面里没有任何常驻主按钮，也没有底部按钮行；Ctrl+S 是唯一保存入口。
     const tools = fakeTools()
     const data = useBoardData(tools)
     await data.loadOutline()
@@ -594,10 +618,10 @@ describe('小说载体', () => {
     const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('outline.editor'), data } })
     await flushPromises()
 
-    const outlineSave = () => wrapper.find('.editor-foot .control-primary')
-    expect(outlineSave().text()).toBe('保存')
+    expect(wrapper.find('.editor-foot').exists()).toBe(false)
+    expect(wrapper.find('.control-primary').exists()).toBe(false)
     await wrapper.find('[aria-label="大纲节点标题"]').setValue('开场：雪夜进城')
-    await outlineSave().trigger('click')
+    await wrapper.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     expect(tools.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(1)
     const outlineChip = wrapper.find('.nx-pane-header .nx-pane-actions .nx-save-chip')
@@ -605,20 +629,6 @@ describe('小说载体', () => {
     expect(outlineChip.text()).toContain('已保存 · 第 2 版')
     expect(wrapper.find('.pane-notice').exists()).toBe(false)
     wrapper.unmount()
-
-    // Ctrl+S 同效：第二次改稿走快捷键，两条路落的是同一格反馈。
-    const keysTools = fakeTools()
-    const keysData = useBoardData(keysTools)
-    await keysData.loadOutline()
-    keysData.selectOutlineNode(0)
-    const keys = mount(CarrierPaneHost, { props: { pane: paneOf('outline.editor'), data: keysData } })
-    await flushPromises()
-    await keys.find('[aria-label="大纲节点标题"]').setValue('开场：雪夜进城')
-    await keys.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
-    await flushPromises()
-    expect(keysTools.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(1)
-    expect(keys.find('.nx-pane-header .nx-save-chip').text()).toContain('已保存 · 第 2 版')
-    keys.unmount()
 
     // 大纲的 STALE：chip 常驻并给「重新载入」；重载后草稿回到盘上那一版，chip 随重读收掉。
     const staleTools = fakeTools({ stale: true })
@@ -628,7 +638,7 @@ describe('小说载体', () => {
     const stale = mount(CarrierPaneHost, { props: { pane: paneOf('outline.editor'), data: staleData } })
     await flushPromises()
     await stale.find('[aria-label="大纲节点标题"]').setValue('冲突里的改名')
-    await stale.find('.editor-foot .control-primary').trigger('click')
+    await stale.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const staleChip = stale.find('.nx-pane-header .nx-save-chip')
     expect(staleChip.classes()).toContain('is-error')
@@ -639,8 +649,8 @@ describe('小说载体', () => {
     expect(stale.find('[aria-label="大纲节点标题"]').element.value).toBe('开场：雨夜进城')
     stale.unmount()
 
-    // ② 条目：编辑态 Ctrl+S 落盘一次；保存后回到阅读态，chip 在动作位与「编辑」并排；
-    //    再进编辑态点常驻「保存」，第二个通道同样进 chip。
+    // ② 条目：编辑态 Ctrl+S 落盘；保存后回到阅读态，chip 在动作位与「编辑」并排。
+    //    再进编辑态（底部没有保存／取消按钮行），第二个通道仍是 Ctrl+S。
     const entryTools = fakeTools()
     const entryData = useBoardData(entryTools)
     await entryData.loadEntries()
@@ -649,6 +659,7 @@ describe('小说载体', () => {
 
     await entry.find('.entry-edit').trigger('click')
     await flushPromises()
+    expect(entry.find('.editor-foot').exists()).toBe(false)
     await entry.find('.editor-area').setValue('冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。')
     await entry.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
@@ -662,9 +673,10 @@ describe('小说载体', () => {
 
     await entry.find('.entry-edit').trigger('click')
     await flushPromises()
-    expect(entry.find('.editor-foot .control-primary').text()).toBe('保存')
+    // 取消退到头部右端（与「编辑」同一个位置），正文里不再有按钮行。
+    expect(entry.find('.nx-pane-header .nx-pane-actions .entry-cancel').exists()).toBe(true)
     await entry.find('.editor-area').setValue('冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。雨声未停。')
-    await entry.find('.editor-foot .control-primary').trigger('click')
+    await entry.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     expect(entryTools.calls.filter((call) => call.tool === 'pinax_worldbook_save')).toHaveLength(2)
     entryChip = entry.find('.nx-pane-header .nx-pane-actions .nx-save-chip')
@@ -765,7 +777,7 @@ describe('小说载体', () => {
     expect(pane.find('[aria-label="提案新文"]').text()).toBe('雨从檐口滴下来，巷子里没人。')
     expect(pane.text()).toContain('14 字')
 
-    await pane.find('.editor-foot .pane-btn.is-primary').trigger('click')
+    await pane.find('.proposal-adopt').trigger('click')
     await flushPromises()
     const saved = tools.calls.filter((call) => call.tool === 'pinax_chapter_save').at(-1)
     expect(saved.args).toEqual({ file: '正文/第002章.md', text: '雨从檐口滴下来，巷子里没人。', expectedRevision: 1, proposal: PROPOSAL.name })
@@ -791,7 +803,7 @@ describe('小说载体', () => {
     await wrapper.find('[data-test="proposal-row-20261028T140000-ch1-abcdef12.json"]').trigger('click')
     await flushPromises()
 
-    const discardButton = wrapper.find('[data-pane-id="novel.editor"] .editor-foot .control-quiet')
+    const discardButton = wrapper.find('[data-pane-id="novel.editor"] .proposal-discard')
     expect(discardButton.text()).toBe('弃用')
     await discardButton.trigger('click')
     await flushPromises()
@@ -814,7 +826,7 @@ describe('小说载体', () => {
     await openProposalsSection(second)
     await second.find('[data-test="proposal-row-20261028T140000-ch1-abcdef12.json"]').trigger('click')
     await flushPromises()
-    await second.find('[data-pane-id="novel.editor"] .editor-foot .control-primary').trigger('click')
+    await second.find('[data-pane-id="novel.editor"] .proposal-adopt').trigger('click')
     await flushPromises()
 
     const error = second.find('.pane-error')
@@ -822,7 +834,7 @@ describe('小说载体', () => {
     expect(error.text()).toContain('已被改动（第 1 版）')
     expect(error.text()).toContain('提案已过期')
     expect(staleTools.state.proposals[0].status, '拒写不推进提案状态').toBe('proposed')
-    const retry = second.find('[data-pane-id="novel.editor"] .editor-foot .control-primary')
+    const retry = second.find('[data-pane-id="novel.editor"] .proposal-adopt')
     expect(retry.attributes('disabled')).toBeUndefined()
     second.unmount()
   })
@@ -1018,8 +1030,10 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     await flushPromises()
     // 编辑态：entry-text 换成 textarea，草稿从读到的正文起。
     expect(wrapper.find('.entry-text').exists()).toBe(false)
-    // 工单C（P3）：保存按钮只写「保存」（原「保存为新版本」）。
-    expect(wrapper.find('.editor-foot .control-primary').text()).toBe('保存')
+    // 批次31（P18）：底部按钮行拆净——保存只剩 Ctrl+S，取消退到头部右端；正文里没有主按钮。
+    expect(wrapper.find('.editor-foot').exists()).toBe(false)
+    expect(wrapper.find('.control-primary').exists()).toBe(false)
+    expect(wrapper.find('.nx-pane-header .nx-pane-actions .entry-cancel').exists()).toBe(true)
     const area = wrapper.find('.editor-area')
     expect(area.element.value).toBe('冷穿越剧版主角，醒来在雪夜。')
 
@@ -1055,7 +1069,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     wrapper.unmount()
   })
 
-  it('条目元数据（工单C／收口包②）：编辑态改关键词／标签／摘要随 meta 传；阅读态展示关键词与摘要；裸 md 不出这三栏', async () => {
+  it('条目元数据（工单C／收口包② → 批次31 P18）：默认折叠在「条目信息」一行，展开后才改关键词／标签／摘要', async () => {
     const tools = fakeTools()
     const data = useBoardData(tools)
     await data.loadEntries()
@@ -1068,6 +1082,21 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
 
     await wrapper.find('.entry-edit').trigger('click')
     await flushPromises()
+    // 批次31（P18 第 4 条）：默认折叠——信息行在场，字段不在 DOM（不是隐藏，是没渲染）。
+    const toggle = wrapper.find('[data-test="entry-meta-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.text()).toContain('条目信息')
+    expect(toggle.text()).toContain('关键词 1 · 关系 0')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(wrapper.find('[data-test="entry-meta-fields"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="条目关键词（逗号分隔）"]').exists()).toBe(false)
+
+    // 点开才摊出字段。
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+    expect(wrapper.find('[data-test="entry-meta-fields"]').exists()).toBe(true)
+
     const keysInput = wrapper.find('[aria-label="条目关键词（逗号分隔）"]')
     const tagsInput = wrapper.find('[aria-label="条目标签（逗号分隔）"]')
     const summaryInput = wrapper.find('[aria-label="条目摘要（最多 500 字）"]')
@@ -1081,8 +1110,8 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     // 摘要上限写在控件上（maxlength），旁边有一枚字数说明（不另铺常驻提示）。
     expect(summaryInput.attributes('maxlength')).toBe('500')
     expect(wrapper.find('.entry-meta-count').text()).toBe('18/500')
-    // 元数据行在正文 textarea 之上。
-    const row = wrapper.find('.entry-meta-edit').element
+    // 折叠层在正文 textarea 之上（展开时也不抢正文的第一眼）。
+    const row = wrapper.find('[data-test="entry-meta-fields"]').element
     const area = wrapper.find('.editor-area').element
     expect(row.compareDocumentPosition(area) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
@@ -1090,7 +1119,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     await keysInput.setValue('柯秒，秒子')
     await tagsInput.setValue('主角, 停摆的表')
     await summaryInput.setValue('雨夜醒来的主角，袖中的表停了。')
-    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const saved = tools.calls.find((call) => call.tool === 'pinax_worldbook_save')
     expect(saved.args.meta).toEqual({ keys: ['柯秒', '秒子'], tags: ['主角', '停摆的表'], summary: '雨夜醒来的主角，袖中的表停了。', relations: [] })
@@ -1099,17 +1128,21 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     expect(wrapper.find('.entry-meta').text()).toContain('摘要：雨夜醒来的主角，袖中的表停了。')
 
     // 摘要留空＝清空（空串随 meta 传，与工具 schema 同一口径）；阅读态不再显示这一格。
+    // 再进编辑态：折叠层回到收起（下一次进来仍是先看正文），展开才改摘要。
     await wrapper.find('.entry-edit').trigger('click')
     await flushPromises()
+    expect(wrapper.find('[data-test="entry-meta-fields"]').exists()).toBe(false)
+    await wrapper.find('[data-test="entry-meta-toggle"]').trigger('click')
+    await flushPromises()
     await wrapper.find('[aria-label="条目摘要（最多 500 字）"]').setValue('')
-    await wrapper.find('.editor-foot .control-primary').trigger('click')
+    await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const cleared = tools.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1)
     expect(cleared.args.meta.summary).toBe('')
     expect(wrapper.find('.entry-meta').text()).not.toContain('摘要：')
     wrapper.unmount()
 
-    // 裸 md（没有 frontmatter）：编辑态不出这三栏，只给一句话说明；保存也不带 meta。
+    // 裸 md（没有 frontmatter）：编辑态不出折叠层与这三栏，只给一句话说明；保存也不带 meta。
     const bareTools = fakeTools()
     const bareData = useBoardData(bareTools)
     await bareData.loadEntries()
@@ -1117,11 +1150,12 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     bareData.editEntry()
     const bare = mount(CarrierPaneHost, { props: { pane: paneOf('worldbook.entries'), data: bareData } })
     await flushPromises()
+    expect(bare.find('[data-test="entry-meta-toggle"]').exists()).toBe(false)
     expect(bare.find('[aria-label="条目关键词（逗号分隔）"]').exists()).toBe(false)
     expect(bare.find('[aria-label="条目摘要（最多 500 字）"]').exists()).toBe(false)
     expect(bare.find('[data-test="entry-meta-bare"]').text()).toContain('没有 frontmatter')
     await bare.find('.editor-area').setValue('裸 md 的新正文。')
-    await bare.find('.editor-foot .control-primary').trigger('click')
+    await bare.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const bareSave = bareTools.calls.find((call) => call.tool === 'pinax_worldbook_save')
     expect(bareSave.args.meta).toBeUndefined()

@@ -29,8 +29,14 @@ import { resolvePaneView } from './viewRegistry.mjs'
  *
  * 保存交互（工单H1，对齐老版）：没有常驻保存按钮——Ctrl+S／Cmd+S 触发（编辑器聚焦时生效），
  * 结果只落在编辑面头部一枚自动消失的保存 chip 上（复刻 wall__save-chip 的度量）。
- * 批次19 H1 收尾：大纲与条目两块面按双通道——各自的常驻「保存」按钮保留（这两块面的主操作位已有惯例），
- * 同时接 Ctrl+S；两条路落同一格 chip，不另铺常驻提示。
+ *
+ * P18 文档为主合同（批次31，作者 2026-10-29 裁定）：「我们是一个面向 Obsidian 的 doc 类组件，
+ * 应该是以文档为主」。据此三件事落到这一枚组件上：
+ *   1. 编辑面就是文档本身——正文满幅铺在窗格底色上（无 border／无卡片背景／无圆角，只留呼吸留白）；
+ *   2. 控件只有三分：窗格头部一行（标题＋meta＋至多两个 quiet 操作，右端对齐）、按需浮现
+ *      （索引窗树行右键菜单／hover 显形）、Ctrl+S＋保存 chip；**常驻按钮行一律取消**；
+ *   3. 元数据默认折叠：条目的关键词／标签／摘要／关系收进一行「条目信息」层（照 Obsidian properties）。
+ * 面板型界面（提案审阅的两版对照）不受此合同约束——两份文档需要视觉分隔。
  */
 const props = defineProps({
   pane: { type: Object, default: null },
@@ -139,8 +145,7 @@ async function openKnowledgeHit(hit) {
  * 保存 chip（工单H1）：只认 useBoardData.saveFeedback 这一格。
  * 六个编辑面共用同一条反馈状态，但每块面只显示自己 target 的那一条；
  * saved 2.5 秒后收起，saving／error 常驻（失败带重试，STALE 换成重新载入）。
- * 大纲与条目（批次19 H1 收尾）：按「双通道」保存——常驻按钮保留（这两块面的主操作位已有惯例），
- * 同时接 Ctrl+S，两条路都落这一格 chip。
+ * 批次31（P18）起 chip 是保存的唯一常驻形态：大纲与条目的常驻「保存」按钮已拆净（双通道收成单通道）。
  */
 const SAVE_TARGET_BY_VIEW = {
   'chapter-editor': 'chapter',
@@ -260,6 +265,28 @@ function actOnSaveChip() {
   if (saveChipStale.value) void reloadFromChip()
   else retrySaveFromChip()
 }
+
+/**
+ * 条目信息折叠层（批次31 · P18 第 4 条）：关键词／标签／摘要／关系默认收起——
+ * 编辑面先是正文，元数据是「条目信息」那一行点开才在的字段（照 Obsidian properties：
+ * 默认一行，点开才是字段）。收起时这一行给「关键词 N · 关系 M」摘要，
+ * 作者不展开也知道元数据改没改、有几条关系。
+ */
+const entryMetaOpen = ref(false)
+
+const entryMetaSummary = computed(() => {
+  const keys = String(props.data.entryMetaDraft?.keys ?? '')
+    .split(/[,，]/u)
+    .map((part) => part.trim())
+    .filter(Boolean)
+  const relations = Array.isArray(props.data.entryMetaDraft?.relations) ? props.data.entryMetaDraft.relations.length : 0
+  return `关键词 ${keys.length} · 关系 ${relations}`
+})
+
+// 退出编辑态就收回折叠层：下一次进来仍是「先看正文」。
+watch(() => props.data.editingEntry, (editing) => {
+  if (!editing) entryMetaOpen.value = false
+})
 </script>
 
 <template>
@@ -327,9 +354,10 @@ function actOnSaveChip() {
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇构思，或用索引窗「构思」区的 ＋ 新建一篇。</p>
     </template>
 
-    <!-- 大纲编辑面（工单B2）：改名与加节点都先落在整份草稿上，按保存才走 pinax_outline_save 整份覆盖。
-         改名选中「中栏改名」这一实现（比行内编辑省一套焦点管理）；不提供拖拽重排。
-         批次19 H1 收尾：保存是双通道——下方按钮保留，Ctrl+S 同效；结果只进头部保存 chip。 -->
+    <!-- 大纲编辑面（工单B2 → 批次31 · P18）：中栏只剩文档本身。
+         节点标题是一行无边框大字，备注是标题下面的第二行无框文字——不再是一个框把内容装进去。
+         节点操作（上移／下移／删除／加同级／加子节点）整排退到索引窗大纲行的右键菜单，
+         树区标题行的「＋」在末尾追一个同级节点；保存只有 Ctrl+S，结果只进头部 chip。 -->
     <template v-else-if="viewKind === 'outline-editor'">
       <div v-if="data.outlineDraft" class="editor">
         <div class="editor-head nx-pane-header">
@@ -344,16 +372,17 @@ function actOnSaveChip() {
           </span>
         </div>
         <input
-          class="nx-field outline-title"
+          class="doc-title outline-title"
           :value="data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? ''"
           spellcheck="false"
           aria-label="大纲节点标题"
+          title="改名、备注、增删与排序都先记在草稿上，Ctrl+S 保存整份大纲"
           @input="data.setOutlineNodeTitle(data.outlineNodeIndex, $event.target.value)"
         >
         <!-- 节点备注（批次28 · 工单1c）：这一节要写什么，一句话；note 是节点上的普通字段，
-             随整份草稿保存走（工具原样透传，不需要改合同）。 -->
+             随整份草稿保存走（工具原样透传，不需要改合同）。批次31 起无边框，是标题下的第二行。 -->
         <textarea
-          class="nx-field outline-note"
+          class="doc-field outline-note"
           :value="data.outlineDraft.nodes[data.outlineNodeIndex]?.note ?? ''"
           maxlength="200"
           rows="2"
@@ -362,29 +391,6 @@ function actOnSaveChip() {
           aria-label="大纲节点备注（最多 200 字）"
           @input="data.setOutlineNodeNote(data.outlineNodeIndex, $event.target.value)"
         />
-        <div class="editor-foot">
-          <!-- 节点操作（批次28 · 工单1b）：只改草稿，按保存才落盘。首行上移／末行下移禁用（no-op 不给假动作）。 -->
-          <button
-            type="button"
-            class="control-secondary outline-move outline-move-up"
-            :disabled="!data.canMoveOutlineNode(-1)"
-            @click="data.moveOutlineNode(-1)"
-          >上移</button>
-          <button
-            type="button"
-            class="control-secondary outline-move outline-move-down"
-            :disabled="!data.canMoveOutlineNode(1)"
-            @click="data.moveOutlineNode(1)"
-          >下移</button>
-          <button type="button" class="control-secondary outline-remove" @click="data.removeOutlineNode()">删除节点</button>
-          <button type="button" class="control-secondary outline-add outline-add-sibling" @click="data.addOutlineNode('sibling')">在后面加同级节点</button>
-          <button type="button" class="control-secondary outline-add outline-add-child" @click="data.addOutlineNode('child')">加子节点</button>
-          <!-- P3：版本号不进按钮文案——版本在头部 meta 与历史面板看。 -->
-          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy" @click="data.saveOutline()">
-            {{ data.busy ? '写入中…' : '保存' }}
-          </button>
-        </div>
-        <p class="pane-hint">大纲按整份覆盖保存：改名、备注、增删与排序都先记在草稿上，按保存才写 大纲/outline.json；层级关系记在连线上。</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一个大纲节点。</p>
     </template>
@@ -418,15 +424,17 @@ function actOnSaveChip() {
           </section>
         </div>
         <div class="editor-foot">
+          <!-- 面板型界面（P18 第 5 条豁免）：两版对照需要视觉分隔，采纳／弃用留在审阅面的动作行。
+               批次31：文档面已无常驻主按钮，这两枚也退回次级控件词汇（不复用主操作皮）。 -->
           <button
             type="button"
-            class="pane-btn is-primary control-primary"
+            class="pane-btn proposal-adopt control-secondary"
             :disabled="data.busy || !data.proposal.content"
             @click="data.adoptProposal()"
           >
             {{ data.busy ? '写入中…' : '采纳（写入为新一版）' }}
           </button>
-          <button type="button" class="control-quiet" :disabled="data.busy" @click="data.discardProposal()">弃用</button>
+          <button type="button" class="control-quiet proposal-discard" :disabled="data.busy" @click="data.discardProposal()">弃用</button>
         </div>
         <p v-if="data.proposal.status === 'adopted'" class="pane-hint">这条提案已经采纳过；再采纳会按当前章节版本重新写入一版。</p>
       </div>
@@ -467,104 +475,118 @@ function actOnSaveChip() {
         <div class="entry-head nx-pane-header">
           <h4 class="pane-sub">{{ data.entry.name }}</h4>
           <span class="entry-meta">{{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="data.entry.keys?.length"> · 关键词：{{ data.entry.keys.join('、') }}</template><template v-if="clipSummary(data.entry.summary)"> · 摘要：{{ clipSummary(data.entry.summary) }}</template><template v-if="!data.entry.contract">（未建档）</template></span>
-          <span v-if="(chipVisible && saveChip) || !data.editingEntry" class="nx-pane-actions">
-            <!-- 保存 chip（批次19 H1 收尾）：Ctrl+S 与下方「保存」按钮同一格反馈；阅读态留着让结果看得见。 -->
+          <span class="nx-pane-actions">
+            <!-- 保存 chip：保存的唯一常驻形态（批次31 · P18）；阅读态也留着，让刚才那一下的结果看得见。 -->
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
               <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
               <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
             </span>
             <button v-if="!data.editingEntry" type="button" class="control-secondary entry-edit" @click="data.editEntry()">编辑</button>
+            <!-- 取消从底部按钮行退到头部右端（P18 第 2 条：头部一行至多两个 quiet 操作）。 -->
+            <button v-else type="button" class="control-quiet entry-cancel" :disabled="data.busy" @click="data.cancelEditEntry()">取消</button>
           </span>
         </div>
-        <!-- 条目元数据（工单C）：契约条目的 frontmatter 关键词／标签在这里改，随保存一起走 meta；
-             裸 md 没有 frontmatter，只给一句话说明（保存仍按原样整份写正文）。
-             收口包②：关键词／标签之下补「摘要」一栏——textarea 走 .nx-field 词汇，500 字上限由
-             maxlength 与工具 schema 两头守，旁边一枚字数说明（不另起常驻提示）。 -->
-        <div v-if="data.editingEntry && data.entry.contract" class="entry-meta-edit">
-          <label class="entry-meta-field">
-            <span class="entry-meta-label">关键词</span>
-            <input
-              class="nx-field"
-              :value="data.entryMetaDraft.keys"
-              spellcheck="false"
-              aria-label="条目关键词（逗号分隔）"
-              @input="data.setEntryMeta('keys', $event.target.value)"
-            >
-          </label>
-          <label class="entry-meta-field">
-            <span class="entry-meta-label">标签</span>
-            <input
-              class="nx-field"
-              :value="data.entryMetaDraft.tags"
-              spellcheck="false"
-              aria-label="条目标签（逗号分隔）"
-              @input="data.setEntryMeta('tags', $event.target.value)"
-            >
-          </label>
-          <label class="entry-meta-field is-summary">
-            <span class="entry-meta-label">摘要</span>
-            <textarea
-              class="nx-field entry-meta-summary"
-              :value="data.entryMetaDraft.summary"
-              maxlength="500"
-              rows="2"
-              spellcheck="false"
-              aria-label="条目摘要（最多 500 字）"
-              @input="data.setEntryMeta('summary', $event.target.value)"
-            />
-            <span class="entry-meta-count" aria-hidden="true">{{ data.entryMetaDraft.summary.length }}/500</span>
-          </label>
-          <!-- 关系（批次28 · 工单2b）：frontmatter 的 relations 一行一条，整份随 meta 落盘。
-               目标用 datalist 提示当前条目名（作者可以直接写 id 或名字，跟正文引用同一口径）；
-               暗线＝covert；weight 没有这一栏，作者改别的字段时它原样带回，不会被洗掉。 -->
-          <div class="entry-relations" data-test="entry-relations">
-            <span class="entry-meta-label">关系</span>
-            <ul v-if="data.entryMetaDraft.relations.length" class="entry-relation-rows">
-              <li v-for="(relation, index) in data.entryMetaDraft.relations" :key="`rel-${index}`" class="entry-relation-row">
-                <input
-                  class="nx-field entry-relation-target"
-                  list="entry-relation-targets"
-                  :value="relation.to"
-                  spellcheck="false"
-                  placeholder="目标条目"
-                  aria-label="关系目标"
-                  @input="data.setEntryRelation(index, 'to', $event.target.value)"
-                >
-                <input
-                  class="nx-field entry-relation-type"
-                  :value="relation.type ?? ''"
-                  spellcheck="false"
-                  placeholder="类型（师徒／敌对／亲属）"
-                  aria-label="关系类型"
-                  @input="data.setEntryRelation(index, 'type', $event.target.value)"
-                >
-                <input
-                  class="nx-field entry-relation-stance"
-                  :value="relation.stance ?? ''"
-                  spellcheck="false"
-                  placeholder="立场"
-                  aria-label="关系立场"
-                  @input="data.setEntryRelation(index, 'stance', $event.target.value)"
-                >
-                <label class="entry-relation-covert">
+        <!-- 条目信息（批次31 · P18 第 4 条）：关键词／标签／摘要／关系默认收起，编辑面先是正文；
+             这一行点开才是字段（照 Obsidian properties）。收起时给「关键词 N · 关系 M」摘要。
+             裸 md 没有 frontmatter：这一行改成一句说明（保存仍按原样整份写正文）。 -->
+        <div v-if="data.editingEntry && data.entry.contract" class="entry-meta-row">
+          <button
+            type="button"
+            class="control-quiet entry-meta-toggle"
+            data-test="entry-meta-toggle"
+            :aria-expanded="entryMetaOpen ? 'true' : 'false'"
+            @click="entryMetaOpen = !entryMetaOpen"
+          >
+            <span aria-hidden="true" class="entry-meta-caret">{{ entryMetaOpen ? '▾' : '▸' }}</span>
+            <span>条目信息</span>
+            <span class="entry-meta-hint">{{ entryMetaSummary }}</span>
+          </button>
+          <div v-if="entryMetaOpen" class="entry-meta-edit" data-test="entry-meta-fields">
+            <label class="entry-meta-field">
+              <span class="entry-meta-label">关键词</span>
+              <input
+                class="nx-field"
+                :value="data.entryMetaDraft.keys"
+                spellcheck="false"
+                aria-label="条目关键词（逗号分隔）"
+                @input="data.setEntryMeta('keys', $event.target.value)"
+              >
+            </label>
+            <label class="entry-meta-field">
+              <span class="entry-meta-label">标签</span>
+              <input
+                class="nx-field"
+                :value="data.entryMetaDraft.tags"
+                spellcheck="false"
+                aria-label="条目标签（逗号分隔）"
+                @input="data.setEntryMeta('tags', $event.target.value)"
+              >
+            </label>
+            <label class="entry-meta-field is-summary">
+              <span class="entry-meta-label">摘要</span>
+              <textarea
+                class="nx-field entry-meta-summary"
+                :value="data.entryMetaDraft.summary"
+                maxlength="500"
+                rows="2"
+                spellcheck="false"
+                aria-label="条目摘要（最多 500 字）"
+                @input="data.setEntryMeta('summary', $event.target.value)"
+              />
+              <span class="entry-meta-count" aria-hidden="true">{{ data.entryMetaDraft.summary.length }}/500</span>
+            </label>
+            <!-- 关系（批次28 · 工单2b）：frontmatter 的 relations 一行一条，整份随 meta 落盘。
+                 目标用 datalist 提示当前条目名（作者可以直接写 id 或名字，跟正文引用同一口径）；
+                 暗线＝covert；weight 没有这一栏，作者改别的字段时它原样带回，不会被洗掉。 -->
+            <div class="entry-relations" data-test="entry-relations">
+              <span class="entry-meta-label">关系</span>
+              <ul v-if="data.entryMetaDraft.relations.length" class="entry-relation-rows">
+                <li v-for="(relation, index) in data.entryMetaDraft.relations" :key="`rel-${index}`" class="entry-relation-row">
                   <input
-                    type="checkbox"
-                    :checked="relation.covert === true"
-                    @change="data.setEntryRelation(index, 'covert', $event.target.checked)"
+                    class="nx-field entry-relation-target"
+                    list="entry-relation-targets"
+                    :value="relation.to"
+                    spellcheck="false"
+                    placeholder="目标条目"
+                    aria-label="关系目标"
+                    @input="data.setEntryRelation(index, 'to', $event.target.value)"
                   >
-                  <span>暗线</span>
-                </label>
-                <button type="button" class="control-quiet entry-relation-remove" :aria-label="`删除第 ${index + 1} 条关系`" @click="data.removeEntryRelation(index)">删行</button>
-              </li>
-            </ul>
-            <datalist id="entry-relation-targets">
-              <option v-for="item in data.entries" :key="item.path" :value="item.name" />
-            </datalist>
-            <button type="button" class="control-secondary entry-relation-add" @click="data.addEntryRelation()">加一条关系</button>
+                  <input
+                    class="nx-field entry-relation-type"
+                    :value="relation.type ?? ''"
+                    spellcheck="false"
+                    placeholder="类型（师徒／敌对／亲属）"
+                    aria-label="关系类型"
+                    @input="data.setEntryRelation(index, 'type', $event.target.value)"
+                  >
+                  <input
+                    class="nx-field entry-relation-stance"
+                    :value="relation.stance ?? ''"
+                    spellcheck="false"
+                    placeholder="立场"
+                    aria-label="关系立场"
+                    @input="data.setEntryRelation(index, 'stance', $event.target.value)"
+                  >
+                  <label class="entry-relation-covert">
+                    <input
+                      type="checkbox"
+                      :checked="relation.covert === true"
+                      @change="data.setEntryRelation(index, 'covert', $event.target.checked)"
+                    >
+                    <span>暗线</span>
+                  </label>
+                  <button type="button" class="control-quiet entry-relation-remove" :aria-label="`删除第 ${index + 1} 条关系`" @click="data.removeEntryRelation(index)">删行</button>
+                </li>
+              </ul>
+              <datalist id="entry-relation-targets">
+                <option v-for="item in data.entries" :key="item.path" :value="item.name" />
+              </datalist>
+              <button type="button" class="control-secondary entry-relation-add" @click="data.addEntryRelation()">加一条关系</button>
+            </div>
           </div>
         </div>
-        <p v-else-if="data.editingEntry" class="pane-hint entry-meta-bare" data-test="entry-meta-bare">
+        <p v-else-if="data.editingEntry" class="entry-meta-bare" data-test="entry-meta-bare">
           这篇没有 frontmatter（未按世界书文件契约建档），关键词／标签／摘要改不了；保存仍按原样整份写正文。
         </p>
         <!-- 阅读态的关系（批次28 · 工单2b）：一行一条「目标 · 类型 · 立场」；没有关系就不摆这块。 -->
@@ -582,12 +604,6 @@ function actOnSaveChip() {
         <!-- 阅读态（批次26）：md 原文渲染成 HTML（标题／粗体／列表／引用／代码块…）。
              渲染器只产出自己拼的标签，输入整段先转义，所以 v-html 的来源是可信的。 -->
         <div v-else class="entry-text nx-rendered-md" data-test="entry-rendered" v-html="entryHtml" />
-        <div v-if="data.editingEntry" class="editor-foot">
-          <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.entryDraft" @click="data.saveEntry()">
-            {{ data.busy ? '写入中…' : '保存' }}
-          </button>
-          <button type="button" class="control-quiet entry-cancel" :disabled="data.busy" @click="data.cancelEditEntry()">取消</button>
-        </div>
         <p v-if="data.entry.contentTruncated" class="pane-notice">只显示前 {{ data.entry.content.length }} 字，全篇 {{ data.entry.contentChars }} 字。</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一条设定。</p>
@@ -644,6 +660,8 @@ function actOnSaveChip() {
               <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
             </span>
             <button v-if="!data.editingDocument" type="button" class="control-secondary document-edit" @click="data.editDocument()">编辑</button>
+            <!-- 取消退到头部右端（P18 第 2 条）：底部不再留按钮行。 -->
+            <button v-else type="button" class="control-quiet document-cancel" :disabled="data.busy" @click="data.cancelEditDocument()">取消</button>
           </span>
         </div>
         <textarea
@@ -655,9 +673,6 @@ function actOnSaveChip() {
           @input="data.setDocumentDraft($event.target.value)"
         />
         <div v-else class="entry-text nx-rendered-md" aria-label="资料正文" v-html="documentHtml" />
-        <div v-if="data.editingDocument" class="editor-foot">
-          <button type="button" class="control-quiet document-cancel" :disabled="data.busy" @click="data.cancelEditDocument()">取消</button>
-        </div>
         <p v-if="data.document.truncated" class="pane-notice">
           只载入了前 {{ data.document.text?.length ?? 0 }} 字，全篇 {{ data.document.totalChars }} 字：保存会覆盖未载入的部分。
         </p>
@@ -680,6 +695,8 @@ function actOnSaveChip() {
               <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
             </span>
             <button v-if="!data.editingScript" type="button" class="control-secondary script-edit" @click="data.editScript()">编辑</button>
+            <!-- 取消退到头部右端（P18 第 2 条）：底部不再留按钮行。 -->
+            <button v-else type="button" class="control-quiet script-cancel" :disabled="data.busy" @click="data.cancelEditScript()">取消</button>
           </span>
         </div>
         <textarea
@@ -691,9 +708,6 @@ function actOnSaveChip() {
           @input="data.setScriptDraft($event.target.value)"
         />
         <div v-else class="entry-text nx-rendered-md" aria-label="剧本正文" v-html="scriptHtml" />
-        <div v-if="data.editingScript" class="editor-foot">
-          <button type="button" class="control-quiet script-cancel" :disabled="data.busy" @click="data.cancelEditScript()">取消</button>
-        </div>
         <p v-if="data.script.truncated" class="pane-notice">
           只载入了前 {{ data.script.text?.length ?? 0 }} 字，全篇 {{ data.script.totalChars }} 字：保存会覆盖未载入的部分。
         </p>
@@ -711,18 +725,20 @@ function actOnSaveChip() {
 
 <style scoped>
 /* 提案审阅（工单A）：两段上下堆叠，各自独立滚动——长章不会把「采纳」按钮顶到看不见的地方。
-   颜色／字号／圆角一律走老前端 token（门禁见 next/tests/visual-contract.test.mjs）。 */
+   颜色／字号／圆角一律走老前端 token（门禁见 next/tests/visual-contract.test.mjs）。
+   批次31（P18 第 5 条）：两版对照属于面板型界面，框留着（两份文档需要视觉分隔），只把外框收窄
+   ——内边距与标签间距各收一档，正文占的位置多回来一点。 */
 .proposal-stack {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-height: 0;
 }
 .proposal-panel {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 4px;
+  padding: 8px 10px;
   border: 1px solid var(--hairline-soft);
   border-radius: var(--radius-control);
   background: var(--surface-workbench-muted);
@@ -818,13 +834,43 @@ function actOnSaveChip() {
   white-space: pre-wrap;
 }
 
+/* 条目信息折叠层（批次31 · P18 第 4 条）：默认只有一行「▸ 条目信息 关键词 1 · 关系 0」，
+   点开才在正文之上摊开字段（照 Obsidian properties）。收起态的行高与正文行距同一档，
+   展开后字段仍走 .nx-field primitive，这里只调排布。 */
+.entry-meta-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.entry-meta-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 4px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.entry-meta-toggle:hover,
+.entry-meta-toggle:focus-visible {
+  color: var(--archive-ink);
+}
+.entry-meta-caret {
+  width: 1em;
+  text-align: center;
+}
+.entry-meta-hint {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 /* 条目元数据行（工单C）：关键词／标签两栏并列。输入沿用 .nx-field primitive
    （颜色／圆角／字号都由它带），这里只调排布，不另起一套控件度量。 */
 .entry-meta-edit {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 0 0 8px;
+  margin: 0;
 }
 .entry-meta-field {
   display: flex;
@@ -845,8 +891,13 @@ function actOnSaveChip() {
   padding: 6px 10px;
   resize: none;
 }
+/* 裸 md（没有 frontmatter）的说明：编辑态里的一句话，不再是带 .pane-hint 的常驻提示行
+   ——它说的是「为什么没有元数据」，属于这条条目的属性，不是操作提示。 */
 .entry-meta-bare {
-  margin: 0 0 8px;
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
 }
 
 /* 关系区（批次28 · 工单2b）：整行独占，一行一条；输入仍是 .nx-field primitive，这里只调排布。
@@ -915,12 +966,12 @@ function actOnSaveChip() {
   color: var(--text-muted);
 }
 
-/* 大纲节点备注（批次28 · 工单1c）：标题下面一条两行高的输入，度量随 .nx-field。 */
+/* 大纲节点备注（批次28 · 工单1c → 批次31 P18）：标题下的第二行无框文字，
+   度量随 .doc-field（底色／描边／圆角都不画），这里只给高度与不随窗格缩放的手感。 */
 .outline-note {
-  margin-top: 6px;
   min-height: 48px;
-  line-height: 1.6;
-  resize: vertical;
+  line-height: 1.7;
+  resize: none;
 }
 
 /* 摘要一栏（收口包②）：独占整行——label 顶对齐，textarea 占满剩余宽度，右侧一枚字数说明。
