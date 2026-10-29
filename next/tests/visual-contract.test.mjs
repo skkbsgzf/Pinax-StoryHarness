@@ -529,6 +529,12 @@ test('P18 文档为主：正文去框、常驻保存按钮拆净、节点操作�
   assert.match(area, /background:\s*transparent/u, '.editor-area 的底色应透明（铺在窗格底色上）')
   assert.match(area, /padding:/u, '.editor-area 要留呼吸留白（padding 不算框）')
 
+  // ①b 焦点环显式关掉：写作面的焦点指示就是光标。不写 none，Chrome 的 :focus-visible
+  //    默认环会顶上来，而且它取 Windows 系统强调色（作者的橙色「黄框」就是这么来的）。
+  const focusRule = ruleBody(layout, '.editor-area:focus-visible {')
+  assert.ok(focusRule, '.editor-area:focus-visible 规则丢了：写作面会顶出 UA 默认焦点环（取系统强调色）')
+  assert.match(focusRule, /outline:\s*none/u, '.editor-area:focus-visible 必须 outline:none（显式关掉 UA 默认环）')
+
   // ② 常驻按钮行取消：模板里一个主按钮都不要（注释里也不许留这个词，免得断言含糊）。
   const primaries = pane.match(/control-primary/gu) ?? []
   assert.equal(primaries.length, 0, `CarrierPaneHost 还留着 ${primaries.length} 处常驻主按钮（P18 第 3 条：保存只有 Ctrl+S＋chip）`)
@@ -587,12 +593,14 @@ test('批次33 文档头归一：一行 .doc-title ＋ 底部 .doc-meta-hint，�
   assert.ok(!layout.includes('.pane-sub'), 'next-shell.css 里还留着 .pane-sub 的规则（标题已统一走 .doc-title）')
   assert.ok(!pane.includes('nx-pane-header'), '旧头部容器 .nx-pane-header 已被 .doc-head 取代')
 
-  // ③ 写作面聚焦不套蓝框：.editor-area 的规则块不许出现 outline:，那条 focus-visible 规则整条删除。
+  // ③ 写作面聚焦不套框：.editor-area 的规则块不许出现 outline:；:focus-visible 必须「显式 none」
+  //    （删规则会留真空，Chrome 的 :focus-visible 默认环顶上来且取 Windows 系统强调色）。
   const area = ruleBody(layout, '.editor-area {')
   assert.ok(area, 'next-shell.css 里没有 .editor-area 规则')
   assert.doesNotMatch(area, /outline\s*:/u, '.editor-area 又在聚焦时画框了：写作面的焦点指示就是光标')
-  assert.ok(!layout.includes('.editor-area:focus-visible'),
-    '.editor-area:focus-visible 那条 outline 规则要整条删掉（改成 outline: 0 也不行）')
+  const focusRule = ruleBody(layout, '.editor-area:focus-visible {')
+  assert.ok(focusRule !== null, '.editor-area:focus-visible 规则必须在（显式 none 档 UA 默认环）')
+  assert.match(focusRule, /outline:\s*none/u, '.editor-area:focus-visible 必须 outline:none')
 
   // ④ 核心区面板头（「正文／演示之书 · novel」那一层）已整块删除（批次34）：
   //    CenterSlotHost 的 DOM 里没有 .center-head，next-shell.css 里那条 display:none 也一并退役。

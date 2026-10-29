@@ -70,6 +70,8 @@ function carrierView() {
     left: [{ slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'book', pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true }],
     center: [{ slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true }],
     skeletonDirs: ['正文', '大纲', '世界书', '构思', '资料', '日志', '约束'],
+    // 守卫夹具（批次32 拆除、33/34 曾回潮）：带归档数据，「不出现」断言才防得住再犯。
+    archive: [{ dir: '旧稿', files: 3, readOnly: true, reason: '外来内容' }]
   }
 }
 

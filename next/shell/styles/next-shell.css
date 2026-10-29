@@ -223,6 +223,13 @@ body {
   font-size: var(--fs-base);
   line-height: 1.6;
   resize: vertical;
+
+}
+/* P18：写作面的焦点指示就是光标。必须「显式」关掉——不写这条，Chrome 的
+   :focus-visible 默认环会顶上来，且取 Windows 系统强调色（作者的橙色「黄框」）。
+   visual-contract 钉的是这条 none，不是「不许出现 outline」。 */
+.editor-area:focus-visible {
+  outline: none;
 }
 .nx-field::placeholder {
   color: var(--text-muted);

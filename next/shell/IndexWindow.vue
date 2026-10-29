@@ -783,17 +783,6 @@ watch(() => props.board?.id, () => {
         <li v-for="(warning, index) in data.listWarnings" :key="`l-${index}`">{{ warning }}</li>
       </ul>
 
-      <template v-if="archive.length">
-        <p class="workspace-nav-section">只读归档</p>
-        <ul class="nx-tree">
-          <li v-for="item in archive" :key="item.dir">
-            <span class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-static is-static" :title="item.reason">
-              <span class="workspace-nav-label">{{ item.dir }}</span>
-              <span class="workspace-nav-meta">{{ item.files }} 项</span>
-            </span>
-          </li>
-        </ul>
-      </template>
     </div>
 
     <!-- 大纲节点菜单（批次31 · P18 第 2 条）：右键才出现，默认不可见——节点操作退到按需浮现。

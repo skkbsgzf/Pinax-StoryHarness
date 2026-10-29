@@ -1295,7 +1295,6 @@ onBeforeUnmount(() => {
         <IndexWindow
           :board="activeBoard"
           :data="data"
-          :archive="view?.archive ?? []"
           :width="indexWidth"
           :project-root="view?.project?.root ?? ''"
           @collapse="indexOpen = false"
