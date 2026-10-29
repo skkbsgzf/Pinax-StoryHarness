@@ -15,6 +15,7 @@ import BackupSection from './settings/BackupSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import HistorySection from './settings/HistorySection.vue'
 import ProposalsSection from './settings/ProposalsSection.vue'
+import ExportSection from './settings/ExportSection.vue'
 import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
@@ -152,6 +153,51 @@ const historyTarget = computed(() => {
   return null
 })
 
+/**
+ * 导出目标（批次26）：当前打开的那一份文档。
+ * 锚点与历史面板同一个（data.selection），但取的是「作者此刻看到的那份文本」——
+ * 编辑态取草稿（未保存的改动也在），阅读态取读回来的正文；没有打开文档就是 null。
+ * 只在六个有正文的载体之间取：章节／条目／构思／资料／约束／剧本（大纲是结构不是正文，不导）。
+ */
+const exportDocumentTarget = computed(() => {
+  const selection = data.selection
+  if (!selection?.type) return null
+  if (selection.type === 'chapter' && data.chapter?.file) {
+    return { kind: 'chapter', title: data.chapter.title ?? selection.item?.title ?? '章节', path: data.chapter.file, text: data.draft ?? '' }
+  }
+  if (selection.type === 'entry' && data.entry?.path) {
+    return {
+      kind: 'entry',
+      title: data.entry.name ?? selection.item?.name ?? '条目',
+      path: data.entry.path,
+      text: data.editingEntry ? (data.entryDraft ?? '') : (data.entry.content ?? '')
+    }
+  }
+  if (selection.type === 'note' && data.note?.file) {
+    return { kind: 'note', title: data.note.title ?? '构思', path: data.note.file, text: data.noteDraft ?? data.note.text ?? '' }
+  }
+  if (selection.type === 'document' && data.document?.file) {
+    return {
+      kind: 'document',
+      title: data.document.title ?? '资料',
+      path: data.document.file,
+      text: data.editingDocument ? (data.documentDraft ?? '') : (data.document.text ?? '')
+    }
+  }
+  if (selection.type === 'rule' && data.rule?.file) {
+    return { kind: 'rule', title: data.rule.title ?? '约束', path: data.rule.file, text: data.ruleDraft ?? data.rule.text ?? '' }
+  }
+  if (selection.type === 'script' && data.script?.file) {
+    return {
+      kind: 'script',
+      title: data.script.title ?? '剧本',
+      path: data.script.file,
+      text: data.editingScript ? (data.scriptDraft ?? '') : (data.script.text ?? '')
+    }
+  }
+  return null
+})
+
 /** 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项。
  *  外壳只留挂载与 open／activeSection 两个状态；各节的内容与状态住在各自 SFC
  *  （next/shell/settings/，照 AssistantDialog 从 AuthoringKnowledgeAssistant 抽取的同一模式）。
@@ -197,7 +243,9 @@ const settingsSections = computed(() => [
   { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
   // 工单B1（协议 v1.1-B）：提案审阅迁出小说板索引窗，收进统一二级页的「文档」组。
   // 数据走 useBoardData 的同一份（loadProposals → pinax_proposal_list），不另开取数路径。
-  { id: 'proposals', title: '提案审阅', group: '文档', keywords: ['提案', '模型改稿', '采纳', '弃用', 'proposals'], component: ProposalsSection, props: { data, open: openProposalFromSettings } }
+  { id: 'proposals', title: '提案审阅', group: '文档', keywords: ['提案', '模型改稿', '采纳', '弃用', 'proposals'], component: ProposalsSection, props: { data, open: openProposalFromSettings } },
+  // 批次26（任务三）：导出当前打开的文档（txt／doc）。锚点与历史面板共用 data.selection。
+  { id: 'export', title: '导出', group: '文档', keywords: ['导出', '另存为', 'txt', 'doc', 'word', '纯文本', '下载'], component: ExportSection, props: { bridge: props.bridge, document: exportDocumentTarget.value } }
 ])
 
 function openSection(id) {

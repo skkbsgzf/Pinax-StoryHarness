@@ -9,6 +9,9 @@ import { NOTES_TOOL_NAMES, createNotesTools } from './notes/tools.mjs'
 import { WORLDBOOK_CARRIER, WORLDBOOK_CARRIER_ID } from './worldbook/manifest.mjs'
 import { WORLDBOOK_TOOL_NAMES, createWorldbookTools } from './worldbook/tools.mjs'
 import { createWorldbookBlocks, readWorldbookEntries } from './worldbook/context.mjs'
+import { SCRIPT_CARRIER, SCRIPT_CARRIER_ID } from './script/manifest.mjs'
+import { SCRIPT_TOOL_NAMES, createScriptTools } from './script/tools.mjs'
+import { createScriptBlocks } from './script/context.mjs'
 import { SETTING_CARRIER, SETTING_CARRIER_ID } from './setting/manifest.mjs'
 import { SETTING_TOOL_NAMES, createSettingTools } from './setting/tools.mjs'
 import { createSettingBlocks } from './setting/context.mjs'
@@ -26,9 +29,10 @@ import { createReferenceBlocks } from './reference/context.mjs'
  *   outline    大纲/（大纲树）
  *   notes      构思/（构思清单）
  *   worldbook  世界书/（条目树）
+ *   script     剧本/（剧本篇目；批次26 M6 提前，排在 worldbook 之后）
  *   setting    约束/（约束清单）
  *   reference  资料/（资料清单）
- * 竖条顺序即注册顺序（v1.1-A：v1 按注册顺序＝小说/大纲/构思/世界书/设定/资料）。
+ * 竖条顺序即注册顺序（v1.1-A：v1 按注册顺序＝小说/大纲/构思/世界书/剧本/设定/资料）。
  * 每个包＝一份清单 ＋ 一个 impl，impl 只有两个可选工厂：
  *   impl.tools(projectCtx)   —— 进运行时工具面的工具（项目打开后调用，要的是这个项目的文件服务）；
  *   impl.blocks(projectCtx)  —— 运行时组上下文信封时的素材块构建器（{ kind: async (askCtx) => 素材包 }）。
@@ -39,6 +43,7 @@ export const NOVEL_CARRIER_TRUST = 't1'
 export const OUTLINE_CARRIER_TRUST = 't1'
 export const NOTES_CARRIER_TRUST = 't1'
 export const WORLDBOOK_CARRIER_TRUST = 't1'
+export const SCRIPT_CARRIER_TRUST = 't1'
 export const SETTING_CARRIER_TRUST = 't1'
 export const REFERENCE_CARRIER_TRUST = 't1'
 
@@ -95,6 +100,20 @@ export function worldbookCarrierPlugin() {
   }
 }
 
+export function scriptCarrierPlugin() {
+  return {
+    manifest: SCRIPT_CARRIER,
+    impl: {
+      source: 'next/carriers/script',
+      // 三把自有工具（列／读／写）＋一个上下文块提供者（script／references 别名）：
+      // 剧本/ 的权限由这块板块自己申请，运行时不越过去开文件（与小说／资料同一条规矩）。
+      tools: (context = {}) => createScriptTools({ ...context, pluginId: context.pluginId ?? SCRIPT_CARRIER_ID }),
+      blocks: (context = {}) => createScriptBlocks({ ...context, pluginId: context.pluginId ?? SCRIPT_CARRIER_ID })
+    },
+    meta: { trust: SCRIPT_CARRIER_TRUST, source: 'next/carriers/script' }
+  }
+}
+
 export function settingCarrierPlugin() {
   return {
     manifest: SETTING_CARRIER,
@@ -123,12 +142,13 @@ export function referenceCarrierPlugin() {
   }
 }
 
-/** 竖条顺序＝注册顺序（协议 v1.1-A）：小说／大纲／构思／世界书／设定／资料。 */
+/** 竖条顺序＝注册顺序（协议 v1.1-A；批次26 起剧本排在 worldbook 之后）。 */
 export const BUILT_IN_CARRIER_PLUGINS = Object.freeze([
   novelCarrierPlugin(),
   outlineCarrierPlugin(),
   notesCarrierPlugin(),
   worldbookCarrierPlugin(),
+  scriptCarrierPlugin(),
   settingCarrierPlugin(),
   referenceCarrierPlugin()
 ])
@@ -140,6 +160,7 @@ export const BUILT_IN_CLAIMED_TOOLS = Object.freeze([
   ...OUTLINE_TOOL_NAMES,
   ...NOTES_TOOL_NAMES,
   ...WORLDBOOK_TOOL_NAMES,
+  ...SCRIPT_TOOL_NAMES,
   ...SETTING_TOOL_NAMES,
   ...REFERENCE_TOOL_NAMES
 ])
@@ -165,6 +186,11 @@ export {
   createWorldbookTools,
   createWorldbookBlocks,
   readWorldbookEntries,
+  SCRIPT_CARRIER,
+  SCRIPT_CARRIER_ID,
+  SCRIPT_TOOL_NAMES,
+  createScriptTools,
+  createScriptBlocks,
   SETTING_CARRIER,
   SETTING_CARRIER_ID,
   SETTING_TOOL_NAMES,

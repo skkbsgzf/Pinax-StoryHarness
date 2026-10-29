@@ -21,6 +21,7 @@ function carrierCarriers() {
     { id: 'pinax.carrier.outline', title: '大纲', isPrimary: false, isEnabled: true, dataDirs: ['大纲'], scopes: ['file:大纲:rw', 'agent:ask'], tools: ['pinax_outline_read', 'pinax_outline_save'], context: { providers: ['outline'], budgetChars: 20000 }, capabilities: ['outline.tree'], panes: [{ slot: 'left-dock', id: 'outline.tree', title: '大纲树' }, { slot: 'center', id: 'outline.editor', title: '大纲编辑' }] },
     { id: 'pinax.carrier.notes', title: '构思', isPrimary: false, isEnabled: true, dataDirs: ['构思'], scopes: ['file:构思:rw', 'agent:ask'], tools: ['pinax_notes_list', 'pinax_notes_save'], context: { providers: [], budgetChars: 20000 }, capabilities: ['notes.ideas'], panes: [{ slot: 'left-dock', id: 'notes.list', title: '构思清单' }, { slot: 'center', id: 'notes.editor', title: '构思编辑' }] },
     { id: 'pinax.carrier.worldbook', title: '世界书', isPrimary: false, isEnabled: true, dataDirs: ['世界书'], scopes: ['file:世界书:rw', 'agent:ask'], tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], context: { providers: ['worldbook'], budgetChars: 20000 }, capabilities: ['setting.entries'], panes: [{ slot: 'left-dock', id: 'worldbook.board', title: '世界书板' }, { slot: 'center', id: 'worldbook.entries', title: '条目' }] },
+    { id: 'pinax.carrier.script', title: '剧本', isPrimary: false, isEnabled: true, dataDirs: ['剧本'], scopes: ['file:剧本:rw', 'agent:ask'], tools: ['pinax_script_list', 'pinax_script_read', 'pinax_script_save'], context: { providers: ['script', 'references'], budgetChars: 12000 }, capabilities: ['script.scenes'], panes: [{ slot: 'left-dock', id: 'script.board', title: '剧本板' }, { slot: 'center', id: 'script.editor', title: '剧本' }] },
     { id: 'pinax.carrier.setting', title: '设定', isPrimary: false, isEnabled: true, dataDirs: ['约束'], scopes: ['file:约束:rw', 'agent:ask'], tools: ['pinax_rule_list', 'pinax_rule_save'], context: { providers: ['rules', 'style'], budgetChars: 20000 }, capabilities: ['constraint.rules'], panes: [{ slot: 'left-dock', id: 'setting.board', title: '设定板' }, { slot: 'center', id: 'setting.rules', title: '约束' }] },
     { id: 'pinax.carrier.reference', title: '资料', isPrimary: false, isEnabled: true, dataDirs: ['资料'], scopes: ['file:资料:rw', 'agent:ask'], tools: ['pinax_document_list', 'pinax_document_read', 'pinax_document_save'], context: { providers: ['references'], budgetChars: 12000 }, capabilities: ['reference.documents'], panes: [{ slot: 'left-dock', id: 'reference.board', title: '资料板' }, { slot: 'center', id: 'reference.documents', title: '资料' }] }
   ]
@@ -41,7 +42,7 @@ const PROPOSAL = {
   createdAt: '2026-10-28T14:00:00'
 }
 
-function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, outlineEdges = null, notes = [], proposals = [], rules = [], documents = [] } = {}) {
+function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, outlineEdges = null, notes = [], proposals = [], rules = [], documents = [], scripts = [] } = {}) {
   const state = {
     revision: 1,
     text: '雨从檐口滴下来。',
@@ -57,6 +58,7 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, ou
     notes,
     rules: rules.map((item) => ({ ...item })),
     documents: documents.map((item) => ({ ...item })),
+    scripts: scripts.map((item) => ({ ...item })),
     entries: [
       { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true, summary: '雪夜醒来的主角，袖中有一枚停摆的表。' },
       { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
@@ -198,6 +200,33 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, ou
         }
         return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.reference', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
       }
+      if (payload.tool === 'pinax_script_list') {
+        // 批次26：与真工具同一形状（剧本篇目＋正文随手带回）。
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.script', payload: { ok: true, total: state.scripts.length, truncated: false, scripts: state.scripts } } }
+      }
+      if (payload.tool === 'pinax_script_read') {
+        const hit = state.scripts.find((item) => item.file === payload.args.file || (payload.args.index !== undefined && item.index === payload.args.index))
+        if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.script', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: `找不到剧本：${payload.args.file ?? payload.args.index}` } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.script', payload: { ok: true, script: { index: hit.index, title: hit.title, file: hit.file, name: hit.name, revision: hit.revision }, text: hit.text, maxChars: payload.args.maxChars ?? 50_000, totalChars: hit.totalChars, truncated: false, revision: hit.revision } } }
+      }
+      if (payload.tool === 'pinax_script_save') {
+        const file = payload.args.file ?? `剧本/${payload.args.title}.md`
+        const hit = state.scripts.find((item) => item.file === file)
+        const actual = hit?.revision ?? 0
+        if (stale || payload.args.expectedRevision !== actual) {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.script', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${file}」已被改动（第 ${actual} 版）`, details: { actual } } } }
+        }
+        const revision = actual + 1
+        if (hit) {
+          hit.revision = revision
+          hit.text = payload.args.text
+          hit.totalChars = payload.args.text.length
+          hit.truncated = false
+        } else {
+          state.scripts.push({ index: state.scripts.length, title: String(payload.args.title ?? '').replace(/\.md$/iu, ''), file, name: file.split('/').pop(), revision, text: payload.args.text, totalChars: payload.args.text.length, truncated: false })
+        }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.script', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
+      }
       if (payload.tool === 'pinax_outline_read') {
         // 与真工具同一条口径：大纲目录空着（既没有 outline.json 也没有 大纲.md）就按 INVALID_INPUT 拒。
         if (outlineMissing) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「大纲/」下既没有 outline.json 也没有 大纲.md' } } }
@@ -242,8 +271,8 @@ function shellView(extra = {}) {
     rejected: [],
     primary: { id: 'pinax.carrier.novel', title: '小说', primary: { projectKind: 'novel' } },
     carriers: carrierCarriers(),
-    left: [paneOf('novel.shelf'), paneOf('outline.tree'), paneOf('notes.list'), paneOf('worldbook.board'), paneOf('setting.board'), paneOf('reference.board')],
-    center: [paneOf('novel.editor'), paneOf('outline.editor'), paneOf('notes.editor'), paneOf('worldbook.entries'), paneOf('setting.rules'), paneOf('reference.documents')],
+    left: [paneOf('novel.shelf'), paneOf('outline.tree'), paneOf('notes.list'), paneOf('worldbook.board'), paneOf('script.board'), paneOf('setting.board'), paneOf('reference.board')],
+    center: [paneOf('novel.editor'), paneOf('outline.editor'), paneOf('notes.editor'), paneOf('worldbook.entries'), paneOf('script.editor'), paneOf('setting.rules'), paneOf('reference.documents')],
     skeletonDirs: ['正文', '大纲', '世界书', '构思', '资料', '日志', '约束'],
     archive: [],
     runtime: {
@@ -1241,7 +1270,7 @@ describe('资料载体', () => {
 })
 
 describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯粹的本域内容树）', () => {
-  it('竖条六格；每栏索引窗只列本载体的树，中栏按 paneId 前缀换面', async () => {
+  it('竖条七格；每栏索引窗只列本载体的树，中栏按 paneId 前缀换面', async () => {
     const tools = fakeTools({
       notes: [{ index: 0, title: '雨夜的表', file: '构思/雨夜的表.md', name: '雨夜的表.md', revision: 1, text: '袖口的表停在十二点差三分。', totalChars: 14, truncated: false }],
       rules: [{ index: 0, title: '纪律', file: '约束/纪律.md', name: '纪律.md', revision: 1, text: '- 不许出现现代词\n', totalChars: 10, truncated: false }],
@@ -1251,9 +1280,9 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 竖条＝六格（注册顺序：小说/大纲/构思/世界书/设定/资料）＋主题钮等动作位。
+    // 竖条＝七格（注册顺序：小说/大纲/构思/世界书/剧本/设定/资料）＋主题钮等动作位。
     const labels = wrapper.findAll('.nx-ribbon-item').map((node) => node.attributes('aria-label'))
-    for (const title of ['小说', '大纲', '构思', '世界书', '设定', '资料']) {
+    for (const title of ['小说', '大纲', '构思', '世界书', '剧本', '设定', '资料']) {
       expect(labels).toContain(title)
     }
 
@@ -1351,14 +1380,85 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
   })
 })
 
+describe('MD 原生渲染与剧本面（批次26）', () => {
+  it('阅读态渲染 md：**粗体** 出 <strong>，标题出 <h1>；源文里的 HTML 当文字；编辑态仍是 textarea 源文', async () => {
+    const tools = fakeTools()
+    const data = useBoardData(tools)
+    await data.loadEntries()
+    const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('worldbook.entries'), data } })
+    await flushPromises()
+
+    // 阅读态：v-html 渲染层（.nx-rendered-md）替下纯文本 pre，md 语法变成真标签。
+    data.entry = { ...data.entry, content: '# 柯秒\n\n这是**粗体**与*斜体*。\n\n- 一\n- 二\n' }
+    await flushPromises()
+    const rendered = wrapper.find('.entry-text.nx-rendered-md')
+    expect(rendered.exists()).toBe(true)
+    expect(rendered.html()).toContain('<strong>粗体</strong>')
+    expect(rendered.html()).toContain('<em>斜体</em>')
+    expect(rendered.html()).toContain('<h1>柯秒</h1>')
+    expect(rendered.html()).toContain('<li>一</li>')
+
+    // 作者在正文里手写 HTML：转义后当文字显示，不会被浏览器当标签执行。
+    data.entry = { ...data.entry, content: '<script>alert(1)</script>普通文字' }
+    await flushPromises()
+    const escaped = wrapper.find('.entry-text.nx-rendered-md').html()
+    expect(escaped).not.toContain('<script')
+    expect(escaped).toContain('普通文字')
+
+    // 编辑态：textarea 拿的是 md 源文，不经过渲染器。
+    await wrapper.find('.entry-edit').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.editor-area').element.value).toBe('<script>alert(1)</script>普通文字')
+    wrapper.unmount()
+  })
+
+  it('剧本栏（批次26）：索引窗列剧本/，点开阅读态渲染 md，编辑保存走 pinax_script_save', async () => {
+    const source = '# 第1集《牛肉汤》\n\n## 场1｜创世讲古\n\n白灼 旁白：**话说**，原初之年。\n'
+    const tools = fakeTools({
+      scripts: [{ index: 0, title: '第001集-牛肉汤', file: '剧本/第001集-牛肉汤.md', name: '第001集-牛肉汤.md', revision: 1, text: source, totalChars: source.length, truncated: false }]
+    })
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    await openBoard(wrapper, '剧本')
+    expect(tools.calls.some((call) => call.tool === 'pinax_script_list'), '换到剧本栏就列 剧本/').toBe(true)
+    const row = wrapper.find('.nx-index-window').findAll('.nx-tree-item').find((item) => item.text().includes('第001集-牛肉汤'))
+    expect(row, '剧本树里的行').toBeTruthy()
+
+    await row.trigger('click')
+    await flushPromises()
+    const pane = () => wrapper.find('[data-pane-id="script.editor"]')
+    expect(pane().find('[aria-label="剧本正文"]').html()).toContain('<strong>话说</strong>')
+    expect(pane().find('textarea.editor-area').exists()).toBe(false)
+
+    await pane().find('.script-edit').trigger('click')
+    await flushPromises()
+    const area = pane().find('textarea.editor-area')
+    expect(area.element.value).toBe(source)
+    await area.setValue(`${source}\n陆漫 画外音：好。\n`)
+    await area.trigger('keydown', { key: 's', ctrlKey: true })
+    await flushPromises()
+
+    const saved = tools.calls.find((call) => call.tool === 'pinax_script_save')
+    expect(saved.args).toEqual({ file: '剧本/第001集-牛肉汤.md', text: `${source}\n陆漫 画外音：好。\n`, expectedRevision: 1 })
+    expect(pane().find('.nx-save-chip').text()).toContain('已保存 · 第 2 版')
+    // 保存成功后回到阅读态，正文以新一版为准。
+    expect(pane().find('textarea.editor-area').exists()).toBe(false)
+    expect(pane().find('[aria-label="剧本正文"]').html()).toContain('<strong>话说</strong>')
+    wrapper.unmount()
+  })
+})
+
 describe('面板与运行时的边界', () => {
   it('认不出的 pane id 不空白也不假装可编辑：明说视图未实现，且一个工具都不调', async () => {
     const tools = fakeTools()
     const data = useBoardData(tools)
-    const wrapper = mount(CarrierPaneHost, { props: { pane: { slot: 'center', id: 'script.scenes', title: '场次', pluginId: 'pinax.carrier.script', pluginTitle: '剧本' }, data } })
+    // 批次26 起 script.* 有真视图了（剧本阅读/编辑面），这条用例改用还没有视图的板块（分镜）当靶子。
+    const wrapper = mount(CarrierPaneHost, { props: { pane: { slot: 'center', id: 'storyboard.shots', title: '分镜', pluginId: 'pinax.carrier.storyboard', pluginTitle: '分镜' }, data } })
     await flushPromises()
     expect(wrapper.text()).toContain('这块板块的面板视图还没做出来')
-    expect(wrapper.text()).toContain('「剧本」')
+    expect(wrapper.text()).toContain('「分镜」')
     expect(tools.calls).toHaveLength(0)
     wrapper.unmount()
   })

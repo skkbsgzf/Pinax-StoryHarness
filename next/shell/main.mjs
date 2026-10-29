@@ -11,6 +11,7 @@ import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
 import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
 import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
+import { EXPORT_EXTENSIONS, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 
 /**
@@ -92,6 +93,21 @@ const PICK_DIR_TITLES = Object.freeze({
   // G2 恢复：选的是恢复后的新项目位置（必须是空目录）。
   'restore-target': '选择恢复后的新项目位置（需要空目录，可在对话框里新建）'
 })
+
+/**
+ * 导出对话框的默认文件名（批次26）：文档标题里 Windows 不允许的字符换空格，截到 80 字；
+ * 标题为空就退回「未命名文档」——对话框里给一个能直接用的名字，而不是让作者从空串开始敲。
+ */
+function exportFileName(title) {
+  const cleaned = String(title ?? '')
+    .replace(/[\\/:*?"<>|]/gu, ' ')
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^\.+/u, '')
+    .slice(0, 80)
+  return cleaned || '未命名文档'
+}
 
 // 数据/缓存目录跟随 PINAX_APP_DATA（批次16 验收修）。
 // 默认 userData（%APPDATA%/Electron）被所有实例共享：一个实例被强杀后残留的缓存锁，
@@ -290,6 +306,22 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     history: { gitHistory, scheduler: historyScheduler },
     // 备份与恢复（G2）：整目录复制，零新依赖；服务只管文件，通道只管把当前项目根交给它。
     backupService: projectBackup,
+    // 导出当前文档（批次26）：系统「另存为」对话框 → next/shell/exportService 落盘。
+    // 后缀以对话框过滤为准：作者自己敲掉了扩展名就补上，敲了别的后缀则按所选格式再补一层（不猜）。
+    exportFile: async ({ content, format, title, html } = {}) => {
+      const kind = format === 'doc' ? 'doc' : 'txt'
+      const extension = EXPORT_EXTENSIONS[kind]
+      const result = await dialog.showSaveDialog(window_, {
+        title: kind === 'doc' ? '导出为 Word 文档（.doc）' : '导出为纯文本（.txt）',
+        defaultPath: `${exportFileName(title)}${extension}`,
+        filters: [{ name: kind === 'doc' ? 'Word 文档' : '纯文本', extensions: [kind] }]
+      })
+      if (result.canceled || !result.filePath) return { ok: true, value: { canceled: true, path: null, format: kind } }
+      const targetPath = result.filePath.toLowerCase().endsWith(extension)
+        ? result.filePath
+        : `${result.filePath}${extension}`
+      return exportDocument({ content, format: kind, targetPath, title: title ?? '', html })
+    },
     // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
     knowledgeService,
     // 收口包⑤：渲染层的 prefs:theme 通知——事件不是请求，只重设原生窗控浮层。

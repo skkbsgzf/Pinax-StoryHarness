@@ -54,6 +54,9 @@ export const IPC_CHANNELS = Object.freeze({
   historyProbe: 'pinax:agent:history:probe',
   backupExport: 'pinax:agent:backup:export',
   backupRestore: 'pinax:agent:backup:restore',
+  // 批次26：导出当前文档（txt／doc）。真正的「另存为」对话框与写盘都在主进程（注入的 exportFile），
+  // 渲染层只递交正文与格式——它拿不到 fs，也决定不了落点。
+  documentExport: 'pinax:agent:document:export',
   menuInvoke: 'pinax:agent:menu:invoke'
 })
 
@@ -214,8 +217,11 @@ export function shellView(session) {
  *   knowledgeService —— next/runtime/knowledgeService（createKnowledgeService）；search／indexStatus／indexSync
  *                       都在主进程内跑（worker 线程检索，零 HTTP）。不注入时 knowledge:* 三条通道如实报缺；
  *                       三条通道都只认 session.projectRoot，entry 恒传当前项目，不接受渲染层指定别的根。
+ * deps 扩展（批次26 导出）：
+ *   exportFile       —— ({ content, format, title, html }) => { ok:{canceled|path…} }：主进程弹系统「另存为」
+ *                       再落盘（next/shell/exportService）。不注入时 document:export 如实报缺，不假装导出过。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null, exportFile = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
@@ -383,6 +389,20 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
             : fail('INVALID_INPUT', '备份服务未提供 readBackupManifest：恢复区的预检不可用')
         }
         return backupService.restoreProject({ backupDir: input.backupDir, targetRoot: input.targetRoot })
+      }
+      case IPC_CHANNELS.documentExport: {
+        if (!exportFile) return fail('INVALID_INPUT', '导出服务未接入（主进程未注入 exportService）：这条通道现在只报缺，不写任何文件')
+        if (typeof input.content !== 'string' || !input.content.length) {
+          return fail('INVALID_INPUT', '导出需要当前文档的正文（content）：空白文档没有可导出的内容')
+        }
+        const format = input.format === 'doc' ? 'doc' : 'txt'
+        return exportFile({
+          content: input.content,
+          format,
+          title: input.title ?? null,
+          // html 是渲染层（mdRender.mjs）渲染好的片段：只给 doc 用，txt 始终写源文本。
+          html: typeof input.html === 'string' ? input.html : null
+        })
       }
       case IPC_CHANNELS.menuInvoke: {
         if (!menuIds.has(input.id)) {

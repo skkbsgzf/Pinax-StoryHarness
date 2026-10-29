@@ -50,6 +50,7 @@ const treeKind = computed(() => {
   if (paneId.startsWith('outline.')) return 'outline'
   if (paneId.startsWith('notes.')) return 'notes'
   if (paneId.startsWith('worldbook.')) return 'entries'
+  if (paneId.startsWith('script.')) return 'scripts'
   if (paneId.startsWith('setting.')) return 'rules'
   if (paneId.startsWith('reference.')) return 'documents'
   return 'none'
@@ -63,6 +64,7 @@ const isEntryOpen = (item) => props.data.selection?.type === 'entry' && props.da
 const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data.selection.item?.file === item.file
 const isRuleOpen = (item) => props.data.selection?.type === 'rule' && props.data.selection.item?.file === item.file
 const isDocumentOpen = (item) => props.data.selection?.type === 'document' && props.data.selection.item?.file === item.file
+const isScriptOpen = (item) => props.data.selection?.type === 'script' && props.data.selection.item?.file === item.file
 
 /** 章节序号：工具给的全局 index（拆分前就是它）；缺 index 时退回组内位置，不让行文空着。 */
 const chapterNumber = (item, localIndex) => (Number.isSafeInteger(item?.index) ? item.index + 1 : localIndex + 1)
@@ -110,6 +112,14 @@ async function createDocument() {
   if (!title) return
   newTitle.value = ''
   await props.data.createDocument(title)
+}
+
+/** 剧本（批次26）：与资料同一个新建形态——标题行＋新建钮。 */
+async function createScript() {
+  const title = newTitle.value.trim()
+  if (!title) return
+  newTitle.value = ''
+  await props.data.createScript(title)
 }
 
 /**
@@ -191,6 +201,9 @@ watch(() => props.board?.id, () => {
   } else if (treeKind.value === 'documents') {
     // 资料（工单G1）：资料板只有这一棵树；泛型项目里它也是主树。
     void props.data.loadDocuments()
+  } else if (treeKind.value === 'scripts') {
+    // 剧本（批次26）：剧本板只有这一棵树（剧本/）。
+    void props.data.loadScripts()
   }
 }, { immediate: true })
 </script>
@@ -462,6 +475,34 @@ watch(() => props.board?.id, () => {
         </ul>
         <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容（资料/）。</p>
         <p v-if="data.documentsError" class="nx-index-error">{{ data.documentsError }}</p>
+      </template>
+
+      <!-- 剧本（批次26 · M6 提前）：剧本板的树。行可点开——点行进中栏的阅读面（编辑在那里按）；
+           行文＝篇名＋字数＋版本号；目录还没写就给一行说明，不当成错误。
+           与资料同一口径：这里不摆「历史…」（剧本的历史还没接，给一个点了没东西的按钮更糟）。 -->
+      <template v-else-if="treeKind === 'scripts'">
+        <div class="nx-index-new">
+          <input v-model="newTitle" class="nx-field is-tiny" placeholder="新剧本标题" aria-label="新剧本标题" @keydown.enter.prevent="createScript">
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newTitle.trim()" @click="createScript">新建</button>
+        </div>
+        <p class="workspace-nav-section">{{ treeDir }}</p>
+        <ul class="nx-tree">
+          <li v-for="item in data.scripts" :key="item.file" class="nx-tree-line">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isScriptOpen(item) }"
+              :aria-current="isScriptOpen(item) ? 'page' : null"
+              @click="data.openScript(item)"
+              @contextmenu.prevent.stop="onRowContextMenu"
+            >
+              <span class="workspace-nav-label">{{ item.title }}</span>
+              <span class="workspace-nav-meta">{{ item.totalChars }} 字 · 第 {{ item.revision }} 版</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!data.scripts.length && !data.scriptsError" class="nx-index-empty">剧本还没有内容（剧本/）。</p>
+        <p v-if="data.scriptsError" class="nx-index-error">{{ data.scriptsError }}</p>
       </template>
 
       <ul v-if="data.listWarnings.length" class="nx-index-warn">

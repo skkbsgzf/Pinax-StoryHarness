@@ -1,10 +1,11 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { renderMarkdown } from './mdRender.mjs'
 
 /**
  * 核心区里的载体面板：正文的编辑面、构思的编辑面、大纲的编辑面、世界书条目的阅读与编辑面
  * （工单A2 起条目可改；工单C 起契约条目的 frontmatter 关键词／标签也能在编辑态改，随 save 的 meta 落盘）、
- * 约束的编辑面（工单E2）、资料的阅读与编辑面（工单G1）。
+ * 约束的编辑面（工单E2）、资料的阅读与编辑面（工单G1）、剧本的阅读与编辑面（批次26）。
  *
  * 协议 v1.1-A（作者 2026-10-28 裁定）：一个载体＝竖条一格＝一棵纯粹的本域内容树。
  * 中栏视图按载体 paneId 前缀路由，不再靠 selection 类型跨栏串面：
@@ -12,8 +13,13 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
  *   outline.* → 大纲编辑
  *   notes.* → 构思编辑
  *   worldbook.* → 条目阅读/编辑
+ *   script.* → 剧本阅读/编辑（批次26）
  *   setting.* → 约束编辑
  *   reference.* → 资料阅读/编辑
+ *
+ * 阅读态一律渲染 md（批次26）：Markdown → HTML 走 next/shell/mdRender.mjs（手写轻量解析，
+ * 输入先整段转义再拼我们自己的标签，出线前过一遍 sanitize）；编辑态仍是 textarea 纯文本——
+ * 作者改的是源文，不是渲染结果。所有 carrier 的阅读态共用同一条渲染路径。
  *
  * 数据不在这里自己取——索引窗与核心区共用 useBoardData 的同一份对象，
  * 所以「索引窗列着第 1 版、正文存成了第 2 版」这种不同步不会发生。
@@ -38,10 +44,22 @@ const viewKind = computed(() => {
   if (id.startsWith('outline.')) return 'outline-editor'
   if (id.startsWith('notes.')) return 'notes-editor'
   if (id.startsWith('worldbook.')) return 'entry-detail'
+  if (id.startsWith('script.')) return 'script-editor'
   if (id.startsWith('setting.')) return 'rule-editor'
   if (id.startsWith('reference.')) return 'document-detail'
   return 'placeholder'
 })
+
+/**
+ * 阅读态的 md 渲染（批次26）：三处阅读面（条目／资料／剧本）与提案审阅的两段正文共用这条路径。
+ * 解析与清洗都在 mdRender.mjs；这里只做「源文 → HTML」的一次计算，编辑态不经过它（textarea 拿源文）。
+ * 稿件里出现渲染器不认的写法时按段落原样显示——不吞内容，也不假装渲染了。
+ */
+const entryHtml = computed(() => renderMarkdown(props.data.entry?.content ?? ''))
+const documentHtml = computed(() => renderMarkdown(props.data.document?.text ?? ''))
+const scriptHtml = computed(() => renderMarkdown(props.data.script?.text ?? ''))
+const proposalCurrentHtml = computed(() => renderMarkdown(props.data.proposalChapter?.text ?? '（目标章还没读到）'))
+const proposalDraftHtml = computed(() => renderMarkdown(props.data.proposal?.content ?? ''))
 
 /** 提案头部的时刻：模型写这一版提案的时间（精确到分钟），解析不了就退回原话。 */
 function stampOf(value) {
@@ -114,6 +132,7 @@ const SAVE_TARGET_BY_VIEW = {
   'outline-editor': 'outline',
   'rule-editor': 'rule',
   'document-detail': 'document',
+  'script-editor': 'script',
   'entry-detail': 'entry'
 }
 
@@ -174,6 +193,7 @@ function saveCurrent() {
     case 'outline-editor': return props.data.saveOutline()
     case 'rule-editor': return props.data.saveRule()
     case 'document-detail': return props.data.saveDocument()
+    case 'script-editor': return props.data.editingScript ? props.data.saveScript() : undefined
     case 'entry-detail': return props.data.editingEntry ? props.data.saveEntry() : undefined
     default: return undefined
   }
@@ -205,6 +225,7 @@ async function reloadFromChip() {
     return
   }
   if (target === 'document' && props.data.document) await props.data.openDocument(props.data.document)
+  if (target === 'script' && props.data.script) await props.data.openScript(props.data.script)
   if (target === 'outline') {
     // loadOutline 会收起旧 chip（重读＝新状态）；节点下标按重读后的长度钳一下，节点被删也不越界。
     await props.data.loadOutline()
@@ -343,14 +364,14 @@ function actOnSaveChip() {
               当前正文
               <span class="editor-meta">{{ data.proposalChapter?.totalChars ?? 0 }} 字<template v-if="data.proposalChapter"> · 第 {{ data.proposalChapter.revision }} 版</template></span>
             </h5>
-            <pre class="entry-text proposal-text">{{ data.proposalChapter?.text ?? '（目标章还没读到）' }}</pre>
+            <div class="entry-text proposal-text nx-rendered-md" v-html="proposalCurrentHtml" />
           </section>
           <section class="proposal-panel">
             <h5 class="proposal-label">
               提案新文
               <span class="editor-meta">{{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字</span>
             </h5>
-            <pre class="editor-area proposal-text" aria-label="提案新文">{{ data.proposal.content ?? '' }}</pre>
+            <div class="editor-area proposal-text nx-rendered-md" aria-label="提案新文" v-html="proposalDraftHtml" />
           </section>
         </div>
         <div class="editor-foot">
@@ -463,7 +484,9 @@ function actOnSaveChip() {
           aria-label="条目编辑器"
           @input="data.setEntryDraft($event.target.value)"
         />
-        <pre v-else class="entry-text">{{ data.entry.content }}</pre>
+        <!-- 阅读态（批次26）：md 原文渲染成 HTML（标题／粗体／列表／引用／代码块…）。
+             渲染器只产出自己拼的标签，输入整段先转义，所以 v-html 的来源是可信的。 -->
+        <div v-else class="entry-text nx-rendered-md" data-test="entry-rendered" v-html="entryHtml" />
         <div v-if="data.editingEntry" class="editor-foot">
           <button type="button" class="pane-btn is-primary control-primary" :disabled="data.busy || !data.entryDraft" @click="data.saveEntry()">
             {{ data.busy ? '写入中…' : '保存' }}
@@ -537,7 +560,7 @@ function actOnSaveChip() {
           aria-label="资料编辑器"
           @input="data.setDocumentDraft($event.target.value)"
         />
-        <pre v-else class="entry-text" aria-label="资料正文">{{ data.document.text }}</pre>
+        <div v-else class="entry-text nx-rendered-md" aria-label="资料正文" v-html="documentHtml" />
         <div v-if="data.editingDocument" class="editor-foot">
           <button type="button" class="control-quiet document-cancel" :disabled="data.busy" @click="data.cancelEditDocument()">取消</button>
         </div>
@@ -546,6 +569,42 @@ function actOnSaveChip() {
         </p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇资料，或在那里新建一篇。</p>
+    </template>
+
+    <!-- 剧本（批次26 · M6 提前）：阅读态＝元信息＋md 渲染正文（场次标题、台词、△ 舞台说明都是 md 文本），
+         编辑态＝textarea（Ctrl+S 保存）＋取消。读的是 pinax_script_read 的全文（列表那份最多 20000 字）；
+         保存走载体自有的 pinax_script_save，带读到的修订号，冲突如实摊开。 -->
+    <template v-else-if="viewKind === 'script-editor'">
+      <div v-if="data.script" class="entry-body">
+        <div class="entry-head nx-pane-header">
+          <h4 class="pane-sub">{{ data.script.title }}</h4>
+          <span class="entry-meta">{{ data.script.file }} · 第 {{ data.script.revision }} 版 · {{ data.script.totalChars }} 字</span>
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!data.editingScript" type="button" class="control-secondary script-edit" @click="data.editScript()">编辑</button>
+          </span>
+        </div>
+        <textarea
+          v-if="data.editingScript"
+          class="editor-area"
+          :value="data.scriptDraft"
+          spellcheck="false"
+          aria-label="剧本编辑器"
+          @input="data.setScriptDraft($event.target.value)"
+        />
+        <div v-else class="entry-text nx-rendered-md" aria-label="剧本正文" v-html="scriptHtml" />
+        <div v-if="data.editingScript" class="editor-foot">
+          <button type="button" class="control-quiet script-cancel" :disabled="data.busy" @click="data.cancelEditScript()">取消</button>
+        </div>
+        <p v-if="data.script.truncated" class="pane-notice">
+          只载入了前 {{ data.script.text?.length ?? 0 }} 字，全篇 {{ data.script.totalChars }} 字：保存会覆盖未载入的部分。
+        </p>
+      </div>
+      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇剧本，或在那里新建一篇。</p>
     </template>
 
     <!-- 只在真的没有对应视图时才显示（批次15 验收修：原来挂在第二条链的 v-else 上，
@@ -715,6 +774,95 @@ function actOnSaveChip() {
   font-size: var(--nx-fs-2xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+
+/* 阅读态的 md 渲染（批次26）。容器带 .entry-text 继承基础度量（字号／行高／墨色），
+   这里只把 pre-wrap 收回来——渲染出的块级标签之间会有换行，保留空白会把版面撑出空行。 */
+.entry-text.nx-rendered-md {
+  white-space: normal;
+}
+.nx-rendered-md :deep(p:first-child) {
+  margin-top: 0;
+}
+.nx-rendered-md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.nx-rendered-md :deep(p) {
+  margin: 0 0 0.9em;
+}
+.nx-rendered-md :deep(h1),
+.nx-rendered-md :deep(h2),
+.nx-rendered-md :deep(h3),
+.nx-rendered-md :deep(h4),
+.nx-rendered-md :deep(h5),
+.nx-rendered-md :deep(h6) {
+  margin: 1.1em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--archive-ink);
+}
+.nx-rendered-md :deep(h1) { font-size: var(--nx-fs-2xl); }
+.nx-rendered-md :deep(h2) { font-size: var(--nx-fs-xl); }
+.nx-rendered-md :deep(h3) { font-size: var(--nx-fs-lg); }
+.nx-rendered-md :deep(h4),
+.nx-rendered-md :deep(h5),
+.nx-rendered-md :deep(h6) { font-size: var(--nx-fs-md); }
+.nx-rendered-md :deep(strong) {
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.nx-rendered-md :deep(em) {
+  font-style: italic;
+}
+.nx-rendered-md :deep(del) {
+  opacity: 0.7;
+}
+.nx-rendered-md :deep(ul),
+.nx-rendered-md :deep(ol) {
+  margin: 0 0 0.9em;
+  padding-inline-start: 1.4em;
+  list-style-position: outside;
+}
+.nx-rendered-md :deep(li) {
+  margin: 0.2em 0;
+}
+.nx-rendered-md :deep(blockquote) {
+  margin: 0 0 0.9em;
+  padding: 2px 0 2px 12px;
+  border-inline-start: 2px solid var(--hairline-soft);
+  color: var(--text-muted);
+}
+.nx-rendered-md :deep(hr) {
+  margin: 1.2em 0;
+  border: 0;
+  border-top: 1px solid var(--hairline-soft);
+}
+.nx-rendered-md :deep(code) {
+  padding: 1px 5px;
+  border-radius: var(--nx-radius-xs);
+  background: var(--surface-workbench-input);
+  font-family: var(--font-mono);
+  font-size: var(--nx-fs-md);
+}
+.nx-rendered-md :deep(pre.md-code) {
+  margin: 0 0 0.9em;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-input);
+  white-space: pre;
+}
+.nx-rendered-md :deep(pre.md-code code) {
+  padding: 0;
+  background: transparent;
+  font-size: var(--nx-fs-md);
+  line-height: 1.65;
+}
+.nx-rendered-md :deep(a) {
+  color: var(--archive-olive);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 </style>
 

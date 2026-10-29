@@ -65,8 +65,8 @@ test('载体写工具落点表与载体 impl 的 annotations 对账：提示只�
   assert.equal(CARRIER_WRITE_CLASS.pinax_proposal_discard.dir, null)
   assert.deepEqual(
     Object.keys(CARRIER_WRITE_CLASS).sort(),
-    ['pinax_chapter_save', 'pinax_document_save', 'pinax_notes_save', 'pinax_outline_save', 'pinax_proposal_discard', 'pinax_rule_save', 'pinax_worldbook_save'],
-    '载体自有写工具就这七把；新增一把要在这里留名'
+    ['pinax_chapter_save', 'pinax_document_save', 'pinax_notes_save', 'pinax_outline_save', 'pinax_proposal_discard', 'pinax_rule_save', 'pinax_script_save', 'pinax_worldbook_save'],
+    '载体自有写工具就这八把（批次26 加剧本的 pinax_script_save）；新增一把要在这里留名'
   )
 })
 

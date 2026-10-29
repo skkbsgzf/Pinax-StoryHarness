@@ -64,6 +64,14 @@ export function useBoardData(bridge) {
     documentDraft: '',
     documentsError: null,
     editingDocument: false,
+    /** 剧本（批次26 · M6 提前）：剧本板的树。与资料同一套——列表带回前 20000 字，
+     *  点开时再走 pinax_script_read 取全文（草稿不能建立在截断文本上）；
+     *  阅读态渲染 md（CarrierPaneHost 的 .nx-rendered-md），编辑态是 textarea。 */
+    scripts: [],
+    script: null,
+    scriptDraft: '',
+    scriptsError: null,
+    editingScript: false,
     /** 提案审阅（工单A）：.pinax/proposals/ 里的模型改稿。
      *  proposals＝列表摘要；proposal＝点开的那份整份 JSON；proposalChapter＝目标章此刻的正文（左右对照用）。
      *  采纳仍走载体 save（带当前修订号），外壳不自己拼一份「采纳后」的正文。 */
@@ -457,6 +465,109 @@ export function useBoardData(bridge) {
     await loadDocuments()
     const made = state.documents.find((item) => item.file === saved.value.file)
     if (made) await openDocument(made)
+  }
+
+  /**
+   * 剧本（批次26）：列 剧本/ 篇目。与资料同一个列法——pinax_script_list 把正文随手带回
+   * （前 20000 字，超出标注）；换板回来时打开着的那篇重读一次全文，不拿截断文本顶替草稿来源。
+   */
+  async function loadScripts() {
+    state.scriptsError = null
+    const listed = await tool('pinax_script_list', { limit: 500 })
+    if (!listed.ok) {
+      state.scripts = []
+      state.scriptsError = listed.message
+      return
+    }
+    state.scripts = listed.value.scripts ?? []
+    const current = state.script ? state.scripts.find((item) => item.file === state.script.file) : null
+    if (current) await openScript(current)
+  }
+
+  /** 点开一篇剧本：走 pinax_script_read 取全文（列表那份最多 20000 字）。 */
+  async function openScript(item) {
+    if (!item) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    state.saveFeedback = null
+    const read = await tool('pinax_script_read', { file: item.file, maxChars: 200000 })
+    state.busy = false
+    if (!read.ok) {
+      state.error = read.message
+      return
+    }
+    state.script = {
+      ...item,
+      title: read.value.script?.title ?? item.title,
+      text: read.value.text ?? '',
+      revision: read.value.revision,
+      totalChars: read.value.totalChars,
+      truncated: read.value.truncated
+    }
+    state.scriptDraft = read.value.text ?? ''
+    state.editingScript = false
+    state.selection = { type: 'script', item: { ...item, revision: read.value.revision } }
+  }
+
+  /** 剧本编辑：与资料同一套开关——「编辑」把正文拷进草稿，「取消」原样退回。 */
+  function editScript() {
+    if (!state.script) return
+    state.scriptDraft = state.script.text ?? ''
+    state.editingScript = true
+    state.error = null
+  }
+
+  function cancelEditScript() {
+    state.editingScript = false
+    state.scriptDraft = state.script?.text ?? ''
+    state.error = null
+  }
+
+  function setScriptDraft(value) {
+    state.scriptDraft = value
+  }
+
+  /** 保存剧本＝作者按 Ctrl+S 的那一下：带读到的修订号走 pinax_script_save，冲突由文件服务拒。 */
+  async function saveScript() {
+    if (!state.script || !state.scriptDraft) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    beginSaveFeedback('script')
+    const saved = await tool('pinax_script_save', { file: state.script.file, text: state.scriptDraft, expectedRevision: state.script.revision })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该篇剧本后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('script', saved)
+      return
+    }
+    state.busy = false
+    state.editingScript = false
+    state.script = { ...state.script, text: state.scriptDraft, revision: saved.value.revision, totalChars: state.scriptDraft.length, truncated: false }
+    settleSaveFeedback('script', saved)
+    state.scripts = state.scripts.map((item) => (item.file === saved.value.file
+      ? { ...item, revision: saved.value.revision, text: state.scriptDraft, totalChars: state.scriptDraft.length, truncated: false }
+      : item))
+  }
+
+  /** 新建剧本：工具拒空 text，以标题作首行落盘，随后列一次并打开新篇（打开时取全文与修订号）。 */
+  async function createScript(title) {
+    const name = String(title ?? '').trim()
+    if (!name) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_script_save', { title: name, text: `${name}\n`, expectedRevision: 0 })
+    state.busy = false
+    if (!saved.ok) {
+      state.error = saved.message
+      return
+    }
+    state.notice = `已新建「${saved.value.file}」`
+    await loadScripts()
+    const made = state.scripts.find((item) => item.file === saved.value.file)
+    if (made) await openScript(made)
   }
 
   /**
@@ -901,6 +1012,13 @@ export function useBoardData(bridge) {
     setDocumentDraft,
     saveDocument,
     createDocument,
+    loadScripts,
+    openScript,
+    editScript,
+    cancelEditScript,
+    setScriptDraft,
+    saveScript,
+    createScript,
     loadProposals,
     openProposal,
     adoptProposal,

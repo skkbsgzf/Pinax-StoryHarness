@@ -10,7 +10,7 @@ import { createProject, initBareProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { buildRuntimeEnvelope } from '../runtime/contextProfiles.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, REFERENCE_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, REFERENCE_CARRIER_ID, SCRIPT_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { FIXTURE_NOVEL } from './fixtures.mjs'
 import { probePort } from './harness.mjs'
 
@@ -89,7 +89,7 @@ try {
   const carrierRoot = join(workspace, 'projects', '真载体靶子')
   const carrierRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) carrierRegistry.install(plugin.manifest, plugin.impl, plugin.meta)
-  const carrierMade = await createProject({ root: carrierRoot, name: '真载体靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: carrierRegistry, extraEnabled: [OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID, REFERENCE_CARRIER_ID] })
+  const carrierMade = await createProject({ root: carrierRoot, name: '真载体靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: carrierRegistry, extraEnabled: [OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID, REFERENCE_CARRIER_ID, SCRIPT_CARRIER_ID] })
   record('M2 建项目：主载体小说＋伴生五栏（大纲/构思/世界书/设定/资料），骨架目录全落盘',
     carrierMade.ok === true && (await readdir(carrierRoot)).includes('世界书') && (await readdir(carrierRoot)).includes('资料') && (await readdir(carrierRoot)).includes('大纲') && (await readdir(carrierRoot)).includes('构思'),
     carrierMade.ok ? '' : String(carrierMade.error?.message || ''))
@@ -104,11 +104,11 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：19 内核 ∪ 六载体声明＝33，其中 19 个名字由载体服务（5 接管＋14 自有），端口仍为 0（v1.1-A 拆栏不新增工具名：小说 正文写口＋提案三把；大纲写半边；构思这对；世界书写口；约束这对；资料三把＋检索）',
+  record('M2 聚合工具面：19 内核 ∪ 七载体声明＝36，其中 22 个名字由载体服务（5 接管＋17 自有），端口仍为 0（v1.1-A 拆栏不新增工具名：小说 正文写口＋提案三把；大纲写半边；构思这对；世界书写口；约束这对；资料三把＋检索；剧本三把）',
     carrierStarted.ok === true
-      && carrierStarted.value.toolCount === 33
-      && carrierStarted.value.carrierTools === 19
-      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'].sort().join()
+      && carrierStarted.value.toolCount === 36
+      && carrierStarted.value.carrierTools === 22
+      && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'].sort().join()
       && carrierStarted.value.portsOpened === 0,
     `toolCount=${carrierStarted.value?.toolCount} carrierTools=${carrierStarted.value?.carrierTools}`)
 

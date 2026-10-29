@@ -68,6 +68,8 @@ export const CARRIER_WRITE_CLASS = Object.freeze({
   pinax_outline_save: Object.freeze({ dir: '大纲' }),
   pinax_notes_save: Object.freeze({ dir: '构思' }),
   pinax_worldbook_save: Object.freeze({ dir: '世界书' }),
+  // 批次26：剧本载体（M6 提前）——剧本/ 有自己的写入口，内核没有同目录写工具可回落。
+  pinax_script_save: Object.freeze({ dir: '剧本' }),
   pinax_rule_save: Object.freeze({ dir: '约束' }),
   pinax_document_save: Object.freeze({ dir: '资料' }),
   pinax_proposal_discard: Object.freeze({ dir: null })
