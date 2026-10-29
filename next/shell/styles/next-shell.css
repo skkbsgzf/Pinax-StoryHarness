@@ -828,6 +828,24 @@ body {
 .nx-overlay-widget.is-dragging {
   box-shadow: 0 16px 36px color-mix(in srgb, var(--archive-ink) 24%, transparent);
 }
+/* 吸附（协议 v1.2 P20）：拖到左右边缘 → 半屏 dock。吸附是 overlay 形态的子状态，
+   宽度走 50%（不再吃内联 width），贴边一侧去掉圆角；拖离即回浮动态（FloatingWidget 解除类名）。 */
+.nx-overlay-widget.is-snapped-left,
+.nx-overlay-widget.is-snapped-right {
+  top: 16px;
+  width: 50%;
+  max-height: calc(100% - 32px);
+}
+.nx-overlay-widget.is-snapped-left {
+  left: 0;
+  right: auto;
+  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+}
+.nx-overlay-widget.is-snapped-right {
+  right: 0;
+  left: auto;
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
+}
 .nx-overlay-head {
   display: flex;
   align-items: center;
@@ -852,6 +870,19 @@ body {
   white-space: nowrap;
   font-size: var(--nx-fs-md);
   font-weight: 500;
+}
+.nx-overlay-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.nx-overlay-expand {
+  flex: none;
+  min-height: 24px;
+  padding: 0 6px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
 }
 .nx-overlay-collapse {
   flex: none;
@@ -907,4 +938,110 @@ body {
   color: var(--control-danger);
   font-size: var(--fs-sm);
   line-height: 1.6;
+}
+
+/* —— 多形态打开（协议 v1.2 P18–P21）——————————————————————————————
+   split：中栏左右分屏（主 pane ＋ 副 pane ≥420px，拖拽分界复用 .resizer 手势）；
+   fullscreen：宿主形态条 ＋ CenterSlotHost 占满中栏；
+   右键「打开方式」：宿主菜单，颜色/字号/圆角全走 token，Esc/点外收起（AppNext 统一管）。 */
+.nx-split {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.nx-split-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.nx-split-main > .center,
+.nx-split-side > .center {
+  flex: 1 1 auto;
+}
+.nx-split-side {
+  display: flex;
+  flex: 0 0 auto;
+  min-width: 420px;
+  min-height: 0;
+  border-left: 1px solid var(--hairline-soft);
+  background: var(--surface-workbench);
+  overflow: hidden;
+}
+/* 分界本体与三栏 .resizer 同形：默认透明（发丝线由 .nx-split-side 的 border-left 给），悬停/拖拽高亮。 */
+.nx-split-divider:hover,
+.next-shell[data-dragging='split'] .nx-split-divider {
+  background: var(--workbench-selected);
+}
+.nx-form-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: none;
+  margin: 0 24px;
+  padding: 6px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-muted);
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-form-bar-label {
+  min-width: 0;
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink);
+}
+.nx-form-bar-action {
+  margin-left: auto;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--nx-fs-md);
+}
+.nx-context-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  min-width: 200px;
+  max-width: 260px;
+  padding: 4px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-context-group {
+  margin: 2px 8px 4px;
+  font-size: var(--nx-fs-2xs);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.nx-context-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: var(--nx-fs-md);
+  text-align: left;
+}
+.nx-context-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.nx-context-mark {
+  color: var(--accent);
+}
+.nx-context-empty {
+  margin: 2px 8px 6px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.nx-context-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--hairline-soft);
 }

@@ -31,9 +31,17 @@ const props = defineProps({
   archive: { type: Array, default: () => [] },
   width: { type: Number, default: 256 }
 })
-const emit = defineEmits(['collapse', 'history', 'overlay'])
+const emit = defineEmits(['collapse', 'history', 'overlay', 'context-menu'])
 
 const newTitle = ref('')
+
+/**
+ * 协议 v1.2 P19：索引窗树行的右键也是「打开方式」入口（统一二级页目录项后续批同法）。
+ * 这一栏只显示当前板，所以只上报坐标；菜单条目（哪些形态）由宿主按当前载体的 forms 声明列。
+ */
+function onRowContextMenu(event) {
+  emit('context-menu', { x: event.clientX, y: event.clientY })
+}
 
 /** 树的口径由板块声明的目录窗 pane 前缀决定（协议 v1.1-A：一载体一棵本域内容树）。 */
 const treeKind = computed(() => {
@@ -223,6 +231,7 @@ watch(() => props.board?.id, () => {
                 :class="{ 'is-active': isChapterOpen(item) }"
                 :aria-current="isChapterOpen(item) ? 'page' : null"
                 @click="data.openChapter(item)"
+                @contextmenu.prevent.stop="onRowContextMenu"
               >
                 <span class="workspace-nav-label">{{ chapterNumber(item, localIndex) }}. {{ item.title }}</span>
                 <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
@@ -268,6 +277,7 @@ watch(() => props.board?.id, () => {
               :aria-current="isOutlineNodeOpen(index) ? 'page' : null"
               :style="{ paddingInlineStart: (10 + (node.depth ?? 0) * 14) + 'px' }"
               @click="data.selectOutlineNode(index)"
+              @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label"><span v-if="hasOutlineChildren(node)" class="nx-outline-mark" aria-hidden="true">·</span>{{ index + 1 }}. {{ node.title }}</span>
             </button>
@@ -327,6 +337,7 @@ watch(() => props.board?.id, () => {
               :class="{ 'is-active': isNoteOpen(item) }"
               :aria-current="isNoteOpen(item) ? 'page' : null"
               @click="data.openNote(item)"
+              @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.title }}</span>
               <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
@@ -357,6 +368,7 @@ watch(() => props.board?.id, () => {
               :class="{ 'is-active': isEntryOpen(item) }"
               :aria-current="isEntryOpen(item) ? 'page' : null"
               @click="data.openEntry(item)"
+              @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.name }}</span>
               <span class="workspace-nav-meta">{{ item.chars }} 字<template v-if="item.contract === false"> · 未建档</template></span>
@@ -413,6 +425,7 @@ watch(() => props.board?.id, () => {
               :class="{ 'is-active': isRuleOpen(item) }"
               :aria-current="isRuleOpen(item) ? 'page' : null"
               @click="data.openRule(item)"
+              @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.title }}</span>
               <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
@@ -440,6 +453,7 @@ watch(() => props.board?.id, () => {
               :class="{ 'is-active': isDocumentOpen(item) }"
               :aria-current="isDocumentOpen(item) ? 'page' : null"
               @click="data.openDocument(item)"
+              @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.title }}</span>
               <span class="workspace-nav-meta">{{ item.totalChars }} 字 · 第 {{ item.revision }} 版</span>

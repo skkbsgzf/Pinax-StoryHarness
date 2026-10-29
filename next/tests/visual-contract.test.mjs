@@ -359,19 +359,34 @@ test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目
 
 /**
  * R3-1／D2：主题的权威来源迁到偏好 JSON，next/shell 源码不得再出现 localStorage。
- * 例外只有两处，都有明确边界：
+ * 例外只有三处，都有明确边界：
  *   1) theme.mjs 里带 legacy-localstorage-bridge 标记的过渡双写块（老前端退役后删）；
- *   2) FloatingWidget.vue 的悬浮窗位置记忆（协议 v1.1-C 明确允许，工单C「唯一允许的 localStorage 用途」）——
- *      只许用 `overlay.<paneId>` 这一条键，读写都必须走 storageKey.value，不许出现第二条键。
+ *   2) FloatingWidget.vue 的悬浮窗位置/吸附记忆（协议 v1.1-C/P20 明确允许）——
+ *      只许用 `overlay.<paneId>` 这一条键，读写都必须走 storageKey.value，不许出现第二条键；
+ *   3) paneForms.mjs 的打开形态记忆（协议 v1.2 P21 明确要求）——
+ *      只许用 `paneForm.<paneId>` 这一条键，键名由宿主拼（载体的 forms 声明本身不落盘）。
  * 这个例外是会退役的：双写块删掉后为 0 处访问，断言仍通过；其它文件一旦出现 localStorage 立刻红。
  */
-test('next/shell 源码不得出现 localStorage（例外只有 theme.mjs 过渡双写块与 FloatingWidget 的 overlay 位置记忆）', async () => {
+test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双写、FloatingWidget 位置记忆与 paneForms 形态记忆）', async () => {
   const files = (await walk(shellDir)).filter((file) => /\.(mjs|js|vue|html)$/u.test(file))
   const offenders = []
   for (const file of files) {
     if (file.endsWith('theme.mjs')) continue
     // 注释里提到这个词不算使用（theme 迁移的说明文字要能写清楚）；只看去掉注释后的源码。
     const text = stripComments(await readFile(file, 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+    if (file.endsWith('paneForms.mjs')) {
+      // 打开形态记忆（协议 v1.2 P21）：键必须是 paneForm.<paneId>，且由宿主拼（不许写死第二条键）。
+      assert.match(text, /PANE_FORM_STORAGE_PREFIX = 'paneForm\.'/u,
+        '形态记忆的键前缀必须是 paneForm.（P21：键名带 paneId，由宿主拼）')
+      assert.match(text, /`\$\{keyPrefix\}\$\{paneId\}`/u,
+        '形态记忆的键必须由前缀 + paneId 拼出')
+      const accesses = text.match(/[^\n]*\.localStorage[^\n]*/gu) ?? []
+      assert.ok(accesses.length > 0, 'paneForms 应负责形态记忆的读写')
+      for (const line of accesses) {
+        assert.match(line, /storage/iu, `localStorage 访问必须经 storage 抽象（键 paneForm.<paneId>）：${line.trim()}`)
+      }
+      continue
+    }
     if (file.endsWith('FloatingWidget.vue')) {
       // 悬浮窗位置记忆：键必须由 pane id 拼出，且每次访问都必须用 storageKey.value（不许写死第二条键）。
       assert.match(text, /const storageKey = computed\(\(\) => `overlay\.\$\{props\.id\}`\)/u,
@@ -385,7 +400,7 @@ test('next/shell 源码不得出现 localStorage（例外只有 theme.mjs 过渡
     }
     if (text.includes('localStorage')) offenders.push(file)
   }
-  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块与 FloatingWidget 的 overlay 位置记忆，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块、FloatingWidget 的 overlay 位置记忆与 paneForms 的形态记忆，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
 
   const theme = await readFile(join(shellDir, 'theme.mjs'), 'utf-8')
   const accesses = (theme.match(/\.localStorage/g) ?? []).length
@@ -462,4 +477,47 @@ test('协议 v1.1-C：outline manifest 声明 overlay pane；层序高于编辑�
   const overlayZ = Number(/--z-floating-dock:\s*(\d+)/u.exec(tokens)?.[1])
   const modalZ = Number(/--z-modal:\s*(\d+)/u.exec(tokens)?.[1])
   assert.ok(Number.isFinite(overlayZ) && Number.isFinite(modalZ) && overlayZ < modalZ, `悬浮层 z(${overlayZ}) 必须低于统一二级页 z(${modalZ})`)
+})
+
+/**
+ * 协议 v1.2 P18–P21（工单A）：多形态打开的机器钉子。
+ *   - 形态词表与状态机只在宿主 paneForms.mjs（P18/P21），载体 SFC 不许出现形态切换逻辑；
+ *   - 右键「打开方式」是宿主菜单，条目只来自 manifest.panes 的 forms 声明；
+ *   - 浮窗吸附/扩屏是宿主容器职责（P20），分屏副栏 ≥420px（P10/P11）。
+ */
+test('协议 v1.2 P18–P21：形态词表归宿主，载体 SFC 不含形态切换；浮窗吸附/扩屏与分屏副栏就位', async () => {
+  const formsPath = join(shellDir, 'paneForms.mjs')
+  assert.equal(await exists(formsPath), true, 'next/shell/paneForms.mjs 必须存在（P21 宿主统一 API）')
+  const forms = await readFile(formsPath, 'utf-8')
+  assert.match(forms, /PANE_FORMS = Object\.freeze\(\['dock', 'split', 'overlay', 'fullscreen'\]\)/u,
+    'P18 词表必须是 dock/split/overlay/fullscreen')
+  assert.match(forms, /export function setPaneForm\(paneId, form\)/u, 'P21 宿主统一 API：setPaneForm(paneId, form)')
+  assert.match(forms, /paneForm\./u, 'P21 持久化键 paneForm.<paneId>')
+
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  for (const needle of ['nx-context-menu', '打开方式', 'setPaneForm', 'nx-split', 'nx-split-side', 'data-split="side"']) {
+    assert.ok(app.includes(needle), `AppNext 缺多形态打开的落点：${needle}`)
+  }
+  assert.match(app, /sanitizePaneForms\(pane\.forms\)/u, '右键菜单必须按 manifest.panes 的 forms 声明列（P18）')
+
+  const widget = await readFile(join(shellDir, 'FloatingWidget.vue'), 'utf-8')
+  for (const needle of ['is-snapped-left', 'is-snapped-right', '扩至全屏', "emit('expand')", 'detectSnap']) {
+    assert.ok(widget.includes(needle), `FloatingWidget 缺 P20 动作：${needle}`)
+  }
+
+  const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
+  const sideRule = ruleBody(layout, '.nx-split-side {')
+  assert.ok(sideRule, 'next-shell.css 里没有 .nx-split-side 规则（分屏副栏）')
+  assert.match(sideRule, /min-width:\s*420px/u, '分屏副栏必须 ≥420px（协议 P10/P11）')
+
+  // P21/P18：载体 SFC 不感知形态——出现宿主状态词即红（今日 next/carriers 里没有 SFC，这条是给后续载体立的钉子）。
+  const carrierSfcs = (await walk(join(repoRoot, 'next', 'carriers'))).filter((file) => file.endsWith('.vue'))
+  const offenders = []
+  for (const file of carrierSfcs) {
+    const text = stripComments(await readFile(file, 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+    for (const needle of ['setPaneForm', 'paneForm.', 'paneForms.mjs', 'is-snapped']) {
+      if (text.includes(needle)) offenders.push(`${file}: ${needle}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `载体 SFC 不许自带形态切换逻辑（P21：宿主管）：\n${offenders.join('\n')}`)
 })

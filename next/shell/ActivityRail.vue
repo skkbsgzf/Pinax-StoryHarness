@@ -27,9 +27,18 @@ const props = defineProps({
   /** registry.list() 的载体清单：无项目时也照常给（不依赖 view）。 */
   carriers: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['select', 'toggle-theme', 'open-project', 'new-project'])
+const emit = defineEmits(['select', 'toggle-theme', 'open-project', 'new-project', 'context-menu'])
 
 const isDark = computed(() => props.scheme === 'dark')
+
+/**
+ * 协议 v1.2 P19：竖条格的右键＝「打开方式」入口。
+ * 菜单本身归宿主（AppNext 一枚 .nx-context-menu），这里只上报格子与指针坐标；
+ * 形态清单按载体 manifest.panes 的 forms 声明由宿主列，竖条不自己猜。
+ */
+function onContextMenu(event, board) {
+  emit('context-menu', { boardId: board.id, x: event.clientX, y: event.clientY })
+}
 
 /** 载体格的图标：清单里目录窗 pane 声明的那枚（没有就退回库图标）。 */
 function carrierIcon(carrier) {
@@ -54,6 +63,7 @@ function carrierIcon(carrier) {
         :aria-label="board.title"
         v-workbench-tooltip="{ text: board.title, side: 'right' }"
         @click="emit('select', board.id)"
+        @contextmenu.prevent.stop="onContextMenu($event, board)"
       >
         <WorkbenchIcon :name="board.icon" :size="22" />
       </button>

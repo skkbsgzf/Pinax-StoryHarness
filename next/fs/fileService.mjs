@@ -11,6 +11,12 @@ import { assertNoSymlinkEscape, joinContained } from './projectPath.mjs'
  *   1) 归属：目标目录必须在该插件 dataDirs 里（C3，跨板块请走对方 tools）；
  *   2) 作用域：manifest.scopes 未声明 file:<目录>:rw 即拒（第 7 节）；
  *   3) 并发：expectedRevision 不符返回 STALE_REVISION，不覆盖、不合并、不吭声。
+ * 工单B（作者裁定「目录递归归认领者」）：file:正文:rw 覆盖 正文/ 及其子目录——
+ * list/read/write 的 dir 既可以是精确 dataDir 名，也可以是「dataDir 名＋子路径」
+ * （如 正文/第一卷；子路径里的文件归属仍按 正文 判，grant 也按 正文 查）。
+ * 前缀判定只认带 `/` 的完整一段（正文2 不算 正文 的子路径）；子路径仍过 C2 的
+ * 路径合法性（..／绝对路径／.pinax 一律拒）与软链逃逸检查——这是前缀语义的自然延伸，
+ * 不是放松：允许的还是同一块目录，只是不再要求调用方把路径拆成两半。
  * 元数据只进 .pinax/（状态 revisions、提案 proposals），正文永远是人打开资源管理器看得懂的那份。
  */
 const REVISIONS_FILE = join('state', 'revisions.json')
@@ -86,7 +92,7 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
     async read({ pluginId, dir, file }) {
       const located = await locate({ pluginId, dir, file })
       if (!located.ok) return located
-      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir, mode: 'read' })
+      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir: located.value.ownerDir, mode: 'read' })
       if (!grant.ok) return grant
       let text
       try {
@@ -112,7 +118,7 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
       }
       const located = await locate({ pluginId, dir, file })
       if (!located.ok) return located
-      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir, mode: 'write' })
+      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir: located.value.ownerDir, mode: 'write' })
       if (!grant.ok) return grant
 
       return service.enqueue(async () => {
@@ -141,7 +147,7 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
     async list({ pluginId, dir }) {
       const located = await locate({ pluginId, dir, file: '.' })
       if (!located.ok) return located
-      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir, mode: 'read' })
+      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir: located.value.ownerDir, mode: 'read' })
       if (!grant.ok) return grant
       try {
         await io.stat(located.value.targetDir)
@@ -346,23 +352,43 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
   async function locate({ pluginId, dir, file, manifest: given }) {
     const manifest = given || registry.get(pluginId)
     if (!manifest) return fail('INVALID_INPUT', `未安装的插件：${pluginId}`)
-    if (!Object.values(manifest.dataDirs).includes(dir)) {
+    const owned = ownedDirOf(manifest, dir)
+    if (!owned) {
       return fail('DIR_CONFLICT', `插件 ${pluginId} 未认领目录「${dir}」；它的板块是 ${Object.values(manifest.dataDirs).join(' / ')}（C3）`, {
         pluginId, dir, owned: Object.values(manifest.dataDirs)
       })
     }
-    const relativeInput = file === '.' || file === '' ? dir : `${dir}/${String(file).replaceAll('\\', '/')}`
+    // dir 既可以是精确 dataDir 名，也可以是「dataDir 名＋子路径」：归属按一级目录名判，
+    // 子路径原样拼回相对路径（仍过 C2 的 ..／绝对路径／.pinax 检查）。
+    const baseDir = owned.subPath ? `${owned.ownerDir}/${owned.subPath}` : owned.ownerDir
+    const relativeInput = file === '.' || file === '' ? baseDir : `${baseDir}/${String(file).replaceAll('\\', '/')}`
     const contained = joinContained(projectRoot, relativeInput)
     if (!contained.ok) return contained
     const { target, relativePath } = contained.value
-    const targetDir = relativePath === dir ? target : resolve(target, '..')
+    const targetDir = relativePath === baseDir ? target : resolve(target, '..')
     const escape = await assertNoSymlinkEscape(projectRoot, target, { realpath: io.realpath, lstat: io.lstat })
     if (!escape.ok) return escape
     return ok({
       targetFile: target,
       targetDir: file === '.' || file === '' ? target : targetDir,
-      relativePath
+      relativePath,
+      ownerDir: owned.ownerDir
     })
+  }
+
+  /**
+   * dir 归一成「一级 dataDir ＋ 子路径」（工单B：「目录递归归认领者」）。
+   * 物理目录名不含 `/`（validatePhysicalDir 守着），所以前缀只认带 `/` 的完整一段：
+   * 「正文/第一卷」是 正文 的子路径，「正文2」不是。返回 null ＝ 这块目录没有主人。
+   */
+  function ownedDirOf(manifest, dir) {
+    const raw = String(dir ?? '').replaceAll('\\', '/').replace(/^\.\//, '').replace(/\/+$/, '')
+    if (!raw) return null
+    const physical = Object.values(manifest.dataDirs)
+    if (physical.includes(raw)) return { ownerDir: raw, subPath: '' }
+    const ownerDir = physical.find((name) => raw.startsWith(`${name}/`))
+    if (!ownerDir) return null
+    return { ownerDir, subPath: raw.slice(ownerDir.length + 1) }
   }
 
   /** 崩溃恢复：半成品临时文件落在目标文件同目录，所以根目录＋每个一级板块目录都要扫一遍。 */

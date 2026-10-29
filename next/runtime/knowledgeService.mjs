@@ -9,8 +9,12 @@ import { readProjectDocument } from '../project/projectManifest.mjs'
  * 它直接包住 server/services/knowledgeRuntime.js 的 createKnowledgeRuntime()：
  *   - search()                → runtime.run(verb, args, entry)，worker 线程执行 kb_search／kb_read／
  *                               worldbook_search；不开端口、不 fetch Express；
- *   - exportProjectKnowledge()→ collectKnowledgeSources(root)：同一份 RAG 输入集与 revision，
- *                               纯读盘盘点，不建索引、不写缓存。
+ *   - indexStatus()           → collectKnowledgeSources(root)：同一份 RAG 输入集与 revision，
+ *                               纯读盘盘点，不建索引、不写缓存（exportProjectKnowledge 是它的旧名）；
+ *   - indexSync()             → 触发一次 kb_search(k=1)，让 knowledgeProjectIndexer.prepare 建/复用缓存，
+ *                               再盘点 revision 返回卡数与输入集。与 server/mcp/knowledgeIndex.js:163-208
+ *                               的 sync 同语义；worker 只允许读动词（knowledgeKernelWorker.js:21），
+ *                               'sync' 不是 runtime verb，所以照 indexProject 的做法用 kb_search 触发。
  * 上游码（KNOWLEDGE_RUNTIME_MISSING／KNOWLEDGE_BUSY／KNOWLEDGE_TIMEOUT／KNOWLEDGE_CHANGED 等）
  * 一律原样透传，外壳据此给作者「知识内核未安装／服务忙」这类人话。
  *
@@ -29,6 +33,10 @@ const MAX_QUERY_CHARS = 2000
 const MAX_RESULTS = 30
 const MAX_REF_CHARS = 1000
 const MAX_READ_CHARS = 20_000
+/** 索引重建的 probe（触发一次检索建索引）上限，与 server/mcp/knowledgeIndex.js:191 的 200 一致。 */
+const MAX_PROBE_CHARS = 200
+/** 首次建索引要跑 Python 编译（45s 上限）＋盘点，60s 的检索默认值不够；给到服务端的 180s 上限。 */
+const INDEX_SYNC_TIMEOUT_MS = 180_000
 
 let sharedKnowledgeService = null
 
@@ -113,10 +121,11 @@ export function createKnowledgeService({ runtime = null, runtimeRoot, cacheRoot 
    * RAG 输入集盘点（只读）：文件数、字节、按一级目录的覆盖，以及 revision。
    * 与 server/mcp/knowledgeIndex.js:snapshotKnowledge 同一形状；substrate 是 collectKnowledgeSources，
    * 不是 Express。大目录会慢——调用方负责 busy 态，服务本身不阻塞事件循环（fs 异步 I/O）。
+   * 这是索引状态通道的底座：不读缓存、不建索引，只回答「当前输入集是什么 revision」。
    */
-  async function exportProjectKnowledge({ root, signal } = {}) {
+  async function indexStatus({ root, signal } = {}) {
     const projectRoot = normalizeRoot(root)
-    if (!projectRoot) return failure('PINAX_INVALID_INPUT', '资料盘点需要项目根 root')
+    if (!projectRoot) return failure('PINAX_INVALID_INPUT', '资料索引状态需要项目根 root')
     try {
       const collected = await collectKnowledgeSources(projectRoot, signal)
       let bytes = 0
@@ -141,6 +150,63 @@ export function createKnowledgeService({ runtime = null, runtimeRoot, cacheRoot 
       }
     } catch (error) {
       return fromError(error, 'KNOWLEDGE_SCAN_FAILED')
+    }
+  }
+
+  /** 旧名保留（H2 的导出盘点通道与既有调用方）：与 indexStatus 同一条实现。 */
+  const exportProjectKnowledge = indexStatus
+
+  /**
+   * 索引重建（工单B）：照 server/mcp/knowledgeIndex.js:indexProject 的 sync 语义——
+   * 先发一次 kb_search（q=probe，k=1），让 knowledgeRuntime 在 worker 之前执行
+   * knowledgeProjectIndexer.prepare 建/复用缓存；再盘点一次输入集，返回卡数与 revision。
+   * worker 只允许读动词（knowledgeKernelWorker.js:21），所以不能直接 run('sync')：
+   * 那会在 prepare 建完索引之后被 worker 拒掉，等于「建了索引却报失败」。
+   *
+   * 首次建索引含 Python 编译，60s 检索默认值不够：给 180s（服务端的 MAX_TIMEOUT_MS 同档）。
+   * 上游码（MISSING／BUSY／TIMEOUT／CHANGED／LIMIT…）原样透传，外壳按码给人话。
+   */
+  async function indexSync({ root, probe } = {}) {
+    const project = await projectOf(root)
+    if (!project.ok) return project
+    const query = String(probe ?? '设定').trim().slice(0, MAX_PROBE_CHARS) || '设定'
+    const entry = { projectId: project.value.projectId, rootPath: project.value.root }
+    try {
+      const engine = await engineOf()
+      const searched = await engine.run(
+        'kb_search',
+        { project: project.value.projectId, q: query, k: 1 },
+        entry,
+        { signal: AbortSignal.timeout(INDEX_SYNC_TIMEOUT_MS) }
+      )
+      const status = await indexStatus({ root: project.value.root })
+      if (!status.ok) return status
+      const coverage = searched?.coverage ?? null
+      return {
+        ok: true,
+        value: {
+          action: 'sync',
+          root: project.value.root,
+          probe: query,
+          // 重建后重新盘点的 revision 是「当前输入集」；indexRevision 是这次编译写进 coverage 的那一份。
+          // 运行时在 worker 之后会再核对一次，两者不一致会以 KNOWLEDGE_CHANGED 报错，不会走到这里。
+          revision: status.value.revision,
+          indexRevision: coverage?.indexRevision ?? null,
+          cards: Number.isSafeInteger(coverage?.projectCards) ? coverage.projectCards : null,
+          indexedAt: coverage?.indexedAt ?? null,
+          compilerCommit: coverage?.compilerCommit ?? null,
+          files: status.value.files,
+          bytes: status.value.bytes,
+          byDir: status.value.byDir,
+          hits: Array.isArray(searched?.hits) ? searched.hits.length : null,
+          coverage
+        }
+      }
+    } catch (error) {
+      if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
+        return failure('KNOWLEDGE_TIMEOUT', `索引重建超时（${INDEX_SYNC_TIMEOUT_MS / 1000}s），请缩小资料目录后重试。`)
+      }
+      return fromError(error, 'KNOWLEDGE_INDEX_FAILED')
     }
   }
 
@@ -195,5 +261,5 @@ export function createKnowledgeService({ runtime = null, runtimeRoot, cacheRoot 
     }
   }
 
-  return { search, exportProjectKnowledge }
+  return { search, indexStatus, exportProjectKnowledge, indexSync }
 }

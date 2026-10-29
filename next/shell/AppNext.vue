@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CenterSlotHost from './CenterSlotHost.vue'
+import CarrierPaneHost from './CarrierPaneHost.vue'
 import FloatingWidget from './FloatingWidget.vue'
 import RuntimeDock from './RuntimeDock.vue'
 import SettingsModal from './SettingsModal.vue'
@@ -19,6 +20,16 @@ import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vu
 import { useBoardData } from './useBoardData.mjs'
 import { IPC_CHANNELS, IPC_EVENT } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
+import {
+  PANE_FORMS,
+  PANE_FORM_LABELS,
+  getPaneForm,
+  hostPaneForms,
+  hydratePaneForms,
+  isPaneForm,
+  sanitizePaneForms,
+  setPaneForm
+} from './paneForms.mjs'
 import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs'
 
 /**
@@ -40,6 +51,9 @@ import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs
  *     工单C（协议 v1.1-C）：载体可以声明 overlay pane（悬浮小工具窗）——外壳用宿主
  *     FloatingWidget 渲染（定位/拖动/收起/位置记忆全在宿主），内容按 pane id 在这里接线；
  *     大纲悬浮窗在正文写作时也能用（大纲板不必是当前板）。
+ *     工单A（协议 v1.2 P18–P21）：载体按 manifest.panes 的 forms 声明可选 dock/split/overlay/fullscreen；
+ *     竖条格与索引窗树行右键出「打开方式」，形态归 paneForms.mjs 的宿主状态机，载体 SFC 不感知。
+ *     浮窗可吸附侧缘（宿主容器子状态）或扩至中栏全屏；分屏副栏 v1 只挂一块（多副栏记账）。
  *
  * 不引 vue-router、不引 Pinia、不 import src/ 的页面——零插件时外壳仍要能起来（M1 判据）。
  * 唯一从老前端拿的是 CSS 本体与三个叶子组件（图标／提示／提示宿主），风格与控件不另起一套。
@@ -70,6 +84,21 @@ const scheme = ref(readScheme())
 const WRITING_FONT_SIZE_DEFAULT = 17
 const WRITING_LINE_HEIGHT_DEFAULT = 1.9
 const writingPrefs = ref({ fontSize: WRITING_FONT_SIZE_DEFAULT, lineHeight: WRITING_LINE_HEIGHT_DEFAULT })
+
+/**
+ * 多形态打开（协议 v1.2 P18–P21）：宿主一份 formMap，AppNext 只订阅快照。
+ * 形态由载体 manifest.panes 的 forms 声明；未声明的形态不出现（见 formTargetsForBoard）。
+ * 状态的唯一写入口是 paneForms.mjs 的 setPaneForm（P21：载体 SFC 不感知形态）。
+ */
+const formMap = ref(hostPaneForms.snapshot())
+const unsubscribePaneForms = hostPaneForms.subscribe((snapshot) => {
+  formMap.value = snapshot
+})
+
+/** 当前 pane 的形态（缺省 dock）。模板与 computed 都走这一条，避免各写各的默认值。 */
+function paneFormOf(paneId) {
+  return formMap.value[String(paneId ?? '')] ?? 'dock'
+}
 
 const project = computed(() => view.value?.project ?? null)
 const runtime = computed(() => view.value?.runtime ?? { tools: [], started: false, title: 'Pi-Agent', budgetPriority: 0, writeSurface: '.pinax/proposals/', reservedSlotReason: '' })
@@ -418,6 +447,31 @@ watch(needsPrimary, (now) => {
 }, { immediate: true })
 
 /**
+ * 一块板声明的全部 pane（清单原话优先，视图里的 pane 对象补 forms 等字段）。
+ * 协议 v1.2 P18：打开方式只看 manifest.panes 的 forms 声明——carrier.panes 是主来源，
+ * 视图的 left/center pane 是同一份清单的投影，合并去重后按 pane id 认。
+ */
+function collectBoardPanes(declared, centerPaneList, treePane) {
+  const byId = new Map()
+  const candidates = [...(Array.isArray(declared) ? declared : []), ...(centerPaneList ?? []), treePane]
+  for (const pane of candidates) {
+    if (!pane) continue
+    const id = String(pane.id ?? '').trim()
+    if (!id) continue
+    if (!byId.has(id)) {
+      byId.set(id, pane)
+      continue
+    }
+    // 同一 pane 的清单声明与视图投影各带一半字段时补全（forms 是 P18 的开关，split 是 P11 的副栏声明）。
+    const merged = { ...byId.get(id) }
+    if (merged.forms === undefined && Array.isArray(pane.forms)) merged.forms = pane.forms
+    if (merged.split === undefined && pane.split !== undefined) merged.split = pane.split
+    byId.set(id, merged)
+  }
+  return [...byId.values()]
+}
+
+/**
  * 一块板＝一个载体：竖条一格、索引窗一份树、核心区一份正文。
  * 图标取这块板的目录窗 pane 声明的图标（清单原话），不是外壳自己编的。
  */
@@ -434,17 +488,25 @@ const boards = computed(() => {
         primary: Boolean(pane.primary),
         dataDirs: carrier?.dataDirs ?? [],
         treePaneId: null,
+        treePane: null,
         treePaneTitle: pane.title ?? '',
         // 协议 v1.1-C：载体声明的悬浮小工具窗（索引窗大纲区标题行的「悬浮」钮据此出现）。
         overlayPane: (carrier?.panes ?? []).find((candidate) => candidate?.slot === 'overlay') ?? null,
+        // 协议 v1.2 P18：这一格的全部 pane（含 forms 声明），右键「打开方式」按它列。
+        panes: Array.isArray(carrier?.panes) ? carrier.panes : [],
         centerPanes: []
       })
     }
     const board = byPlugin.get(id)
     if (pane.slot === 'center') board.centerPanes.push(pane)
-    else if (!board.treePaneId) board.treePaneId = pane.id
+    else if (!board.treePaneId) {
+      board.treePaneId = pane.id
+      board.treePane = pane
+    }
   }
-  return [...byPlugin.values()].sort((a, b) => Number(b.primary) - Number(a.primary))
+  const list = [...byPlugin.values()].sort((a, b) => Number(b.primary) - Number(a.primary))
+  for (const board of list) board.panes = collectBoardPanes(board.panes, board.centerPanes, board.treePane)
+  return list
 })
 
 const activeBoard = computed(() => boards.value.find((board) => board.id === activeBoardId.value) ?? boards.value[0] ?? null)
@@ -466,20 +528,17 @@ const overlayPanes = computed(() => carriers.value
       carrierTitle: carrier.title
     }))))
 
-/** 悬浮窗开合状态（按 pane id；每载体至多一个，不持久化——工单C 只要求位置记忆）。 */
-const overlayOpen = ref({})
-
+/**
+ * 悬浮窗开合＝形态状态机的一次切换（协议 v1.2 P21）：打开＝overlay；收起＝dock。
+ * 收起态仍由 FloatingWidget 画成侧缘小标签（工单C 的行为不变，只是状态改由宿主统一持有）。
+ */
 function setOverlayOpen(paneId, open) {
   if (!paneId) return
-  const next = Boolean(open)
-  if (Boolean(overlayOpen.value[paneId]) === next) return
-  overlayOpen.value = { ...overlayOpen.value, [paneId]: next }
-  // 打开时现取一次本载体的树：悬浮窗的价值就是「不必先切到大纲板」也能看到内容。
-  if (next && paneId === 'outline.widget') void data.loadOutline()
+  applyPaneForm(paneId, open ? 'overlay' : 'dock')
 }
 
 function toggleBoardOverlay(paneId) {
-  setOverlayOpen(paneId, !overlayOpen.value[paneId])
+  setOverlayOpen(paneId, paneFormOf(paneId) !== 'overlay')
 }
 
 /**
@@ -516,6 +575,270 @@ async function openProposalFromSettings(item) {
 }
 /** 核心区只挂这块板的 center 面板：正文不再被目录视图挤到旁边。 */
 const activeCenterPane = computed(() => activeBoard.value?.centerPanes?.[0] ?? null)
+
+/* —— 多形态打开（协议 v1.2 P18–P21）——————————————————————————————
+ * 形态是宿主状态：dock＝三栏里的中栏、split＝中栏右侧副栏、overlay＝宿主浮窗、
+ * fullscreen＝占满中栏。载体 SFC 一律不感知（P12/P21）：这里只决定把哪块 pane 摆到哪。
+ * 摆放优先级：fullscreen > split > 普通中栏。 */
+const centerPaneRecords = computed(() => boards.value.flatMap((board) => (board.centerPanes ?? []).map((pane) => ({ pane, board }))))
+
+/** 声明了 overlay 槽的 pane id（用于全屏还原时判断「还原浮窗」还是「还原停靠」）。 */
+const overlayPaneIds = computed(() => overlayPanes.value.map((pane) => pane.paneId))
+
+/** 中栏 pane 被选成浮窗时，仍然用宿主 FloatingWidget 装它（内容仍由 CarrierPaneHost 渲染）。 */
+const floatingCenterPanes = computed(() => centerPaneRecords.value
+  .filter(({ pane }) => paneFormOf(pane.id) === 'overlay')
+  .map(({ pane, board }) => ({ ...pane, boardId: board.id })))
+
+/** 全屏形态（P20/P21）：占满中栏的 pane。中栏 pane 优先于 overlay 槽的迷你窗。 */
+const fullscreenTarget = computed(() => {
+  for (const { pane } of centerPaneRecords.value) {
+    if (paneFormOf(pane.id) === 'fullscreen') return pane
+  }
+  for (const pane of overlayPanes.value) {
+    if (paneFormOf(pane.paneId) === 'fullscreen') return { id: pane.paneId, title: pane.title, slot: 'overlay' }
+  }
+  return null
+})
+
+/**
+ * 分屏副栏（P11/P21）：formMap 里第一块 split 的 pane。
+ * P11 的 split:'side' 声明优先当副栏；主 pane 仍是当前板，副栏只挂这一块（v1 单副栏，多副栏记账）。
+ */
+const splitTarget = computed(() => {
+  const records = [...centerPaneRecords.value]
+  for (const pane of overlayPanes.value) {
+    records.push({ pane: { id: pane.paneId, title: pane.title, slot: 'overlay' }, board: null })
+  }
+  const matching = records.filter(({ pane }) => paneFormOf(pane.id) === 'split')
+  if (!matching.length) return null
+  matching.sort((a, b) => Number(b.pane.split === 'side') - Number(a.pane.split === 'side'))
+  return matching[0]
+})
+
+/** 普通中栏 pane：当前板的中栏面板；它自己不在 dock 时让位（副栏/浮窗/全屏各走各的分支）。 */
+const mainCenterPane = computed(() => {
+  const pane = activeCenterPane.value
+  if (!pane || paneFormOf(pane.id) !== 'dock') return null
+  return pane
+})
+
+/** P11 的 split:'main' 声明：有声明且当前在 dock，就由它当主 pane；没有声明时主 pane＝当前板。 */
+const declaredSplitMain = computed(() => centerPaneRecords.value.find(({ pane }) => pane.split === 'main')?.pane ?? null)
+
+/** 分屏主 pane：声明的主 pane 优先；否则普通中栏 pane。副栏若是同一块就不再重复渲染。 */
+const splitMainPane = computed(() => {
+  const declared = declaredSplitMain.value
+  if (declared && paneFormOf(declared.id) === 'dock' && declared.id !== splitTarget.value?.pane?.id) return declared
+  const pane = mainCenterPane.value
+  if (!pane) return null
+  return splitTarget.value?.pane?.id === pane.id ? null : pane
+})
+
+/** 分屏副栏 ≥420px（协议 P10：载体必须在半宽 ≥420px 下可用）。 */
+const SPLIT_SIDE_MIN = 420
+const SPLIT_MAIN_MIN = 320
+const SPLIT_DIVIDER_WIDTH = 5
+const splitWidth = ref(480)
+const splitContainer = ref(null)
+const splitSideStyle = computed(() => (splitMainPane.value ? { width: `${splitWidth.value}px` } : { width: '100%' }))
+
+/** 分屏分界的拖拽：与三栏 .resizer 同一套手势（起点记录→pointermove 改宽度→pointerup 收）。 */
+function startSplitDrag(event) {
+  if (event?.button !== undefined && event.button !== 0) return
+  const startX = event.clientX
+  const startWidth = splitWidth.value
+  const total = splitContainer.value?.getBoundingClientRect?.().width ?? 0
+  const maxWidth = Math.max(SPLIT_SIDE_MIN, total ? total - SPLIT_MAIN_MIN - SPLIT_DIVIDER_WIDTH : startWidth + 480)
+  dragging.value = 'split'
+  const move = (moveEvent) => {
+    const next = startWidth - (moveEvent.clientX - startX)
+    splitWidth.value = Math.round(Math.min(maxWidth, Math.max(SPLIT_SIDE_MIN, next)))
+  }
+  const up = () => {
+    dragging.value = null
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+  event.preventDefault?.()
+}
+
+/** 形态切换的唯一外壳入口：单副栏／单全屏的清理在这里做，右键菜单与浮窗按钮都走它。 */
+function applyPaneForm(paneId, form) {
+  if (form === 'split' || form === 'fullscreen') {
+    for (const [otherId, otherForm] of Object.entries(formMap.value)) {
+      if (otherId === paneId) continue
+      // 单副栏：第二块 split 收回 dock。
+      if (otherForm === form) setPaneForm(otherId, 'dock')
+      // 全屏占满中栏时会盖住分屏：选分屏＝明确要看见副栏，先把全屏收回 dock。
+      else if (form === 'split' && otherForm === 'fullscreen') setPaneForm(otherId, 'dock')
+    }
+  }
+  const result = setPaneForm(paneId, form)
+  if (result.ok && form !== 'dock') void preparePaneData(paneId)
+  return result
+}
+
+/** 全屏的「还原」目标：记下进入前形态；刷新后没有记忆时，overlay 槽的 pane 还原成浮窗。 */
+const fullscreenReturn = ref({})
+
+function enterFullscreen(paneId) {
+  // 空 id 直接交给状态机拒绝：不能因为一次无效点击先把别的全屏 pane 清掉。
+  if (!paneId) return setPaneForm(paneId, 'fullscreen')
+  const previous = getPaneForm(paneId)
+  if (previous !== 'fullscreen') fullscreenReturn.value = { ...fullscreenReturn.value, [paneId]: previous }
+  return applyPaneForm(paneId, 'fullscreen')
+}
+
+function restoreFormFor(paneId) {
+  const previous = fullscreenReturn.value[paneId]
+  if (previous && previous !== 'fullscreen' && isPaneForm(previous)) return previous
+  return overlayPaneIds.value.includes(paneId) ? 'overlay' : 'dock'
+}
+
+const fullscreenRestoreLabel = computed(() => (
+  fullscreenTarget.value && restoreFormFor(fullscreenTarget.value.id) === 'overlay' ? '还原浮窗' : '还原停靠'
+))
+
+function restoreFromFullscreen() {
+  const pane = fullscreenTarget.value
+  if (!pane) return
+  applyPaneForm(pane.id, restoreFormFor(pane.id))
+}
+
+/** 换形态后把对应载体的内容取回来（浮窗／分屏／全屏都可能打开一块不在当前板的树）。 */
+async function preparePaneData(paneId) {
+  const id = String(paneId ?? '')
+  if (!id) return
+  if (id.startsWith('novel.')) await data.loadChapters()
+  else if (id.startsWith('outline.')) await data.loadOutline()
+  else if (id.startsWith('notes.')) await data.loadNotes()
+  else if (id.startsWith('worldbook.')) await data.loadEntries()
+  else if (id.startsWith('setting.')) await data.loadRules()
+  else if (id.startsWith('reference.')) await data.loadDocuments()
+}
+
+/** 新载体清单到位时把 paneForm.<paneId> 读回来；恢复出非 dock 形态时顺手取一次内容。 */
+let paneDataRestored = false
+function hydratePaneFormsForView() {
+  const ids = new Set()
+  for (const board of boards.value) for (const pane of board.panes ?? []) ids.add(pane.id)
+  for (const pane of overlayPanes.value) ids.add(pane.paneId)
+  if (!ids.size) return
+  const before = formMap.value
+  hydratePaneForms([...ids])
+  const after = formMap.value
+  const toLoad = new Set()
+  if (!paneDataRestored) {
+    // 本次挂载的第一次有效清单：所有非 dock 形态都要内容（可能是上次启动留下的）。
+    paneDataRestored = true
+    for (const [paneId, form] of Object.entries(after)) if (form !== 'dock') toLoad.add(paneId)
+  } else if (after !== before) {
+    // 之后才出现的 pane（如启用新载体）只补新读回来的那一块。
+    for (const [paneId, form] of Object.entries(after)) {
+      if (form !== 'dock' && before[paneId] !== form) toLoad.add(paneId)
+    }
+  }
+  for (const paneId of toLoad) void preparePaneData(paneId)
+}
+
+watch([boards, overlayPanes], () => hydratePaneFormsForView(), { immediate: true })
+
+/* —— 右键「打开方式」（协议 v1.2 P19）：竖条格与索引窗树行共用一枚宿主菜单 ————————— */
+/** 菜单里的「打开方式」按 pane 的 forms 声明列；slot 排序让 center 优先当形态目标。 */
+function paneSlotRank(pane) {
+  if (pane?.slot === 'center') return 0
+  if (pane?.slot === 'overlay') return 1
+  return 2
+}
+
+function formTargetsForBoard(board) {
+  const panes = [...(Array.isArray(board?.panes) ? board.panes : [])]
+    .sort((a, b) => paneSlotRank(a) - paneSlotRank(b))
+  const targets = new Map()
+  for (const pane of panes) {
+    if (!pane?.id) continue
+    for (const form of sanitizePaneForms(pane.forms)) {
+      if (!targets.has(form)) targets.set(form, pane)
+    }
+  }
+  return PANE_FORMS
+    .filter((form) => targets.has(form))
+    .map((form) => ({ form, paneId: targets.get(form).id, label: PANE_FORM_LABELS[form] }))
+}
+
+const contextMenu = ref(null)
+const contextMenuRoot = ref(null)
+const CONTEXT_MENU_WIDTH = 220
+const CONTEXT_MENU_ITEM_HEIGHT = 30
+
+const contextMenuStyle = computed(() => {
+  const menu = contextMenu.value
+  if (!menu) return {}
+  const viewportWidth = Number(globalThis.innerWidth) || 0
+  const viewportHeight = Number(globalThis.innerHeight) || 0
+  const menuHeight = 56 + menu.entries.length * CONTEXT_MENU_ITEM_HEIGHT + 30
+  const left = Math.max(8, Math.min(menu.x, viewportWidth - CONTEXT_MENU_WIDTH - 8))
+  const top = Math.max(8, Math.min(menu.y, viewportHeight - menuHeight - 8))
+  return { left: `${left}px`, top: `${top}px` }
+})
+
+function openContextMenu(boardId, point = {}) {
+  const board = boards.value.find((item) => item.id === boardId)
+  if (!board) return
+  contextMenu.value = {
+    boardId,
+    title: board.title,
+    x: Number.isFinite(point.x) ? point.x : 0,
+    y: Number.isFinite(point.y) ? point.y : 0,
+    entries: formTargetsForBoard(board)
+  }
+}
+
+function openRailContextMenu(payload) {
+  if (payload?.boardId) openContextMenu(payload.boardId, payload)
+}
+
+/** 索引窗树行右键：目标就是当前板（这一栏只显示当前载体的树）。 */
+function openIndexContextMenu(payload) {
+  if (activeBoard.value) openContextMenu(activeBoard.value.id, payload)
+}
+
+function closeContextMenu() {
+  contextMenu.value = null
+}
+
+function choosePaneForm(entry) {
+  const menu = contextMenu.value
+  if (!entry) return
+  if (entry.form === 'dock') {
+    const board = boards.value.find((item) => item.id === menu?.boardId)
+    // 「停靠栏」是载体整体回到竖条切换：这一格所有 pane 都收回 dock（含收起浮窗、撤掉副栏/全屏）。
+    for (const pane of board?.panes ?? []) setPaneForm(pane.id, 'dock')
+    setPaneForm(entry.paneId, 'dock')
+  } else if (entry.form === 'fullscreen') {
+    enterFullscreen(entry.paneId)
+  } else {
+    applyPaneForm(entry.paneId, entry.form)
+  }
+  closeContextMenu()
+}
+
+/** Esc 先关菜单（window 捕获，先于 FloatingWidget/标题栏的 document 监听）；点菜单外也收起。 */
+function onContextMenuKeydown(event) {
+  if (!contextMenu.value || event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  closeContextMenu()
+}
+
+function onContextMenuPointerDown(event) {
+  if (!contextMenu.value) return
+  if (contextMenuRoot.value?.contains?.(event.target)) return
+  closeContextMenu()
+}
 
 /** 只申请只读作用域的板块适合默认随行：它贡献上下文块，不跟主载体抢写盘。 */
 function isReadOnlyCompanion(carrier) {
@@ -697,11 +1020,17 @@ onMounted(() => {
   // 页内菜单行的收起手势挂在 document 上：Esc 与点击菜单外都收（下拉不许一直挂着）。
   document.addEventListener('keydown', onTitlebarKeydown)
   document.addEventListener('pointerdown', onTitlebarPointerDown)
+  // 右键「打开方式」菜单：window 捕获阶段先收菜单（Esc 不再传给悬浮窗/标题栏）。
+  window.addEventListener('keydown', onContextMenuKeydown, true)
+  window.addEventListener('pointerdown', onContextMenuPointerDown, true)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onTitlebarKeydown)
   document.removeEventListener('pointerdown', onTitlebarPointerDown)
+  window.removeEventListener('keydown', onContextMenuKeydown, true)
+  window.removeEventListener('pointerdown', onContextMenuPointerDown, true)
+  unsubscribePaneForms()
 })
 </script>
 
@@ -774,6 +1103,7 @@ onBeforeUnmount(() => {
         @toggle-theme="toggleTheme"
         @open-project="openProjectFolder"
         @new-project="openNewProject"
+        @context-menu="openRailContextMenu"
       />
 
       <template v-if="indexOpen">
@@ -785,6 +1115,7 @@ onBeforeUnmount(() => {
           @collapse="indexOpen = false"
           @history="openHistoryFor"
           @overlay="toggleBoardOverlay"
+          @context-menu="openIndexContextMenu"
         />
         <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('index', $event)" />
       </template>
@@ -804,8 +1135,50 @@ onBeforeUnmount(() => {
 
         <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
 
+        <!-- 协议 v1.2 P20/P21：全屏形态占满中栏。宿主只多一条「还原」形态条，
+             载体内容仍由 CenterSlotHost 原样渲染（P12：内容渲染不随形态变）。 -->
+        <template v-else-if="fullscreenTarget">
+          <div class="nx-form-bar" data-form="fullscreen">
+            <span class="nx-form-bar-label">全屏 · {{ fullscreenTarget.title }}</span>
+            <button type="button" class="control-quiet nx-form-bar-action" @click="restoreFromFullscreen">{{ fullscreenRestoreLabel }}</button>
+          </div>
+          <CenterSlotHost
+            :active-pane="fullscreenTarget"
+            :data="data"
+            :project="project"
+          />
+        </template>
+
+        <!-- 协议 v1.2 P11/P21：中栏左右分屏——主 pane 与副 pane 各挂一块 CenterSlotHost，
+             副栏 ≥420px；具体哪块载体进副栏由右键「在分屏中打开」触发。 -->
+        <div v-else-if="splitTarget" ref="splitContainer" class="nx-split" :data-split-pane="splitTarget.pane.id">
+          <div v-if="splitMainPane" class="nx-split-main" data-split="main">
+            <CenterSlotHost
+              :active-pane="splitMainPane"
+              :data="data"
+              :project="project"
+            />
+          </div>
+          <div
+            v-if="splitMainPane"
+            class="resizer nx-split-divider"
+            role="separator"
+            aria-orientation="vertical"
+            @pointerdown="startSplitDrag"
+          />
+          <div class="nx-split-side" :style="splitSideStyle" data-split="side">
+            <CenterSlotHost
+              :active-pane="splitTarget.pane"
+              :data="data"
+              :project="project"
+            />
+          </div>
+        </div>
+
+        <p v-else-if="!mainCenterPane && activeCenterPane" class="center-empty">「{{ activeCenterPane.title }}」现在以浮窗打开。</p>
         <CenterSlotHost
-          :active-pane="activeCenterPane"
+          v-else
+          :active-pane="mainCenterPane"
           :data="data"
           :project="project"
         />
@@ -837,32 +1210,81 @@ onBeforeUnmount(() => {
         @update:active-section="activeSection = $event"
       />
 
-      <!-- 协议 v1.1-C：悬浮小工具窗。宿主容器与定位全在 FloatingWidget；这里只按 pane id 接线内容。
-           大纲板不必是当前板——正文写作时大纲照样浮在核心区右上角，随时收起/展开。 -->
+      <!-- 协议 v1.1-C / v1.2：悬浮小工具窗。宿主容器与定位全在 FloatingWidget；这里只按 pane id 接线内容。
+           形态是宿主状态：声明 overlay 槽的 pane 在 dock 时是侧缘标签，overlay 时是卡片，fullscreen 时进中栏。 -->
+      <template v-for="pane in overlayPanes" :key="pane.paneId">
+        <FloatingWidget
+          v-if="paneFormOf(pane.paneId) === 'overlay' || paneFormOf(pane.paneId) === 'dock'"
+          :id="pane.paneId"
+          :open="paneFormOf(pane.paneId) === 'overlay'"
+          :title="pane.title"
+          :width="pane.width"
+          :suspend-esc="settingsOpen"
+          @close="setOverlayOpen(pane.paneId, false)"
+          @toggle="setOverlayOpen(pane.paneId, true)"
+          @expand="enterFullscreen(pane.paneId)"
+        >
+          <template v-if="pane.paneId === 'outline.widget'">
+            <p v-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
+            <p v-else-if="!data.outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
+            <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
+              <li v-for="(node, index) in data.outline" :key="node.id ?? `overlay-node-${index}`">
+                <button type="button" class="workspace-nav-item workspace-nav-item--tree nx-tree-row" @click="openOutlineNodeFromWidget(index)">
+                  <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
+                </button>
+              </li>
+            </ul>
+          </template>
+          <p v-else class="nx-overlay-empty">这块悬浮窗还没有内容。</p>
+        </FloatingWidget>
+      </template>
+
+      <!-- 中栏 pane 被右键选成浮窗（P18/P21）：同一宿主容器装 CarrierPaneHost，内容渲染不变（P12）。 -->
       <FloatingWidget
-        v-for="pane in overlayPanes"
-        :key="pane.paneId"
-        :id="pane.paneId"
-        :open="Boolean(overlayOpen[pane.paneId])"
+        v-for="pane in floatingCenterPanes"
+        :key="`float-${pane.id}`"
+        :id="pane.id"
+        :open="true"
         :title="pane.title"
-        :width="pane.width"
+        :width="360"
         :suspend-esc="settingsOpen"
-        @close="setOverlayOpen(pane.paneId, false)"
-        @toggle="setOverlayOpen(pane.paneId, true)"
+        @close="setOverlayOpen(pane.id, false)"
+        @toggle="setOverlayOpen(pane.id, true)"
+        @expand="enterFullscreen(pane.id)"
       >
-        <template v-if="pane.paneId === 'outline.widget'">
-          <p v-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
-          <p v-else-if="!data.outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
-          <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
-            <li v-for="(node, index) in data.outline" :key="node.id ?? `overlay-node-${index}`">
-              <button type="button" class="workspace-nav-item workspace-nav-item--tree nx-tree-row" @click="openOutlineNodeFromWidget(index)">
-                <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
-              </button>
-            </li>
-          </ul>
-        </template>
-        <p v-else class="nx-overlay-empty">这块悬浮窗还没有内容。</p>
+        <CarrierPaneHost :pane="pane" :data="data" />
       </FloatingWidget>
+
+      <!-- 协议 v1.2 P19：竖条格／索引窗树行的右键「打开方式」。宿主菜单，Esc／点外收起。
+           只有 manifest.panes 的 forms 声明过的形态才出现（无声明时给一句说明，不伪造形态）。 -->
+      <div
+        v-if="contextMenu"
+        ref="contextMenuRoot"
+        class="nx-context-menu"
+        role="menu"
+        :aria-label="`${contextMenu.title} 打开方式`"
+        :style="contextMenuStyle"
+        @contextmenu.prevent
+      >
+        <p class="nx-context-group">打开方式</p>
+        <template v-if="contextMenu.entries.length">
+          <button
+            v-for="entry in contextMenu.entries"
+            :key="entry.form"
+            type="button"
+            class="control-quiet nx-context-item"
+            role="menuitem"
+            :data-form="entry.form"
+            @click="choosePaneForm(entry)"
+          >
+            <span>{{ entry.label }}</span>
+            <span v-if="paneFormOf(entry.paneId) === entry.form" class="nx-context-mark" aria-hidden="true">✓</span>
+          </button>
+        </template>
+        <p v-else class="nx-context-empty">该载体未声明打开形态</p>
+        <div class="nx-context-separator" role="separator"></div>
+        <button type="button" class="control-quiet nx-context-item" role="menuitem" disabled title="后续批次">在新窗口打开</button>
+      </div>
 
       <WorkbenchTooltip />
     </div>

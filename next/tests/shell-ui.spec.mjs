@@ -1,11 +1,20 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import AppNext from '../shell/AppNext.vue'
 import ActivityRail from '../shell/ActivityRail.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import { IPC_CHANNELS, IPC_EVENT } from '../shell/ipcContract.mjs'
+import { resetPaneForms } from '../shell/paneForms.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
+
+/**
+ * 多形态打开（P21）的状态是模块级单例：每个用例从 dock 起步，避免上一个用例的形态泄漏；
+ * localStorage 仍由用例自己清（持久化用例要在同一用例内跨挂载读回同一份键）。
+ */
+beforeEach(() => {
+  resetPaneForms()
+})
 
 /**
  * 外壳界面测试（WP4 · M2 批次 4 重排后）。
@@ -1815,15 +1824,261 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     expect(wrapper.find('.nx-overlay-widget').attributes('style')).toContain('left: 40px')
     wrapper.unmount()
 
-    // 重新挂载＝重新读位置：坐标仍在（键 overlay.<paneId>）。
+    // 重新挂载＝形态与位置都读回（P21：paneForm 已存 overlay，浮窗自动开着）；
+    // 若形态没有持久化，再点一次「悬浮」也走到同一断言——位置记忆键仍是 overlay.<paneId>。
     const second = mount(AppNext, { props: { bridge: overlayBridge() } })
     await flushPromises()
     await openOutlineBoard(second)
-    await openWidget(second)
+    if (!second.find('.nx-overlay-widget').exists()) await openWidget(second)
     const style = second.find('.nx-overlay-widget').attributes('style')
     expect(style).toContain('left: 40px')
     expect(style).toContain('top: 30px')
     second.unmount()
     globalThis.localStorage?.clear()
+  })
+})
+
+describe('多形态打开（协议 v1.2 P18–P21）', () => {
+  afterEach(() => {
+    resetPaneForms()
+    globalThis.localStorage?.clear()
+  })
+
+  const OUTLINE_PANES = [
+    { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', forms: ['dock'] },
+    // 'window' 是词表外形态：宿主过滤掉，不进菜单（P18）。
+    // split:'side' 是协议 P11 的副栏声明——有它时这块 pane 优先当副 pane。
+    { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', split: 'side', forms: ['dock', 'split', 'fullscreen', 'window'] },
+    { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, forms: ['overlay', 'fullscreen'] }
+  ]
+  const NOVEL_PANES = [
+    { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', forms: ['dock'] },
+    // split:'main' 是协议 P11 的主栏声明——分屏时由它当主 pane。
+    { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', split: 'main', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+  ]
+
+  /** carrierView 上补两块带 forms 声明的载体：小说（左树/正文）与大纲（左树/编辑/悬浮窗）。 */
+  function multiFormView() {
+    const base = carrierView()
+    return {
+      ...base,
+      carriers: [
+        { ...base.carriers[0], panes: NOVEL_PANES },
+        ...base.carriers.slice(1),
+        {
+          id: 'pinax.carrier.outline',
+          title: '大纲',
+          primary: { projectKind: 'generic' },
+          isPrimary: false,
+          isEnabled: true,
+          capabilities: ['outline.tree'],
+          requires: [],
+          scopes: ['file:大纲:rw', 'agent:ask'],
+          dataDirs: ['大纲'],
+          settings: [],
+          tools: ['pinax_outline_read', 'pinax_outline_save'],
+          context: { providers: ['outline'], budgetChars: 20000 },
+          panes: OUTLINE_PANES
+        }
+      ],
+      left: [
+        { ...NOVEL_PANES[0], pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true },
+        { ...OUTLINE_PANES[0], pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
+      ],
+      center: [
+        { ...NOVEL_PANES[1], pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true },
+        { ...OUTLINE_PANES[1], pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
+      ]
+    }
+  }
+
+  function multiFormBridge() {
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: multiFormView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { theme: 'light' } }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        if (payload.tool === 'pinax_outline_read') {
+          return {
+            ok: true,
+            value: {
+              tool: payload.tool,
+              owner: 'pinax.carrier.outline',
+              payload: { ok: true, source: '大纲/outline.json', nodes: [{ id: 'n1', title: '开场：雨夜进城' }], edges: [], nodeTotal: 1, truncated: false, revision: 1, warning: null }
+            }
+          }
+        }
+        if (payload.tool === 'pinax_chapter_list') {
+          return {
+            ok: true,
+            value: {
+              tool: payload.tool,
+              owner: 'fixture.novel',
+              payload: { ok: true, total: 1, truncated: false, chapters: [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }] }
+            }
+          }
+        }
+      }
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    return { request, onEvent: () => () => {}, channels: IPC_CHANNELS }
+  }
+
+  function railByName(wrapper, name) {
+    return wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === name)
+  }
+
+  async function openOutlineWidget(wrapper) {
+    const outlineRail = railByName(wrapper, '大纲')
+    expect(outlineRail, '竖条应有大纲栏').toBeTruthy()
+    await outlineRail.trigger('click')
+    await flushPromises()
+    const toggle = wrapper.find('[aria-label="悬浮大纲"]')
+    expect(toggle.exists(), '大纲区标题行右侧应有「悬浮」钮').toBe(true)
+    await toggle.trigger('click')
+    await flushPromises()
+  }
+
+  it('右键竖条格按 forms 声明列「打开方式」；选分屏→目标面板进副栏、主 pane 不变；树行右键同入口', async () => {
+    resetPaneForms()
+    globalThis.localStorage?.clear()
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge() } })
+    await flushPromises()
+
+    const outlineRail = railByName(wrapper, '大纲')
+    outlineRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    await flushPromises()
+
+    const menu = wrapper.find('.nx-context-menu')
+    expect(menu.exists()).toBe(true)
+    expect(menu.find('.nx-context-group').text()).toBe('打开方式')
+    // 只列 forms 声明过的四档（'window' 被词表过滤）；顺序按宿主词表。
+    expect(menu.findAll('[data-form]').map((node) => node.attributes('data-form'))).toEqual(['dock', 'split', 'overlay', 'fullscreen'])
+
+    await menu.find('[data-form="split"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+
+    const split = wrapper.find('.nx-split')
+    expect(split.exists()).toBe(true)
+    expect(split.attributes('data-split-pane')).toBe('outline.editor')
+    expect(wrapper.find('.nx-split-main [data-pane-id="novel.editor"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-split-side [data-pane-id="outline.editor"]').exists()).toBe(true)
+    const sideWidth = Number(/width:\s*(\d+)px/u.exec(wrapper.find('.nx-split-side').attributes('style') ?? '')?.[1] ?? 0)
+    expect(sideWidth).toBeGreaterThanOrEqual(420)
+    expect(globalThis.localStorage.getItem('paneForm.outline.editor')).toBe('split')
+
+    // 分界可拖：往左 100px，副栏变宽 100px（与三栏 .resizer 同一套手势）。
+    wrapper.find('.nx-split-divider').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 900, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 800, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 800, bubbles: true }))
+    await flushPromises()
+    const dragWidth = Number(/width:\s*(\d+)px/u.exec(wrapper.find('.nx-split-side').attributes('style') ?? '')?.[1] ?? 0)
+    expect(dragWidth).toBe(sideWidth + 100)
+
+    // 索引窗树行右键：同一枚宿主菜单（激活大纲板后树里才有内容）。
+    await outlineRail.trigger('click')
+    await flushPromises()
+    const row = wrapper.find('.nx-index-body .nx-tree-row')
+    expect(row.exists()).toBe(true)
+    row.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
+    await flushPromises()
+    const rowMenu = wrapper.find('.nx-context-menu')
+    expect(rowMenu.exists()).toBe(true)
+    expect(rowMenu.findAll('[data-form]').map((node) => node.attributes('data-form'))).toEqual(['dock', 'split', 'overlay', 'fullscreen'])
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+
+    // 点菜单外也收起（同一枚宿主菜单的手势纪律）。
+    row.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
+    await flushPromises()
+    expect(wrapper.find('.nx-context-menu').exists()).toBe(true)
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('未声明 forms 的载体：右键只给说明，不伪造任何形态', async () => {
+    resetPaneForms()
+    globalThis.localStorage?.clear()
+    const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
+    await flushPromises()
+
+    const novelRail = railByName(wrapper, '小说（夹具）')
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }))
+    await flushPromises()
+    const menu = wrapper.find('.nx-context-menu')
+    expect(menu.exists()).toBe(true)
+    expect(menu.findAll('[data-form]')).toHaveLength(0)
+    expect(menu.find('.nx-context-empty').text()).toBe('该载体未声明打开形态')
+    expect(menu.text()).toContain('在新窗口打开')
+    wrapper.unmount()
+  })
+
+  it('浮窗吸附：拖到左缘吸附成半屏 dock，再拖离恢复浮动态', async () => {
+    resetPaneForms()
+    globalThis.localStorage?.clear()
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge() } })
+    await flushPromises()
+    await openOutlineWidget(wrapper)
+
+    const widget = wrapper.find('.nx-overlay-widget')
+    expect(widget.exists()).toBe(true)
+    widget.find('.nx-overlay-head').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 0, clientY: 100, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 0, clientY: 100, bubbles: true }))
+    await flushPromises()
+
+    const snapped = wrapper.find('.nx-overlay-widget')
+    expect(snapped.classes()).toContain('is-snapped-left')
+    expect(snapped.attributes('data-snap')).toBe('left')
+    expect(JSON.parse(globalThis.localStorage.getItem('overlay.outline.widget')).snap).toBe('left')
+
+    // 从吸附态拖离 → 回浮动态；位置落盘不再带 snap。
+    snapped.find('.nx-overlay-head').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 320, clientY: 100, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 320, clientY: 100, bubbles: true }))
+    await flushPromises()
+
+    const floating = wrapper.find('.nx-overlay-widget')
+    expect(floating.classes()).not.toContain('is-snapped-left')
+    const stored = JSON.parse(globalThis.localStorage.getItem('overlay.outline.widget'))
+    expect(stored.snap).toBeUndefined()
+    expect(stored.left).toBeGreaterThan(32)
+    expect(floating.attributes('style')).toContain(`left: ${stored.left}px`)
+    wrapper.unmount()
+  })
+
+  it('扩至全屏：占满中栏，点「还原浮窗」回到浮动态', async () => {
+    resetPaneForms()
+    globalThis.localStorage?.clear()
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge() } })
+    await flushPromises()
+    await openOutlineWidget(wrapper)
+
+    const expand = wrapper.find('[aria-label="扩至全屏"]')
+    expect(expand.exists()).toBe(true)
+    await expand.trigger('click')
+    await flushPromises()
+
+    const bar = wrapper.find('.nx-form-bar')
+    expect(bar.exists()).toBe(true)
+    expect(bar.attributes('data-form')).toBe('fullscreen')
+    expect(bar.text()).toContain('全屏 · 大纲')
+    expect(wrapper.find('.col-center [data-pane-id="outline.widget"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
+    expect(wrapper.find('.nx-overlay-tab').exists()).toBe(false)
+    expect(globalThis.localStorage.getItem('paneForm.outline.widget')).toBe('fullscreen')
+
+    await bar.find('.nx-form-bar-action').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-form-bar').exists()).toBe(false)
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
+    expect(globalThis.localStorage.getItem('paneForm.outline.widget')).toBe('overlay')
+    wrapper.unmount()
   })
 })

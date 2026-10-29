@@ -17,9 +17,17 @@ const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_.]{1,63}$/u
 const SETTING_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u
 const SETTING_TITLE_MAX = 40
 
-/** 插件可用的槽位（C5）。right 是保留字——右栏归一级公民运行时，任何插件声明即拒。 */
-export const OPEN_SLOTS = Object.freeze(['left-dock', 'center'])
+/** 插件可用的槽位（C5）。right 是保留字——右栏归一级公民运行时，任何插件声明即拒。
+ *  overlay 是协议 v1.1-C 的悬浮小工具窗（作者 2026-10-28 裁定）：载体只声明「要一枚悬浮窗」
+ *  与它的宽度（width，200–600，缺省 300），**渲染与定位一律归宿主** next/shell/FloatingWidget.vue——
+ *  载体声明意图，宿主管渲染；同一时刻每载体至多一个悬浮窗实例（多开后续批）。 */
+export const OPEN_SLOTS = Object.freeze(['left-dock', 'center', 'overlay'])
 export const RESERVED_SLOTS = Object.freeze(['right', 'top-menu'])
+
+/** overlay 宽度（合同值域）：缺省 300，硬闸 200–600——不许某载体声明 1000px 把核心区盖死。 */
+export const OVERLAY_WIDTH_DEFAULT = 300
+export const OVERLAY_WIDTH_MIN = 200
+export const OVERLAY_WIDTH_MAX = 600
 
 export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (!isPlainObject(input)) return fail('INVALID_MANIFEST', '载体清单必须是对象')
@@ -137,6 +145,7 @@ function validatePanes(value, pluginId) {
   }
   const seen = new Set()
   const out = []
+  let overlayCount = 0
   for (const pane of value) {
     if (!isPlainObject(pane) || typeof pane.id !== 'string' || !pane.id.trim()) {
       return fail('INVALID_MANIFEST', `${pluginId} 的 panes 项必须有 id`)
@@ -151,12 +160,31 @@ function validatePanes(value, pluginId) {
     }
     if (seen.has(pane.id)) return fail('INVALID_MANIFEST', `${pluginId} 的 pane id 重复：${pane.id}`)
     seen.add(pane.id)
-    out.push({
+    const normalized = {
       slot: pane.slot,
       id: pane.id.trim(),
       title: String(pane.title || pane.id).trim(),
       icon: typeof pane.icon === 'string' ? pane.icon.trim() : 'plugin'
-    })
+    }
+    // overlay（协议 v1.1-C）：宽度是合同字段，过了校验才交给宿主 FloatingWidget 消费。
+    // 其他槽位不认 width（静默丢弃会让「声明了却不生效」重演，所以只在 overlay 上保留并校验）。
+    if (pane.slot === 'overlay') {
+      // 每载体至多一枚悬浮窗（工单C 边界：不做多开）；多声明直接拒装，不靠宿主去猜哪枚算数。
+      overlayCount += 1
+      if (overlayCount > 1) {
+        return fail('INVALID_MANIFEST', `${pluginId} 至多声明一枚 overlay pane（每载体至多一个悬浮窗实例；多开留待后续批）`, {
+          pluginId, paneId: pane.id
+        })
+      }
+      const width = pane.width === undefined ? OVERLAY_WIDTH_DEFAULT : pane.width
+      if (!Number.isSafeInteger(width) || width < OVERLAY_WIDTH_MIN || width > OVERLAY_WIDTH_MAX) {
+        return fail('INVALID_MANIFEST', `${pluginId} 的 overlay pane「${pane.id}」width 须是 ${OVERLAY_WIDTH_MIN}–${OVERLAY_WIDTH_MAX} 的整数（缺省 ${OVERLAY_WIDTH_DEFAULT}）`, {
+          pluginId, paneId: pane.id, width: pane.width
+        })
+      }
+      normalized.width = width
+    }
+    out.push(normalized)
   }
   return ok(out)
 }

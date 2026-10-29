@@ -42,6 +42,8 @@ export const IPC_CHANNELS = Object.freeze({
   // entry 恒传当前项目根；不开全局知识面。
   knowledgeSearch: 'pinax:agent:knowledge:search',
   knowledgeIndexStatus: 'pinax:agent:knowledge:index-status',
+  // 工单B：索引重建（首次/资料变更后）——主进程内 kb_search 触发 prepare，再盘点 revision。
+  knowledgeIndexSync: 'pinax:agent:knowledge:index-sync',
   prefsGet: 'pinax:agent:prefs:get',
   prefsSet: 'pinax:agent:prefs:set',
   prefsProbeModelPlane: 'pinax:agent:prefs:probe-model-plane',
@@ -209,9 +211,9 @@ export function shellView(session) {
  *                       不注入时 backup:export／backup:restore 如实报缺，界面不假装备份过。
  *                       backup:restore 只带 backupDir 时是「预检」：返回 manifest 摘要，不写一个字节。
  * deps 扩展（H2 知识服务 all-in-one）：
- *   knowledgeService —— next/runtime/knowledgeService（createKnowledgeService）；search／exportProjectKnowledge
- *                       都在主进程内跑（worker 线程检索，零 HTTP）。不注入时 knowledge:* 两条通道如实报缺；
- *                       两条通道都只认 session.projectRoot，entry 恒传当前项目，不接受渲染层指定别的根。
+ *   knowledgeService —— next/runtime/knowledgeService（createKnowledgeService）；search／indexStatus／indexSync
+ *                       都在主进程内跑（worker 线程检索，零 HTTP）。不注入时 knowledge:* 三条通道如实报缺；
+ *                       三条通道都只认 session.projectRoot，entry 恒传当前项目，不接受渲染层指定别的根。
  */
 export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
@@ -293,16 +295,24 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
       case IPC_CHANNELS.runtimePropose:
         return session.runtime ? session.runtime.propose({ name: input.name, text: input.text }) : fail('INVALID_INPUT', '运行时尚未就绪')
-      // H2：知识服务 all-in-one。两条都只认当前项目根——渲染层传什么 root 都不采信。
+      // H2／工单B：知识服务 all-in-one。三条都只认当前项目根——渲染层传什么 root 都不采信。
       case IPC_CHANNELS.knowledgeSearch: {
         if (!knowledgeService?.search) return fail('INVALID_INPUT', '知识服务未接入（主进程未创建 knowledgeService）：这条通道现在只报缺，不检索任何资料')
         if (!session.projectRoot) return fail('INVALID_INPUT', '知识检索需要先打开一个项目：只检索当前项目，不做全局知识面')
         return knowledgeService.search({ ...input, root: session.projectRoot })
       }
       case IPC_CHANNELS.knowledgeIndexStatus: {
-        if (!knowledgeService?.exportProjectKnowledge) return fail('INVALID_INPUT', '知识服务未接入（主进程未创建 knowledgeService）：这条通道现在只报缺，不盘点任何资料')
+        // 旧注入服务只有 exportProjectKnowledge（H2 的旧名）；新服务用 indexStatus。
+        const status = knowledgeService?.indexStatus ?? knowledgeService?.exportProjectKnowledge
+        if (typeof status !== 'function') return fail('INVALID_INPUT', '知识服务未接入（主进程未创建 knowledgeService）：这条通道现在只报缺，不盘点任何资料')
         if (!session.projectRoot) return fail('INVALID_INPUT', '资料盘点需要先打开一个项目：只盘点当前项目')
-        return knowledgeService.exportProjectKnowledge({ root: session.projectRoot })
+        return status.call(knowledgeService, { root: session.projectRoot })
+      }
+      case IPC_CHANNELS.knowledgeIndexSync: {
+        if (!knowledgeService?.indexSync) return fail('INVALID_INPUT', '知识服务未接入（主进程未创建 knowledgeService）：这条通道现在只报缺，不重建索引')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '索引重建需要先打开一个项目：只索引当前项目')
+        // probe 只是触发索引的那一次检索词；服务侧会截断到 200 字，空值回落「设定」。
+        return knowledgeService.indexSync({ root: session.projectRoot, probe: input.probe })
       }
       case IPC_CHANNELS.prefsGet:
         return prefs ? prefs.read() : fail('INVALID_INPUT', '偏好存储未接入（主进程未创建偏好文件）')
