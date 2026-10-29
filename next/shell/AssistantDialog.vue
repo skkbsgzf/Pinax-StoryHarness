@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 
 /**
@@ -26,12 +26,24 @@ const props = defineProps({
   title: { type: String, default: 'Pi-Agent' },
   placeholder: { type: String, default: '就当前项目问一句话…' },
   /** 折叠层的工具名清单（默认不展开）。 */
-  tools: { type: Array, default: () => [] }
+  tools: { type: Array, default: () => [] },
+  /** 当前模式：review（提案制）或 auto（直写）。 */
+  mode: { type: String, default: 'review' }
 })
-const emit = defineEmits(['send', 'retry'])
+const emit = defineEmits(['send', 'retry', 'update:mode'])
 
 const draft = ref('')
 const threadRef = ref(null)
+const mode = computed(() => props.mode)
+
+/** / 命令提示（输入以 / 开头时显示可用命令）。 */
+const slashCommands = [
+  { cmd: '/审阅', desc: '审阅当前章节' },
+  { cmd: '/大纲', desc: '查看或编辑大纲' },
+  { cmd: '/总结', desc: '总结当前内容' },
+  { cmd: '/资料', desc: '搜索参考资料' }
+]
+const showSlashHint = computed(() => draft.value.startsWith('/'))
 
 function submit() {
   const text = draft.value.trim()
@@ -61,6 +73,13 @@ watch(() => props.messages.length, async () => {
           <strong>{{ title }}</strong>
         </div>
       </div>
+      <button
+        type="button"
+        class="authoring-knowledge__mode-badge"
+        :class="mode === 'review' ? 'is-review' : 'is-auto'"
+        :title="mode === 'review' ? '审阅模式：AI 产出走提案，确认后才落盘' : '自动模式：AI 产出直接写入（慎用）'"
+        @click="emit('update:mode', mode === 'review' ? 'auto' : 'review')"
+      >{{ mode === 'review' ? '审阅' : '自动' }}</button>
     </header>
 
     <div class="authoring-knowledge__body">
@@ -127,6 +146,11 @@ watch(() => props.messages.length, async () => {
           :disabled="disabled || busy"
           @keydown="onKeydown"
         />
+        <div v-if="showSlashHint" class="authoring-knowledge__slash-hint">
+          <span v-for="cmd in slashCommands" :key="cmd.cmd" class="authoring-knowledge__slash-item">
+            <code>{{ cmd.cmd }}</code> {{ cmd.desc }}
+          </span>
+        </div>
         <div class="authoring-knowledge__composer-actions">
           <button
             type="button"
@@ -208,4 +232,13 @@ watch(() => props.messages.length, async () => {
 @media (pointer: coarse) {
   .authoring-knowledge__send { width: 44px; height: 44px; }
 }
+</style>
+
+<style scoped>
+/* 批次22：模式标签（审阅/自动）＋ slash 命令提示。全 token。 */
+.authoring-knowledge__mode-badge { flex: none; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
+.authoring-knowledge__mode-badge.is-review { color: var(--accent, var(--accent)); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+.authoring-knowledge__mode-badge.is-auto { color: var(--signal-warm, var(--signal-warm)); border-color: color-mix(in srgb, var(--signal-warm) 32%, transparent); }
+.authoring-knowledge__slash-hint { display: flex; flex-wrap: wrap; gap: 6px 12px; padding: 6px 4px 0; font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
+.authoring-knowledge__slash-item code { color: var(--accent, var(--accent)); font-weight: 600; margin-right: 4px; }
 </style>
