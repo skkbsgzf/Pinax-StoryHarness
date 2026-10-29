@@ -1,7 +1,6 @@
 import { fail, ok } from '../../kernel/errors.mjs'
 import { isSameProjectRoot, normalizeProjectRoot } from '../../fs/projectPath.mjs'
 import { parseWorldbookEntryFile, serializeWorldbookEntryFile } from '../../../shared/worldbookFileContract.js'
-import { readWorldbookEntries } from './context.mjs'
 import { WORLDBOOK_CARRIER, WORLDBOOK_CARRIER_ID } from './manifest.mjs'
 
 /**
@@ -24,6 +23,15 @@ import { WORLDBOOK_CARRIER, WORLDBOOK_CARRIER_ID } from './manifest.mjs'
  * 再改关键词／标签／关系。relations 整份覆盖（最多 32 条）：每项只收 to ／ type ／ stance ／ covert ／ weight，
  * src 是来源证明而不是作者编辑的东西，递进来直接拒；落盘仍走 shared/worldbookFileContract.js 的
  * serializeWorldbookEntryFile（它与 links 的 ∪ 去重是同一份实现，这里不写第二套 YAML 子集）。
+ *
+ * 类别层（批次34 · 真实数据适配第一档）：大梦的 13 条世界书全在 世界书/人物|编年|设定/ 里，
+ * 而这一栏原先只列一层 → 面板全盲（文件合法、工具瞎）。现在：
+ *   - 列：世界书/ 顶层文件 ＋ 每个一级子目录里的文件（一层封顶；更深的不猜，如实记 warning 与 skippedDirs）；
+ *   - 每条带 cat（相对 世界书/ 的一级子目录名，顶层文件为空串）与带子路径的 path（世界书/人物/xxx.md）；
+ *   - 排序：类别（顶层在先）→ 文件名；另回 categories: [名称…] 供索引窗分组与新建下拉；
+ *   - 读：除 id／name 外接受 path（子路径原样）；
+ *   - 写：path 接受子路径（新建落类别目录；改稿把读回来的 path 原样带回），三道闸的语义不变
+ *     （子路径的归属仍按一级目录「世界书」判，工单B 的文件服务语义）。
  */
 const MAX_CONTENT_CHARS = 200_000
 /** 元数据口的一句话摘要上限（工单C）：超过就不落盘，不静默截断。 */
@@ -38,6 +46,12 @@ const META_FIELDS = Object.freeze(['keys', 'tags', 'summary', 'relations'])
 /** 关系边里作者能改的字段；src（来源证明）与未知字段一律拒。 */
 const RELATION_FIELDS = Object.freeze(['to', 'type', 'stance', 'covert', 'weight'])
 const WORLDBOOK_DIR = WORLDBOOK_CARRIER.dataDirs.entries
+/** 一次最多碰多少个世界书文件：与内核 pinax_worldbook_list 的 limit 上限（1000）同档。 */
+const ENTRY_READ_LIMIT = 1000
+/** 与 context.mjs 同一条文本口径（.md 是契约形态；.txt 是历史遗留的裸稿）。 */
+const TEXT_FILE_PATTERN = /\.(?:md|txt)$/iu
+/** 文件名排序：中文按拼音、数字按数值（003-倒带 排在 010-xxx 之前，不按字符序）。 */
+const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
 
 export function createWorldbookTools(context = {}) {
   const pluginId = context.pluginId ?? WORLDBOOK_CARRIER_ID
@@ -68,19 +82,123 @@ export function createWorldbookTools(context = {}) {
     return null
   }
 
+  /**
+   * 世界书全量读取（批次34）：顶层文件 ＋ 一级类别子目录里的文件。
+   * 只有一层是刻意的——真实结构就是「世界书/类别/条目.md」；第二层子目录不猜，记进
+   * warnings 与 skippedDirs（面板要能把「没读」如实讲出来，而不是装作这一栏空了）。
+   * 每条的 cat 是类别名（顶层为空串），path 是带子路径的相对路径（世界书/人物/xxx.md）。
+   * 排序：类别（顶层在先）→ 文件名；列表与 read 吃同一份顺序，不存在两套排名。
+   */
   async function readAll(limit) {
-    const read = await readWorldbookEntries({ pluginId, fileService, limit })
-    if (read.error) {
-      return { failure: fail(read.error.code, `「${WORLDBOOK_DIR}/」未取得：${read.error.message}`, read.error.details ?? null) }
+    const listed = await fileService.list({ pluginId, dir: WORLDBOOK_DIR })
+    if (!listed.ok) {
+      return { failure: fail(listed.error.code, `「${WORLDBOOK_DIR}/」未取得：${listed.error.message}`, listed.error.details ?? null) }
     }
-    return { entries: read.entries, warnings: read.warnings, skippedDirs: read.skippedDirs }
+    const warnings = []
+    const skippedDirs = []
+    const topEntries = listed.value.entries ?? []
+    const categories = topEntries
+      .filter((entry) => entry.kind === 'dir')
+      .map((entry) => entry.name)
+      .sort((a, b) => collator.compare(a, b))
+    const targets = topEntries
+      .filter((entry) => entry.kind === 'file' && TEXT_FILE_PATTERN.test(entry.name))
+      .map((entry) => ({ file: entry.name, cat: '' }))
+    for (const category of categories) {
+      const nested = await fileService.list({ pluginId, dir: `${WORLDBOOK_DIR}/${category}` })
+      if (!nested.ok) {
+        warnings.push(`「${WORLDBOOK_DIR}/${category}/」列不出来：${nested.error.message}`)
+        continue
+      }
+      for (const entry of nested.value.entries ?? []) {
+        if (entry.kind === 'dir') {
+          skippedDirs.push(`${WORLDBOOK_DIR}/${category}/${entry.name}`)
+          continue
+        }
+        if (TEXT_FILE_PATTERN.test(entry.name)) targets.push({ file: `${category}/${entry.name}`, cat: category })
+      }
+    }
+    if (skippedDirs.length) {
+      warnings.push(`「${WORLDBOOK_DIR}/」下有 ${skippedDirs.length} 个第二层子目录（${skippedDirs.slice(0, 6).join(' / ')}）未读取：类别只认一层。`)
+    }
+    targets.sort(compareByCategoryThenName)
+
+    const cap = Number.isSafeInteger(limit) && limit >= 0 ? Math.min(limit, ENTRY_READ_LIMIT) : ENTRY_READ_LIMIT
+    const entries = []
+    for (const target of targets.slice(0, cap)) {
+      const read = await fileService.read({ pluginId, dir: WORLDBOOK_DIR, file: target.file })
+      if (!read.ok) {
+        warnings.push(`世界书「${target.file}」读失败：${read.error.message}`)
+        continue
+      }
+      entries.push(toEntry(read, target.cat))
+    }
+    if (targets.length > cap) {
+      warnings.push(`「${WORLDBOOK_DIR}/」有 ${targets.length} 个文件，本次只读了前 ${cap} 个（上限 ${ENTRY_READ_LIMIT}）。`)
+    }
+    if (entries.some((entry) => entry.unparsed)) {
+      warnings.push(`${entries.filter((entry) => entry.unparsed).length} 个世界书文件不符合文件契约（无 frontmatter 或缺 id），按整篇正文收录。`)
+    }
+    return { entries, warnings, skippedDirs, categories }
+  }
+
+  /** 单条文件 → 条目（契约条目给全字段；裸 md 按整篇收录并标记未建档）。 */
+  function toEntry(read, category) {
+    const parsed = parseWorldbookEntryFile(read.value.text)
+    const fallbackName = baseName(read.value.relativePath).replace(TEXT_FILE_PATTERN, '')
+    if (parsed.ok) {
+      const content = String(parsed.entry.content ?? '').replace(/\r\n?/g, '\n').trim()
+      return {
+        id: parsed.entry.id || null,
+        name: parsed.entry.name || fallbackName,
+        type: parsed.entry.type || 'general',
+        keys: [...(parsed.entry.keys ?? [])],
+        tags: Array.isArray(parsed.entry.tags) ? parsed.entry.tags : [],
+        summary: typeof parsed.entry.summary === 'string' ? parsed.entry.summary : '',
+        relations: Array.isArray(parsed.entry.relations) ? parsed.entry.relations : [],
+        cat: category,
+        content,
+        path: read.value.relativePath,
+        revision: read.value.revision,
+        chars: content.length,
+        contract: true
+      }
+    }
+    const content = String(read.value.text).replace(/\r\n?/g, '\n').trim()
+    return {
+      id: null,
+      name: fallbackName,
+      type: 'general',
+      keys: [],
+      tags: [],
+      relations: [],
+      cat: category,
+      content,
+      path: read.value.relativePath,
+      revision: read.value.revision,
+      chars: content.length,
+      contract: false,
+      contractError: parsed.error.message,
+      unparsed: true
+    }
+  }
+
+  /** 按 path / id / name 找一条（read 与「按路径确认这份文件在不在世界书里」共用）。 */
+  function locate(entries, { id = '', name = '', path = '' }) {
+    if (path) {
+      const wanted = toDirRelative(WORLDBOOK_DIR, path).replace(/^\.\//u, '')
+      return entries.find((entry) => toDirRelative(WORLDBOOK_DIR, entry.path) === wanted) ?? null
+    }
+    if (id) return entries.find((entry) => entry.id === id) ?? null
+    if (name) return entries.find((entry) => entry.name === name) ?? null
+    return null
   }
 
   return [
     {
       name: 'pinax_worldbook_list',
       title: '列出世界书条目（世界书载体）',
-      description: '列出当前项目「世界书/」里的条目（id/名称/类型/标签/别名/字数/所在文件与修订号），可按 type 过滤；不返回正文，也不谎报没读过的字节数。子目录未被递归时会如实记账。',
+      description: '列出当前项目「世界书/」里的条目（id/名称/类型/类别/标签/别名/字数/所在文件与修订号），含一级类别子目录（人物/编年/设定…）里的条目，可按 type 过滤；不返回正文，也不谎报没读过的字节数。第二层子目录未被递归时如实记账。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -109,11 +227,15 @@ export function createWorldbookTools(context = {}) {
           truncated: all.length > limit,
           warnings: loaded.warnings,
           skippedDirs: loaded.skippedDirs,
+          // 类别清单（批次34）：索引窗按它分组、新建下拉按它出选项；顶层不属于任何类别，故不在里面。
+          categories: loaded.categories ?? [],
           projectRoot: root,
           entries: all.slice(0, limit).map((entry) => ({
             id: entry.id,
             name: entry.name,
             type: entry.type,
+            // 类别（批次34）：一级子目录名；顶层文件为空串（不是 undefined——界面不必再猜）。
+            cat: entry.cat ?? '',
             tags: entry.tags,
             aliases: entry.keys,
             chars: entry.chars,
@@ -129,12 +251,13 @@ export function createWorldbookTools(context = {}) {
     {
       name: 'pinax_worldbook_read',
       title: '读取世界书条目（世界书载体）',
-      description: '按 id 或 name 读单条世界书正文与关系字段，支持 maxChars 截断；返回该文件的相对路径与修订号，读不到就说读不到，不拼一条相近的冒充。',
+      description: '按 path（世界书/ 下的相对路径，可带一级类别子目录）或 id 或 name 读单条世界书正文与关系字段，支持 maxChars 截断；返回该文件的相对路径、类别与修订号，读不到就说读不到，不拼一条相近的冒充。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         properties: {
           projectPath: { type: 'string', maxLength: 240, description: '当前项目根路径；与打开的项目不一致时直接拒绝。' },
+          path: { type: 'string', minLength: 1, maxLength: 240, description: '条目相对路径，与 pinax_worldbook_list 给的 path 同一形状（如「世界书/人物/人物·柯秒.md」，也接受「人物·柯秒.md」）。' },
           id: { type: 'string', minLength: 1, maxLength: 120, description: '条目 id（frontmatter 的 id）。' },
           name: { type: 'string', minLength: 1, maxLength: 120, description: '条目名称，先精确后包含匹配。' },
           maxChars: { type: 'integer', minimum: 1000, maximum: MAX_CONTENT_CHARS, description: `正文最多返回字符数，默认 50000，上限 ${MAX_CONTENT_CHARS}。` }
@@ -148,18 +271,27 @@ export function createWorldbookTools(context = {}) {
         if (rejected) return rejected
         const wantedId = typeof args.id === 'string' ? args.id.trim() : ''
         const wantedName = typeof args.name === 'string' ? args.name.trim() : ''
-        if (!wantedId && !wantedName) return fail('INVALID_INPUT', 'pinax_worldbook_read 要给 id 或 name 其一')
+        const wantedPath = typeof args.path === 'string' ? args.path.trim() : ''
+        if (!wantedId && !wantedName && !wantedPath) return fail('INVALID_INPUT', 'pinax_worldbook_read 要给 path / id / name 其一')
         const maxChars = args.maxChars === undefined ? 50_000 : args.maxChars
         if (!Number.isSafeInteger(maxChars) || maxChars < 1000 || maxChars > MAX_CONTENT_CHARS) {
           return fail('INVALID_INPUT', `maxChars 须是 1000–${MAX_CONTENT_CHARS} 的整数`, { got: args.maxChars })
         }
-        const loaded = await readAll(1000)
+        const loaded = await readAll(ENTRY_READ_LIMIT)
         if (loaded.failure) return loaded.failure
         const warnings = [...loaded.warnings]
         const entries = loaded.entries
-        let hit = wantedId ? entries.find((entry) => entry.id === wantedId) : null
+        let hit = wantedPath ? locate(entries, { path: wantedPath }) : null
+        // path 读不到就给一句准确的话：这份文件不在世界书/ 里（也不猜一条相近的顶上）。
+        if (!hit && wantedPath) {
+          return fail('INVALID_INPUT', `「${WORLDBOOK_DIR}/」里没有 ${wantedPath}`, {
+            total: entries.length,
+            candidates: entries.slice(0, 10).map((entry) => entry.path)
+          })
+        }
+        if (!hit && wantedId) hit = locate(entries, { id: wantedId })
         if (!hit && wantedName) {
-          hit = entries.find((entry) => entry.name === wantedName) || null
+          hit = locate(entries, { name: wantedName })
           if (!hit) {
             const loose = entries.filter((entry) => String(entry.name).includes(wantedName))
             if (loose.length > 1) {
@@ -186,6 +318,8 @@ export function createWorldbookTools(context = {}) {
             // 收口包②（调度方裁定 dwfq-5c79bf4a-1）：摘要随读返回，阅读态 meta 行才有东西可显示。
             // 裸 md 没有 frontmatter，按空串返回（不是「没读到」）。
             summary: typeof hit.summary === 'string' ? hit.summary : '',
+            // 类别（批次34）：一级子目录名；顶层文件是空串。
+            cat: hit.cat ?? '',
             // 关系（批次28 · 工单2a）：阅读态要按「目标 · 类型 · 立场」显示，所以归一成作者能编辑的那几栏；
             // frontmatter 里没有 relations 就是空数组（不是「没读到」）。src 不进返回值——它是来源证明。
             relations: relationsForRead(hit.relations),
@@ -203,13 +337,13 @@ export function createWorldbookTools(context = {}) {
     {
       name: 'pinax_worldbook_save',
       title: '保存世界书条目（世界书载体）',
-      description: '作者确认后的设定落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。保存的是条目正文：契约条目保留既有 frontmatter（id/type/keys 保持不变），裸 md 与新建文件按原样整份写。可选 meta 只改已建档条目的元数据（keys 关键词／tags 标签／summary 摘要／relations 关系边），未提供的字段保持原值；裸 md 与新建带 meta 即拒（先保存正文建档再改）。写 世界书/ 走文件服务三道闸（归属＋file:世界书:rw＋并发）。',
+      description: '作者确认后的设定落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。保存的是条目正文：契约条目保留既有 frontmatter（id/type/keys 保持不变），裸 md 与新建文件按原样整份写。path 支持一级类别子目录（如「设定/设定·钟楼.md」，新建落进那个目录；只认一层）。可选 meta 只改已建档条目的元数据（keys 关键词／tags 标签／summary 摘要／relations 关系边），未提供的字段保持原值；裸 md 与新建带 meta 即拒（先保存正文建档再改）。写 世界书/ 走文件服务三道闸（归属＋file:世界书:rw＋并发）。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
         required: ['path', 'text', 'expectedRevision'],
         properties: {
-          path: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（世界书/ 下），与读取工具给回的 path 同一形状，如「世界书/人物·柯秒.md」或「人物·柯秒.md」。' },
+          path: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（世界书/ 下，类别只认一层），与读取工具给回的 path 同一形状，如「世界书/人物/人物·柯秒.md」「人物/人物·柯秒.md」或顶层的「人物·柯秒.md」。' },
           text: { type: 'string', minLength: 1, maxLength: MAX_CONTENT_CHARS, description: '条目正文（契约条目只换正文、frontmatter 原样保留；裸 md 与新建按原样整份写），故必须带修订号。' },
           expectedRevision: { type: 'integer', minimum: 0, description: '读取时拿到的修订号；新建传 0。' },
           meta: {
@@ -265,6 +399,14 @@ export function createWorldbookTools(context = {}) {
         }
         const relative = toDirRelative(WORLDBOOK_DIR, args.path)
         if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '世界书条目文件名必须以 .md 结尾', { path: args.path })
+        // 类别只认一层（批次34 边界）：世界书/类别/条目.md 可以，更深的嵌套布局本批不开。
+        const segments = relative.split('/')
+        if (segments.length > 2) {
+          return fail('INVALID_INPUT', `世界书条目的类别只认一层：${args.path} 多了一层目录`, { path: args.path, maxDepth: 2 })
+        }
+        if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+          return fail('INVALID_INPUT', `世界书路径不合法：${args.path}`, { path: args.path })
+        }
 
         // 元数据口（工单C）：形状先判（与落盘与否无关），契约与否等读到现文件再判。
         const metaProvided = args.meta !== undefined
@@ -315,6 +457,25 @@ export function createWorldbookTools(context = {}) {
 function toDirRelative(dir, path) {
   const normalized = String(path).replaceAll('\\', '/')
   return normalized.startsWith(`${dir}/`) ? normalized.slice(dir.length + 1) : normalized
+}
+
+/** 相对路径的最后一段（类别子路径下的文件名）。 */
+function baseName(relativePath) {
+  const parts = String(relativePath ?? '').replaceAll('\\', '/').split('/')
+  return parts[parts.length - 1] ?? ''
+}
+
+/**
+ * 类别层排序（批次34）：顶层条目（cat === ''）排在最前，其后按类别名、类别内按文件名。
+ * 顶层在先是有意的——老项目（没有子目录）看上去与批次33 之前完全一样。
+ */
+function compareByCategoryThenName(left, right) {
+  if (left.cat !== right.cat) {
+    if (!left.cat) return -1
+    if (!right.cat) return 1
+    return collator.compare(left.cat, right.cat)
+  }
+  return collator.compare(baseName(left.file), baseName(right.file))
 }
 
 /**

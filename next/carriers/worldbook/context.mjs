@@ -7,7 +7,7 @@
  * 共用它，所以面板上的条目清单与塞给模型的那份字节永远同源。
  *
  * 三条如实的限制写在这里，不假装覆盖面比这更大：
- *   1) 只看目录一级（世界书的 伏笔/、编年/ 等子目录会被记账跳过，文件服务当前不提供更深的列举）；
+ *   1) 类别只认一层（顶层＋一级子目录，批次34 补刀；更深子目录如实记账跳过）；
  *   2) 世界书条目按文件契约 v2 的 frontmatter 解析，解析不了的按整篇正文收录并留 warning；
  *   3) 单条字符上限是硬闸，超了在块里写明「已截断，原文 N 字」，绝不悄悄丢字。
  */
@@ -49,22 +49,39 @@ export async function readWorldbookEntries({ pluginId = WORLDBOOK_CARRIER_ID, fi
   }
   const listed = await fileService.list({ pluginId, dir: WORLDBOOK_DIR })
   if (!listed.ok) return { entries: [], warnings: [], skippedDirs, error: listed.error }
+  // 类别层（批次34 摸底后补刀）：顶层文件 ＋ 每个一级类别子目录的文件（与 pinax_worldbook_list
+  // 同一深度口径）——大梦真稿 13 条全在 人物/编年/设定 子目录里，只列一层等于对真实项目全盲。
+  // 更深的子目录不猜，进 skippedDirs／warnings。条目带 cat 与 path（世界书/<cat>/name）。
   const directories = listed.value.entries.filter((entry) => entry.kind === 'dir')
-  skippedDirs.push(...directories.map((entry) => `${WORLDBOOK_DIR}/${entry.name}`))
-  if (directories.length) {
-    warnings.push(`「${WORLDBOOK_DIR}/」下有 ${directories.length} 个子目录（${directories.slice(0, 6).map((entry) => entry.name).join(' / ')}）未递归读取：文件服务只让一级列举。`)
-  }
-  const names = listed.value.entries
+  const targets = listed.value.entries
     .filter((entry) => entry.kind === 'file' && TEXT_FILE_PATTERN.test(entry.name))
-    .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN', { numeric: true }))
-    .map((entry) => entry.name)
+    .map((entry) => ({ file: entry.name, cat: '' }))
+  for (const dirEntry of directories) {
+    const nested = await fileService.list({ pluginId, dir: `${WORLDBOOK_DIR}/${dirEntry.name}` })
+    if (!nested.ok) {
+      warnings.push(`「${WORLDBOOK_DIR}/${dirEntry.name}/」列不出来：${nested.error.message}`)
+      continue
+    }
+    for (const nestedEntry of nested.value.entries ?? []) {
+      if (nestedEntry.kind === 'dir') {
+        skippedDirs.push(`${WORLDBOOK_DIR}/${dirEntry.name}/${nestedEntry.name}`)
+        continue
+      }
+      if (TEXT_FILE_PATTERN.test(nestedEntry.name)) targets.push({ file: `${dirEntry.name}/${nestedEntry.name}`, cat: dirEntry.name })
+    }
+  }
+  if (skippedDirs.length) {
+    warnings.push(`「${WORLDBOOK_DIR}/」下有 ${skippedDirs.length} 个第二层子目录（${skippedDirs.slice(0, 6).join(' / ')}）未读取：类别只认一层。`)
+  }
+  targets.sort((a, b) =>
+    (a.cat === b.cat ? a.file.localeCompare(b.file, 'zh-CN', { numeric: true }) : a.cat.localeCompare(b.cat, 'zh-CN', { numeric: true })))
 
   const cap = Number.isSafeInteger(limit) && limit >= 0 ? Math.min(limit, ENTRY_READ_LIMIT) : ENTRY_READ_LIMIT
   const entries = []
-  for (const name of names.slice(0, cap)) {
-    const read = await fileService.read({ pluginId, dir: WORLDBOOK_DIR, file: name })
+  for (const target of targets.slice(0, cap)) {
+    const read = await fileService.read({ pluginId, dir: WORLDBOOK_DIR, file: target.file })
     if (!read.ok) {
-      warnings.push(`世界书「${name}」读失败：${read.error.message}`)
+      warnings.push(`世界书「${target.file}」读失败：${read.error.message}`)
       continue
     }
     const parsed = parseWorldbookEntryFile(read.value.text)
@@ -72,7 +89,8 @@ export async function readWorldbookEntries({ pluginId = WORLDBOOK_CARRIER_ID, fi
       const content = String(parsed.entry.content ?? '').replace(/\r\n?/g, '\n').trim()
       entries.push({
         id: parsed.entry.id || null,
-        name: parsed.entry.name || name.replace(TEXT_FILE_PATTERN, ''),
+        name: parsed.entry.name || target.file.replace(TEXT_FILE_PATTERN, '').split('/').pop(),
+        cat: target.cat,
         type: parsed.entry.type || 'general',
         keys: [...(parsed.entry.keys ?? [])],
         tags: Array.isArray(parsed.entry.tags) ? parsed.entry.tags : [],
@@ -91,7 +109,8 @@ export async function readWorldbookEntries({ pluginId = WORLDBOOK_CARRIER_ID, fi
     const content = String(read.value.text).replace(/\r\n?/g, '\n').trim()
     entries.push({
       id: null,
-      name: name.replace(TEXT_FILE_PATTERN, ''),
+      name: target.file.replace(TEXT_FILE_PATTERN, '').split('/').pop(),
+      cat: target.cat,
       type: 'general',
       keys: [],
       tags: [],
@@ -105,8 +124,8 @@ export async function readWorldbookEntries({ pluginId = WORLDBOOK_CARRIER_ID, fi
       unparsed: true
     })
   }
-  if (names.length > cap) {
-    warnings.push(`「${WORLDBOOK_DIR}/」有 ${names.length} 个文件，本次只读了前 ${cap} 个（上限 ${ENTRY_READ_LIMIT}）。`)
+  if (targets.length > cap) {
+    warnings.push(`「${WORLDBOOK_DIR}/」有 ${targets.length} 个文件，本次只读了前 ${cap} 个（上限 ${ENTRY_READ_LIMIT}）。`)
   }
   if (entries.some((entry) => entry.unparsed)) {
     warnings.push(`${entries.filter((entry) => entry.unparsed).length} 个世界书文件不符合文件契约（无 frontmatter 或缺 id），按整篇正文收录。`)

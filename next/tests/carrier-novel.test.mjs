@@ -375,3 +375,36 @@ test('没有项目（view 为空）时面就是内核 19 工具＋技能读取�
   assert.deepEqual(runtime.surfaceInfo().carrierToolNames, [])
   await runtime.stop()
 })
+
+test('章节标题剥排序前缀（批次34）：003-倒带 → 倒带，file 与排序仍按原名', async () => {
+  const { workspace, root, runtime } = await novelProject('carrier-title-prefix')
+  try {
+    await runtime.start()
+    await writeFile(join(root, '正文', '003-倒带.md'), '倒带。', 'utf-8')
+    await writeFile(join(root, '正文', '010-进城.md'), '进城。', 'utf-8')
+    await writeFile(join(root, '正文', '第001章-入场.md'), '入场。', 'utf-8')
+
+    const listed = await runtime.callTool('pinax_chapter_list', { limit: 10 })
+    assert.equal(listed.value.payload.ok, true, JSON.stringify(listed.value.payload))
+    const byFile = Object.fromEntries(listed.value.payload.chapters.map((item) => [item.file, item.title]))
+    // 只剥「1–3 位数字＋连字符」这一种前缀：第001章-入场 这种命名一个字都不改。
+    assert.equal(byFile['正文/003-倒带.md'], '倒带')
+    assert.equal(byFile['正文/010-进城.md'], '进城')
+    assert.equal(byFile['正文/第001章-入场.md'], '第001章-入场')
+
+    // file 保留原名：读写定位靠它，剥前缀不影响任何落盘路径。
+    assert.deepEqual(listed.value.payload.chapters.map((item) => item.file).sort(), ['正文/003-倒带.md', '正文/010-进城.md', '正文/第001章-入场.md'].sort())
+
+    // 剥过前缀的标题与原名都能定位到同一章（作者可能照文件名来点）。
+    for (const title of ['倒带', '003-倒带']) {
+      const read = await runtime.callTool('pinax_chapter_read', { title, maxChars: 1000 })
+      assert.equal(read.value.payload.ok, true, `${title}：${JSON.stringify(read.value.payload)}`)
+      assert.equal(read.value.payload.chapter.title, '倒带')
+      assert.equal(read.value.payload.chapter.file, '正文/003-倒带.md')
+      assert.equal(read.value.payload.text, '倒带。')
+    }
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})

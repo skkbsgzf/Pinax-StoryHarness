@@ -61,7 +61,7 @@ export function createNovelTools(context = {}) {
         const relativePath = `${NOVEL_DIRS.manuscript}/${volume}/${name}`
         chapters.push({
           index: chapters.length,
-          title: name.replace(/\.md$/iu, ''),
+          title: chapterTitle(name),
           file: relativePath,
           name,
           volume,
@@ -77,7 +77,7 @@ export function createNovelTools(context = {}) {
       const relativePath = `${NOVEL_DIRS.manuscript}/${name}`
       chapters.push({
         index: chapters.length,
-        title: name.replace(/\.md$/iu, ''),
+        title: chapterTitle(name),
         file: relativePath,
         name,
         volume: null,
@@ -91,7 +91,7 @@ export function createNovelTools(context = {}) {
     {
       name: 'pinax_chapter_list',
       title: '列出章节（小说载体）',
-      description: '按「正文/」列章节序号、标题、相对路径、卷名（顶层章为 null）与当前修订号：一级子目录＝卷，卷按目录名、卷内按文件名排序，平铺章排在卷后；不返回正文，也不谎报没读过的字节数。',
+      description: '按「正文/」列章节序号、标题、相对路径、卷名（顶层章为 null）与当前修订号：一级子目录＝卷，卷按目录名、卷内按文件名排序，平铺章排在卷后；标题剥掉文件名开头的排序前缀（003-倒带 → 倒带），file 仍是原名。不返回正文，也不谎报没读过的字节数。',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -311,7 +311,7 @@ async function resolveChapter(args, listManuscript) {
     const hit = chapters.find((item) => item.file === wanted || item.file.endsWith(`/${wanted}`))
     if (hit) return ok({ ...hit, matchedBy: 'file' })
     if (!/\.md$/iu.test(wanted)) return fail('INVALID_INPUT', 'file 指向的必须是 .md 章节', { file: args.file })
-    return ok({ index: null, title: wanted.replace(/\.md$/iu, '').split('/').pop(), file: wanted, name: toDirRelative(NOVEL_DIRS.manuscript, wanted), matchedBy: 'file' })
+    return ok({ index: null, title: chapterTitle(wanted.split('/').pop()), file: wanted, name: toDirRelative(NOVEL_DIRS.manuscript, wanted), matchedBy: 'file' })
   }
   if (!chapters.length) return fail('INVALID_INPUT', '「正文/」还没有任何章节，可先用 pinax_chapter_save 新建')
   if (args.index !== undefined) {
@@ -320,7 +320,8 @@ async function resolveChapter(args, listManuscript) {
     return hit ? ok({ ...hit, matchedBy: 'index' }) : fail('INVALID_INPUT', `章节序号 ${args.index} 超出范围（共 ${chapters.length} 章）`)
   }
   if (args.title) {
-    const exact = chapters.find((item) => item.title === args.title)
+    // 批次34：title 已剥掉排序前缀；作者仍可能按原文件名（003-倒带）来点，两个名字都认。
+    const exact = chapters.find((item) => item.title === args.title || chapterStem(item.file) === args.title)
     if (exact) return ok({ ...exact, matchedBy: 'title-exact' })
     const loose = chapters.filter((item) => item.title.includes(String(args.title)))
     if (loose.length === 1) return ok({ ...loose[0], matchedBy: 'title-contains' })
@@ -338,6 +339,20 @@ async function resolveChapter(args, listManuscript) {
 function toDirRelative(dir, path) {
   const normalized = String(path).replaceAll('\\', '/')
   return normalized.startsWith(`${dir}/`) ? normalized.slice(dir.length + 1) : normalized
+}
+
+/**
+ * 章节标题（批次34 · 真实数据适配）：文件名开头的排序前缀（NNN-）不进标题。
+ * 「003-倒带.md」→「倒带」；只动 title，file 仍是原名——读写定位与排序都靠文件名。
+ * 只认 1–3 位数字＋半角连字符：第001章-入场、001_xxx 这类命名一个字不改。
+ */
+function chapterTitle(name) {
+  return String(name ?? '').replace(/\.md$/iu, '').replace(/^\d{1,3}-/u, '')
+}
+
+/** 文件名（去扩展名、去目录）＝没剥过前缀的原名：title 匹配的第二把钥匙，两种写法都认。 */
+function chapterStem(file) {
+  return String(file ?? '').replaceAll('\\', '/').split('/').pop().replace(/\.md$/iu, '')
 }
 
 /** 标题→文件名：Windows 非法字符与控制字符都换成空格（用 \p{Cc} 而不是 \u0000-\u001F，规则允许前者）。 */

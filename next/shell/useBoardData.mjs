@@ -84,6 +84,9 @@ export function useBoardData(bridge) {
     proposalWarnings: [],
     proposalsError: null,
     entries: [],
+    /** 世界书类别（批次34）：世界书/ 下的一级子目录名（列表工具随 categories 带回）。
+     *  索引窗按它分组、新建下拉按它出选项；顶层旧项目是空数组（下拉只剩「顶层」，列表一整组）。 */
+    categories: [],
     entry: null,
     /** 条目编辑（工单A2）：阅读态与编辑态的开关＋草稿，与正文的 draft 分开各拿各的。 */
     editingEntry: false,
@@ -729,9 +732,11 @@ export function useBoardData(bridge) {
     if (!listed.ok) {
       state.treeError = listed.message
       state.entries = []
+      state.categories = []
       return
     }
     state.entries = listed.value.entries ?? []
+    state.categories = Array.isArray(listed.value.categories) ? listed.value.categories : []
     state.listWarnings = listed.value.warnings ?? []
     const current = state.entry ? state.entries.find((item) => item.path === state.entry.path) : null
     if (!state.entry && state.entries.length) await openEntry(state.entries[0])
@@ -744,7 +749,9 @@ export function useBoardData(bridge) {
     state.error = null
     state.notice = ''
     state.saveFeedback = null
-    const read = await tool('pinax_worldbook_read', item.id ? { id: item.id } : { name: item.name })
+    // 批次34：优先按 path 定位——同一名字的条目可以分住在两个类别目录里，按 path 才不串。
+    const locator = item.path ? { path: item.path } : item.id ? { id: item.id } : { name: item.name }
+    const read = await tool('pinax_worldbook_read', locator)
     state.busy = false
     if (!read.ok) {
       state.error = read.message
@@ -850,10 +857,38 @@ export function useBoardData(bridge) {
     settleSaveFeedback('entry', saved)
   }
 
+  /**
+   * 新建世界书条目（批次34）：类别决定落点——新建落 世界书/<类别>/<名称>.md；
+   * 没有类别目录的旧项目落顶层（世界书/<名称>.md），与批次33 之前的项目行为一致。
+   * 工具拒空 text，所以以条目标题作首行落盘（与章节／构思／约束新建同一口径）；
+   * 建完重列一次并打开这一条，作者接着在编辑面补正文与元数据。
+   */
+  async function createEntry(title, category = '') {
+    const name = entryFileNameFromTitle(title)
+    if (!name) return
+    const cat = String(category ?? '').trim()
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const saved = await tool('pinax_worldbook_save', {
+      path: cat ? `${cat}/${name}.md` : `${name}.md`,
+      text: `${name}\n`,
+      expectedRevision: 0
+    })
+    state.busy = false
+    if (!saved.ok) {
+      state.error = saved.message
+      return
+    }
+    state.notice = `已新建「${saved.value.file}」`
+    await loadEntries()
+    const made = state.entries.find((item) => item.path === saved.value.file)
+    if (made) await openEntry(made)
+  }
+
   function setDraft(value) {
     state.draft = value
   }
-
   /** 大纲树（工单A3 只读 → 工单B2 起可编辑）：小说板块把 大纲/outline.json 的节点列进索引窗。
    *  大纲还没写（工具对「既没有 outline.json 也没有 大纲.md」回 INVALID_INPUT）是新建项目的常态：
    *  清空、revision 记为 null（首次保存传 0 建档）、不报错，索引窗给一行说明＋「新建大纲」；
@@ -1165,6 +1200,7 @@ export function useBoardData(bridge) {
     addEntryRelation,
     removeEntryRelation,
     saveEntry,
+    createEntry,
     loadOutline,
     selectOutlineNode,
     startOutline,
@@ -1302,4 +1338,20 @@ function relationPayload(rows) {
       return out
     })
     .filter(Boolean)
+}
+
+/**
+ * 条目名 → 文件名（批次34：世界书类别层的「新建条目」）。
+ * Windows 非法字符与控制字符换成空格，去掉开头的点，截 120 字；「/」也换成空格——
+ * 它是类别分隔符，留在名字里会让新建跑到别的目录去。扩展名由调用方补。
+ */
+function entryFileNameFromTitle(title) {
+  return String(title ?? '')
+    .replace(/[\\/:*?"<>|]/gu, ' ')
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^\.+/u, '')
+    .replace(/\.md$/iu, '')
+    .slice(0, 120)
 }

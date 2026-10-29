@@ -577,10 +577,11 @@ describe('Obsidian 三栏', () => {
     wrapper.unmount()
   })
 
-  it('中栏在零面板时给出解释而不是空白', () => {
-    const wrapper = mount(CenterSlotHost, { props: { data: { error: null, notice: '' }, project: null } })
+  it('中栏在零面板时给出解释而不是空白；核心区面板头 DOM 已整块删除（批次34）', () => {
+    const wrapper = mount(CenterSlotHost, { props: { data: { error: null, notice: '' } } })
     expect(wrapper.text()).toContain('没有已启用的中栏面板')
-    expect(wrapper.text()).toContain('尚未打开项目')
+    expect(wrapper.find('.center-head').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('尚未打开项目')
     wrapper.unmount()
   })
 
@@ -2520,9 +2521,19 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
   const OUTLINE_EDGES = [{ from: 'n1', to: 'n2' }]
   const LONG_SUMMARY = '雪夜醒来的主角，袖中有一枚停摆的表，表针在雨夜重新走了起来，她却记不得自己是谁，也记不得这座城。'
   const ENTRIES = [
-    { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, summary: LONG_SUMMARY, path: '世界书/人物·柯秒.md', revision: 1, contract: true },
-    { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
+    { id: 'wb-1', name: '人物·柯秒', type: 'character', cat: '', tags: ['主角'], aliases: ['柯秒'], chars: 18, summary: LONG_SUMMARY, path: '世界书/人物·柯秒.md', revision: 1, contract: true },
+    { id: null, name: '随手记', type: 'general', cat: '', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
   ]
+  /** 类别层夹具（批次34）：世界书/ 下一级子目录＝类别，条目 path 带子路径（照大梦真数据结构）。 */
+  const CATEGORIZED = [
+    { id: 'wb-ch1', name: '编年·停摆的表', type: 'event', cat: '编年', tags: [], aliases: [], chars: 10, summary: '', path: '世界书/编年/编年·停摆的表.md', revision: 1, contract: true },
+    { id: 'wb-ch2', name: '编年·雨夜', type: 'event', cat: '编年', tags: [], aliases: [], chars: 12, summary: '', path: '世界书/编年/编年·雨夜.md', revision: 1, contract: true },
+    { id: 'wb-1', name: '人物·柯秒', type: 'character', cat: '人物', tags: ['主角'], aliases: ['柯秒'], chars: 18, summary: '', path: '世界书/人物/人物·柯秒.md', revision: 1, contract: true },
+    { id: 'wb-p1', name: '地点·槐巷', type: 'location', cat: '人物', tags: [], aliases: ['槐巷'], chars: 20, summary: '', path: '世界书/人物/地点·槐巷.md', revision: 1, contract: true },
+    { id: 'wb-s1', name: '设定·钟楼', type: 'setting', cat: '设定', tags: [], aliases: [], chars: 16, summary: '', path: '世界书/设定/设定·钟楼.md', revision: 1, contract: true }
+  ]
+  /** 工具返回的类别清单（字典序：编年 < 人物 < 设定）。 */
+  const CATEGORIES = ['编年', '人物', '设定']
 
   /** 在 carrierView 上补世界书与大纲两块板（各自的目录窗 pane 前缀决定索引窗画哪棵树）。 */
   function writingView() {
@@ -2580,7 +2591,9 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     }
   }
 
-  function writingBridge({ nodes = OUTLINE_NODES, edges = OUTLINE_EDGES, entries = ENTRIES } = {}) {
+  const CHAPTERS = [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }]
+
+  function writingBridge({ nodes = OUTLINE_NODES, edges = OUTLINE_EDGES, entries = ENTRIES, categories = [], chapters = CHAPTERS } = {}) {
     const calls = []
     // 条目夹具是模块级常量：这里拷一份，保存用例改的是这一次挂载自己的账。
     const book = entries.map((item) => ({ ...item }))
@@ -2590,7 +2603,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
       if (channel === IPC_CHANNELS.runtimeToolCall) {
         calls.push({ tool: payload.tool, args: payload.args })
         if (payload.tool === 'pinax_chapter_list') {
-          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: 1, truncated: false, chapters: [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }] } } }
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: chapters.length, truncated: false, chapters } } }
         }
         if (payload.tool === 'pinax_chapter_read') {
           return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: 0, title: '雨夜', file: payload.args.file }, text: '雨夜。', totalChars: 3, truncated: false, revision: 1 } } }
@@ -2602,16 +2615,37 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
           return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.outline', payload: { ok: true, file: '大纲/outline.json', revision: 2, nodeTotal: payload.args.nodes?.length ?? 0 } } }
         }
         if (payload.tool === 'pinax_worldbook_list') {
-          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, total: book.length, truncated: false, warnings: [], skippedDirs: [], projectRoot: 'D:/tmp/大梦', entries: book } } }
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, total: book.length, truncated: false, warnings: [], skippedDirs: [], categories: [...categories], projectRoot: 'D:/tmp/大梦', entries: book } } }
         }
         if (payload.tool === 'pinax_worldbook_read') {
-          const hit = book.find((item) => (item.id && item.id === payload.args.id) || item.name === payload.args.name)
+          const hit = book.find((item) => (payload.args.path && item.path === payload.args.path) || (item.id && item.id === payload.args.id) || item.name === payload.args.name)
           if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '没有这条' } } }
           return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, entry: { ...hit, keys: hit.aliases, relations: Array.isArray(hit.relations) ? hit.relations : [], content: '冷穿越剧版主角，醒来在雪夜。', contentChars: 16, contentTruncated: false }, warnings: [] } } }
         }
         if (payload.tool === 'pinax_worldbook_save') {
           const index = book.findIndex((item) => item.path === payload.args.path)
-          if (index < 0) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: '没有这条' } } }
+          if (index < 0) {
+            // 新建（批次34）：类别子路径落一条新条目，返回的是带世界书/ 前缀的 path。
+            if (payload.args.expectedRevision !== 0) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: '没有这条' } } }
+            const file = `世界书/${payload.args.path}`
+            const segments = String(payload.args.path).split('/')
+            const created = {
+              id: null,
+              name: segments[segments.length - 1].replace(/\.md$/iu, ''),
+              type: 'general',
+              cat: segments.length > 1 ? segments[0] : '',
+              tags: [],
+              aliases: [],
+              chars: String(payload.args.text ?? '').length,
+              summary: '',
+              path: file,
+              revision: 1,
+              contract: false
+            }
+            book.push(created)
+            if (created.cat && !categories.includes(created.cat)) categories.push(created.cat)
+            return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, file, revision: 1, created: true } } }
+          }
           const hit = book[index]
           const next = { ...hit, revision: hit.revision + 1, content: payload.args.text }
           if (Array.isArray(payload.args.meta?.relations)) next.relations = payload.args.meta.relations.map((relation) => ({ ...relation }))
@@ -2743,11 +2777,13 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
 
     const table = wrapper.find('[data-test="entries-table"]')
     expect(table.exists()).toBe(true)
-    expect(table.findAll('th').map((th) => th.text())).toEqual(['名称', '类型', '关键词', '字数', '摘要'])
+    // 批次34：表格加了一列「类别」（顶层旧项目的条目在这一列是「—」）。
+    expect(table.findAll('th').map((th) => th.text())).toEqual(['名称', '类别', '类型', '关键词', '字数', '摘要'])
     const bodyRows = table.findAll('tbody tr')
     expect(bodyRows).toHaveLength(2)
     expect(bodyRows[0].findAll('td').map((td) => td.text())).toEqual([
       '人物·柯秒',
+      '—',
       'character',
       '柯秒',
       '18',
@@ -2762,7 +2798,8 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await bodyRows[0].trigger('click')
     await flushPromises()
     const lastRead = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_read').at(-1)
-    expect(lastRead.args).toEqual({ id: 'wb-1' })
+    // 批次34 起按 path 打开（同一名字的条目可以分住两个类别目录，按 path 才不串）。
+    expect(lastRead.args).toEqual({ path: '世界书/人物·柯秒.md' })
     expect(wrapper.find('[data-pane-id="worldbook.entries"]').text()).toContain('人物·柯秒')
 
     // 状态按项目根落 localStorage（照 paneForm 先例）。
@@ -2853,6 +2890,81 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     const cleared = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1)
     expect(cleared.args.meta.relations).toEqual([])
     expect(paneNow().find('[data-test="entry-relations-read"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('世界书类别层（批次34）：列表按类别分组（三组＋行数），表格有类别列，新建下拉＝既有类别', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({ entries: CATEGORIZED, categories: [...CATEGORIES] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    // 列表视图：每组一个小节头（人物／编年／设定按工具给的顺序），组内是原来的条目行。
+    const sections = wrapper.findAll('.nx-index-window [data-test="entry-category"]')
+    expect(sections.map((node) => node.text())).toEqual(CATEGORIES)
+    const lists = wrapper.findAll('.nx-index-window .nx-tree')
+    expect(lists.map((list) => list.findAll('.nx-tree-item').length)).toEqual([2, 2, 1])
+    expect(wrapper.find('.nx-index-window').text()).not.toContain('未分类')
+
+    // 表格视图：多一列「类别」，值来自条目的 cat。
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    const table = wrapper.find('[data-test="entries-table"]')
+    expect(table.findAll('th').map((th) => th.text())).toEqual(['名称', '类别', '类型', '关键词', '字数', '摘要'])
+    // 表格按工具给的顺序列条目（类别列的值来自条目的 cat）。
+    expect(table.findAll('tbody tr').map((row) => row.findAll('td')[1].text())).toEqual(CATEGORIZED.map((entry) => entry.cat))
+
+    // 新建（区头 ＋）：临时行带类别下拉，选项＝既有类别，默认第一个；选中的类别决定落点。
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="index-new-toggle"]').trigger('click')
+    await flushPromises()
+    const select = wrapper.find('[data-test="index-new-category"]')
+    expect(select.exists()).toBe(true)
+    expect(select.findAll('option').map((option) => option.text())).toEqual(CATEGORIES)
+    expect(select.element.value).toBe(CATEGORIES[0])
+
+    await wrapper.find('[data-test="index-new-input"]').setValue('人物·新角')
+    await select.setValue('设定')
+    await wrapper.find('[data-test="index-new-input"]').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    const saved = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1)
+    expect(saved.args.path).toBe('设定/人物·新角.md')
+    expect(saved.args.expectedRevision).toBe(0)
+    // 建完重列并打开这一条（打开按 path 定位）。
+    const opened = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_read').at(-1)
+    expect(opened.args).toEqual({ path: '世界书/设定/人物·新角.md' })
+    wrapper.unmount()
+
+    // 没有类别目录的旧项目：下拉只有「顶层」，新建落 世界书/<名称>.md。
+    globalThis.localStorage?.clear()
+    const legacy = writingBridge()
+    const old = mount(AppNext, { props: { bridge: legacy } })
+    await flushPromises()
+    await openBoard(old, '世界书')
+    await old.find('[data-test="index-new-toggle"]').trigger('click')
+    await flushPromises()
+    expect(old.findAll('[data-test="index-new-category"] option').map((option) => option.text())).toEqual(['顶层'])
+    await old.find('[data-test="index-new-input"]').setValue('新条目')
+    await old.find('[data-test="index-new-input"]').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(legacy.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1).args.path).toBe('新条目.md')
+    old.unmount()
+  })
+
+  it('章节标题不带排序前缀（批次34）：行＝「倒带」，原名只留在行的 title 提示里', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({ chapters: [{ index: 0, title: '倒带', file: '正文/003-倒带.md', name: '003-倒带.md', revision: 1 }] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const row = wrapper.find('.nx-index-window .nx-tree-item')
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toBe('倒带')
+    expect(row.text()).not.toMatch(/^\d+-/u)
+    // file 仍是原名：读写定位与排序靠它，只有 title 被剥了前缀。
+    expect(row.attributes('title')).toContain('正文/003-倒带.md')
     wrapper.unmount()
   })
 })

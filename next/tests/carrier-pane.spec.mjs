@@ -130,7 +130,8 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, ou
       }
       if (payload.tool === 'pinax_worldbook_list') return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, total: state.entries.length, truncated: false, warnings: ['1 个世界书文件不符合文件契约（无 frontmatter 或缺 id），按整篇正文收录。'], skippedDirs: ['世界书/伏笔'], entries: state.entries } } }
       if (payload.tool === 'pinax_worldbook_read') {
-        const hit = state.entries.find((item) => (item.id && item.id === payload.args.id) || item.name === payload.args.name || item.name.includes(payload.args.name ?? ''))
+        // 批次34：索引窗按 path 打开条目（同一名字可住在两个类别目录里）。
+        const hit = state.entries.find((item) => (payload.args.path && item.path === payload.args.path) || (item.id && item.id === payload.args.id) || (payload.args.name && (item.name === payload.args.name || item.name.includes(payload.args.name))))
         if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「世界书/」里没有 查无此人' } } }
         const content = hit.savedText ?? (hit.name === '随手记' ? '一些还没整理的设定碎句。' : '冷穿越剧版主角，醒来在雪夜。')
         return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, entry: { ...hit, relations: [], keys: hit.aliases, content, contentChars: content.length, contentTruncated: false }, warnings: hit.contract ? [] : ['条目「随手记」未按世界书文件契约建档（未找到 frontmatter），返回的是整篇正文。'] } } }
@@ -1569,10 +1570,14 @@ describe('面板与运行时的边界', () => {
     wrapper.unmount()
   })
 
-  it('中栏无面板时仍是解释而不是空白', () => {
-    const wrapper = mount(CenterSlotHost, { props: { data: { error: null, notice: '' }, project: null } })
+  it('中栏无面板时仍是解释而不是空白；核心区面板头 DOM 已整块删除（批次34）', () => {
+    const wrapper = mount(CenterSlotHost, { props: { data: { error: null, notice: '' } } })
     expect(wrapper.text()).toContain('没有已启用的中栏面板')
-    expect(wrapper.text()).toContain('尚未打开项目')
+    // 批次34：「正文／项目名」那一层不是隐藏，是不存在——载体身份在竖条、项目名在标题栏。
+    expect(wrapper.find('.center-head').exists()).toBe(false)
+    expect(wrapper.find('.center-title').exists()).toBe(false)
+    expect(wrapper.find('.center-sub').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('尚未打开项目')
     wrapper.unmount()
   })
 

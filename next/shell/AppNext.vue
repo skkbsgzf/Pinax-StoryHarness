@@ -1331,7 +1331,6 @@ onBeforeUnmount(() => {
           <CenterSlotHost
             :active-pane="fullscreenTarget"
             :data="data"
-            :project="project"
           />
         </template>
 
@@ -1342,7 +1341,6 @@ onBeforeUnmount(() => {
             <CenterSlotHost
               :active-pane="splitMainPane"
               :data="data"
-              :project="project"
             />
           </div>
           <div
@@ -1356,7 +1354,6 @@ onBeforeUnmount(() => {
             <CenterSlotHost
               :active-pane="splitTarget.pane"
               :data="data"
-              :project="project"
             />
           </div>
         </div>
@@ -1366,7 +1363,6 @@ onBeforeUnmount(() => {
           v-else
           :active-pane="mainCenterPane"
           :data="data"
-          :project="project"
         />
       </div>
 

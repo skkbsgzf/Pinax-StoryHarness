@@ -417,14 +417,9 @@ body {
   color: var(--archive-ink);
   overflow: auto;
 }
-/* 核心区面板头（批次33 · 作者裁定「标题栏放一个标题，其他东西就不用放了」）：
-   「正文／演示之书 · novel」这一层不再在文档头上念第二遍——载体身份在竖条上，
-   项目名在标题栏；文档头只剩文档自己的名字（.doc-title）与底部一行 hint（.doc-meta-hint）。
-   CenterSlotHost.vue 不在本批允许文件里，所以这里用样式层收掉这一块；
-   DOM 仍在（等下一批动 CenterSlotHost 时整块删除，届时这条规则一并退役）。 */
-.center-head {
-  display: none;
-}
+/* 批次34：核心区面板头（.center-head）已整块删除——DOM 不在，这条样式规则随之退役。
+   「标题栏放一个标题，其他东西就不用放了」：载体身份在竖条上、项目名在标题栏，
+   文档头只剩文档自己的名字（.doc-title）与底部一行 hint（.doc-meta-hint）。 */
 .center-empty {
   margin: 0;
   padding: 0 24px;

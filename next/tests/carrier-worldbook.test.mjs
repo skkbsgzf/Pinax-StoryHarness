@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
 import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
@@ -165,7 +165,7 @@ test('本地化轨口径：只服务当前打开的项目，第二个路径与�
 
     const noLocator = await runtime.callTool('pinax_worldbook_read', {})
     assert.equal(noLocator.value.payload.ok, false)
-    assert.match(noLocator.value.payload.message, /要给 id 或 name/)
+    assert.match(noLocator.value.payload.message, /要给 path \/ id \/ name/)
 
     const badLimit = await runtime.callTool('pinax_worldbook_list', { limit: 0 })
     assert.equal(badLimit.value.payload.ok, false)
@@ -653,6 +653,168 @@ test('世界书关系边（批次28 · 工单2a）：保存后 frontmatter 往�
     assert.deepEqual(clearedEntry.value.payload.entry.relations, [])
     const clearedParsed = parseWorldbookEntryFile((await opened.value.fileService.read({ pluginId: WORLDBOOK_CARRIER_ID, dir: '世界书', file: '地点·钟楼.md' })).value.text)
     assert.deepEqual(clearedParsed.entry.links, ['wb-extra'], '关系整份清空后，只有关系层之外那条独立 links 留了下来')
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+/**
+ * 批次34 · 真实数据适配第一档：类别层（世界书/人物|编年|设定/…）。
+ * 夹具照 dameng-px 的形状造：三个类别子目录、13 条真 frontmatter 条目、外加一个第二层子目录
+ * （用证「更深的不猜，但如实记 warning」）。素材落工装目录，不碰作者原稿。
+ */
+const CATEGORIZED_BOOK = Object.freeze({
+  人物: ['人物·柯秒（冷穿越剧版）', '人物·老周', '人物·阿棠', '人物·团长', '人物·无名'],
+  编年: ['编年·停摆的表', '编年·雨夜', '编年·入城', '编年·钟楼'],
+  设定: ['设定·槐巷', '设定·雨具', '设定·铜钱', '设定·表芯']
+})
+
+async function seedCategorizedBook(opened) {
+  let serial = 0
+  for (const [cat, names] of Object.entries(CATEGORIZED_BOOK)) {
+    for (const name of names) {
+      serial += 1
+      const written = await opened.value.fileService.write({
+        pluginId: WORLDBOOK_CARRIER_ID,
+        dir: `世界书/${cat}`,
+        file: `${name}.md`,
+        text: serializeWorldbookEntryFile({
+          id: `wb-cat-${serial}`,
+          name,
+          type: cat === '人物' ? 'character' : cat === '编年' ? 'event' : 'setting',
+          keys: [name.split('·').pop()],
+          tags: [cat],
+          content: `${name} 的正文，写在「${cat}」这一类别里。`
+        }),
+        expectedRevision: 0
+      })
+      assert.equal(written.ok, true, `${cat}/${name}：${JSON.stringify(written.error ?? {})}`)
+    }
+  }
+  // 第二层子目录：本批不递归，必须记账而不是装作没看见。
+  await mkdir(join(opened.value.fileService.root, '世界书', '人物', '子类'), { recursive: true })
+  await writeFile(join(opened.value.fileService.root, '世界书', '人物', '子类', '深一层.md'), '更深的一层不猜。\n', 'utf-8')
+}
+
+test('世界书类别层（批次34）：13 条子目录条目全量可见、cat 正确、categories 齐、排序按类别→文件名', async () => {
+  const { workspace, opened, runtime } = await worldbookProject('worldbook-categories-list')
+  try {
+    await seedCategorizedBook(opened)
+    const listed = await runtime.callTool('pinax_worldbook_list', { limit: 500 })
+    assert.equal(listed.value.payload.ok, true, JSON.stringify(listed.value.payload))
+    assert.equal(listed.value.payload.total, 13, '三个类别目录里的 13 条都要看得见（批次33 之前这里是 0）')
+
+    const categories = listed.value.payload.categories
+    assert.equal(categories.length, 3)
+    assert.deepEqual([...categories].sort(), ['人物', '编年', '设定'].sort())
+
+    // 组内条数、cat 与带子路径的 path 都对得上。
+    const entries = listed.value.payload.entries
+    for (const cat of categories) {
+      const rows = entries.filter((entry) => entry.cat === cat)
+      assert.equal(rows.length, CATEGORIZED_BOOK[cat].length, `类别「${cat}」条目数不对`)
+      assert.ok(rows.every((entry) => entry.path === `世界书/${cat}/${entry.name}.md`), `类别「${cat}」的 path 要带子路径`)
+    }
+    // 排序：类别（工具给的 categories 顺序）→ 文件名；组是连续的。
+    assert.deepEqual(entries.map((entry) => entry.cat), categories.flatMap((cat) => Array(CATEGORIZED_BOOK[cat].length).fill(cat)))
+    const names = entries.filter((entry) => entry.cat === '人物').map((entry) => entry.name)
+    assert.deepEqual(names, ['人物·阿棠', '人物·柯秒（冷穿越剧版）', '人物·老周', '人物·团长', '人物·无名'], '类别内按文件名排序（collator：数字按值、中文按拼音）')
+
+    // 第二层子目录：不进条目，但要在 skippedDirs 与 warnings 里说出来。
+    assert.ok(listed.value.payload.skippedDirs.some((dir) => dir.endsWith('世界书/人物/子类')), '第二层子目录要记进 skippedDirs')
+    assert.match(listed.value.payload.warnings.join('\n'), /第二层子目录/)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书类别层（批次34）：read 按 path（带子路径）定位，返回 cat；不存在的路径直接说没有', async () => {
+  const { workspace, opened, runtime } = await worldbookProject('worldbook-categories-read')
+  try {
+    await seedCategorizedBook(opened)
+
+    const byPath = await runtime.callTool('pinax_worldbook_read', { path: '世界书/人物/人物·柯秒（冷穿越剧版）.md' })
+    assert.equal(byPath.value.payload.ok, true, JSON.stringify(byPath.value.payload))
+    assert.equal(byPath.value.payload.entry.cat, '人物')
+    assert.equal(byPath.value.payload.entry.name, '人物·柯秒（冷穿越剧版）')
+    assert.equal(byPath.value.payload.entry.path, '世界书/人物/人物·柯秒（冷穿越剧版）.md')
+    assert.match(byPath.value.payload.entry.content, /写在「人物」这一类别里/)
+
+    // 不带 世界书/ 前缀的同一形状也认。
+    const relative = await runtime.callTool('pinax_worldbook_read', { path: '设定/设定·表芯.md' })
+    assert.equal(relative.value.payload.ok, true, JSON.stringify(relative.value.payload))
+    assert.equal(relative.value.payload.entry.cat, '设定')
+
+    const missing = await runtime.callTool('pinax_worldbook_read', { path: '世界书/人物/查无此条.md' })
+    assert.equal(missing.value.payload.ok, false)
+    assert.equal(missing.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(missing.value.payload.message, /人物\/查无此条\.md/)
+
+    const noLocator = await runtime.callTool('pinax_worldbook_read', {})
+    assert.match(noLocator.value.payload.message, /path \/ id \/ name/)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书类别层（批次34）：新建落类别目录、改稿原样带回 path；第三层路径拒收', async () => {
+  const { workspace, root, opened, runtime } = await worldbookProject('worldbook-categories-save')
+  try {
+    await seedCategorizedBook(opened)
+
+    // 新建：类别目录由 path 决定，文件真的落进那个子目录。
+    const created = await runtime.callTool('pinax_worldbook_save', { path: '设定/设定·新钟.md', text: '设定·新钟\n', expectedRevision: 0 })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+    assert.equal(created.value.payload.file, '世界书/设定/设定·新钟.md')
+    assert.equal(created.value.payload.created, true)
+    const onDisk = await opened.value.fileService.read({ pluginId: WORLDBOOK_CARRIER_ID, dir: '世界书', file: '设定/设定·新钟.md' })
+    assert.equal(onDisk.ok, true, JSON.stringify(onDisk.error ?? {}))
+    assert.equal(onDisk.value.revision, 1)
+    assert.match(await readFile(join(root, '世界书', '设定', '设定·新钟.md'), 'utf-8'), /设定·新钟/)
+
+    // 列一次：新条目带着自己的类别出现。
+    const listed = await runtime.callTool('pinax_worldbook_list', {})
+    const fresh = listed.value.payload.entries.find((entry) => entry.path === '世界书/设定/设定·新钟.md')
+    assert.equal(fresh?.cat, '设定')
+
+    // 改稿：把读回来的 path 原样带回，落的是同一份文件（不新开一条）。
+    const read = await runtime.callTool('pinax_worldbook_read', { path: fresh.path })
+    const saved = await runtime.callTool('pinax_worldbook_save', {
+      path: read.value.payload.entry.path,
+      text: '钟楼在雨夜停了。',
+      expectedRevision: read.value.payload.entry.revision
+    })
+    assert.equal(saved.value.payload.ok, true, JSON.stringify(saved.value.payload))
+    assert.equal(saved.value.payload.file, '世界书/设定/设定·新钟.md')
+    assert.equal(saved.value.payload.revision, 2)
+    assert.equal(saved.value.payload.created, false)
+
+    // 第三层（世界书/类别/子类/条目.md）本批不开：明说拒，不猜落点。
+    const tooDeep = await runtime.callTool('pinax_worldbook_save', { path: '人物/子类/太深.md', text: '太深。', expectedRevision: 0 })
+    assert.equal(tooDeep.value.payload.ok, false)
+    assert.equal(tooDeep.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(tooDeep.value.payload.message, /只认一层/)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('世界书类别层（批次34）：没有子目录的旧项目行为不变——categories 为空、cat 为空串、新建仍落顶层', async () => {
+  const { workspace, runtime } = await worldbookProject('worldbook-categories-legacy', { fill: true })
+  try {
+    const listed = await runtime.callTool('pinax_worldbook_list', {})
+    assert.equal(listed.value.payload.total, 3)
+    assert.deepEqual(listed.value.payload.categories, [], '没有类别目录就是空数组（不猜一个「未分类」出来）')
+    assert.ok(listed.value.payload.entries.every((entry) => entry.cat === ''), '顶层条目的 cat 是空串')
+    assert.deepEqual(listed.value.payload.skippedDirs, [], '顶层项目没有跳过的目录')
+
+    const created = await runtime.callTool('pinax_worldbook_save', { path: '地点·钟楼.md', text: '巷尾的钟楼。', expectedRevision: 0 })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+    assert.equal(created.value.payload.file, '世界书/地点·钟楼.md', '旧项目的新建仍落顶层（兼容优先）')
   } finally {
     await runtime.stop()
     await workspace.cleanup()

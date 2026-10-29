@@ -594,12 +594,12 @@ test('批次33 文档头归一：一行 .doc-title ＋ 底部 .doc-meta-hint，�
   assert.ok(!layout.includes('.editor-area:focus-visible'),
     '.editor-area:focus-visible 那条 outline 规则要整条删掉（改成 outline: 0 也不行）')
 
-  // ④ 核心区面板头（「正文／演示之书 · novel」那一层）不再出现在文档上方：
-  //    CenterSlotHost.vue 不在本批允许文件里，先由布局层收掉（display: none）；
-  //    下一批把 DOM 整块删掉时，这条断言随之退役。
-  const head = ruleBody(layout, '.center-head {')
-  assert.ok(head, 'next-shell.css 里没有 .center-head 规则')
-  assert.match(head, /display:\s*none/u, '核心区面板头要收掉：文档头只留文档自己的标题')
+  // ④ 核心区面板头（「正文／演示之书 · novel」那一层）已整块删除（批次34）：
+  //    CenterSlotHost 的 DOM 里没有 .center-head，next-shell.css 里那条 display:none 也一并退役。
+  const centerHost = await readFile(join(shellDir, 'CenterSlotHost.vue'), 'utf-8')
+  assert.ok(!centerHost.includes('center-head'), 'CenterSlotHost 还留着 .center-head 的 DOM（批次33 的临时隐藏已该退役）')
+  assert.ok(!centerHost.includes('center-sub'), 'CenterSlotHost 还留着 .center-sub（项目名在标题栏，核心区不再念）')
+  assert.ok(!layout.includes('.center-head'), 'next-shell.css 里还留着 .center-head 规则（DOM 已删，规则一并退役）')
 })
 
 test('批次33 索引窗 IDE 化：行＝名字、版本进 title、历史与新建 hover 显形、新建走临时输入行', async () => {
