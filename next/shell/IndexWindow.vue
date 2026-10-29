@@ -325,6 +325,10 @@ watch(() => props.board?.id, () => {
           大纲还没有内容（大纲/outline.json）。
           <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="data.startOutline()">新建大纲</button>
         </p>
+        <!-- 批次30（U13 纯文案，不加按钮）：告诉作者散文章节稿有官方转换入口——不在这里放第二个动作钮。 -->
+        <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty" data-test="outline-import-hint">
+          大纲目录里有章节稿（md）时，可在 设置 → 大纲转换 一键生成节点。
+        </p>
         <p v-if="data.outlineError" class="nx-index-error">{{ data.outlineError }}</p>
       </template>
 

@@ -8,6 +8,7 @@ import { createAppPreferences } from '../runtime/appPreferences.mjs'
 import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
 import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
+import { importOutlineChapters } from '../runtime/outlineImportService.mjs'
 import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
@@ -334,6 +335,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     // 导入既有稿（E1）：结构动作由作者在向导里显式按两次（计划→执行），与建项目同级走主进程；
     // dryRun≠false 一律当计划，只有显式 false 才落盘。
     importProject: ({ sourcePath, targetPath, dryRun }) => (dryRun ? planImport({ sourcePath, targetPath }) : runImport({ sourcePath, targetPath })),
+    // 批次30：大纲转换（散文章节稿 → 大纲/outline.json）。源 md 只读、现有节点不动；
+    // dryRun 缺省由通道按 true 传进来，只扫描不写盘。
+    outlineImport: (args) => importOutlineChapters(args),
     onProjectOpened: beginHistory,
     // 工单E3：关项目即停历史定时器。session.close 不清 projectRoot，停表只能在外壳这一层做；
     // 不重启窗口也能让「关掉项目后不再有新快照」成立。

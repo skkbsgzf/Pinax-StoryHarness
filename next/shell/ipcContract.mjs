@@ -32,6 +32,9 @@ export const IPC_CHANNELS = Object.freeze({
   projectPickDir: 'pinax:agent:project:pick-dir',
   projectOpen: 'pinax:agent:project:open',
   projectImportRun: 'pinax:agent:project:import-run',
+  // 批次30：大纲转换（散文章节稿 → 大纲/outline.json）。只对当前项目的 大纲/ 操作，
+  // 外部稿子先走 E1 拷进来再转换；dryRun=true 只扫描，不写盘。
+  outlineImport: 'pinax:agent:outline:import',
   projectClose: 'pinax:agent:project:close',
   carrierSetEnabled: 'pinax:agent:carrier:set-enabled',
   carrierSetPrimary: 'pinax:agent:carrier:set-primary',
@@ -240,12 +243,15 @@ export function shellView(session) {
  * deps 扩展（批次26 导出）：
  *   exportFile       —— ({ content, format, title, html }) => { ok:{canceled|path…} }：主进程弹系统「另存为」
  *                       再落盘（next/shell/exportService）。不注入时 document:export 如实报缺，不假装导出过。
+ * deps 扩展（批次30 大纲转换）：
+ *   outlineImport    —— ({ root, fileService, dryRun }) => { ok, value|error }（next/runtime/outlineImportService）；
+ *                       不注入时 outline:import 如实报缺。只认当前项目根与当前文件服务——渲染层指定不了别的目录。
  * deps 扩展（批次29 运行过程事件）：
  *   emitRuntimeEvent —— ({ askId, event }) => void：runtimeAsk 执行期间把运行器的真实阶段事件推给渲染层
  *                       （主进程：webContents.send(IPC_PUSH.runtimeAskEvent, payload)）。
  *                       不注入时只算 askId、不发事件（进程内单测与验收照旧，两参调用面不变）。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
   // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
   // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
@@ -294,6 +300,15 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return importProject
           ? importProject({ sourcePath: input.sourcePath, targetPath: input.targetPath, dryRun: input.dryRun !== false })
           : fail('INVALID_INPUT', '导入适配器未接入（主进程未注入 projectImportAdapter）：这条通道现在只报缺，不落盘')
+      // 批次30：散文章节稿 → 大纲/outline.json。与导入同级的结构动作，走 shell 通道不经写族闸；
+      // 只认当前项目根与当前文件服务（渲染层指定不了别的目录），dryRun 缺省＝只扫描不写盘。
+      case IPC_CHANNELS.outlineImport: {
+        if (!outlineImport) return fail('INVALID_INPUT', '大纲转换服务未接入（主进程未注入 outlineImportService）：这条通道现在只报缺，不写任何文件')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '大纲转换需要先打开一个项目：只转换当前项目 大纲/ 里的章节稿')
+        const fileService = session.project?.value?.fileService ?? null
+        if (!fileService) return fail('INVALID_INPUT', '文件服务未就绪（项目还没完整打开）：这条通道现在只报缺，不写任何文件')
+        return outlineImport({ root: session.projectRoot, fileService, dryRun: input.dryRun !== false })
+      }
       case IPC_CHANNELS.projectOpen: {
         const opened = await session.open(input.root)
         if (opened.ok) await notifyProjectOpened(opened)

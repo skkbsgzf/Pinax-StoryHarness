@@ -11,6 +11,7 @@ import PrefsSection from './settings/PrefsSection.vue'
 import CarriersSection from './settings/CarriersSection.vue'
 import NewProjectSection from './settings/NewProjectSection.vue'
 import ImportSection from './settings/ImportSection.vue'
+import OutlineImportSection from './settings/OutlineImportSection.vue'
 import BackupSection from './settings/BackupSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import HistorySection from './settings/HistorySection.vue'
@@ -304,7 +305,9 @@ const settingsSections = computed(() => [
   // 数据走 useBoardData 的同一份（loadProposals → pinax_proposal_list），不另开取数路径。
   { id: 'proposals', title: '提案审阅', group: '文档', keywords: ['提案', '模型改稿', '采纳', '弃用', 'proposals'], component: ProposalsSection, props: { data, open: openProposalFromSettings } },
   // 批次26（任务三）：导出当前打开的文档（txt／doc）。锚点与历史面板共用 data.selection。
-  { id: 'export', title: '导出', group: '文档', keywords: ['导出', '另存为', 'txt', 'doc', 'word', '纯文本', '下载'], component: ExportSection, props: { bridge: props.bridge, document: exportDocumentTarget.value } }
+  { id: 'export', title: '导出', group: '文档', keywords: ['导出', '另存为', 'txt', 'doc', 'word', '纯文本', '下载'], component: ExportSection, props: { bridge: props.bridge, document: exportDocumentTarget.value } },
+  // 批次30：散文章节稿 → 大纲/outline.json。只追加缺的章节，现有节点不动（dryRun 扫描后才落盘）。
+  { id: 'outline-import', title: '大纲转换', group: '文档', keywords: ['大纲', '章节稿', 'outline', '001-004', '散文', '转换', 'md'], component: OutlineImportSection, props: { bridge: props.bridge, project: project.value, reload: data.loadOutline } }
 ])
 
 function openSection(id) {

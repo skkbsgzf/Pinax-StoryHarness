@@ -2805,3 +2805,145 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     wrapper.unmount()
   })
 })
+
+describe('大纲转换（批次30）', () => {
+  /** 在 carrierView 上补一块大纲载体（左树／中栏），用于打开大纲栏看空态指引。 */
+  function outlineView() {
+    const base = carrierView()
+    const outlineCarrier = {
+      id: 'pinax.carrier.outline',
+      title: '大纲',
+      primary: { projectKind: 'generic' },
+      isPrimary: false,
+      isEnabled: true,
+      capabilities: ['outline.tree'],
+      requires: [],
+      scopes: ['file:大纲:rw', 'agent:ask'],
+      dataDirs: ['大纲'],
+      settings: [],
+      tools: ['pinax_outline_read', 'pinax_outline_save'],
+      context: { providers: ['outline'], budgetChars: 20000 },
+      panes: [
+        { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline' },
+        { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list' }
+      ]
+    }
+    return {
+      ...base,
+      carriers: [...base.carriers, outlineCarrier],
+      left: [...base.left, { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }],
+      center: [...base.center, { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }]
+    }
+  }
+
+  function outlineBridge({ handlers = new Map(), nodes = [] } = {}) {
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: outlineView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      if (channel === IPC_CHANNELS.runtimeToolCall && payload?.tool === 'pinax_outline_read') {
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.outline', payload: { ok: true, source: '大纲/outline.json', nodes, edges: [], nodeTotal: nodes.length, truncated: false, revision: 1, warning: null } } }
+      }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent }
+  }
+
+  const SCAN = {
+    dryRun: true,
+    files: 1,
+    chapters: 2,
+    imported: 2,
+    reused: 0,
+    revision: 0,
+    nodeTotal: 2,
+    items: [
+      { title: '第一章《牛肉汤》', source: '大纲/001-004.md#第一章《牛肉汤》', status: 'imported', id: 'imp-1' },
+      { title: '第二章《延迟》', source: '大纲/001-004.md#第二章《延迟》', status: 'imported', id: 'imp-2' }
+    ],
+    warnings: []
+  }
+  const APPLIED = { ...SCAN, dryRun: false, revision: 1, file: '大纲/outline.json' }
+
+  it('转换节挂载即扫描（dryRun）→「转换并导入」落盘（dryRun:false）→ 结果逐条渲染并刷新外壳', async () => {
+    const handlers = new Map()
+    const calls = []
+    handlers.set(IPC_CHANNELS.outlineImport, vi.fn(async (payload) => {
+      calls.push(payload)
+      return { ok: true, value: payload?.dryRun === false ? APPLIED : SCAN }
+    }))
+    const bridge = outlineBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 统一二级页的「文档 → 大纲转换」节。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    const tab = wrapper.find('[data-test="settings-tab-outline-import"]')
+    expect(tab.exists()).toBe(true)
+    await tab.trigger('click')
+    await flushPromises()
+
+    const panel = wrapper.find('[aria-label="大纲转换"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.attributes('role')).toBe('tabpanel')
+    // 挂载即扫描：dryRun:true 只读，不写盘。
+    expect(calls[0]).toEqual({ dryRun: true })
+    expect(panel.find('[data-test="outline-scan"]').text()).toContain('1 份 md · 2 个章节标题（待追加 2 章，复用 0 章）')
+
+    const viewCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length
+    await panel.find('[data-test="outline-apply"]').trigger('click')
+    await flushPromises()
+    expect(calls.at(-1)).toEqual({ dryRun: false })
+    expect(panel.find('[data-test="outline-done"]').text()).toContain('导入 2 章 / 复用 0 章')
+    // 结果逐条：每章一行，状态是导入/复用。
+    expect(panel.findAll('[data-test="outline-items"] li').map((node) => node.text()))
+      .toEqual(['导入 · 第一章《牛肉汤》', '导入 · 第二章《延迟》'])
+    // 成功后走既有刷新路径（emit changed → AppNext.refresh），不是事件总线。
+    expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length).toBeGreaterThan(viewCallsBefore)
+    // 同一项目没换根，refresh 的 projectRoot 监听不会触发——转换后必须显式重列大纲树，左树才立刻长出节点。
+    expect(bridge.request.mock.calls.some(([channel, payload]) => channel === IPC_CHANNELS.runtimeToolCall && payload?.tool === 'pinax_outline_read')).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('冲突与空目录如实摊开：STALE_REVISION 的 code 与 message 都显示，不假装成功', async () => {
+    const handlers = new Map()
+    handlers.set(IPC_CHANNELS.outlineImport, vi.fn(async () => ({
+      ok: false,
+      error: { code: 'PINAX_STALE_REVISION', message: '「大纲/outline.json」已被改动（第 2 版），本次基于第 1 版的写入被拒绝' }
+    })))
+    const bridge = outlineBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    await wrapper.find('[data-test="settings-tab-outline-import"]').trigger('click')
+    await flushPromises()
+
+    const panel = wrapper.find('[aria-label="大纲转换"]')
+    const failure = panel.find('[data-test="outline-error"]')
+    expect(failure.exists()).toBe(true)
+    expect(failure.text()).toContain('PINAX_STALE_REVISION')
+    expect(failure.text()).toContain('已被改动')
+    expect(panel.find('[data-test="outline-done"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('大纲空态带一句指引：章节稿可在 设置 → 大纲转换 生成节点（纯文案，不放按钮）', async () => {
+    const bridge = outlineBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    const rail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === '大纲')
+    expect(rail, '竖条应有大纲栏').toBeTruthy()
+    await rail.trigger('click')
+    await flushPromises()
+
+    const hint = wrapper.find('[data-test="outline-import-hint"]')
+    expect(hint.exists()).toBe(true)
+    expect(hint.text()).toContain('设置 → 大纲转换')
+    expect(hint.findAll('button')).toHaveLength(0)
+    wrapper.unmount()
+  })
+})

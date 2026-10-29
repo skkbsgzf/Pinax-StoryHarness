@@ -449,7 +449,16 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
    * 于是 expectedRevision 0 只可能是真正的新建。
    */
   async function adoptRevision(relativePath) {
-    if (revisions.has(relativePath)) return revisions.get(relativePath)
+    if (revisions.has(relativePath)) {
+      // 账上有记录也要对一次盘：文件可能被作者在盘外删掉，或整目录拷贝带来了陈账
+      // （账说第 1 版、盘上没有）。以盘为准清掉陈条目按未建档（0）处理——
+      // 否则同名文件永远建不回来（STALE 指着一个不存在的「第 1 版」）。
+      const tracked = revisions.get(relativePath)
+      const exists = await io.stat(join(projectRoot, relativePath)).then(() => true, () => false)
+      if (exists) return tracked
+      revisions.delete(relativePath)
+      return 0
+    }
     const exists = await io.stat(join(projectRoot, relativePath)).then(() => true, () => false)
     if (!exists) return 0
     revisions.set(relativePath, 1)

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm as rmFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { createFileService } from '../fs/fileService.mjs'
@@ -81,6 +81,29 @@ test('写入→读回→修订并发：STALE_REVISION 不覆盖', async () => {
 
     const state = JSON.parse(await readFile(join(root, '.pinax', 'state', 'revisions.json'), 'utf-8'))
     assert.equal(state.revisions['正文/第001章-入场.md'], 2)
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
+test('陈账自愈（批次30 补）：账上有记录而磁盘上文件已被删 → 按未建档处理，expectedRevision 0 能重建同名文件', async () => {
+  const { service, root, workspace } = await setup()
+  try {
+    const made = await service.write({ pluginId: 'fixture.novel', dir: '正文', file: '被删章.md', text: '一版', expectedRevision: 0 })
+    assert.equal(made.ok, true, JSON.stringify(made.error ?? {}))
+
+    // 作者在盘外删掉文件（账本不知情——整目录拷贝/外部删除都会造成这种账实分离）。
+    await rmFile(join(root, '正文', '被删章.md'))
+
+    // 重建同名：不该被「账上的第 1 版」挡住；读也不再虚报修订号。
+    const again = await service.write({ pluginId: 'fixture.novel', dir: '正文', file: '被删章.md', text: '重写', expectedRevision: 0 })
+    assert.equal(again.ok, true, String(again.error?.message || ''))
+    assert.equal(again.value.revision, 1)
+
+    const reread = await service.read({ pluginId: 'fixture.novel', dir: '正文', file: '被删章.md' })
+    assert.equal(reread.ok, true)
+    assert.equal(reread.value.text, '重写')
+    assert.equal(reread.value.revision, 1)
   } finally {
     await workspace.cleanup()
   }
