@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CenterSlotHost from './CenterSlotHost.vue'
+import FloatingWidget from './FloatingWidget.vue'
 import RuntimeDock from './RuntimeDock.vue'
 import SettingsModal from './SettingsModal.vue'
 import PrefsSection from './settings/PrefsSection.vue'
@@ -12,6 +13,7 @@ import ImportSection from './settings/ImportSection.vue'
 import BackupSection from './settings/BackupSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import HistorySection from './settings/HistorySection.vue'
+import ProposalsSection from './settings/ProposalsSection.vue'
 import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
@@ -33,6 +35,11 @@ import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs
  *     D2 起「文档」组再收一节「文档历史」（快照列表／diff／恢复）；
  *     工单B 起目录按「应用／项目／文档」分组并带搜索，载体设置占位节归「载体」组。
  *     核心区不再内嵌任何配置 section 与按钮，目录之外的弹窗不允许存在。
+ *     工单B1：索引窗不再摆提案区——「文档」组新增「提案审阅」节（协议 v1.1-B），
+ *     列表在设置里看、点开即关窗并把 selection 置为该提案，核心区沿用既有审阅面。
+ *     工单C（协议 v1.1-C）：载体可以声明 overlay pane（悬浮小工具窗）——外壳用宿主
+ *     FloatingWidget 渲染（定位/拖动/收起/位置记忆全在宿主），内容按 pane id 在这里接线；
+ *     大纲悬浮窗在正文写作时也能用（大纲板不必是当前板）。
  *
  * 不引 vue-router、不引 Pinia、不 import src/ 的页面——零插件时外壳仍要能起来（M1 判据）。
  * 唯一从老前端拿的是 CSS 本体与三个叶子组件（图标／提示／提示宿主），风格与控件不另起一套。
@@ -158,7 +165,10 @@ const settingsSections = computed(() => [
   { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹'], component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
   { id: 'primary', title: '主载体选择', group: '项目', keywords: ['这个项目要创作什么', '创作小说还是剧本'], component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } },
   // 文档
-  { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } }
+  { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
+  // 工单B1（协议 v1.1-B）：提案审阅迁出小说板索引窗，收进统一二级页的「文档」组。
+  // 数据走 useBoardData 的同一份（loadProposals → pinax_proposal_list），不另开取数路径。
+  { id: 'proposals', title: '提案审阅', group: '文档', keywords: ['提案', '模型改稿', '采纳', '弃用', 'proposals'], component: ProposalsSection, props: { data, open: openProposalFromSettings } }
 ])
 
 function openSection(id) {
@@ -205,6 +215,11 @@ function openBackup() {
 /** 当前文档历史（D2）：菜单「文件 → 当前文档历史…」与索引窗行动作的共同落点。 */
 function openHistory() {
   openSection('history')
+}
+
+/** 提案审阅（工单B1）：菜单「项目 → 提案审阅…」的落点——统一二级页的「文档 → 提案审阅」节。 */
+function openProposals() {
+  openSection('proposals')
 }
 
 /** 索引窗行动作：先把该文档读进来（修订号以磁盘为准），再摊开历史。 */
@@ -288,6 +303,7 @@ const menuActions = {
   'project.import': () => openImport(),
   'project.backup': () => openBackup(),
   'project.history': () => openHistory(),
+  'project.reviewProposals': () => openProposals(),
   'settings.theme': () => toggleTheme(),
   'settings.preferences': () => void openSettings(),
   'settings.carriers': () => void openCarriers()
@@ -419,6 +435,8 @@ const boards = computed(() => {
         dataDirs: carrier?.dataDirs ?? [],
         treePaneId: null,
         treePaneTitle: pane.title ?? '',
+        // 协议 v1.1-C：载体声明的悬浮小工具窗（索引窗大纲区标题行的「悬浮」钮据此出现）。
+        overlayPane: (carrier?.panes ?? []).find((candidate) => candidate?.slot === 'overlay') ?? null,
         centerPanes: []
       })
     }
@@ -430,6 +448,72 @@ const boards = computed(() => {
 })
 
 const activeBoard = computed(() => boards.value.find((board) => board.id === activeBoardId.value) ?? boards.value[0] ?? null)
+
+/**
+ * 协议 v1.1-C：启用的载体声明的 overlay pane（一载体至多一个实例）。
+ * 从 view.carriers[].panes 里取（pluginRegistry 只把 left-dock/center 拆进视图的 left/center，
+ * overlay 不进竖条、也不占中栏）。宽度用合同校验过的值（缺省 300）。
+ */
+const overlayPanes = computed(() => carriers.value
+  .filter((carrier) => carrier.isEnabled)
+  .flatMap((carrier) => (Array.isArray(carrier.panes) ? carrier.panes : [])
+    .filter((pane) => pane?.slot === 'overlay' && pane.id)
+    .map((pane) => ({
+      paneId: pane.id,
+      title: pane.title ?? carrier.title,
+      width: Number.isSafeInteger(pane.width) ? pane.width : 300,
+      carrierId: carrier.id,
+      carrierTitle: carrier.title
+    }))))
+
+/** 悬浮窗开合状态（按 pane id；每载体至多一个，不持久化——工单C 只要求位置记忆）。 */
+const overlayOpen = ref({})
+
+function setOverlayOpen(paneId, open) {
+  if (!paneId) return
+  const next = Boolean(open)
+  if (Boolean(overlayOpen.value[paneId]) === next) return
+  overlayOpen.value = { ...overlayOpen.value, [paneId]: next }
+  // 打开时现取一次本载体的树：悬浮窗的价值就是「不必先切到大纲板」也能看到内容。
+  if (next && paneId === 'outline.widget') void data.loadOutline()
+}
+
+function toggleBoardOverlay(paneId) {
+  setOverlayOpen(paneId, !overlayOpen.value[paneId])
+}
+
+/**
+ * 迷你大纲里点一行：切到大纲栏（若已启用）并把该节点送进中栏编辑面；悬浮窗保持开着，方便连续跳。
+ * 切板会触发索引窗的 watch 重列大纲（它会先把草稿清空）——所以先让那一拍跑完（nextTick），
+ * 需要时再补齐一份大纲，最后才 selectOutlineNode；否则刚建好的草稿会被换板重列冲掉。
+ */
+async function openOutlineNodeFromWidget(index) {
+  const board = boards.value.find((item) => (item.centerPanes ?? []).some((pane) => String(pane.id).startsWith('outline.')))
+  if (board) activeBoardId.value = board.id
+  indexOpen.value = true
+  await nextTick()
+  if (!data.outline?.length) await data.loadOutline()
+  data.selectOutlineNode(index)
+}
+/** 提案的目标是正文：审阅面只挂在「正文」那一栏（协议 v1.1-A 的载体分栏，一栏一棵树）。 */
+const chapterBoardId = computed(() => {
+  const byDir = boards.value.find((board) => (board.dataDirs ?? []).includes('正文'))
+  return byDir?.id ?? boards.value.find((board) => board.primary)?.id ?? null
+})
+
+/**
+ * 二级页里点开一条提案（工单B1）：关闭设置 → 切到正文那一栏 → 把 selection 置为该提案。
+ * 核心区由 CarrierPaneHost 的 proposal-review 分支接住（审阅面只有那一块，不复制第二套）；
+ * 采纳／弃用仍在那块面上，本节只做列表与导航。
+ */
+async function openProposalFromSettings(item) {
+  if (!item?.name) return
+  closeSettings()
+  const target = chapterBoardId.value
+  if (target) activeBoardId.value = target
+  indexOpen.value = true
+  await data.openProposal(item)
+}
 /** 核心区只挂这块板的 center 面板：正文不再被目录视图挤到旁边。 */
 const activeCenterPane = computed(() => activeBoard.value?.centerPanes?.[0] ?? null)
 
@@ -700,6 +784,7 @@ onBeforeUnmount(() => {
           :width="indexWidth"
           @collapse="indexOpen = false"
           @history="openHistoryFor"
+          @overlay="toggleBoardOverlay"
         />
         <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('index', $event)" />
       </template>
@@ -751,6 +836,33 @@ onBeforeUnmount(() => {
         @toggle-companion="toggleCompanion"
         @update:active-section="activeSection = $event"
       />
+
+      <!-- 协议 v1.1-C：悬浮小工具窗。宿主容器与定位全在 FloatingWidget；这里只按 pane id 接线内容。
+           大纲板不必是当前板——正文写作时大纲照样浮在核心区右上角，随时收起/展开。 -->
+      <FloatingWidget
+        v-for="pane in overlayPanes"
+        :key="pane.paneId"
+        :id="pane.paneId"
+        :open="Boolean(overlayOpen[pane.paneId])"
+        :title="pane.title"
+        :width="pane.width"
+        :suspend-esc="settingsOpen"
+        @close="setOverlayOpen(pane.paneId, false)"
+        @toggle="setOverlayOpen(pane.paneId, true)"
+      >
+        <template v-if="pane.paneId === 'outline.widget'">
+          <p v-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
+          <p v-else-if="!data.outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
+          <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
+            <li v-for="(node, index) in data.outline" :key="node.id ?? `overlay-node-${index}`">
+              <button type="button" class="workspace-nav-item workspace-nav-item--tree nx-tree-row" @click="openOutlineNodeFromWidget(index)">
+                <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
+              </button>
+            </li>
+          </ul>
+        </template>
+        <p v-else class="nx-overlay-empty">这块悬浮窗还没有内容。</p>
+      </FloatingWidget>
 
       <WorkbenchTooltip />
     </div>

@@ -49,13 +49,19 @@ export const KERNEL_WRITE_CLASS = Object.freeze({
 })
 
 /**
- * 载体自有写工具的落点（批次16 记账，批次19 H1 收尾）：名字 → 它写的那块 dataDir。
- * dir: null ＝写的是内核元数据（提案目录 .pinax/proposals/），不归任何载体目录，任何目录提示都不列它。
+ * 载体自有写工具的落点（批次16 记账，批次19 H1 收尾；协议 v1.1-A 起落点随工具搬家）。
+ * 名字 → 它写的那块 dataDir。dir: null ＝写的是内核元数据（提案目录 .pinax/proposals/），不归任何载体目录，任何目录提示都不列它。
  *
  * 为什么落点要在这里点名：载体工具描述里只有 annotations.readOnlyHint，没有「写哪块目录」的字段，
  * 而拒绝提示要说出「写「正文/」请走哪把」——只有知道落点才说得准。写工具的身份仍以载体 impl 的
  * annotations 为准（见 carrierToolAnnotations），这张表只补落点；guardCarrierWriteGaps() 在门禁里
  * 与「载体 impl 现列的写工具」逐条对账：漏点名／点名了却不是写工具／点名的目录不归该载体，都直接红。
+ *
+ * 协议 v1.1-A（作者 2026-10-28 裁定）把混合板拆成六栏后，落点表本身不变（工具名与目标目录没变），
+ * 变的是主人：pinax_outline_save 写「大纲」归 pinax.carrier.outline、pinax_notes_save 写「构思」归
+ * pinax.carrier.notes、pinax_worldbook_save 写「世界书」归 pinax.carrier.worldbook；pinax_chapter_save
+ * 仍归 pinax.carrier.novel（正文），pinax_rule_save 仍归 pinax.carrier.setting（约束）——dirOutsideOwner
+ * 就是这条主人关系的机器核对面。
  */
 export const CARRIER_WRITE_CLASS = Object.freeze({
   pinax_chapter_save: Object.freeze({ dir: '正文' }),

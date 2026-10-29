@@ -315,6 +315,80 @@ describe('Obsidian 三栏', () => {
     expect(globalThis.localStorage.getItem('app_theme')).toBe('dark')
     wrapper.unmount()
   })
+
+  it('卷→章两级（工单B）：正文/ 下的一级子目录＝卷，卷标题不可点；平铺数据渲染与旧版一致', async () => {
+    const chapters = [
+      { index: 0, title: '第001章-雨夜', file: '正文/第一卷/第001章-雨夜.md', name: '第001章-雨夜.md', revision: 1 },
+      { index: 1, title: '第002章-停摆', file: '正文/第一卷/第002章-停摆.md', name: '第002章-停摆.md', revision: 1 },
+      { index: 2, title: '第003章-雪夜', file: '正文/第二卷/第003章-雪夜.md', name: '第003章-雪夜.md', revision: 1 },
+      { index: 3, title: '第004章-尾声', file: '正文/第004章-尾声.md', name: '第004章-尾声.md', revision: 1 }
+    ]
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        if (payload.tool === 'pinax_chapter_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: chapters.length, truncated: false, chapters } } }
+        }
+        if (payload.tool === 'pinax_chapter_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: 0, title: '第001章-雨夜', file: payload.args.file }, text: '雨夜。', totalChars: 3, truncated: false, revision: 1 } } }
+        }
+      }
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '未预期的通道' } }
+    })
+    const wrapper = mount(AppNext, { props: { bridge: { request } } })
+    await flushPromises()
+
+    // 卷标题按目录名出，是静态 <p>（不可点、不出现在 .nx-tree-item 里）。
+    const volumes = wrapper.findAll('[data-test="chapter-volume"]')
+    expect(volumes.map((node) => node.text())).toEqual(['第一卷', '第二卷'])
+    expect(volumes[0].element.tagName).toBe('P')
+    const rows = wrapper.findAll('.nx-index-window .nx-tree-item')
+    expect(rows).toHaveLength(4)
+    expect(rows.map((row) => row.text())).toEqual([
+      expect.stringContaining('1. 第001章-雨夜'),
+      expect.stringContaining('2. 第002章-停摆'),
+      expect.stringContaining('3. 第003章-雪夜'),
+      expect.stringContaining('4. 第004章-尾声')
+    ])
+    // 顺序：卷内的章在卷标题之后——第一卷的两行夹在第一卷与第二卷之间。
+    const html = wrapper.find('.nx-index-window .nx-index-body').element.innerHTML
+    expect(html.indexOf('第一卷')).toBeLessThan(html.indexOf('第001章-雨夜'))
+    expect(html.indexOf('第002章-停摆')).toBeLessThan(html.indexOf('第二卷'))
+    expect(html.indexOf('第二卷')).toBeLessThan(html.indexOf('第003章-雪夜'))
+
+    // 卷下的章仍能点开（核心区载入正文）。
+    await rows[2].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-pane-id="novel.editor"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('正文/第二卷/第003章-雪夜.md')
+    wrapper.unmount()
+
+    // 平铺数据（没有卷子目录）：不画卷标题，行文与拆分前一样。
+    const flat = [
+      { index: 0, title: '开场', file: '正文/第001章-开场.md', name: '第001章-开场.md', revision: 1 },
+      { index: 1, title: '雨夜', file: '正文/第002章-雨夜.md', name: '第002章-雨夜.md', revision: 1 }
+    ]
+    const flatRequest = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        if (payload.tool === 'pinax_chapter_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: flat.length, truncated: false, chapters: flat } } }
+        }
+        if (payload.tool === 'pinax_chapter_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: 0, title: '开场', file: payload.args.file }, text: '开场。', totalChars: 3, truncated: false, revision: 1 } } }
+        }
+      }
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '未预期的通道' } }
+    })
+    const flatWrapper = mount(AppNext, { props: { bridge: { request: flatRequest } } })
+    await flushPromises()
+    expect(flatWrapper.findAll('[data-test="chapter-volume"]')).toHaveLength(0)
+    expect(flatWrapper.findAll('.nx-index-window .nx-tree-item').map((row) => row.text())).toEqual([
+      expect.stringContaining('1. 开场'),
+      expect.stringContaining('2. 雨夜')
+    ])
+    flatWrapper.unmount()
+  })
 })
 
 describe('偏好与模型面板（批次8①）', () => {
@@ -1023,6 +1097,122 @@ describe('文档历史面板（D2 · R3-3）', () => {
   })
 })
 
+describe('提案审阅（工单B1 · 协议 v1.1-B：列表在二级页，审阅面在中栏）', () => {
+  const PROPOSAL = {
+    name: '20261028T140000-ch1-abcdef12.json',
+    kind: 'proposal',
+    schema: 'pinax-proposal@1',
+    id: '20261028T140000-ch1-abcdef12',
+    status: 'proposed',
+    target: { index: 0, title: '第001章-雨夜', file: '正文/雨夜.md', chars: 3 },
+    contentChars: 9,
+    createdAt: '2026-10-28T14:00:00',
+    note: '把雨提前一段'
+  }
+
+  /**
+   * 提案审阅节的桥：view／章节工具／提案三把按真合同形状回。
+   * prefsGet 带 theme，避免挂载时的主题迁移写搅乱调用计数。
+   */
+  function proposalsBridge({ handlers = new Map(), proposals = [PROPOSAL] } = {}) {
+    const calls = { list: [], read: [], save: [] }
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        if (payload.tool === 'pinax_chapter_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: 1, truncated: false, chapters: [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }] } } }
+        }
+        if (payload.tool === 'pinax_chapter_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: 0, title: '雨夜', file: payload.args.file }, text: '雨夜。', totalChars: 3, truncated: false, revision: 1 } } }
+        }
+        if (payload.tool === 'pinax_chapter_save') {
+          calls.save.push(payload)
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, file: payload.args.file, revision: 2, created: false, bytes: payload.args.text.length } } }
+        }
+        if (payload.tool === 'pinax_proposal_list') {
+          calls.list.push(payload)
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: proposals.length, raw: [], rawTotal: 0, warnings: [], proposals } } }
+        }
+        if (payload.tool === 'pinax_proposal_read') {
+          calls.read.push(payload)
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, name: PROPOSAL.name, path: `.pinax/proposals/${PROPOSAL.name}`, proposal: { schema: 'pinax-proposal@1', id: PROPOSAL.id, status: 'proposed', target: PROPOSAL.target, content: '雨夜，巷子里没人。', contentChars: 9, note: PROPOSAL.note, createdAt: PROPOSAL.createdAt } } } }
+        }
+      }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent, calls }
+  }
+
+  it('菜单「项目 → 提案审阅…」打开「文档」组新节：列表→点开→关闭弹窗→中栏对照→采纳带提案名', async () => {
+    const handlers = new Map()
+    const bridge = proposalsBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 索引窗不再摆提案区（v1.1-A：小说栏只有正文一棵树）。
+    expect(wrapper.find('.nx-index-window').text()).not.toContain('提案')
+    expect(bridge.calls.list).toHaveLength(0)
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.reviewProposals' })
+    await flushPromises()
+
+    const panel = wrapper.find('[aria-label="提案审阅"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.attributes('role')).toBe('tabpanel')
+    expect(wrapper.find('[data-test="settings-tab-proposals"]').exists()).toBe(true)
+    // 它和「文档历史」同属「文档」组。
+    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toContain('文档')
+    const tabsInDoc = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
+    expect(tabsInDoc).toContain('文档历史')
+    expect(tabsInDoc).toContain('提案审阅')
+
+    // 列表走 pinax_proposal_list 一条通道；行文＝目标章＋创建时刻。
+    expect(bridge.calls.list.length).toBeGreaterThanOrEqual(1)
+    const row = panel.find(`[data-test="proposal-row-${PROPOSAL.name}"]`)
+    expect(row.exists()).toBe(true)
+    expect(row.text()).toContain('第001章-雨夜')
+    expect(row.text()).toContain('10-28 14:00')
+
+    // 点一条：弹窗关掉，正文栏打开既有审阅面（当前正文 vs 提案新文）。
+    await row.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="提案审阅"]').exists()).toBe(false)
+    expect(bridge.calls.read).toHaveLength(1)
+    const pane = wrapper.find('[data-pane-id="novel.editor"]')
+    expect(pane.exists()).toBe(true)
+    expect(pane.text()).toContain('提案 · 第001章-雨夜')
+    expect(pane.text()).toContain('提案说明：把雨提前一段')
+    expect(pane.find('.editor-text, .entry-text').text()).toBe('雨夜。')
+    expect(pane.find('[aria-label="提案新文"]').text()).toBe('雨夜，巷子里没人。')
+
+    // 采纳仍走既有那条：chapter_save 带当前修订号与提案名。
+    await pane.find('.editor-foot .pane-btn.is-primary').trigger('click')
+    await flushPromises()
+    expect(bridge.calls.save).toHaveLength(1)
+    expect(bridge.calls.save[0].args).toEqual({ file: '正文/雨夜.md', text: '雨夜，巷子里没人。', expectedRevision: 1, proposal: PROPOSAL.name })
+    expect(wrapper.text()).toContain('已采纳提案')
+    wrapper.unmount()
+  })
+
+  it('空态：没有提案时如实说明，不摆空列表；运行时散件报数但不进审阅面', async () => {
+    const handlers = new Map()
+    const bridge = proposalsBridge({ handlers, proposals: [] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.reviewProposals' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="提案审阅"]')
+    expect(panel.find('[data-test="proposals-section"]').text()).toContain('还没有提案')
+    expect(panel.findAll('[data-test^="proposal-row-"]')).toHaveLength(0)
+    wrapper.unmount()
+  })
+})
+
 describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () => {
   it('标题栏渲染项目信息 chip：有项目＝名称·类型·版本，无项目＝未打开项目', async () => {
     const withProject = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
@@ -1431,5 +1621,209 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     expect(unknown.find('[data-test="settings-panel-carrier:fixture.novel:novel.unknown"]').exists()).toBe(true)
     expect(unknown.find('[data-test="carrier-settings-empty"]').text()).toBe('该载体的设置项还没有内容')
     unknown.unmount()
+  })
+})
+
+describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
+  const OUTLINE_NODES = [
+    { id: 'n1', title: '开场：雨夜进城', summary: '雪夜，柯秒进了城。' },
+    { id: 'n2', title: '第一折：停摆的表' }
+  ]
+
+  /** 在 carrierView 上补一块大纲载体（含 overlay pane 声明）与它的左树/中栏。 */
+  function overlayView() {
+    const base = carrierView()
+    const outlineCarrier = {
+      id: 'pinax.carrier.outline',
+      title: '大纲',
+      primary: { projectKind: 'generic' },
+      isPrimary: false,
+      isEnabled: true,
+      capabilities: ['outline.tree'],
+      requires: [],
+      scopes: ['file:大纲:rw', 'agent:ask'],
+      dataDirs: ['大纲'],
+      settings: [],
+      tools: ['pinax_outline_read', 'pinax_outline_save'],
+      context: { providers: ['outline'], budgetChars: 20000 },
+      panes: [
+        { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline' },
+        { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list' },
+        { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300 }
+      ]
+    }
+    return {
+      ...base,
+      carriers: [...base.carriers, outlineCarrier],
+      left: [...base.left, { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }],
+      center: [...base.center, { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }]
+    }
+  }
+
+  function overlayBridge({ handlers = new Map(), nodes = OUTLINE_NODES } = {}) {
+    const calls = []
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: overlayView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        calls.push(payload.tool)
+        if (payload.tool === 'pinax_chapter_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: 1, truncated: false, chapters: [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }] } } }
+        }
+        if (payload.tool === 'pinax_chapter_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: 0, title: '雨夜', file: payload.args.file }, text: '雨夜。', totalChars: 3, truncated: false, revision: 1 } } }
+        }
+        if (payload.tool === 'pinax_outline_read') {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.outline', payload: { ok: true, source: '大纲/outline.json', nodes, edges: [], nodeTotal: nodes.length, truncated: false, revision: 1, warning: null } } }
+        }
+        if (payload.tool === 'pinax_outline_save') {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.outline', payload: { ok: true, file: '大纲/outline.json', revision: 2, nodeTotal: payload.args.nodes?.length ?? 0 } } }
+        }
+      }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    return { request, onEvent, calls }
+  }
+
+  async function openOutlineBoard(wrapper) {
+    const rail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === '大纲')
+    expect(rail, '竖条应有大纲栏').toBeTruthy()
+    await rail.trigger('click')
+    await flushPromises()
+  }
+
+  async function openWidget(wrapper) {
+    const toggle = wrapper.find('[aria-label="悬浮大纲"]')
+    expect(toggle.exists(), '大纲区标题行右侧应有「悬浮」钮').toBe(true)
+    await toggle.trigger('click')
+    await flushPromises()
+  }
+
+  it('开/收/展开：索引窗「悬浮」钮打开右上卡片，收起成侧缘小标签，点标签再展开；Esc 收起', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = overlayBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+
+    // 打开前没有悬浮窗；开关就是大纲区标题行右侧那枚 .control-quiet。
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
+    await openWidget(wrapper)
+
+    const widget = wrapper.find('.nx-overlay-widget')
+    expect(widget.exists()).toBe(true)
+    expect(widget.attributes('aria-label')).toBe('大纲悬浮窗')
+    expect(widget.attributes('data-overlay-id')).toBe('outline.widget')
+    expect(widget.find('.nx-overlay-title').text()).toBe('大纲')
+    // 内容＝迷你大纲（只读清单），打开时现取一次大纲。
+    expect(bridge.calls).toContain('pinax_outline_read')
+    const rows = widget.findAll('.nx-overlay-tree .workspace-nav-item')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('开场：雨夜进城')
+    expect(rows[1].text()).toContain('第一折：停摆的表')
+
+    // 收起：卡片退场，右侧缘留一枚小标签。
+    await widget.find('[aria-label="收起悬浮窗"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
+    const tab = wrapper.find('.nx-overlay-tab')
+    expect(tab.exists()).toBe(true)
+    expect(tab.attributes('aria-label')).toBe('展开大纲悬浮窗')
+    expect(tab.text()).toBe('大纲')
+
+    // 点标签展开。
+    await tab.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
+
+    // Esc 收起（统一二级页没开时）。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
+    expect(wrapper.find('.nx-overlay-tab').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('正文写作时也可用：切回小说栏悬浮窗仍在；点迷你大纲一行跳到大纲编辑面', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = overlayBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+
+    // 切回小说板：悬浮窗不随板走（这正是它的价值）。
+    const novelRail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === '小说（夹具）')
+    expect(novelRail).toBeTruthy()
+    await novelRail.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-pane-id="novel.editor"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
+
+    // 点迷你大纲：切回大纲栏并把该节点送进中栏编辑面；悬浮窗保持开着。
+    const first = wrapper.find('.nx-overlay-tree .workspace-nav-item')
+    await first.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-pane-id="outline.editor"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="大纲节点标题"]').element.value).toBe('开场：雨夜进城')
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('Esc 优先关统一二级页：设置开着时 Esc 收起的是弹窗，悬浮窗不动', async () => {
+    globalThis.localStorage?.clear()
+    const handlers = new Map()
+    const bridge = overlayBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
+
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    // 弹窗被 Esc 关掉（WorkbenchModal 的语义），悬浮窗还在。
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('位置记忆：拖动写入 localStorage 的 overlay.outline.widget，重新挂载读回同一坐标', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = overlayBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+
+    const head = wrapper.find('.nx-overlay-head').element
+    head.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 140, clientY: 130, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 140, clientY: 130, bubbles: true }))
+    await flushPromises()
+
+    const stored = JSON.parse(globalThis.localStorage.getItem('overlay.outline.widget'))
+    expect(stored).toEqual({ left: 40, top: 30 })
+    expect(wrapper.find('.nx-overlay-widget').attributes('style')).toContain('left: 40px')
+    wrapper.unmount()
+
+    // 重新挂载＝重新读位置：坐标仍在（键 overlay.<paneId>）。
+    const second = mount(AppNext, { props: { bridge: overlayBridge() } })
+    await flushPromises()
+    await openOutlineBoard(second)
+    await openWidget(second)
+    const style = second.find('.nx-overlay-widget').attributes('style')
+    expect(style).toContain('left: 40px')
+    expect(style).toContain('top: 30px')
+    second.unmount()
+    globalThis.localStorage?.clear()
   })
 })

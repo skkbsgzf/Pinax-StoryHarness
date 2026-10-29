@@ -2,9 +2,18 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 /**
- * 核心区里的载体面板：正文的编辑面、构思速记的编辑面（工单B1）、条目的阅读与编辑面（工单A2 起条目可改；
- * 工单C 起契约条目的 frontmatter 关键词／标签也能在编辑态改，随 save 的 meta 落盘）、
+ * 核心区里的载体面板：正文的编辑面、构思的编辑面、大纲的编辑面、世界书条目的阅读与编辑面
+ * （工单A2 起条目可改；工单C 起契约条目的 frontmatter 关键词／标签也能在编辑态改，随 save 的 meta 落盘）、
  * 约束的编辑面（工单E2）、资料的阅读与编辑面（工单G1）。
+ *
+ * 协议 v1.1-A（作者 2026-10-28 裁定）：一个载体＝竖条一格＝一棵纯粹的本域内容树。
+ * 中栏视图按载体 paneId 前缀路由，不再靠 selection 类型跨栏串面：
+ *   novel.* → 正文编辑（选中提案时换审阅面）
+ *   outline.* → 大纲编辑
+ *   notes.* → 构思编辑
+ *   worldbook.* → 条目阅读/编辑
+ *   setting.* → 约束编辑
+ *   reference.* → 资料阅读/编辑
  *
  * 数据不在这里自己取——索引窗与核心区共用 useBoardData 的同一份对象，
  * 所以「索引窗列着第 1 版、正文存成了第 2 版」这种不同步不会发生。
@@ -23,20 +32,14 @@ const props = defineProps({
 
 const paneId = computed(() => props.pane?.id ?? '')
 const viewKind = computed(() => {
-  // 小说板块的中栏只有 editor 一块：选中大纲节点就是大纲编辑面（工单B2），
-  // 点名速记（索引窗构思区）换构思编辑面，点开提案（索引窗提案区）换审阅面，
-  // 其余时候是正文编辑面。
-  if (paneId.value === 'novel.editor') {
-    if (props.data.selection?.type === 'outline-node') return 'outline-editor'
-    if (props.data.selection?.type === 'proposal') return 'proposal-review'
-    return props.data.selection?.type === 'note' ? 'notes-editor' : 'chapter-editor'
-  }
-  // 设定板（工单E2）：点名约束（索引窗「约束」区）换约束编辑面，其余时候是条目详情。
-  if (paneId.value === 'setting.entries') {
-    return props.data.selection?.type === 'rule' ? 'rule-editor' : 'entry-detail'
-  }
-  // 资料板（工单G1）：阅读面与编辑面在同一块面板上切换（照条目详情的形态）。
-  if (paneId.value === 'reference.documents') return 'document-detail'
+  const id = paneId.value
+  // 小说栏只有正文一棵内容树；提案的目标是正文，审阅面随正文留在这块板上（协议 v1.1-A）。
+  if (id.startsWith('novel.')) return props.data.selection?.type === 'proposal' ? 'proposal-review' : 'chapter-editor'
+  if (id.startsWith('outline.')) return 'outline-editor'
+  if (id.startsWith('notes.')) return 'notes-editor'
+  if (id.startsWith('worldbook.')) return 'entry-detail'
+  if (id.startsWith('setting.')) return 'rule-editor'
+  if (id.startsWith('reference.')) return 'document-detail'
   return 'placeholder'
 })
 

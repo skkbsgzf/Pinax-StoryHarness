@@ -10,7 +10,7 @@ import { createProject, initBareProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { buildRuntimeEnvelope } from '../runtime/contextProfiles.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, REFERENCE_CARRIER_ID, SETTING_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, REFERENCE_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { FIXTURE_NOVEL } from './fixtures.mjs'
 import { probePort } from './harness.mjs'
 
@@ -85,16 +85,16 @@ try {
     `正文=${manuscriptEntries.length} 项`)
   await runtimeReal.stop()
 
-  // ── M2 批次 1：真载体（小说＋设定）上盘后的验收 ───────────────────────────────
+  // ── M2 批次 1 起：真载体上盘后的验收（协议 v1.1-A 起是六栏：小说/大纲/构思/世界书/设定/资料）──────
   const carrierRoot = join(workspace, 'projects', '真载体靶子')
   const carrierRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) carrierRegistry.install(plugin.manifest, plugin.impl, plugin.meta)
-  const carrierMade = await createProject({ root: carrierRoot, name: '真载体靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: carrierRegistry, extraEnabled: [SETTING_CARRIER_ID, REFERENCE_CARRIER_ID] })
-  record('M2 建项目：主载体小说＋伴生设定＋伴生资料，骨架目录全落盘',
-    carrierMade.ok === true && (await readdir(carrierRoot)).includes('世界书') && (await readdir(carrierRoot)).includes('资料'),
+  const carrierMade = await createProject({ root: carrierRoot, name: '真载体靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: carrierRegistry, extraEnabled: [OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID, REFERENCE_CARRIER_ID] })
+  record('M2 建项目：主载体小说＋伴生五栏（大纲/构思/世界书/设定/资料），骨架目录全落盘',
+    carrierMade.ok === true && (await readdir(carrierRoot)).includes('世界书') && (await readdir(carrierRoot)).includes('资料') && (await readdir(carrierRoot)).includes('大纲') && (await readdir(carrierRoot)).includes('构思'),
     carrierMade.ok ? '' : String(carrierMade.error?.message || ''))
 
-  // 种数据直接落盘（隔离目录）：这些是项目的种子文件，不是面板写入；设定板块批次 11 起有自有写入口（pinax_worldbook_save）。
+  // 种数据直接落盘（隔离目录）：这些是项目的种子文件，不是面板写入；世界书／约束都有载体自有的写入口。
   await writeFile(join(carrierRoot, '正文', '第001章-入场.md'), '雨从檐口滴下来，巷子里没人。', 'utf-8')
   await writeFile(join(carrierRoot, '大纲', 'outline.json'), JSON.stringify({ nodes: [{ id: 'n1', title: '开场：雨夜进城' }], edges: [] }), 'utf-8')
   await writeFile(join(carrierRoot, '约束', '纪律.md'), '- 不许出现现代词\n- 每章 2000 字', 'utf-8')
@@ -104,7 +104,7 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：19 内核 ∪ 载体声明＝33，其中 19 个名字由载体服务（5 接管＋14 自有），端口仍为 0（工单A2：pinax_worldbook_save；工单B1：构思这对；工单B2：大纲写半边 pinax_outline_save；工单A：提案三把 pinax_proposal_list/read/discard；工单E2：约束这对 pinax_rule_list/save；工单G1：资料三把 pinax_document_list/read/save；工单H2：pinax_reference_search）',
+  record('M2 聚合工具面：19 内核 ∪ 六载体声明＝33，其中 19 个名字由载体服务（5 接管＋14 自有），端口仍为 0（v1.1-A 拆栏不新增工具名：小说 正文写口＋提案三把；大纲写半边；构思这对；世界书写口；约束这对；资料三把＋检索）',
     carrierStarted.ok === true
       && carrierStarted.value.toolCount === 33
       && carrierStarted.value.carrierTools === 19
@@ -139,15 +139,16 @@ try {
   // 工单A2（断言同步，调度方裁定 dwfq-f2369ffa-3）：世界书 rw 后，写经自有 pinax_worldbook_save 落盘——
   // 覆写种子文件（expectedRevision 1→2，不新建文件），后面的写族闸 record 靠目录清单不变继续成立。
   const worldbookSaved = await carrierRuntime.callTool('pinax_worldbook_save', { path: '世界书/人物·柯秒.md', text: '冷穿越剧版主角，醒来在雪夜。作者在面板改的一笔。', expectedRevision: 1 })
-  record('M2 设定板块：世界书 1 条读得到、经自有 save 落盘（1→2）；约束 2 份经自有 list 读回全文、save 落盘（1→2），不多建文件',
+  record('M2 世界书与设定两栏：世界书 1 条读得到、经自有 save 落盘（1→2）；约束 2 份经自有 list 读回全文、save 落盘（1→2），不多建文件',
     worldbookList.value.payload.ok === true && worldbookList.value.payload.total === 1
-      && worldbookList.value.owner === SETTING_CARRIER_ID
+      && worldbookList.value.owner === WORLDBOOK_CARRIER_ID
       && ruleList.value.payload.ok === true && ruleList.value.payload.total === 2
+      && ruleList.value.owner === SETTING_CARRIER_ID
       && ruleList.value.payload.rules.every((rule) => typeof rule.text === 'string' && rule.text.length > 0)
       && ruleSaved.value.payload.ok === true && ruleSaved.value.payload.revision === 2
       && !rulesOnDisk.includes('载体想偷写.md')
       && worldbookSaved.value.payload.ok === true && worldbookSaved.value.payload.revision === 2,
-    `条目=${worldbookList.value.payload?.total ?? '-'} 约束=${ruleList.value.payload?.total ?? '-'} 存=${ruleSaved.value.payload?.revision ?? '-'}/${worldbookSaved.value.payload?.revision ?? '-'}`)
+    `条目=${worldbookList.value.payload?.total ?? '-'}（${worldbookList.value.owner}） 约束=${ruleList.value.payload?.total ?? '-'}（${ruleList.value.owner}） 存=${ruleSaved.value.payload?.revision ?? '-'}/${worldbookSaved.value.payload?.revision ?? '-'}`)
 
   const envelope = await buildRuntimeEnvelope({
     registry: carrierRegistry,

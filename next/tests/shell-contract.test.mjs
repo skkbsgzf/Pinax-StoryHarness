@@ -33,8 +33,9 @@ const HISTORY_CHANNELS = [
  * 判据来自 M1 方案第 3 节 WP4：不装插件时外壳可进入、可打开项目、可在运行时栏问一句话，且运行时栏无法被插件占用。
  */
 
-test('槽位合同：右栏与顶层菜单是保留字，开放槽位只有两个', () => {
-  assert.deepEqual(OPEN_SLOTS, ['left-dock', 'center'])
+test('槽位合同：右栏与顶层菜单是保留字，开放槽位是左右竖条/中栏/悬浮窗三个', () => {
+  // 协议 v1.1-C：overlay（悬浮小工具窗）是第三个开放槽位；载体只声明意图与宽度，定位归宿主。
+  assert.deepEqual(OPEN_SLOTS, ['left-dock', 'center', 'overlay'])
   assert.equal(isReservedSlot('right'), true)
   assert.equal(isReservedSlot('top-menu'), true)
   assert.equal(isReservedSlot('center'), false)

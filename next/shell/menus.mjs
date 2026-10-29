@@ -24,6 +24,8 @@ export const MENU_TEMPLATE = Object.freeze([
       // 工单G2：整目录复制到作者选定的位置／从备份复制回空目录（零新依赖，不做 zip）。
       { id: 'project.backup', label: '备份与恢复…' },
       { id: 'project.history', label: '当前文档历史…', accelerator: 'CmdOrCtrl+Shift+H' },
+      // 工单B1（协议 v1.1-B）：提案审阅迁出小说板索引窗，落统一二级页「文档 → 提案审阅」。
+      { id: 'project.reviewProposals', label: '提案审阅…', accelerator: 'CmdOrCtrl+Shift+P' },
       // 工单A：从「运行时」组迁来（那个组整体删了）。主进程收到后给渲染层发提案目录提示。
       { id: 'project.proposals', label: '打开提案目录' },
       { type: 'separator' },

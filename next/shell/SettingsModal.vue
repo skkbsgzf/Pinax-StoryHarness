@@ -15,7 +15,9 @@ import WorkbenchModal from './WorkbenchModal.vue'
  *
  * 底座是 WorkbenchModal（遮罩／圆角／Esc／过渡原样沿用，props open/dismissable/title 透传）。
  * 目录表 props.sections = [{ id, title, group?, keywords?, component, props? }] 注册——分三组：
- * 「应用」偏好与模型／备份与恢复；「项目」载体管理／导入既有稿／新建项目／主载体选择；「文档」文档历史。
+ * 「应用」偏好与模型／备份与恢复；「项目」载体管理／导入既有稿／新建项目／主载体选择；
+ * 「文档」文档历史／提案审阅（后者是工单B1：协议 v1.1-B 把提案审阅从小说板索引窗迁来这里，
+ * 目录项与内容组件由 AppNext 的 settingsSections 注册，本组件只按 group 归组渲染，不写死节名）。
  * 载体设置（协议 P14 第二步）：props.carriers 的每块载体按它清单里真声明的设置节
  * （settings: [{ id, title }]）在目录里出目录项（「载体」组，文案照声明的 title）；
  * 声明为空数组的载体不占目录格（批次20 按载体标题伪造的占位节已删）。

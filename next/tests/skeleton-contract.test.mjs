@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { PROJECT_KINDS, validateRelativePath } from '../kernel/projectSkeleton.mjs'
 import { CAPABILITY_IDS } from '../kernel/capabilities.vocab.mjs'
 import { kernelToolNames } from '../runtime/mcpSurface.mjs'
-import { NOVEL_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER } from '../carriers/index.mjs'
+import { NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER } from '../carriers/index.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
@@ -48,26 +48,26 @@ test('C2 路径规则：中文目录正常，越界与 .pinax 直写全拒', () 
 /**
  * M2 门禁口径（替换 M1 的「carriers/ 必须为空」）。
  * 判据从「不许有插件」换成「插件必须守规矩」，四条都可机读：
- *   1) 随框架发布的只有 novel / setting / reference 三块，且都是 JS 清单——不允许散落 .carrier.json（那会绕过校验器）；
+ *   1) 随框架发布的是协议 v1.1-A 的六块（novel / outline / notes / worldbook / setting / reference），且都是 JS 清单——不允许散落 .carrier.json（那会绕过校验器）；
  *   2) 板块认领的目录互不重叠（C3 一目录一主人），且都落在固化中文骨架的并集里；
  *   3) 认领的工具名必须是内核 19 里已有的（不许虚增工具面）；载体的自有工具逐条点名，加了要留名；
  *   4) 每块板块的 dataDirs 与 scopes 必须一一对应——声明了目录却没申请权限，或反过来，都算清单说谎。
  */
-const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze(['pinax_chapter_save', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'])
+const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze(['pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'])
 
-test('M2 口径：next/carriers 发布小说＋设定＋资料三块，目录不重叠且落在中文骨架并集里', async () => {
+test('M2 口径：next/carriers 发布六块载体，目录不重叠且落在中文骨架并集里', async () => {
   const carriersDir = join(repoRoot, 'next', 'carriers')
   const entries = await readdir(carriersDir)
   const stray = entries.filter((name) => name.endsWith('.carrier.json') || name === 'manifests.json')
   assert.deepEqual(stray, [], '清单只允许写在 manifest.mjs 里过校验器，散落 JSON 会绕过 C1–C8')
   const published = entries.filter((name) => !name.startsWith('.'))
   assert.deepEqual(published.filter((name) => name.endsWith('.mjs')).sort(), ['index.mjs'])
-  assert.deepEqual(published.filter((name) => !name.includes('.')).sort(), ['novel', 'reference', 'setting'])
+  assert.deepEqual(published.filter((name) => !name.includes('.')).sort(), ['notes', 'novel', 'outline', 'reference', 'setting', 'worldbook'], '协议 v1.1-A：六块载体各占一栏')
 
   const kernel = new Set(kernelToolNames())
   const skeletonUnion = new Set(Object.values(PROJECT_KINDS).flat())
   const dirs = new Set()
-  for (const manifest of [NOVEL_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER]) {
+  for (const manifest of [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER]) {
     for (const dir of Object.values(manifest.dataDirs)) {
       assert.equal(skeletonUnion.has(dir), true, `${manifest.id} 的目录「${dir}」不在固化骨架里`)
       assert.equal(dirs.has(dir), false, `目录「${dir}」被两块板块同时认领（C3 一目录一主人）`)
@@ -85,9 +85,9 @@ test('M2 口径：next/carriers 发布小说＋设定＋资料三块，目录不
     }
   }
   // 自有工具（内核没有的新名字）逐条点名：新增必须在这里留名，防止有人偷偷扩面。
-  // 工单B1 起这份名单不再只有写口：构思的 pinax_notes_list 也是载体自有（列与读合在一把里，没有内核名可认领）。
-  const own = [NOVEL_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
-  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：小说的 pinax_chapter_save、pinax_outline_save（工单B2）、构思这对（工单B1）与提案三把（工单A）＋ 设定的 pinax_worldbook_save（工单A2）＋ 约束这对 pinax_rule_list/pinax_rule_save（工单E2）＋ 资料 pinax_document_list/read/save（工单G1）＋ pinax_reference_search（工单H2；断言同步）')
+  // 协议 v1.1-A 拆栏不新增工具名，只是把它们分给不同的主人。
+  const own = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
+  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：小说（正文写口＋提案三把）、大纲写半边、构思这对、世界书写口、约束这对、资料三把＋检索（断言同步）')
 })
 
 test('能力词表非空且每条有中文名，闭包才算得动', () => {

@@ -86,6 +86,50 @@ test('写入→读回→修订并发：STALE_REVISION 不覆盖', async () => {
   }
 })
 
+test('目录递归归认领者（工单B）：list/read/write 接受「dataDir 名＋子路径」，归属与作用域仍按一级目录判', async () => {
+  const { service, root, workspace } = await setup()
+  try {
+    await mkdir(join(root, '正文', '第一卷'), { recursive: true })
+    await writeFile(join(root, '正文', '第一卷', '第001章-雨夜.md'), '雨夜。', 'utf-8')
+
+    // list：dir 用子路径形态也列得到（此前精确匹配 dataDir 名，直接 DIR_CONFLICT）。
+    const listed = await service.list({ pluginId: 'fixture.novel', dir: '正文/第一卷' })
+    assert.equal(listed.ok, true, JSON.stringify(listed.error ?? {}))
+    assert.deepEqual(listed.value.entries.map((entry) => entry.name), ['第001章-雨夜.md'])
+
+    // read：两种写法等价——（一级 dir＋file 子路径）与（子路径 dir＋文件名）。
+    const byFlat = await service.read({ pluginId: 'fixture.novel', dir: '正文', file: '第一卷/第001章-雨夜.md' })
+    const bySubdir = await service.read({ pluginId: 'fixture.novel', dir: '正文/第一卷', file: '第001章-雨夜.md' })
+    assert.equal(byFlat.ok, true, JSON.stringify(byFlat.error ?? {}))
+    assert.equal(bySubdir.ok, true, JSON.stringify(bySubdir.error ?? {}))
+    assert.equal(bySubdir.value.relativePath, '正文/第一卷/第001章-雨夜.md')
+    assert.equal(bySubdir.value.text, '雨夜。')
+
+    // write：dir 用子路径形态同样落进 正文/第一卷/…（作用域按 正文 的 rw 判）。
+    const written = await service.write({ pluginId: 'fixture.novel', dir: '正文/第一卷', file: '第002章-雪夜.md', text: '雪夜。', expectedRevision: 0 })
+    assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+    assert.equal(written.value.relativePath, '正文/第一卷/第002章-雪夜.md')
+    assert.equal(await readFile(join(root, '正文', '第一卷', '第002章-雪夜.md'), 'utf-8'), '雪夜。')
+
+    // 前缀只认带 `/` 的完整一段：「正文2」不是 正文 的子路径。
+    const trap = await service.list({ pluginId: 'fixture.novel', dir: '正文2' })
+    assert.equal(trap.ok, false)
+    assert.equal(trap.error.code, 'PINAX_DIR_CONFLICT')
+
+    // 子路径仍过 C2：.. 不能借子路径形态绕出板块。
+    const escape = await service.list({ pluginId: 'fixture.novel', dir: '正文/../世界书' })
+    assert.equal(escape.ok, false)
+    assert.equal(escape.error.code, 'PINAX_PATH_OUTSIDE_PROJECT')
+
+    // 归属不因子路径放宽：别人的板块写不进 正文/第一卷。
+    const foreign = await service.write({ pluginId: 'fixture.worldbook', dir: '正文/第一卷', file: '偷写.md', text: 'x', expectedRevision: 0 })
+    assert.equal(foreign.ok, false)
+    assert.equal(foreign.error.code, 'PINAX_DIR_CONFLICT')
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
 test('C2 越界路径与 .pinax 直写一律拒绝', async () => {
   const { service, workspace } = await setup()
   try {

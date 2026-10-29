@@ -30,6 +30,8 @@ const isolatedRoot = await mkdtemp(join(tmpdir(), 'pinax-next-realpane-'))
 process.env.PINAX_APP_DATA = join(isolatedRoot, 'appdata')
 process.env.PINAX_MIRROR_ROOT = join(isolatedRoot, 'mirror')
 const { createNextSession, NOVEL_CARRIER_ID, SETTING_CARRIER_ID } = createRequire(import.meta.url)(resolve(here, '..', 'index.mjs'))
+// 世界书载体的 id 从 carriers 清单直接取：next/index.mjs 的再导出名单不在本批改动面内。
+import { WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 
 const workspaces = []
 
@@ -71,9 +73,9 @@ async function makeProject(label) {
   workspaces.push(workspace)
   const root = join(workspace, '真链路靶子')
   const session = await createNextSession({ root, autoOpen: false })
-  const created = await session.create({ name: '真链路靶子', primaryCarrier: NOVEL_CARRIER_ID, extraEnabled: [SETTING_CARRIER_ID] })
+  const created = await session.create({ name: '真链路靶子', primaryCarrier: NOVEL_CARRIER_ID, extraEnabled: [WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID] })
   expect(created.ok, JSON.stringify(created.error ?? {})).toBe(true)
-  // 素材从文件系统侧落盘：设定板块是只读板块，面板不能自己造数据。
+  // 素材从文件系统侧落盘：这些是项目种子文件，不是面板写入（面板侧走载体的 save 工具）。
   await writeFile(join(root, '正文', '第001章-入场.md'), '雨从檐口滴下来，巷子里没人。', 'utf-8')
   await writeFile(join(root, '世界书', '人物·柯秒.md'), '---\nschemaVersion: 1\nid: kb-1\nname: 人物·柯秒\ntype: character\nkeys:\n  - 柯秒\n---\n\n冷穿越剧版主角，醒来在雪夜。', 'utf-8')
   await writeFile(join(root, '约束', '文风.md'), '短句为主，一拍一段。', 'utf-8')
@@ -110,23 +112,31 @@ describe('载体面板接真会话', () => {
     await session.close()
   })
 
-  it('设定面板读的是真世界书条目；面板没有写通道，内核那份也进不了这块目录', async () => {
+  it('世界书与设定各占一栏：世界书栏读出真条目，设定栏只列约束；内核那份也进不了别人的目录', async () => {
     const { root, session } = await makeProject('setting')
     const bridge = realBridge(session)
     const wrapper = mount(AppNext, { props: { bridge } })
-    await waitFor(() => wrapper.find('.nx-ribbon-item[aria-label="设定"]').exists(), { note: '图标竖条没有设定板块入口' })
+    await waitFor(() => wrapper.find('.nx-ribbon-item[aria-label="世界书"]').exists(), { note: '图标竖条没有世界书板块入口' })
 
-    const board = wrapper.find('.nx-ribbon-item[aria-label="设定"]')
-    expect(board.exists(), '图标竖条应有设定板块的入口').toBe(true)
+    // 协议 v1.1-A：世界书独立一栏。靶子目录里只有一条条目。
+    const board = wrapper.find('.nx-ribbon-item[aria-label="世界书"]')
+    expect(board.exists(), '图标竖条应有世界书板块的入口').toBe(true)
     await board.trigger('click')
-    // 工单E2 起设定板是两棵树：世界书条目 ＋ 约束。靶子目录里各有一份，所以是 2 行。
-    await waitFor(() => wrapper.find('[data-pane-id="setting.entries"]').exists() && wrapper.findAll('.nx-index-window .nx-tree-item').length === 2 && wrapper.find('.entry-text').exists(), { note: '设定面板没从磁盘读出世界书条目／约束' })
+    await waitFor(() => wrapper.find('[data-pane-id="worldbook.entries"]').exists() && wrapper.findAll('.nx-index-window .nx-tree-item').length === 1 && wrapper.find('.entry-text').exists(), { note: '世界书面板没从磁盘读出条目' })
 
-    expect(wrapper.find('[data-pane-id="setting.entries"]').exists()).toBe(true)
-    expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(2)
-    expect(wrapper.find('.nx-index-window').text()).toContain('约束')
-    expect(wrapper.find('.nx-index-window').text()).toContain('文风')
+    expect(wrapper.find('[data-pane-id="worldbook.entries"]').exists()).toBe(true)
+    expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(1)
+    expect(wrapper.find('.nx-index-window').text()).toContain('人物·柯秒')
     expect(wrapper.find('.entry-text').text()).toContain('醒来在雪夜')
+
+    // 设定栏（约束）：世界书条目不在这一栏，只有 约束/文风.md 一行；中栏是约束编辑面（点开才进）。
+    const settingBoard = wrapper.find('.nx-ribbon-item[aria-label="设定"]')
+    expect(settingBoard.exists(), '图标竖条应有设定板块的入口').toBe(true)
+    await settingBoard.trigger('click')
+    await waitFor(() => wrapper.find('[data-pane-id="setting.rules"]').exists() && wrapper.find('.nx-index-window').text().includes('文风'), { note: '设定栏没从磁盘读出约束' })
+    expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(1)
+    expect(wrapper.find('.nx-index-window').text()).not.toContain('人物·柯秒')
+    expect(wrapper.find('.entry-text').exists()).toBe(false)
 
     // 界面上没有任何写入通道：面板存在前后，世界书目录的文件清单一个字都没变。
     expect((await readdir(join(root, '世界书'))).join()).toBe('人物·柯秒.md')

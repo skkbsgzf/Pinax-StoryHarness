@@ -8,7 +8,7 @@ import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, SETTING_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { AGENT_CONTEXT_PROFILES } from '../../shared/agentContextProfiles.js'
 import { validateAgentContextEnvelope } from '../../shared/agentContextContract.js'
 import { buildRuntimeEnvelope, readOnlyProfiles, readOnlyTaskForProfile } from '../runtime/contextProfiles.mjs'
@@ -30,7 +30,7 @@ import { createTempWorkspace } from '../testing/harness.mjs'
 const CHAPTER_TEXT = '# 第一章 入场\n\n他醒来时，雪已经埋了半条街。'
 const OUTLINE_JSON = JSON.stringify({ nodes: [{ id: 'n1', title: '开场', summary: '雪夜醒来' }], edges: [] }, null, 2)
 
-async function materialProject(label, { extraEnabled = [SETTING_CARRIER_ID], fill = true, chapterChars = null, bigRules = 0 } = {}) {
+async function materialProject(label, { extraEnabled = [OUTLINE_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID], fill = true, chapterChars = null, bigRules = 0 } = {}) {
   const workspace = await createTempWorkspace(label)
   const root = join(workspace.projects, '上下文靶子')
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
@@ -116,9 +116,9 @@ test('信封由载体块拼成：五块齐、优先级按档案顺序、过的�
     const refs = payload.envelope.blocks.flatMap((block) => block.sourceRefs)
     assert.ok(refs.some((ref) => ref.startsWith('setting-rules:约束/')))
     assert.ok(refs.some((ref) => ref.startsWith('setting-style:约束/')))
-    assert.ok(refs.some((ref) => ref.startsWith('setting-worldbook:世界书/')))
+    assert.ok(refs.some((ref) => ref.startsWith('worldbook:世界书/')))
     assert.ok(refs.some((ref) => ref.startsWith('novel-chapter:正文/')))
-    assert.ok(refs.some((ref) => ref.startsWith('novel-outline:大纲/')))
+    assert.ok(refs.some((ref) => ref.startsWith('outline:大纲/')))
   } finally {
     await target.workspace.cleanup()
   }
@@ -144,15 +144,15 @@ test('正文块与工具读到的是同一份字节；未指定章节时如实�
   }
 })
 
-test('板块缺席只记账不硬失败：未启用设定时 rules/style/worldbook 进 missingKinds', async () => {
+test('板块缺席只记账不硬失败：未启用设定/大纲/世界书时 rules/style/outline/worldbook 进 missingKinds', async () => {
   const target = await materialProject('ctx-missing-provider', { extraEnabled: [] })
   try {
     const built = await buildRuntimeEnvelope({ registry: target.registry, view: target.view, fileService: target.fileService, question: '节奏对不对？' })
     assert.equal(built.ok, true, JSON.stringify(built.error ?? {}))
-    assert.deepEqual(built.value.providerKinds, ['selection', 'outline'])
-    assert.deepEqual(built.value.missingKinds.sort(), ['rules', 'style', 'worldbook'])
+    assert.deepEqual(built.value.providerKinds, ['selection'])
+    assert.deepEqual(built.value.missingKinds.sort(), ['outline', 'rules', 'style', 'worldbook'])
     assert.ok(built.value.warnings.some((warning) => /没有提供者/.test(warning)))
-    assert.deepEqual(built.value.envelope.blocks.map((block) => block.kind), ['selection', 'outline'])
+    assert.deepEqual(built.value.envelope.blocks.map((block) => block.kind), ['selection'])
   } finally {
     await target.workspace.cleanup()
   }

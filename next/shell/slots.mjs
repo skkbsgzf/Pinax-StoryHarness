@@ -1,10 +1,12 @@
 /**
- * 槽位合同（C5）：外壳只保证顶栏＋左竖条＋中栏＋右运行时栏。
+ * 槽位合同（C5）：外壳只保证顶栏＋左竖条＋中栏＋右运行时栏，外加协议 v1.1-C 的悬浮小工具窗。
  * 纯数据模块——主进程、渲染进程与门禁都能同一份判定，插件抢地盘在这里就被拒。
  */
 export const SLOT_LEFT_DOCK = 'left-dock'
 export const SLOT_CENTER = 'center'
-export const OPEN_SLOTS = Object.freeze([SLOT_LEFT_DOCK, SLOT_CENTER])
+/** 协议 v1.1-C：悬浮小工具窗。载体声明意图（含 width），定位/收起/记忆一律归宿主 FloatingWidget。 */
+export const SLOT_OVERLAY = 'overlay'
+export const OPEN_SLOTS = Object.freeze([SLOT_LEFT_DOCK, SLOT_CENTER, SLOT_OVERLAY])
 
 /** right 归一级公民运行时；top-menu 归主进程应用菜单。插件声明即拒装。 */
 export const RESERVED_SLOTS = Object.freeze({

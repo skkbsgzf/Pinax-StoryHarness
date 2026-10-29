@@ -359,19 +359,33 @@ test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目
 
 /**
  * R3-1／D2：主题的权威来源迁到偏好 JSON，next/shell 源码不得再出现 localStorage。
- * 唯一例外是 theme.mjs 里带 legacy-localstorage-bridge 标记的过渡双写块（老前端退役后删）。
+ * 例外只有两处，都有明确边界：
+ *   1) theme.mjs 里带 legacy-localstorage-bridge 标记的过渡双写块（老前端退役后删）；
+ *   2) FloatingWidget.vue 的悬浮窗位置记忆（协议 v1.1-C 明确允许，工单C「唯一允许的 localStorage 用途」）——
+ *      只许用 `overlay.<paneId>` 这一条键，读写都必须走 storageKey.value，不许出现第二条键。
  * 这个例外是会退役的：双写块删掉后为 0 处访问，断言仍通过；其它文件一旦出现 localStorage 立刻红。
  */
-test('next/shell 源码不得出现 localStorage（唯一过渡例外：theme.mjs 的老前端双写块）', async () => {
+test('next/shell 源码不得出现 localStorage（例外只有 theme.mjs 过渡双写块与 FloatingWidget 的 overlay 位置记忆）', async () => {
   const files = (await walk(shellDir)).filter((file) => /\.(mjs|js|vue|html)$/u.test(file))
   const offenders = []
   for (const file of files) {
     if (file.endsWith('theme.mjs')) continue
     // 注释里提到这个词不算使用（theme 迁移的说明文字要能写清楚）；只看去掉注释后的源码。
     const text = stripComments(await readFile(file, 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+    if (file.endsWith('FloatingWidget.vue')) {
+      // 悬浮窗位置记忆：键必须由 pane id 拼出，且每次访问都必须用 storageKey.value（不许写死第二条键）。
+      assert.match(text, /const storageKey = computed\(\(\) => `overlay\.\$\{props\.id\}`\)/u,
+        '悬浮窗位置记忆的键必须是 overlay.<paneId>（键名带 paneId）')
+      const accesses = text.match(/[^\n]*\.localStorage[^\n]*/gu) ?? []
+      assert.ok(accesses.length > 0, 'FloatingWidget 应负责位置记忆的读写')
+      for (const line of accesses) {
+        assert.match(line, /storageKey\.value/u, `localStorage 访问必须走 overlay.<paneId> 这一条键：${line.trim()}`)
+      }
+      continue
+    }
     if (text.includes('localStorage')) offenders.push(file)
   }
-  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `除了 theme.mjs 的过渡双写块与 FloatingWidget 的 overlay 位置记忆，next/shell 源码不得出现 localStorage：\n${offenders.join('\n')}`)
 
   const theme = await readFile(join(shellDir, 'theme.mjs'), 'utf-8')
   const accesses = (theme.match(/\.localStorage/g) ?? []).length
@@ -381,4 +395,71 @@ test('next/shell 源码不得出现 localStorage（唯一过渡例外：theme.mj
     assert.match(theme, /老前端退役后删/, '过渡双写块必须写明老前端退役后删除')
     assert.doesNotMatch(stripComments(theme), /\.localStorage\??\.getItem/u, '禁止读浏览器缓存：权威来源只能是偏好 JSON')
   }
+})
+
+/**
+ * 协议 v1.1-C（工单C）：悬浮小工具窗＝宿主容器＋载体声明。
+ * 三条边界都可机读：
+ *   1) FloatingWidget 是唯一宿主——拖动句柄、Esc、位置记忆（overlay.<paneId>）都在它身上；
+ *      载体 SFC 一律不许自带拖拽/定位逻辑；
+ *   2) AppNext 只接线开合与内容，不许维护悬浮窗的硬编码坐标表（位置归宿主）；
+ *   3) outline manifest 声明 overlay pane，层序 token 必须低于统一二级页。
+ */
+test('协议 v1.1-C：FloatingWidget 是悬浮窗宿主容器（拖动／收起／Esc／位置记忆都在宿主）', async () => {
+  const widgetPath = join(shellDir, 'FloatingWidget.vue')
+  assert.equal(await exists(widgetPath), true, 'next/shell/FloatingWidget.vue 必须存在（悬浮窗宿主容器）')
+  const widget = await readFile(widgetPath, 'utf-8')
+  for (const needle of [
+    'startDrag',
+    'pointerdown',
+    'Escape',
+    "emit('close')",
+    "emit('toggle')",
+    'getBoundingClientRect',
+    'overlay.${props.id}',
+    'storageKey.value'
+  ]) {
+    assert.ok(widget.includes(needle), `FloatingWidget 缺宿主职责：${needle}`)
+  }
+  assert.ok(widget.includes('nx-overlay-tab'), '收起态要有侧缘小标签（点击展开）')
+  assert.ok(widget.includes('<slot />'), '内容经插槽由外壳注入，宿主不自造载体内容')
+})
+
+test('协议 v1.1-C：载体 SFC 不许自带拖拽／定位逻辑（P16：宿主管渲染）', async () => {
+  const carriersDir = join(repoRoot, 'next', 'carriers')
+  // 今天 next/carriers/ 里还没有 SFC（载体工具/清单都是 .mjs）；这条断言是给后续载体声明
+  // overlay pane 时立的钉子——谁把拖拽/定位写进载体 SFC，这里直接红。
+  const carrierSfcs = (await walk(carriersDir)).filter((file) => file.endsWith('.vue'))
+  const offenders = []
+  for (const file of carrierSfcs) {
+    const text = stripComments(await readFile(file, 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+    for (const needle of ['pointerdown', 'mousedown', 'localStorage', 'getBoundingClientRect', 'position: absolute', 'position:absolute']) {
+      if (text.includes(needle)) offenders.push(`${file}: ${needle}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `载体 SFC 不许自带拖拽/定位（宿主 FloatingWidget 负责）：\n${offenders.join('\n')}`)
+})
+
+test('协议 v1.1-C：AppNext 不含悬浮窗硬编码坐标表；位置记忆键 overlay.<paneId> 只在宿主里拼', async () => {
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  assert.ok(app.includes('<FloatingWidget'), '外壳要挂宿主容器')
+  assert.ok(app.includes(':id="pane.paneId"'), '宿主按 paneId 区分实例（位置记忆键 overlay.<paneId>）')
+  assert.doesNotMatch(app, /\boverlay[_-]?positions?\b/iu, 'AppNext 不许维护 overlay 的硬编码坐标表')
+  assert.doesNotMatch(app, /(?:left|top|right)\s*:\s*['"]?\d+px/u, 'AppNext 不许写悬浮窗的硬编码坐标（定位归 FloatingWidget）')
+  assert.doesNotMatch(app, /\.localStorage/u, '位置记忆归宿主 FloatingWidget，AppNext 不碰 localStorage')
+})
+
+test('协议 v1.1-C：outline manifest 声明 overlay pane；层序高于编辑器、低于统一二级页', async () => {
+  const manifest = await readFile(join(repoRoot, 'next', 'carriers', 'outline', 'manifest.mjs'), 'utf-8')
+  assert.match(manifest, /slot: 'overlay'/u, '大纲载体要声明 overlay pane')
+  assert.match(manifest, /id: 'outline\.widget'/u, 'overlay pane id 固定 outline.widget')
+  const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
+  const rule = ruleBody(layout, '.nx-overlay-widget')
+  assert.ok(rule, 'next-shell.css 里没有 .nx-overlay-widget 规则')
+  assert.match(rule, /position:\s*absolute/u, '悬浮窗是 absolute 定位卡片')
+  assert.match(rule, /z-index:\s*var\(--z-floating-dock\)/u, '层序走 --z-floating-dock（高于编辑器、低于统一二级页）')
+  const tokens = await readFile(join(repoRoot, 'src', 'styles', 'main.css'), 'utf-8')
+  const overlayZ = Number(/--z-floating-dock:\s*(\d+)/u.exec(tokens)?.[1])
+  const modalZ = Number(/--z-modal:\s*(\d+)/u.exec(tokens)?.[1])
+  assert.ok(Number.isFinite(overlayZ) && Number.isFinite(modalZ) && overlayZ < modalZ, `悬浮层 z(${overlayZ}) 必须低于统一二级页 z(${modalZ})`)
 })

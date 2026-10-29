@@ -32,6 +32,10 @@ export function useBoardData(bridge) {
     /** 树级提示：列目录失败摊在索引窗（与文档级分开，免得作者分不清是哪一步说的话）。 */
     treeError: null,
     chapters: [],
+    /** 卷→章两级（工单B）：正文/ 下的一级子目录＝卷；{ name, chapters[] }，平铺数据只有一个无名组
+     *  （name:''，IndexWindow 不画卷标题，渲染与旧版平铺列表一致）。chapters 仍是扁平全集，
+     *  openChapter／修订号推进／提案采纳都按 file 定位，不依赖分组。 */
+    chapterGroups: [],
     chapter: null,
     draft: '',
     /** 大纲（工单A3 只读树 → 工单B2 可编辑）：索引窗的第三棵树。
@@ -64,6 +68,8 @@ export function useBoardData(bridge) {
      *  proposals＝列表摘要；proposal＝点开的那份整份 JSON；proposalChapter＝目标章此刻的正文（左右对照用）。
      *  采纳仍走载体 save（带当前修订号），外壳不自己拼一份「采纳后」的正文。 */
     proposals: [],
+    /** 运行时轨写下的纯文本散件（kind:'raw'）：不当成可审阅提案，但在提案审阅节里如实报数。 */
+    proposalRaw: [],
     proposal: null,
     proposalChapter: null,
     proposalWarnings: [],
@@ -115,9 +121,13 @@ export function useBoardData(bridge) {
     if (!listed.ok) {
       state.treeError = listed.message
       state.chapters = []
+      state.chapterGroups = []
       return
     }
     state.chapters = listed.value.chapters ?? []
+    // 卷→章两级（工单B）：章的卷名以工具返回的 volume 字段为准（顶层章为 null）；
+    // 缺字段时按章节相对路径的 正文/<卷>/<章>.md 分段现算。两级封顶，更深的层级按同一卷归类。
+    state.chapterGroups = groupChaptersByVolume(state.chapters, listed.value.volumes)
     if (!keep) return
     const current = state.chapter ? state.chapters.find((item) => item.file === state.chapter.file) : null
     if (!state.chapter && state.chapters.length) await openChapter(state.chapters[state.chapters.length - 1])
@@ -162,6 +172,7 @@ export function useBoardData(bridge) {
     settleSaveFeedback('chapter', saved)
     // 就地推进索引窗里的版本号，不为一次保存重读整章（重读会把 chip 的版本号冲掉）。
     state.chapters = state.chapters.map((item) => (item.file === saved.value.file ? { ...item, revision: saved.value.revision } : item))
+    state.chapterGroups = groupChaptersByVolume(state.chapters)
   }
 
   async function createChapter(title) {
@@ -458,11 +469,13 @@ export function useBoardData(bridge) {
     const listed = await tool('pinax_proposal_list', {})
     if (!listed.ok) {
       state.proposals = []
+      state.proposalRaw = []
       state.proposalWarnings = []
       state.proposalsError = listed.message
       return
     }
     state.proposals = listed.value.proposals ?? []
+    state.proposalRaw = listed.value.raw ?? []
     state.proposalWarnings = listed.value.warnings ?? []
     if (!state.proposal) return
     const fresh = state.proposals.find((item) => item.name === state.proposal.name)
@@ -558,6 +571,7 @@ export function useBoardData(bridge) {
       state.draft = proposal.content
     }
     state.chapters = state.chapters.map((item) => (item.file === saved.value.file ? { ...item, revision: saved.value.revision } : item))
+    state.chapterGroups = groupChaptersByVolume(state.chapters)
     state.proposalChapter = {
       ...(state.proposalChapter ?? {}),
       file: targetFile,
@@ -849,11 +863,15 @@ export function useBoardData(bridge) {
     state.knowledgeError = null
   }
 
-  /** 换板时清瞬时提示：上一块板的提示、保存 chip 与检索结果不该出现在这一块板上（批次18 验收修 / 工单H1/H2）。 */
+  /** 换板时清瞬时提示：上一块板的提示、保存 chip 与检索结果不该出现在这一块板上（批次18 验收修 / 工单H1/H2）。
+   *  协议 v1.1-A 起一载体一棵本域内容树：上一栏的树级错误（treeError）与世界书列举警告（listWarnings）
+   *  也随换板收掉，否则「世界书/ 读失败」会挂到小说栏的正文树上。 */
   function clearTransient() {
     state.notice = ''
     state.error = null
     state.saveFeedback = null
+    state.treeError = null
+    state.listWarnings = []
     clearKnowledgeSearch()
   }
 
@@ -902,6 +920,53 @@ export function useBoardData(bridge) {
     saveOutline,
     setDraft
   })
+}
+
+/**
+ * 卷→章两级（工单B）：正文/ 下的一级子目录＝卷。
+ * 章的卷名以工具给的 volume 字段为准（pinax_chapter_list 每条带 volume，顶层章为 null）；
+ * 没这个字段时按章节相对路径分段现算：
+ *   '正文/第一卷/第001章.md' → 卷「第一卷」；'正文/第001章.md' → 平铺（name:'' 的无名组）。
+ * 另保留 volumes（[{ name, chapters }]）这一形状，工具将来直接返回卷结构时按它排。
+ * 两级封顶——更深的层级不会被拆成第三级，整段目录名按一卷归类。平铺数据只得到无名组，
+ * 索引窗不画卷标题，渲染与拆分前完全一致。
+ */
+function groupChaptersByVolume(chapters, volumes = null) {
+  const list = Array.isArray(chapters) ? chapters : []
+  const groups = []
+  if (Array.isArray(volumes) && volumes.length) {
+    const grouped = new Set()
+    for (const volume of volumes) {
+      const name = String(volume?.name ?? '').trim()
+      const items = Array.isArray(volume?.chapters) ? volume.chapters : []
+      if (!name) continue
+      for (const item of items) grouped.add(item?.file)
+      groups.push({ name, chapters: items })
+    }
+    const loose = list.filter((item) => !grouped.has(item?.file))
+    if (loose.length || !groups.length) groups.push({ name: '', chapters: loose })
+    return groups
+  }
+  const byName = new Map()
+  const loose = []
+  for (const chapter of list) {
+    const declared = typeof chapter?.volume === 'string' && chapter.volume.trim() ? chapter.volume.trim() : ''
+    const parts = String(chapter?.file ?? '').replaceAll('\\', '/').split('/')
+    // 工具给了 volume 就用它；否则只认 正文/<卷>/<文件> 这一段（两段以内是平铺，更深的按同一卷归类）。
+    const volume = declared || (parts.length >= 3 ? parts[1] : '')
+    if (!volume) {
+      loose.push(chapter)
+      continue
+    }
+    if (!byName.has(volume)) {
+      const group = { name: volume, chapters: [] }
+      byName.set(volume, group)
+      groups.push(group)
+    }
+    byName.get(volume).chapters.push(chapter)
+  }
+  if (loose.length || !groups.length) groups.push({ name: '', chapters: loose })
+  return groups
 }
 
 /**

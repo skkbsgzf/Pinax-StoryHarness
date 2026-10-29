@@ -9,6 +9,19 @@ import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchToolt
  * 行用老前端的 .workspace-nav-item 词汇（src/styles/workspace-navigation.css:21-75）：
  * 行高、悬停、选中色、焦点环全部是原件那份 CSS，Next 不另配一套。
  * 宽度沿用老版目录窗的口径（200–360px，见 WorkspaceContentGroups.vue:155 的 aria-valuemin/max）。
+ *
+ * 协议 v1.1-A（作者 2026-10-28 裁定）：一个载体＝竖条一格＝一棵纯粹的本域内容树。
+ * 这一栏按板块目录窗 pane 的前缀只渲染**本载体 dataDir** 的内容层级：
+ *   novel.*      → 正文（卷→章两级树；提案审阅在统一二级页「文档 → 提案审阅」，工单B）
+ *   outline.*    → 大纲树
+ *   notes.*      → 构思清单
+ *   worldbook.*  → 世界书条目树
+ *   setting.*    → 约束清单
+ *   reference.*  → 资料清单
+ * 上一版把大纲／构思／世界书都塞进小说／设定板是模型错误，本版按六栏拆开。
+ * 工单B：小说栏再纯粹化——只渲染章节树；提案区迁统一二级页（设置 → 文档 → 提案审阅）。
+ * 卷→章两级：正文/ 下的一级子目录＝卷（不可点的分区标题），卷下是章行；没有子目录时
+ * 与旧的平铺列表一模一样（大梦的真实数据就是平铺的）。
  */
 const props = defineProps({
   /** 当前板块（一个载体）：树从哪来、标题叫什么都在这块板上。 */
@@ -18,20 +31,23 @@ const props = defineProps({
   archive: { type: Array, default: () => [] },
   width: { type: Number, default: 256 }
 })
-const emit = defineEmits(['collapse', 'history'])
+const emit = defineEmits(['collapse', 'history', 'overlay'])
 
 const newTitle = ref('')
 
-/** 树的口径由板块声明的目录窗 pane 决定（novel.* 列章节，setting.* 列世界书条目，reference.* 列资料）。 */
+/** 树的口径由板块声明的目录窗 pane 前缀决定（协议 v1.1-A：一载体一棵本域内容树）。 */
 const treeKind = computed(() => {
   const paneId = String(props.board?.treePaneId ?? '')
   if (paneId.startsWith('novel.')) return 'chapters'
-  if (paneId.startsWith('setting.')) return 'entries'
+  if (paneId.startsWith('outline.')) return 'outline'
+  if (paneId.startsWith('notes.')) return 'notes'
+  if (paneId.startsWith('worldbook.')) return 'entries'
+  if (paneId.startsWith('setting.')) return 'rules'
   if (paneId.startsWith('reference.')) return 'documents'
   return 'none'
 })
 
-/** 树所在的目录名：取板块认领的第一个目录（小说＝正文，设定＝世界书，资料＝资料）。 */
+/** 树所在的目录名：取板块认领的第一个目录（小说＝正文，大纲＝大纲，构思＝构思…）。 */
 const treeDir = computed(() => props.board?.dataDirs?.[0] ?? props.board?.treePaneTitle ?? '目录')
 
 const isChapterOpen = (item) => props.data.selection?.type === 'chapter' && props.data.selection.item?.file === item.file
@@ -40,8 +56,18 @@ const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data
 const isRuleOpen = (item) => props.data.selection?.type === 'rule' && props.data.selection.item?.file === item.file
 const isDocumentOpen = (item) => props.data.selection?.type === 'document' && props.data.selection.item?.file === item.file
 
+/** 章节序号：工具给的全局 index（拆分前就是它）；缺 index 时退回组内位置，不让行文空着。 */
+const chapterNumber = (item, localIndex) => (Number.isSafeInteger(item?.index) ? item.index + 1 : localIndex + 1)
+
+/** 卷→章两级（工单B）：useBoardData 组好组，这里只负责画；没有 groups 时退回平铺列表。 */
+const chapterGroups = computed(() => {
+  const groups = props.data.chapterGroups
+  if (Array.isArray(groups) && groups.length) return groups
+  return Array.isArray(props.data.chapters) && props.data.chapters.length ? [{ name: '', chapters: props.data.chapters }] : []
+})
+
 /**
- * 哪些大纲行有子节点（工单G3）：只看 edges，两种字段名都认（{from,to} / {source,target}）；
+ * 哪些大纲行有子节点：只看 edges，两种字段名都认（{from,to} / {source,target}）；
  * 端点缺失或指向不存在的节点的连线不算——不拿断链给行头加记号。
  * depth（缩进层级）由 useBoardData 的 loadOutline／saveOutline 贴上，这里只负责画。
  */
@@ -63,15 +89,6 @@ const outlineParentIds = computed(() => {
 })
 const hasOutlineChildren = (node) => typeof node?.id === 'string' && outlineParentIds.value.has(node.id)
 const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-node' && props.data.selection.item?.index === index
-const isProposalOpen = (item) => props.data.selection?.type === 'proposal' && props.data.selection.item?.name === item.name
-
-/** 提案行的 createdAt 短格式（模型写提案的时刻，精确到分钟就够认了；解析不了就原样退回空串）。 */
-function shortStamp(value) {
-  const date = new Date(String(value ?? ''))
-  if (Number.isNaN(date.getTime())) return ''
-  const pad = (part) => String(part).padStart(2, '0')
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
-}
 
 async function createChapter() {
   const title = newTitle.value.trim()
@@ -147,22 +164,21 @@ async function submitNewRule() {
   await props.data.createRule(title)
 }
 
-// 换板＝换树：目录窗自己负责把这一板的东西列出来（核心区不替它列）。
-// 大纲随章节一起取（工单A3）：同属小说板块的索引窗，一次换板三棵树都是新的。
-// 构思速记（工单B1）也在这一拍里列出来；它刻意不自动打开，正文仍是核心区的主角。
+// 换板＝换树：目录窗自己负责把这一板的东西列出来（核心区不替它列），且只列本载体那一棵。
+// 协议 v1.1-A：小说板不再顺手取大纲／构思／世界书——那些是别的栏的树。
 watch(() => props.board?.id, () => {
   newTitle.value = ''
   closeNewNote()
   closeNewRule()
   if (treeKind.value === 'chapters') {
     void props.data.loadChapters()
+  } else if (treeKind.value === 'outline') {
     void props.data.loadOutline()
+  } else if (treeKind.value === 'notes') {
     void props.data.loadNotes()
-    // 提案（工单A）跟着一起列：模型改稿落 .pinax/proposals/ 后，这一栏要马上看得见。
-    void props.data.loadProposals()
   } else if (treeKind.value === 'entries') {
     void props.data.loadEntries()
-    // 约束（工单E2）：设定板的第二棵树，随条目一起列——换板一次，两棵树都是新的。
+  } else if (treeKind.value === 'rules') {
     void props.data.loadRules()
   } else if (treeKind.value === 'documents') {
     // 资料（工单G1）：资料板只有这一棵树；泛型项目里它也是主树。
@@ -189,68 +205,60 @@ watch(() => props.board?.id, () => {
     <div class="nx-index-body">
       <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
 
+      <!-- 小说（协议 v1.1-A：这一栏只有正文一棵树；提案审阅已迁统一二级页，工单B1） -->
       <template v-if="treeKind === 'chapters'">
         <div class="nx-index-new">
           <input v-model="newTitle" class="nx-field is-tiny" placeholder="新章标题" @keydown.enter.prevent="createChapter">
           <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newTitle.trim()" @click="createChapter">新建</button>
         </div>
         <p class="workspace-nav-section">{{ treeDir }}</p>
-        <ul class="nx-tree">
-          <li v-for="item in data.chapters" :key="item.file" class="nx-tree-line">
-            <button
-              type="button"
-              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
-              :class="{ 'is-active': isChapterOpen(item) }"
-              :aria-current="isChapterOpen(item) ? 'page' : null"
-              @click="data.openChapter(item)"
-            >
-              <span class="workspace-nav-label">{{ item.index + 1 }}. {{ item.title }}</span>
-              <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
-            </button>
-            <button
-              type="button"
-              class="nx-row nx-index-icon-btn nx-index-history"
-              :aria-label="`「${item.title}」的历史`"
-              v-workbench-tooltip="{ text: '历史', side: 'left' }"
-              @click.stop="emit('history', { type: 'chapter', item })"
-            >
-              <WorkbenchIcon name="history" :size="14" />
-            </button>
-          </li>
-        </ul>
-        <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
-
-        <!-- 提案（工单A）：模型改稿落在 .pinax/proposals/，这里接住它——
-             行文＝目标章标题＋创建时刻；点开进中栏审阅（采纳／弃用在那边）。
-             没有提案就不摆这一区；列不出来时把原话摊在这里，不假装「没有提案」。 -->
-        <template v-if="data.proposals.length || data.proposalsError || data.proposalWarnings.length">
-          <p class="workspace-nav-section">提案</p>
-          <ul v-if="data.proposals.length" class="nx-tree">
-            <li v-for="item in data.proposals" :key="item.name" class="nx-tree-line">
+        <!-- 卷→章（工单B）：有子目录时先出卷标题（不可点），卷下是章行；平铺时只有一个无名组。 -->
+        <template v-for="(group, groupIndex) in chapterGroups" :key="group.name || `flat-${groupIndex}`">
+          <p v-if="group.name" class="workspace-nav-section nx-volume" data-test="chapter-volume">{{ group.name }}</p>
+          <ul class="nx-tree">
+            <li v-for="(item, localIndex) in group.chapters" :key="item.file" class="nx-tree-line">
               <button
                 type="button"
                 class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
-                :class="{ 'is-active': isProposalOpen(item) }"
-                :aria-current="isProposalOpen(item) ? 'page' : null"
-                @click="data.openProposal(item)"
+                :class="{ 'is-active': isChapterOpen(item) }"
+                :aria-current="isChapterOpen(item) ? 'page' : null"
+                @click="data.openChapter(item)"
               >
-                <span class="workspace-nav-label">{{ item.target?.title ?? item.name }}</span>
-                <span class="workspace-nav-meta">
-                  {{ shortStamp(item.createdAt) }}<template v-if="item.status === 'adopted'"> · 已采纳</template>
-                </span>
+                <span class="workspace-nav-label">{{ chapterNumber(item, localIndex) }}. {{ item.title }}</span>
+                <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
+              </button>
+              <button
+                type="button"
+                class="nx-row nx-index-icon-btn nx-index-history"
+                :aria-label="`「${item.title}」的历史`"
+                v-workbench-tooltip="{ text: '历史', side: 'left' }"
+                @click.stop="emit('history', { type: 'chapter', item })"
+              >
+                <WorkbenchIcon name="history" :size="14" />
               </button>
             </li>
           </ul>
-          <p v-if="!data.proposals.length && data.proposalsError" class="nx-index-error">{{ data.proposalsError }}</p>
-          <ul v-if="data.proposalWarnings.length" class="nx-index-warn">
-            <li v-for="(warning, index) in data.proposalWarnings" :key="`p-${index}`">{{ warning }}</li>
-          </ul>
         </template>
+        <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+      </template>
 
-        <!-- 大纲（工单A3 只读 → 工单B2 可编辑 → 工单G3 按 edges 缩进）：行可点选——点行把节点送进中栏的大纲编辑面
-             （改名/加节点在那里）；depth 由 edges 现算（断链/无 edges 全是一级），行头「·」只标有子节点的行。
-             大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
-        <p class="workspace-nav-section">大纲</p>
+      <!-- 大纲（协议 v1.1-A：独立一栏，只有大纲那一棵内容树）。
+           行可点选——点行把节点送进中栏的大纲编辑面（改名/加节点在那里）；
+           depth 由 edges 现算（断链/无 edges 全是一级），行头「·」只标有子节点的行。
+           大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
+      <template v-else-if="treeKind === 'outline'">
+        <!-- 工单C（协议 v1.1-C）：载体声明了 overlay pane 才出这枚「悬浮」钮——
+             点它由外壳打开 FloatingWidget 的大纲悬浮窗（正文写作时不必切回这一栏）。 -->
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">{{ treeDir }}</p>
+          <button
+            v-if="board?.overlayPane"
+            type="button"
+            class="control-quiet nx-index-overlay-toggle"
+            aria-label="悬浮大纲"
+            @click="emit('overlay', board.overlayPane.id)"
+          >悬浮</button>
+        </div>
         <ul class="nx-tree">
           <li v-for="(node, index) in data.outline" :key="node.id ?? `outline-${index}`" class="nx-tree-line">
             <button
@@ -279,12 +287,14 @@ watch(() => props.board?.id, () => {
           <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="data.startOutline()">新建大纲</button>
         </p>
         <p v-if="data.outlineError" class="nx-index-error">{{ data.outlineError }}</p>
+      </template>
 
-        <!-- 构思速记（工单B1）：第四棵树。行可点开——正文随 pinax_notes_list 一起回来，
-             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。
-             新建（工单H1）：入口是区标题右侧的「＋」，点开才在区顶出现输入行（失焦／Enter 提交，Esc 收起）。 -->
+      <!-- 构思（协议 v1.1-A：独立一栏）。行可点开——正文随 pinax_notes_list 一起回来，
+           点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。
+           新建（工单H1）：入口是区标题右侧的「＋」，点开才在区顶出现输入行（失焦／Enter 提交，Esc 收起）。 -->
+      <template v-else-if="treeKind === 'notes'">
         <div class="nx-index-section-head">
-          <p class="workspace-nav-section">构思</p>
+          <p class="workspace-nav-section">{{ treeDir }}</p>
           <button
             type="button"
             class="nx-row nx-index-icon-btn nx-index-add-toggle"
@@ -336,6 +346,7 @@ watch(() => props.board?.id, () => {
         <p v-if="data.notesError" class="nx-index-error">{{ data.notesError }}</p>
       </template>
 
+      <!-- 世界书（协议 v1.1-A：独立一栏，条目树）。未建档的条目在行尾标出来。 -->
       <template v-else-if="treeKind === 'entries'">
         <p class="workspace-nav-section">{{ treeDir }}</p>
         <ul class="nx-tree">
@@ -362,12 +373,14 @@ watch(() => props.board?.id, () => {
           </li>
         </ul>
         <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+      </template>
 
-        <!-- 约束（工单E2）：设定板的第二棵树。行可点开——正文随 pinax_rule_list 一起回来，
-             点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。
-             新建（工单H1）：与构思同一形态——区标题右侧「＋」，点开才出现输入行。 -->
+      <!-- 约束（协议 v1.1-A：设定栏只剩这一棵内容树；世界书已独立成栏）。
+           行可点开——正文随 pinax_rule_list 一起回来，点击只换核心区的面板，不再发第二次读；
+           新建（工单H1）：与构思同一形态——区标题右侧「＋」，点开才出现输入行。 -->
+      <template v-else-if="treeKind === 'rules'">
         <div class="nx-index-section-head">
-          <p class="workspace-nav-section">约束</p>
+          <p class="workspace-nav-section">{{ treeDir }}</p>
           <button
             type="button"
             class="nx-row nx-index-icon-btn nx-index-add-toggle"
@@ -500,6 +513,16 @@ watch(() => props.board?.id, () => {
 }
 .nx-index-new-inline {
   padding-top: 0;
+}
+/* 「悬浮」小钮（工单C）：收在区标题行右侧，与「＋」同一条基准线；命中区压到行高内，不另起一行。 */
+.nx-index-overlay-toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  min-height: 24px;
+  padding: 0 6px;
+  font-size: var(--nx-fs-2xs);
 }
 /* 大纲层级记号（工单G3）：有子节点的行在标题前点一枚极轻的「·」，不引新图标、不另立一套行形态。 */
 .nx-outline-mark {

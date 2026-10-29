@@ -1,14 +1,13 @@
 /**
- * 设定载体（M2 第一批的第二块板块）：世界书 ＋ 约束。
- * 它存在的理由很具体——运行时要给模型装「约束」「世界书」两块上下文，而文件服务只让插件读自己认领的目录；
+ * 设定载体（M2 第一批的第二块板块；协议 v1.1-A 起只剩 约束/）。
+ * 它存在的理由很具体——运行时要给模型装「约束」这块上下文，而文件服务只让插件读自己认领的目录；
  * 没有这块板块，运行时就只能空着手问模型「这本书的规矩是什么」。
- * 世界书这一个目录申请 rw（工单A2，作者批准的合同变更）：面板与模型从内核手里认领的两把只读工具
- * （pinax_worldbook_list / pinax_worldbook_read）取数，写走载体自有的 pinax_worldbook_save
- * （与小说的 pinax_chapter_save 同一条规矩：expectedRevision 乐观并发，先例在 next/carriers/novel/tools.mjs）。
- * 约束目录自工单E2 起也申请 rw：约束/ 直接进上下文信封的 rules 块，作者却只能去外部编辑器改——
+ * 协议 v1.1-A（作者 2026-10-28 裁定）：世界书拆去 pinax.carrier.worldbook（那条内容树独立成栏），
+ * 设定栏只留 约束/——一个载体＝竖条一格＝一棵纯粹的本域内容树。
+ * 约束目录自工单E2 起申请 rw：约束/ 直接进上下文信封的 rules/style 块，作者却只能去外部编辑器改——
  * 面板按构思速记的同一套模式（列表随手带回全文＋自有 save 带修订号）补上最小编辑面；
- * 两把新工具 pinax_rule_list / pinax_rule_save 是载体自有名字（内核只有 pinax_rule_write，不认领）。
- * 内核的 pinax_worldbook_write / pinax_rule_write 照旧不认领：写族闸把这两个目录的写入点名到自有工具上。
+ * 两把工具 pinax_rule_list / pinax_rule_save 是载体自有名字（内核只有 pinax_rule_write，不认领）。
+ * 内核的 pinax_rule_write 照旧不认领：写族闸把这个目录的写入点名到自有工具上。
  */
 export const SETTING_CARRIER_ID = 'pinax.carrier.setting'
 
@@ -16,41 +15,40 @@ export const SETTING_CARRIER = Object.freeze({
   spec: 'pinax-carrier@1',
   id: SETTING_CARRIER_ID,
   title: '设定',
-  version: '0.4.0',
+  version: '0.5.0',
   minKernel: '1',
   tier: 'carrier',
 
   primary: {
     projectKind: 'generic',
-    defaultPane: 'setting.entries',
+    defaultPane: 'setting.rules',
     contextProfile: 'setting-field'
   },
 
   dataDirs: Object.freeze({
-    entries: '世界书',
     constraints: '约束'
   }),
 
   panes: [
     { slot: 'left-dock', id: 'setting.board', title: '设定板', icon: 'library' },
-    { slot: 'center', id: 'setting.entries', title: '条目', icon: 'list' }
+    { slot: 'center', id: 'setting.rules', title: '约束', icon: 'list' }
   ],
 
-  capabilities: ['setting.entries', 'constraint.rules'],
+  capabilities: ['constraint.rules'],
   requires: [],
 
-  // 协议 P14 载体设置注册（工单A 第二步）：声明格式 [{ id, title }]（id 在本载体命名空间内唯一，
-  // title 是设置页目录项文案；分组由设置页固定为「载体」）。机制示例已由小说的「写作偏好」给出，
-  // 本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
+  // 协议 P14 载体设置注册：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
   settings: [],
-  tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save'],
+  tools: ['pinax_rule_list', 'pinax_rule_save'],
 
   context: {
-    providers: ['rules', 'style', 'worldbook'],
+    providers: ['rules', 'style'],
     budgetChars: 20000
   },
 
-  scopes: ['file:世界书:rw', 'file:约束:rw', 'agent:ask']
+  // agent:ask 是运行时调用载体工具的前置授权（next/kernel/scopeGrant.mjs:59）：缺了它，约束这一对
+  // 工具在运行时面上会被整组拒掉（原设定载体一直带着它）。与小说/资料同一口径。
+  scopes: ['file:约束:rw', 'agent:ask']
 })
 
 export default SETTING_CARRIER

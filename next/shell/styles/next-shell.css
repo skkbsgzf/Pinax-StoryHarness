@@ -21,6 +21,8 @@ body {
 }
 
 .next-shell {
+  /* 悬浮小工具窗的绝对定位以这一层为坐标系（协议 v1.1-C）：top:16px 即标题栏下 16px。 */
+  position: relative;
   --nx-section-gap: 18px;
   /* —— Next 字号刻度：老前端只 token 化了 --fs-sm(12)/--fs-base(14)，
      中间档（11/13/15/17/19）历史上都是裸 px，这里收进 --nx-* 命名刻度，
@@ -802,4 +804,107 @@ body {
     border-left: 0;
     border-top: 1px solid var(--hairline-soft);
   }
+}
+
+/* —— 悬浮小工具窗（协议 v1.1-C · 工单C）———————————————————————
+   宿主容器 FloatingWidget.vue 的形态全部在这里：载体只声明 overlay pane 与宽度，
+   定位/拖动/收起/位置记忆归宿主。z-index 高于编辑器（chrome 90 / overlay 180）、
+   低于统一二级页（popover 400 / modal 800）——取 --z-floating-dock（240）。
+   颜色、字号、圆角一律走 token；尺寸是布局 px（允许）。 */
+.nx-overlay-widget {
+  position: absolute;
+  top: 16px;
+  right: 24px;
+  z-index: var(--z-floating-dock);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 32px);
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+  overflow: hidden;
+}
+.nx-overlay-widget.is-dragging {
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--archive-ink) 24%, transparent);
+}
+.nx-overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--surface-workbench-muted);
+  color: var(--archive-ink);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.nx-overlay-widget.is-dragging .nx-overlay-head {
+  cursor: grabbing;
+}
+.nx-overlay-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--nx-fs-md);
+  font-weight: 500;
+}
+.nx-overlay-collapse {
+  flex: none;
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.nx-overlay-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  scrollbar-width: thin;
+}
+/* 收起态：右侧缘一枚小标签（竖排），点它展开。 */
+.nx-overlay-tab {
+  position: absolute;
+  right: 0;
+  top: 120px;
+  z-index: var(--z-floating-dock);
+  writing-mode: vertical-rl;
+  padding: 10px 4px;
+  border: 1px solid var(--hairline-soft);
+  border-right: 0;
+  border-radius: var(--radius-control) 0 0 var(--radius-control);
+  background: var(--surface-workbench-raised);
+  color: var(--archive-ink);
+  font-size: var(--nx-fs-2xs);
+  letter-spacing: 0.08em;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--archive-ink) 14%, transparent);
+}
+/* 迷你大纲列表：与索引窗同一套行词汇，点一行跳大纲编辑。 */
+.nx-overlay-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nx-overlay-empty {
+  margin: 0;
+  padding: 6px 4px;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
+}
+.nx-overlay-error {
+  margin: 0;
+  padding: 6px 4px;
+  color: var(--control-danger);
+  font-size: var(--fs-sm);
+  line-height: 1.6;
 }
