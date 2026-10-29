@@ -49,7 +49,6 @@ function emptyFrameworkView() {
     center: [],
     primary: null,
     carriers: [],
-    archive: [],
     skeletonDirs: [],
     ownedDirs: [],
     rejected: [{ pluginId: 'bad.carrier', error: { message: '槽位 "right" 是保留字' } }],
@@ -71,7 +70,6 @@ function carrierView() {
     left: [{ slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'book', pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true }],
     center: [{ slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true }],
     skeletonDirs: ['正文', '大纲', '世界书', '构思', '资料', '日志', '约束'],
-    archive: [{ dir: '旧稿', files: 3, readOnly: true, reason: '外来内容' }]
   }
 }
 
@@ -531,10 +529,9 @@ describe('Obsidian 三栏', () => {
 
     expect(wrapper.find('[data-pane-id="novel.editor"]').exists()).toBe(true)
     expect(wrapper.find('[data-pane-id="novel.shelf"]').exists()).toBe(false)
-    // 目录树与只读归档在索引窗那一栏，不在核心区。
+    // 目录树在索引窗那一栏，不在核心区（P18 后索引窗不再有「只读归档」死区）。
     expect(wrapper.find('.nx-index-window').text()).toContain('正文')
-    expect(wrapper.find('.nx-index-window').text()).toContain('旧稿')
-    expect(wrapper.find('.center').text()).not.toContain('旧稿')
+    expect(wrapper.find('.nx-index-window').text()).not.toContain('只读归档')
     wrapper.unmount()
   })
 

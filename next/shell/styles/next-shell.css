@@ -346,13 +346,9 @@ body {
   text-align: left;
   cursor: pointer;
 }
-.nx-tree-row.is-static {
-  cursor: default;
-}
+
 /* 骨架目录与归档是只读清单，不是可点的行：压暗一档，别让人以为是能打开的面板。 */
-.nx-tree-static {
-  color: var(--text-muted);
-}
+
 .nx-index-new {
   display: flex;
   align-items: center;
