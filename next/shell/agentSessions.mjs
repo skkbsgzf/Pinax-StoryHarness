@@ -28,6 +28,16 @@ export const MAX_SESSION_MESSAGES = 200
 /** 自动标题的截断长度（第一条 user 消息的前 N 字）。 */
 export const SESSION_TITLE_CHARS = 24
 
+/**
+ * 每条消息随身携带的运行过程轨迹上限（批次29）。
+ * 一问最多 5 类事件、每轮一条 model-round（轮数闸上限 3），32 条够装下正常一整轮，
+ * 再多就是有人在灌事件——多出来的丢最旧的，不让 localStorage 被一条消息撑爆。
+ */
+export const MAX_TRAIL_EVENTS = 32
+
+/** 运行过程事件只有这五种阶段（与 next/runtime/runnerAdvisor.mjs 的发射点一一对应）。 */
+export const TRAIL_STAGES = Object.freeze(['start', 'envelope', 'model-round', 'answer', 'failed'])
+
 /** 还没有人说话时的会话名。 */
 export const DEFAULT_SESSION_TITLE = '新会话'
 
@@ -80,10 +90,117 @@ function cleanList(value, limit = 40) {
     .map((item) => item.slice(0, 400))
 }
 
+/** 计数类字段：只留有限非负整数，别的一律回落 0（localStorage 里的值不可信）。 */
+function cleanCount(value) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : 0
+}
+
+/**
+ * 单条运行过程事件 → JSON 安全形状（批次29）。
+ *
+ * 逐阶段列白名单，不做「原样透传」：事件会随会话落进 localStorage，
+ * 未知阶段与多余字段一律丢掉，免得存储里长出一份影子 schema。
+ * 注意 failed 的断点字段叫 `atStage`——工单里写的是 `{ stage:'failed', code, stage }`（键重名），
+ * 实现按语义落成 `atStage`：「stage 说这是失败，atStage 说断在哪一步」。
+ */
+export function sanitizeTrailEvent(raw) {
+  if (!raw || typeof raw !== 'object' || !TRAIL_STAGES.includes(raw.stage)) return null
+  if (raw.stage === 'start') {
+    return { stage: 'start', questionChars: cleanCount(raw.questionChars) }
+  }
+  if (raw.stage === 'envelope') {
+    return {
+      stage: 'envelope',
+      taskType: cleanText(raw.taskType, 80),
+      profile: cleanText(raw.profile, 60),
+      blocks: cleanCount(raw.blocks),
+      chars: cleanCount(raw.chars),
+      missingKinds: cleanList(raw.missingKinds, 12)
+    }
+  }
+  if (raw.stage === 'model-round') {
+    return { stage: 'model-round', round: cleanCount(raw.round) }
+  }
+  if (raw.stage === 'answer') {
+    return {
+      stage: 'answer',
+      chars: cleanCount(raw.chars),
+      structured: raw.structured === true,
+      roundsUsed: cleanCount(raw.roundsUsed)
+    }
+  }
+  return {
+    stage: 'failed',
+    code: cleanText(raw.code, 80),
+    atStage: TRAIL_STAGES.includes(raw.atStage) && raw.atStage !== 'failed' ? raw.atStage : 'start'
+  }
+}
+
+/** 轨迹清洗：未知阶段丢弃，超上限丢最旧的（保留最近 32 条）。 */
+export function sanitizeTrail(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map(sanitizeTrailEvent)
+    .filter(Boolean)
+    .slice(-MAX_TRAIL_EVENTS)
+}
+
+/** 阶段的人类说法（断点行与折叠层共用一份，别处不另写一套词）。 */
+export function trailStageLabel(stage) {
+  const labels = {
+    start: '开始',
+    envelope: '组装上下文',
+    'model-round': '模型轮次',
+    answer: '回答'
+  }
+  return labels[stage] ?? '未知步骤'
+}
+
+/** 折叠层的一行：阶段名 ＋ 关键数字（没有数字的阶段就只留阶段名）。 */
+export function describeTrailEvent(event) {
+  if (!event || typeof event !== 'object') return null
+  if (event.stage === 'start') {
+    return { stage: event.stage, label: '开始', detail: `问题 ${event.questionChars} 字` }
+  }
+  if (event.stage === 'envelope') {
+    const profile = event.profile || event.taskType || '未标注档案'
+    return { stage: event.stage, label: '组装上下文', detail: `${event.blocks} 块 · ${event.chars} 字 · ${profile}` }
+  }
+  if (event.stage === 'model-round') {
+    return { stage: event.stage, label: `模型第 ${event.round} 轮`, detail: '' }
+  }
+  if (event.stage === 'answer') {
+    return {
+      stage: event.stage,
+      label: '回答',
+      detail: `${event.chars} 字 · ${event.structured ? '结构化' : '原文'} · ${event.roundsUsed} 轮`
+    }
+  }
+  if (event.stage === 'failed') {
+    return { stage: event.stage, label: '中断', detail: `${event.code || '未知错误'} · 断在${trailStageLabel(event.atStage)}` }
+  }
+  return null
+}
+
+/**
+ * busy 期那句阶段语：只认这几种真实事件，别的一律回空串让调用方保留固定语。
+ * 「没有事件时保持现有固定语」是工单的硬要求——不能为了好看编一句「正在深度思考」。
+ */
+export function describeRuntimeProgress(event) {
+  if (!event || typeof event !== 'object') return ''
+  if (event.stage === 'envelope') return `正在组装上下文（${event.blocks} 块 · ${event.chars} 字）`
+  if (event.stage === 'model-round') return `模型第 ${event.round} 轮`
+  if (event.stage === 'answer') return '正在整理回答'
+  if (event.stage === 'failed') return '这一步中断了'
+  return ''
+}
+
 /**
  * 消息 → JSON 安全形状。
  * 字段沿用 RuntimeDock 既有那份（{ id, role, text, findings, actions, failed, at }），
  * 批次27 只多两个界面字段：command（slash 命令徽章）与 notes（引用取不到的如实标注）。
+ * 批次29 多一个 trail：这一问真实的运行过程事件（封顶 32 条），刷新后答下方的「过程」折叠层还在。
  * 未知字段一律不带进存储——localStorage 里不该长出一份随版本漂移的影子 schema。
  */
 export function sanitizeSessionMessage(raw) {
@@ -107,6 +224,7 @@ export function sanitizeSessionMessage(raw) {
     actions: cleanList(raw.actions),
     notes: cleanList(raw.notes),
     command: typeof raw.command === 'string' ? cleanText(raw.command, 40) : '',
+    trail: sanitizeTrail(raw.trail),
     failed: raw.failed === true,
     at: cleanText(raw.at, 40)
   }
@@ -117,7 +235,8 @@ function copyMessage(message) {
     ...message,
     findings: message.findings.map((item) => ({ ...item })),
     actions: [...message.actions],
-    notes: [...message.notes]
+    notes: [...message.notes],
+    trail: message.trail.map((event) => ({ ...event }))
   }
 }
 

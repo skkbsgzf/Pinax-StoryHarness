@@ -4,7 +4,7 @@ import AppNext from '../shell/AppNext.vue'
 import ActivityRail from '../shell/ActivityRail.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
-import { IPC_CHANNELS, IPC_EVENT } from '../shell/ipcContract.mjs'
+import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
 import { resetPaneForms } from '../shell/paneForms.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 
@@ -160,7 +160,7 @@ describe('运行时栏', () => {
     await wrapper.find('.authoring-knowledge__send').trigger('click')
     await flushPromises()
 
-    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.runtimeAsk, { question: '这本书现在什么状态？' })
+    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.runtimeAsk, { question: '这本书现在什么状态？', askId: expect.any(String) })
     expect(wrapper.find('.authoring-knowledge__error').text()).toContain('未接模型运行器')
     expect(wrapper.text()).not.toContain('编造')
     // 工具面折在底部一个折叠层里，默认不摊开。
@@ -186,6 +186,176 @@ describe('运行时栏', () => {
     const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView() } })
     expect(wrapper.find('.authoring-knowledge__input-row textarea').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('渲染层未接主进程桥')
+    wrapper.unmount()
+  })
+
+  it('busy 期按真实事件换阶段语，答后轨迹折进「过程」折叠层（批次29）', async () => {
+    const handlers = new Map()
+    let settle = null
+    const response = new Promise((resolve) => { settle = resolve })
+    const bridge = {
+      request: vi.fn(async (channel) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        // runtimeAsk 先挂着：用例要在 busy 期一条条喂事件，最后才让回答落地。
+        if (channel === IPC_CHANNELS.runtimeAsk) return response
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      }),
+      onEvent: (channel, handler) => {
+        handlers.set(channel, handler)
+        return () => handlers.delete(channel)
+      },
+      channels: IPC_CHANNELS
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('开场怎么改？')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    const askCall = bridge.request.mock.calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)
+    expect(askCall).toBeTruthy()
+    const askId = askCall[1].askId
+    expect(typeof askId).toBe('string')
+    const emit = handlers.get(IPC_PUSH.runtimeAskEvent)
+    expect(typeof emit).toBe('function')
+
+    // 没有事件时保持老版的固定语。
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).toContain('正在核对项目资料')
+
+    // 上一轮晚到的事件（askId 对不上）不许串进这一问。
+    emit({ askId: 'ask-上一轮', event: { stage: 'model-round', round: 9 } })
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).toContain('正在核对项目资料')
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).not.toContain('模型第 9 轮')
+
+    emit({ askId, event: { stage: 'start', questionChars: 5 } })
+    emit({ askId, event: { stage: 'envelope', taskType: 'authoring.review.chapter', profile: 'writing-chapter', blocks: 6, chars: 18_240, missingKinds: [] } })
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).toContain('正在组装上下文（6 块 · 18240 字）')
+
+    emit({ askId, event: { stage: 'model-round', round: 1 } })
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).toContain('模型第 1 轮')
+
+    emit({ askId, event: { stage: 'answer', chars: 9, structured: true, roundsUsed: 1 } })
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).toContain('正在整理回答')
+
+    settle({ ok: true, value: { source: 'in-process-advisor', text: '建议把停摆的表提前。', askId } })
+    await flushPromises()
+
+    expect(wrapper.find('.authoring-knowledge__thinking').exists()).toBe(false)
+    const trail = wrapper.find('details.authoring-knowledge__trail')
+    expect(trail.exists()).toBe(true)
+    expect(trail.attributes('open')).toBeUndefined() // 默认收起：屏上只留问—答主线
+    expect(trail.find('summary').text()).toContain('过程')
+    expect(trail.text()).toContain('组装上下文')
+    expect(trail.text()).toContain('模型第 1 轮')
+    expect(trail.text()).toContain('6 块')
+    expect(trail.text()).toContain('回答')
+    wrapper.unmount()
+  })
+
+  it('两问同时在途：事件按 askId 分桶，各自只落回自己的回答（批次29）', async () => {
+    const handlers = new Map()
+    const deferred = []
+    const bridge = {
+      request: vi.fn(async (channel) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        if (channel === IPC_CHANNELS.runtimeAsk) {
+          return new Promise((resolve) => { deferred.push(resolve) })
+        }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      }),
+      onEvent: (channel, handler) => {
+        handlers.set(channel, handler)
+        return () => handlers.delete(channel)
+      },
+      channels: IPC_CHANNELS
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    const input = () => wrapper.find('.authoring-knowledge__input-row textarea')
+
+    // A 会话问一句（先挂着），再新开一个会话问第二句：两问同时在途。
+    await input().setValue('A 的问题')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    const askIdA = bridge.request.mock.calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1].askId
+
+    await wrapper.find('.authoring-knowledge__session-btn').trigger('click')
+    await wrapper.find('.authoring-knowledge__session-new').trigger('click')
+    // 弹层保持开着会盖住后面的点击路径：建完会话就收起（这里只关心事件分桶）。
+    await wrapper.find('.authoring-knowledge__session-btn').trigger('click')
+    await flushPromises()
+    await input().setValue('B 的问题')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    const askIdB = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1][1].askId
+
+    const emit = handlers.get(IPC_PUSH.runtimeAskEvent)
+    emit({ askId: askIdA, event: { stage: 'envelope', taskType: 'authoring.review.chapter', profile: 'writing-chapter', blocks: 3, chars: 100, missingKinds: [] } })
+    emit({ askId: askIdA, event: { stage: 'model-round', round: 1 } })
+    emit({ askId: askIdB, event: { stage: 'envelope', taskType: 'authoring.review.chapter', profile: 'writing-chapter', blocks: 7, chars: 900, missingKinds: [] } })
+    emit({ askId: askIdB, event: { stage: 'model-round', round: 2 } })
+
+    // A 先答（此刻作者看着 B）：轨迹必须回到 A 那条会话。
+    deferred[0]({ ok: true, value: { source: 'in-process-advisor', text: 'A 的回答', askId: askIdA } })
+    await flushPromises()
+    deferred[1]({ ok: true, value: { source: 'in-process-advisor', text: 'B 的回答', askId: askIdB } })
+    await flushPromises()
+
+    const bTrail = wrapper.find('details.authoring-knowledge__trail')
+    expect(bTrail.text()).toContain('7 块')
+    expect(bTrail.text()).toContain('模型第 2 轮')
+    expect(bTrail.text()).not.toContain('3 块')
+
+    // 切回 A 会话：它的折叠层只有自己那两笔，没有 B 的事件串进来。
+    await wrapper.find('.authoring-knowledge__session-btn').trigger('click')
+    const aRow = wrapper.findAll('.authoring-knowledge__session-item').find((row) => row.text().includes('A 的问题'))
+    await aRow.trigger('click')
+    await flushPromises()
+    const aTrail = wrapper.find('details.authoring-knowledge__trail')
+    expect(aTrail.text()).toContain('3 块')
+    expect(aTrail.text()).toContain('模型第 1 轮')
+    expect(aTrail.text()).not.toContain('7 块')
+    expect(aTrail.text()).not.toContain('模型第 2 轮')
+    wrapper.unmount()
+  })
+
+  it('失败：failed 事件让错误行带上「断在哪一步」，轨迹照样折在答下方（批次29）', async () => {
+    const handlers = new Map()
+    let settle = null
+    const response = new Promise((resolve) => { settle = resolve })
+    const bridge = {
+      request: vi.fn(async (channel) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        if (channel === IPC_CHANNELS.runtimeAsk) return response
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      }),
+      onEvent: (channel, handler) => {
+        handlers.set(channel, handler)
+        return () => handlers.delete(channel)
+      },
+      channels: IPC_CHANNELS
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('这章行不行？')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    const askId = bridge.request.mock.calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1].askId
+    const emit = handlers.get(IPC_PUSH.runtimeAskEvent)
+    emit({ askId, event: { stage: 'envelope', taskType: 'authoring.review.chapter', profile: 'writing-chapter', blocks: 6, chars: 0, missingKinds: [] } })
+    emit({ askId, event: { stage: 'model-round', round: 1 } })
+    emit({ askId, event: { stage: 'failed', code: 'AGENT_PROVIDER_CONFIG_INVALID', atStage: 'model-round' } })
+    settle({ ok: false, error: { code: 'PINAX_DEPENDENCY_UNMET', message: '未检测到可用模型。请先启动 pi-agent 任务面（serve:pinax）。' } })
+    await flushPromises()
+
+    const error = wrapper.find('.authoring-knowledge__error').text()
+    expect(error).toContain('未检测到可用模型')
+    expect(error).toContain('断在：模型第 1 轮')
+    const trail = wrapper.find('details.authoring-knowledge__trail')
+    expect(trail.exists()).toBe(true)
+    expect(trail.text()).toContain('AGENT_PROVIDER_CONFIG_INVALID')
     wrapper.unmount()
   })
 })

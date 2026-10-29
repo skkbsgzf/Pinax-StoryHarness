@@ -5,10 +5,15 @@ import {
   DEFAULT_SESSION_TITLE,
   MAX_SESSIONS,
   MAX_SESSION_MESSAGES,
+  MAX_TRAIL_EVENTS,
   SESSION_TITLE_CHARS,
   agentSessionStorageKey,
   createSessionStore,
-  sanitizeSessionMessage
+  describeRuntimeProgress,
+  describeTrailEvent,
+  sanitizeSessionMessage,
+  sanitizeTrail,
+  sanitizeTrailEvent
 } from '../shell/agentSessions.mjs'
 
 /**
@@ -209,7 +214,7 @@ test('持久化往返：多会话与 activeId 落盘，消息形状是 JSON 安�
 
   const firstMessage = saved.sessions[0].messages[0]
   assert.deepEqual(Object.keys(firstMessage).sort(),
-    ['actions', 'at', 'command', 'failed', 'findings', 'id', 'notes', 'role', 'text'],
+    ['actions', 'at', 'command', 'failed', 'findings', 'id', 'notes', 'role', 'text', 'trail'],
     '消息只落 schema 里那几个字段（未知字段不进存储）')
   assert.equal(firstMessage.command, '/资料')
   assert.equal(firstMessage.notes.length, 1)
@@ -266,8 +271,80 @@ test('消息清洗：角色必须是 user/agent，非字符串字段不进存储
     actions: ['ok'],
     notes: [],
     command: '',
+    trail: [],
     failed: false,
     at: ''
   })
   assert.equal(sanitizeSessionMessage({ role: 'user', failed: 'yes' }).failed, false, 'failed 只认布尔真值')
+})
+
+test('运行过程轨迹（批次29）：事件按白名单清洗、封顶 32 条、随消息持久化', () => {
+  // 白名单：只认五种阶段。链上不存在的子代理／hook 不许在这里长出假事件。
+  assert.equal(sanitizeTrailEvent({ stage: 'subagent', name: '研究员' }), null)
+  assert.equal(sanitizeTrailEvent(null), null)
+  assert.deepEqual(
+    sanitizeTrailEvent({
+      stage: 'envelope',
+      taskType: 'authoring.review.chapter',
+      profile: 'writing-chapter',
+      blocks: '6',
+      chars: 18_240,
+      missingKinds: ['outline', 42],
+      extra: 'drop'
+    }),
+    {
+      stage: 'envelope',
+      taskType: 'authoring.review.chapter',
+      profile: 'writing-chapter',
+      blocks: 6,
+      chars: 18_240,
+      missingKinds: ['outline']
+    },
+    '计数收成整数、未知字段不进存储'
+  )
+  assert.deepEqual(
+    sanitizeTrailEvent({ stage: 'failed', code: 'AGENT_PROVIDER_CONFIG_INVALID', atStage: 'model-round' }),
+    { stage: 'failed', code: 'AGENT_PROVIDER_CONFIG_INVALID', atStage: 'model-round' }
+  )
+  assert.equal(sanitizeTrailEvent({ stage: 'failed', atStage: 'failed' }).atStage, 'start', '断点只认前四步，failed 不能自己当断点')
+
+  const long = Array.from({ length: MAX_TRAIL_EVENTS + 8 }, (_item, index) => ({ stage: 'model-round', round: index + 1 }))
+  const capped = sanitizeTrail(long)
+  assert.equal(capped.length, MAX_TRAIL_EVENTS, `轨迹封顶 ${MAX_TRAIL_EVENTS} 条`)
+  assert.equal(capped[0].round, 9, '丢的是最旧的')
+  assert.equal(capped.at(-1).round, MAX_TRAIL_EVENTS + 8)
+
+  // 随消息落盘再读回来：轨迹还在、形状仍是固定字段（刷新后折叠层不会消失）。
+  const storage = memoryStorage()
+  const store = createSessionStore('D:/trail', { storage, now: stepClock() })
+  store.append({ role: 'user', text: '这一章怎么样？' })
+  store.append({
+    role: 'agent',
+    text: '节奏偏慢。',
+    trail: [
+      { stage: 'start', questionChars: 7 },
+      { stage: 'envelope', taskType: 'authoring.review.chapter', profile: 'writing-chapter', blocks: 6, chars: 18_240, missingKinds: [] },
+      { stage: 'model-round', round: 1 },
+      { stage: 'answer', chars: 5, structured: true, roundsUsed: 1 }
+    ]
+  })
+  const reopened = createSessionStore('D:/trail', { storage, now: stepClock() })
+  const trail = reopened.active().messages.at(-1).trail
+  assert.equal(trail.length, 4)
+  assert.deepEqual(trail.map((event) => event.stage), ['start', 'envelope', 'model-round', 'answer'])
+  assert.equal(trail[1].blocks, 6)
+  assert.equal(trail.at(-1).structured, true)
+
+  // 界面那两句：busy 期阶段语与折叠层一行，数字都来自事件本身。
+  assert.equal(describeRuntimeProgress({ stage: 'envelope', blocks: 6, chars: 18_240 }), '正在组装上下文（6 块 · 18240 字）')
+  assert.equal(describeRuntimeProgress({ stage: 'model-round', round: 2 }), '模型第 2 轮')
+  assert.equal(describeRuntimeProgress({ stage: 'answer' }), '正在整理回答')
+  assert.equal(describeRuntimeProgress({ stage: 'start', questionChars: 3 }), '', 'start 没有更好的话就回空串，让界面保留固定语')
+  assert.equal(describeRuntimeProgress(null), '')
+  assert.deepEqual(describeTrailEvent({ stage: 'failed', code: 'PINAX_DEPENDENCY_UNMET', atStage: 'model-round' }), {
+    stage: 'failed',
+    label: '中断',
+    detail: 'PINAX_DEPENDENCY_UNMET · 断在模型轮次'
+  })
+  assert.equal(describeTrailEvent({ stage: 'subagent' }), null)
 })

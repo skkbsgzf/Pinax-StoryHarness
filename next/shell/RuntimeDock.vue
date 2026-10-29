@@ -1,8 +1,15 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import AssistantDialog from './AssistantDialog.vue'
-import { IPC_CHANNELS } from './ipcContract.mjs'
-import { createSessionStore, formatClock } from './agentSessions.mjs'
+import { IPC_CHANNELS, IPC_PUSH } from './ipcContract.mjs'
+import {
+  MAX_TRAIL_EVENTS,
+  createSessionStore,
+  describeRuntimeProgress,
+  formatClock,
+  sanitizeTrailEvent,
+  trailStageLabel
+} from './agentSessions.mjs'
 import { resolveSlash, slashMessageFields } from './slashCommands.mjs'
 import { matchReference, parseRefs, referenceKindLabel, resolveRefs, withRefs } from './agentReferences.mjs'
 
@@ -20,6 +27,8 @@ import { matchReference, parseRefs, referenceKindLabel, resolveRefs, withRefs } 
  *      的 context.omit；命令徽章落在 user 那条消息上。omit 是既有能力，不在这里改内核。
  *   3) @ 引用：拆出 @《…》 → 走已有 runtimeToolCall 取摘要 → 拼进问题原文；取不到的如实标在消息流里。
  *   4) 提问：把问题送进 runtime:ask 通道、把回答排成会话、记住最后一轮以便重试。
+ *   5) 运行过程（批次29）：提问期间接主进程推来的真实阶段事件，busy 期换阶段语，
+ *      答完把整条轨迹随消息落进会话（答下方的「过程」折叠层），刷新后还在。
  * 工具面之类的开发者向事实折在对话框底部的折叠层里——老版就是这么处理的。
  */
 const props = defineProps({
@@ -56,6 +65,78 @@ const tools = computed(() => props.runtime.tools.map((tool) => ({ name: tool.nam
 
 /** 上一问的原文与 omit：重试要一模一样地再问一次（引用摘要已经拼在原文里了）。 */
 const lastQuestion = ref(null)
+
+/* —— 运行过程事件（批次29） ——
+ * 本轮提问的 askId 由渲染层生成、随载荷交上去：事件在回答之前就到，
+ * 只有自己先知道号，才认得出哪条事件属于「这次 busy 期」。上一轮晚到的事件对不上号就丢。
+ * 轨迹按 askId 分桶而不是只留一份：作者可以在 A 会话问完切到 B 再问，
+ * 两问同时在途时各自的轨迹不能互相污染（上一版的单份 liveTrail 会把 B 的事件记进 A 的回答里）。 */
+const DEFAULT_THINKING = '正在核对项目资料…'
+/** 在途提问的轨迹：askId → events[]；回答落地时取出并删掉这一桶。 */
+const pendingTrails = new Map()
+/** 当前显示的那一问（busy 期阶段语只跟最新开的那一问）。 */
+const liveTrail = ref([])
+const liveAskId = ref('')
+let askSeq = 0
+let unsubscribeAskEvents = null
+
+function onAskEvent(payload) {
+  const askId = String(payload?.askId ?? '')
+  const bucket = askId ? pendingTrails.get(askId) : null
+  if (!bucket) return
+  const event = sanitizeTrailEvent(payload?.event)
+  if (!event) return
+  bucket.push(event)
+  if (bucket.length > MAX_TRAIL_EVENTS) bucket.splice(0, bucket.length - MAX_TRAIL_EVENTS)
+  if (askId === liveAskId.value) liveTrail.value = bucket.slice()
+}
+
+function bindAskEvents(bridge) {
+  if (unsubscribeAskEvents) {
+    unsubscribeAskEvents()
+    unsubscribeAskEvents = null
+  }
+  unsubscribeAskEvents = typeof bridge?.onEvent === 'function'
+    ? bridge.onEvent(IPC_PUSH.runtimeAskEvent, onAskEvent)
+    : null
+}
+
+bindAskEvents(props.bridge)
+watch(() => props.bridge, (bridge) => bindAskEvents(bridge))
+onBeforeUnmount(() => {
+  if (unsubscribeAskEvents) unsubscribeAskEvents()
+  unsubscribeAskEvents = null
+})
+
+/** 开一问：新 askId（自带一个空轨迹桶）＋ 让阶段语跟着这一问走。 */
+function beginAsk() {
+  askSeq += 1
+  const askId = `ask-${Date.now().toString(36)}-${askSeq.toString(36)}`
+  pendingTrails.set(askId, [])
+  liveAskId.value = askId
+  liveTrail.value = []
+  return askId
+}
+
+/** 收一问：把这桶轨迹定格取走（之后同 askId 的晚到事件找不到桶，直接丢）。 */
+function finishAsk(askId) {
+  const trail = (pendingTrails.get(askId) ?? []).slice()
+  pendingTrails.delete(askId)
+  return trail
+}
+
+/** busy 期那句语：只按最新一条真实事件换，没有事件就保持老版的固定语。 */
+const thinkingText = computed(() => describeRuntimeProgress(liveTrail.value.at(-1)) || DEFAULT_THINKING)
+
+/** 断点的人类说法：模型轮次带上是第几轮，别的阶段直接用阶段名。 */
+function brokenStageText(trail, failed) {
+  if (!failed) return ''
+  if (failed.atStage === 'model-round') {
+    const lastRound = [...trail].reverse().find((event) => event.stage === 'model-round')?.round
+    if (lastRound) return `模型第 ${lastRound} 轮`
+  }
+  return trailStageLabel(failed.atStage)
+}
 
 /**
  * 在途请求计数：作者可以在 A 会话提问后切到 B 再问一句。
@@ -132,7 +213,8 @@ async function ask(input) {
 /** 真正发出去的那一下（重试也走这里）：只管请求与记录，忙态由调用方包住。 */
 async function runQuestion(question, omit = [], sessionId = null) {
   lastQuestion.value = { question, omit: Array.isArray(omit) ? [...omit] : [], sessionId }
-  const payload = { question }
+  const askId = beginAsk()
+  const payload = { question, askId }
   // omit 只在真的有条目时才进载荷：没有剪裁的提问保持老的 { question } 形状。
   if (lastQuestion.value.omit.length) payload.context = { omit: lastQuestion.value.omit }
 
@@ -143,6 +225,9 @@ async function runQuestion(question, omit = [], sessionId = null) {
     result = { ok: false, error: { message: String(error?.message || error) } }
   }
 
+  // 这一问的轨迹在回答落地时定格：之后同 askId 的晚到事件不再改动这条回答。
+  const trail = finishAsk(askId)
+
   if (result?.ok) {
     const value = result.value ?? {}
     const answer = value.result ?? null
@@ -152,15 +237,20 @@ async function runQuestion(question, omit = [], sessionId = null) {
       text: value.text ?? '',
       findings: (answer?.issues ?? []).filter((item) => item && typeof item.message === 'string'),
       actions: (answer?.action ?? []).filter((item) => typeof item === 'string'),
+      trail,
       at: formatClock(Date.now())
     }, sessionId)
     return
   }
+  // 失败：把「走到哪一步断的」写进错误那行（失败是给人看的，不能只说「内核拒绝了」）。
+  const broken = brokenStageText(trail, trail.find((event) => event.stage === 'failed'))
+  const message = result?.error?.message ?? '内核拒绝了这一问。'
   store.append({
     id: '',
     role: 'agent',
     failed: true,
-    text: result?.error?.message ?? '内核拒绝了这一问。',
+    text: broken ? `${message}（断在：${broken}）` : message,
+    trail,
     at: formatClock(Date.now())
   }, sessionId)
 }
@@ -199,6 +289,7 @@ function removeSession(id) {
       :busy="busy"
       :disabled="!canAsk"
       :title="runtime.title"
+      :thinking="thinkingText"
       :tools="tools"
       :sessions="sessions"
       :active-session-id="activeSessionId"

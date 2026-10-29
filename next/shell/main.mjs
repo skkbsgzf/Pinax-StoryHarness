@@ -10,7 +10,7 @@ import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneP
 import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
 import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
-import { IPC_CHANNELS, IPC_EVENT, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
+import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 
@@ -324,6 +324,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     },
     // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
     knowledgeService,
+    // 运行过程事件（批次29）：runtimeAsk 期间把运行器的真实阶段推给渲染层。
+    // 走既有推送机制（sendToRenderer → webContents.send），通道名在 ipcContract 里；窗口不在时静默丢弃。
+    emitRuntimeEvent: (payload) => sendToRenderer(IPC_PUSH.runtimeAskEvent, payload),
     // 收口包⑤：渲染层的 prefs:theme 通知——事件不是请求，只重设原生窗控浮层。
     onThemeChanged: async (theme) => {
       updateTitleBarOverlay({ theme, zoom: currentUiZoom })

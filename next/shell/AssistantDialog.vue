@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { SLASH_COMMANDS, isSlashDraft } from './slashCommands.mjs'
 import { REFERENCE_KIND_ORDER, referenceKindLabel } from './agentReferences.mjs'
-import { formatRelativeTime } from './agentSessions.mjs'
+import { formatRelativeTime, describeTrailEvent } from './agentSessions.mjs'
 
 /**
  * Agent 对话框：从老前端的作品资料助手抽出来的纯会话面。
@@ -30,6 +30,8 @@ const props = defineProps({
   /** 会话面：[{ id, role:'user'|'agent', text, findings:[], actions:[], command, notes:[], failed:boolean, at:string }] */
   messages: { type: Array, default: () => [] },
   busy: { type: Boolean, default: false },
+  /** busy 期那一行字：外壳按最新一条真实运行事件换（没有事件时是固定语）。 */
+  thinking: { type: String, default: '正在核对项目资料…' },
   /** 没有桥（渲染层没接主进程）时为真：输入框禁用。 */
   disabled: { type: Boolean, default: false },
   title: { type: String, default: 'Pi-Agent' },
@@ -230,6 +232,11 @@ function relativeTime(timestamp) {
   return formatRelativeTime(timestamp, Date.now())
 }
 
+/** 答下方「过程」折叠层的数据：每条事件 → 一行（阶段＋关键数字），认不出的阶段跳过。 */
+function trailRows(trail) {
+  return (Array.isArray(trail) ? trail : []).map(describeTrailEvent).filter(Boolean)
+}
+
 /** Esc：会话弹层先收（统一二级页开着时让位，照 FloatingWidget 的 suspendEsc）。 */
 function onDocumentKeydown(event) {
   if (event.key !== 'Escape' || props.suspendEsc) return
@@ -384,11 +391,22 @@ onBeforeUnmount(() => {
                 </ul>
               </div>
             </template>
+            <!-- 批次29：这一问真实的运行过程（阶段＋数字）。开发者向的事实，默认收起——
+                 屏上只留问—答主线，要看过程就展开。失败的回答也带这条轨迹（断在哪一步）。 -->
+            <details v-if="message.trail?.length" class="authoring-knowledge__trail">
+              <summary><WorkbenchIcon name="chevron-down" :size="12" />过程（{{ message.trail.length }} 步）</summary>
+              <ul class="authoring-knowledge__trail-list">
+                <li v-for="(step, index) in trailRows(message.trail)" :key="`t-${index}`" class="authoring-knowledge__trail-row">
+                  <span class="authoring-knowledge__trail-stage">{{ step.label }}</span>
+                  <span v-if="step.detail" class="authoring-knowledge__trail-detail">{{ step.detail }}</span>
+                </li>
+              </ul>
+            </details>
           </article>
         </template>
 
         <div v-if="busy" class="authoring-knowledge__thinking" role="status">
-          <span aria-hidden="true"></span>正在核对项目资料…
+          <span aria-hidden="true"></span>{{ thinking }}
         </div>
       </div>
     </div>
@@ -511,6 +529,17 @@ onBeforeUnmount(() => {
 .authoring-knowledge__findings-list { margin: 0; padding-left: 18px; font-size: var(--nx-fs-md); line-height: 1.7; color: var(--archive-ink); }
 .authoring-knowledge__findings-sev { margin-right: 5px; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
 .authoring-knowledge__actions { margin-top: 12px; }
+
+/* 批次29：运行过程轨迹（答下方的「过程」折叠层）。开发者向的事实，默认收起；
+   字号/圆角一律走刻度 token（visual-contract 受管）。 */
+.authoring-knowledge__trail { margin-top: 14px; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__trail summary { display: flex; min-height: 26px; align-items: center; gap: 6px; list-style: none; cursor: pointer; }
+.authoring-knowledge__trail summary::-webkit-details-marker { display: none; }
+.authoring-knowledge__trail[open] summary svg { transform: rotate(180deg); }
+.authoring-knowledge__trail-list { display: grid; gap: 2px; margin: 4px 0 0; padding-left: 4px; list-style: none; font-size: var(--nx-fs-2xs); line-height: 1.6; }
+.authoring-knowledge__trail-row { display: flex; gap: 8px; }
+.authoring-knowledge__trail-stage { min-width: 88px; flex: none; color: var(--text-secondary); }
+.authoring-knowledge__trail-detail { color: var(--text-muted); }
 </style>
 
 <style scoped>

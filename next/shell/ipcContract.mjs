@@ -72,6 +72,19 @@ export const IPC_EVENT = Object.freeze({
 
 export const IPC_EVENTS = Object.freeze(Object.values(IPC_EVENT))
 
+/**
+ * 运行过程事件推送通道（批次29）：主进程 → 渲染层，payload `{ askId, event }`。
+ *
+ * 名字由工单钉死为 `pinax:agent:runtime:ask-event`——它没有 `event:` 这一段，
+ * 所以不能进 IPC_EVENT（shell-contract 断言那张表里的每一个都以 `pinax:agent:event:` 开头）。
+ * preload 的事件白名单同时取 IPC_EVENTS 与这张表，所以渲染层不需要第二条订阅机制。
+ */
+export const IPC_PUSH = Object.freeze({
+  runtimeAskEvent: 'pinax:agent:runtime:ask-event'
+})
+
+export const IPC_PUSH_EVENTS = Object.freeze(Object.values(IPC_PUSH))
+
 const SLIM_MAX_DEPTH = 8
 
 function pruneValue(value, depth) {
@@ -220,9 +233,17 @@ export function shellView(session) {
  * deps 扩展（批次26 导出）：
  *   exportFile       —— ({ content, format, title, html }) => { ok:{canceled|path…} }：主进程弹系统「另存为」
  *                       再落盘（next/shell/exportService）。不注入时 document:export 如实报缺，不假装导出过。
+ * deps 扩展（批次29 运行过程事件）：
+ *   emitRuntimeEvent —— ({ askId, event }) => void：runtimeAsk 执行期间把运行器的真实阶段事件推给渲染层
+ *                       （主进程：webContents.send(IPC_PUSH.runtimeAskEvent, payload)）。
+ *                       不注入时只算 askId、不发事件（进程内单测与验收照旧，两参调用面不变）。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null, exportFile = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
+  // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
+  // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
+  let askSeq = 0
+  const nextAskId = () => `ask-${Date.now().toString(36)}-${(++askSeq).toString(36)}`
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
   async function notifyProjectOpened(result) {
@@ -295,8 +316,18 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         if (result.ok) await notifyProjectOpened(result)
         return result
       }
-      case IPC_CHANNELS.runtimeAsk:
-        return session.runtime ? session.runtime.ask(input.question, input.context ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
+      case IPC_CHANNELS.runtimeAsk: {
+        if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')
+        const requestedAskId = typeof input.askId === 'string' ? input.askId.trim().slice(0, 80) : ''
+        const askId = requestedAskId || nextAskId()
+        const onEvent = typeof emitRuntimeEvent === 'function'
+          ? (event) => emitRuntimeEvent({ askId, event })
+          : null
+        const result = await session.runtime.ask(input.question, input.context ?? {}, onEvent ? { onEvent } : {})
+        // askId 随回执回去：渲染层据此把「本次 busy 期」的事件串到这一条回答上（晚到的事件对不上号就丢）。
+        if (result?.ok) return { ...result, value: { ...(result.value ?? {}), askId } }
+        return result
+      }
       case IPC_CHANNELS.runtimeToolCall:
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
       case IPC_CHANNELS.runtimePropose:

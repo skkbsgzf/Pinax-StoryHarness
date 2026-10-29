@@ -2,7 +2,7 @@ import { runAdvisorAgent } from '../../server/services/advisorAgentRunner.js'
 import { createAdvisorTaskResponse } from '../../server/services/advisorTaskService.js'
 import { collectAgentEnvelopeSourceRefs } from '../../shared/agentContextContract.js'
 import { createModelRoundGuard } from '../../shared/modelLoopGuard.js'
-import { fail } from '../kernel/errors.mjs'
+import { fail, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { buildRuntimeEnvelope } from './contextProfiles.mjs'
 
 /**
@@ -16,15 +16,35 @@ import { buildRuntimeEnvelope } from './contextProfiles.mjs'
 export const ADVISOR_RUNNER_SOURCE = 'in-process-advisor'
 const DEFAULT_TIMEOUT_MS = 60_000
 
+/**
+ * 运行过程事件（批次29）：这一层的真实节点，纯数据 JSON。
+ *   start       ── 提问进了运行器（questionChars 是原文长度）
+ *   envelope    ── 上下文信封组装完（块数／字数／缺了哪几类素材）
+ *   model-round ── roundGuard 的每一次真实轮（round 是第几轮）
+ *   answer      ── 回答成形（字数、是否解析成结构化、用了几轮）
+ *   failed      ── 断在哪一步（code 是上游错误码，atStage 是断点所在阶段）
+ * 边界（诚实）：这条 in-process 链上没有子代理、没有 hook、也没有流式 token，
+ * 所以这里不造那三类事件——事件粒度到「轮」为止。
+ *
+ * 事件回调是旁路：回调抛错只记 warning，绝不打断提问本身（见 createEventEmitter）。
+ * 事件全部在这一层发，老线（server/services/advisorAgentRunner.js）一个字节都不动。
+ */
 export function createAdvisorRunner({
   runAgent = runAdvisorAgent,
   buildEnvelope = buildRuntimeEnvelope,
-  timeoutMs = DEFAULT_TIMEOUT_MS
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  onEvent = null
 } = {}) {
-  return async function advisorRunner({ question, context = {}, runtime } = {}) {
+  return async function advisorRunner({ question, context = {}, runtime, onEvent: perAskEvent = null } = {}) {
+    // 单次提问的事件口优先：外壳每一问都要带自己的 askId，不能靠 runner 创建时绑死的那一个。
+    const emit = createEventEmitter(typeof perAskEvent === 'function' ? perAskEvent : onEvent)
+    emit({ stage: 'start', questionChars: String(question ?? '').length })
+
     const sources = runtime?.contextSources?.() ?? {}
     if (!sources.registry || !sources.view || !sources.fileService) {
-      return fail('INVALID_INPUT', '运行时当前没有打开项目：没有板块提供的素材块，上下文信封无从组装。请先到「打开项目」选一个含 .pinax 的文件夹。')
+      const missingProject = '运行时当前没有打开项目：没有板块提供的素材块，上下文信封无从组装。请先到「打开项目」选一个含 .pinax 的文件夹。'
+      emit({ stage: 'failed', code: NEXT_ERROR_CODES.INVALID_INPUT, atStage: 'start' })
+      return fail('INVALID_INPUT', missingProject)
     }
     const built = await buildEnvelope({
       registry: sources.registry,
@@ -33,11 +53,24 @@ export function createAdvisorRunner({
       question,
       context
     })
-    if (!built.ok) return built
+    if (!built.ok) {
+      // 信封没组装出来：断点在「组装上下文」，code 用内核那条真实错误码。
+      emit({ stage: 'failed', code: String(built.error?.code ?? 'PINAX_DEPENDENCY_UNMET'), atStage: 'envelope' })
+      return built
+    }
     const payload = built.value
+    emit({
+      stage: 'envelope',
+      taskType: payload.taskType,
+      profile: payload.profile ?? null,
+      blocks: Array.isArray(payload.envelope?.blocks) ? payload.envelope.blocks.length : 0,
+      chars: Number(payload.envelope?.budget?.usedChars) || 0,
+      missingKinds: Array.isArray(payload.missingKinds) ? [...payload.missingKinds] : []
+    })
 
     // 一次提问＝一个轮数闸：内核里的思考回合、语义修复重跑都计在同一条链上（与 advisor 路由同口径）。
-    const roundGuard = createModelRoundGuard()
+    // 只包一层 acquire：每一次真实轮都发一条 model-round（超限那一次会抛，不算成功轮）。
+    const roundGuard = withRoundEvents(createModelRoundGuard(), (round) => emit({ stage: 'model-round', round }))
     let run
     try {
       run = await withTimeout(runAgent({
@@ -48,7 +81,13 @@ export function createAdvisorRunner({
         taskMeta: { taskType: payload.taskType, target: payload.envelope.target, options: {}, roundGuard }
       }), timeoutMs)
     } catch (error) {
-      return mapRunnerFailure(error, payload)
+      const mapped = mapRunnerFailure(error, payload)
+      emit({
+        stage: 'failed',
+        code: String(error?.code || mapped.error?.code || 'PINAX_RUNNER_FAILED'),
+        atStage: roundGuard.used > 0 ? 'model-round' : 'envelope'
+      })
+      return mapped
     }
 
     const meta = {
@@ -61,15 +100,21 @@ export function createAdvisorRunner({
       contextWarnings: payload.warnings
     }
     let advice = String(run?.advice ?? '')
+    const rawAdvice = advice
     let result = null
+    let structured = false
     try {
       const response = createAdvisorTaskResponse({ taskType: payload.taskType, advice, target: payload.envelope.target, meta })
       advice = response.advice
       result = response.result
+      // structured＝这一层真的把模型原话解析成了结构化审稿：解析成功时 advice 已被换成 result.summary，
+      // 解析不出来时 formatAdvice 原样回吐那段字（两者逐字相同）。不拿「没抛错」冒充「解析成功」。
+      structured = Boolean(result) && String(advice).trim() !== rawAdvice.trim()
     } catch {
       // 解析不了就原样给作者看模型返回的那段字，同时把「没解析成结构化结果」记在 meta 里，不假装成功。
       meta.resultParsing = 'advice 未能转成结构化结果，已按原文返回'
     }
+    emit({ stage: 'answer', chars: String(advice).length, structured, roundsUsed: roundGuard.used })
     return {
       ok: true,
       source: ADVISOR_RUNNER_SOURCE,
@@ -112,4 +157,41 @@ function withTimeout(promise, ms) {
       (error) => { clearTimeout(timer); reject(error) }
     )
   })
+}
+
+/**
+ * 事件回调的旁路包装：回调同步抛错、返回 rejected Promise，都只留一条 warning。
+ * 事件是给人看的过程，不是提问的一部分——它坏了，回答还得照常出来。
+ */
+function createEventEmitter(onEvent) {
+  if (typeof onEvent !== 'function') return () => {}
+  const warn = (error) => {
+    // eslint-disable-next-line no-console -- 主进程/运行时没有渲染层可报，事件回调失败必须留痕
+    console.warn('[pinax-next] 运行器事件回调失败：', error?.message ?? error)
+  }
+  return (event) => {
+    try {
+      const returned = onEvent({ ...event })
+      if (returned && typeof returned.then === 'function') returned.then(null, warn)
+    } catch (error) {
+      warn(error)
+    }
+  }
+}
+
+/**
+ * 轮数闸的事件壳：接口（used／limit／acquire）与 createModelRoundGuard 逐字一致，
+ * 只是每次 acquire 成功后把「第几轮」报出去——超限那一次会抛 MODEL_ROUND_LIMIT_EXCEEDED，
+ * 它不算一次真实轮，所以不发事件。
+ */
+function withRoundEvents(guard, onRound) {
+  return {
+    get used() { return guard.used },
+    get limit() { return guard.limit },
+    acquire(scope = 'model') {
+      const round = guard.acquire(scope)
+      onRound(round)
+      return round
+    }
+  }
 }

@@ -97,16 +97,21 @@ export function createAgentRuntime(options = {}) {
      *   没有 runner 但显式给了 advisorBaseUrl → 走既有 pinax_agent_ask（HTTP 自调用，后续要拆）；
      *   两者都没有 → 如实报 DEPENDENCY_UNMET，绝不编一段回答冒充模型。
      * runner 返回 {ok:false, error} 的失败信封一律原样透传（内核那句「未检测到可用模型…」必须能被作者看到）。
+     *
+     * 第三个参数是运行过程事件口（批次29）：`ask(question, context, { onEvent })`。
+     * 单列第三参而不是塞进 context，是为了不弄脏上下文契约——context 会进信封组装（omit／chapterIndex…），
+     * 而 onEvent 是回调，不该被当成上下文块的选择依据。前两参的调用面一字未动。
      */
-    async ask(question, context = {}) {
+    async ask(question, context = {}, options = {}) {
       const text = String(question || '').trim()
       if (!text) return fail('INVALID_INPUT', '提问内容不能为空')
       const grant = canPerform(grants, { type: 'agent', action: 'ask' })
       if (!grant.ok) return grant
       if (typeof runner === 'function') {
+        const onEvent = typeof options?.onEvent === 'function' ? options.onEvent : null
         let answered = null
         try {
-          answered = await runner({ question: text, context, runtime })
+          answered = await runner({ question: text, context, runtime, onEvent })
         } catch (error) {
           return fail('IO_FAILED', `运行时执行失败：${String(error?.message || error)}`, { code: error?.code ?? NEXT_ERROR_CODES.IO_FAILED })
         }
