@@ -24,6 +24,14 @@ import { nextEntriesView, readEntriesView, writeEntriesView } from './entriesVie
  * 工单B：小说栏再纯粹化——只渲染章节树；提案区迁统一二级页（设置 → 文档 → 提案审阅）。
  * 卷→章两级：正文/ 下的一级子目录＝卷（不可点的分区标题），卷下是章行；没有子目录时
  * 与旧的平铺列表一模一样（大梦的真实数据就是平铺的）。
+ *
+ * 批次33（作者 2026-10-30 裁定「正常的 IDE 是怎么设计的，你就怎么设计」）：这一栏按 IDE 的
+ * 文件树收一遍——
+ *   1. 行＝名字：行首的「1. 」数字前缀全拆（章节与大纲都一样），顺序由文件名与排序自明；
+ *      「第 N 版」「N 字」从可见 meta 退到行的 title（悬停才出现，IDE 的 hover 同一个道理）；
+ *   2. 动作 hover 显形：行尾历史钮默认不占视觉，hover／键盘聚焦这一行才显形（命中区始终在）；
+ *   3. 新建只留区标题行右侧一枚 hover 显形的「＋」，点开是临时输入行——Enter 建档、
+ *      Esc／失焦取消（常驻的「新标题＋新建」输入排不再占一行）。
  */
 const props = defineProps({
   /** 当前板块（一个载体）：树从哪来、标题叫什么都在这块板上。 */
@@ -36,8 +44,6 @@ const props = defineProps({
   projectRoot: { type: String, default: '' }
 })
 const emit = defineEmits(['collapse', 'history', 'overlay', 'context-menu'])
-
-const newTitle = ref('')
 
 /**
  * 协议 v1.2 P19：索引窗树行的右键也是「打开方式」入口（统一二级页目录项后续批同法）。
@@ -134,9 +140,6 @@ const isRuleOpen = (item) => props.data.selection?.type === 'rule' && props.data
 const isDocumentOpen = (item) => props.data.selection?.type === 'document' && props.data.selection.item?.file === item.file
 const isScriptOpen = (item) => props.data.selection?.type === 'script' && props.data.selection.item?.file === item.file
 
-/** 章节序号：工具给的全局 index（拆分前就是它）；缺 index 时退回组内位置，不让行文空着。 */
-const chapterNumber = (item, localIndex) => (Number.isSafeInteger(item?.index) ? item.index + 1 : localIndex + 1)
-
 /** 卷→章两级（工单B）：useBoardData 组好组，这里只负责画；没有 groups 时退回平铺列表。 */
 const chapterGroups = computed(() => {
   const groups = props.data.chapterGroups
@@ -180,94 +183,60 @@ function clipTableSummary(value) {
   return text.length > TABLE_SUMMARY_CHARS ? `${text.slice(0, TABLE_SUMMARY_CHARS)}…` : text
 }
 
-async function createChapter() {
-  const title = newTitle.value.trim()
-  if (!title) return
-  newTitle.value = ''
-  await props.data.createChapter(title)
-}
-
-async function createDocument() {
-  const title = newTitle.value.trim()
-  if (!title) return
-  newTitle.value = ''
-  await props.data.createDocument(title)
-}
-
-/** 剧本（批次26）：与资料同一个新建形态——标题行＋新建钮。 */
-async function createScript() {
-  const title = newTitle.value.trim()
-  if (!title) return
-  newTitle.value = ''
-  await props.data.createScript(title)
+/**
+ * 行 title（批次33 · 索引窗 IDE 化）：「第 N 版」「N 字」从可见 meta 退到行 tooltip——
+ * 顺序由文件名与排序自明，版本与字数要问的时候悬停一下就有（IDE 的 hover 提示同一个道理）。
+ * 只拼这条数据真的有的字段：章节列表不带字数，就不编一个 0 出来。
+ */
+function rowHint(item) {
+  const parts = []
+  const file = String(item?.file ?? item?.path ?? '').trim()
+  if (file) parts.push(file)
+  if (Number.isFinite(Number(item?.revision))) parts.push(`第 ${item.revision} 版`)
+  const chars = item?.totalChars ?? item?.chars
+  if (Number.isFinite(Number(chars))) parts.push(`${chars} 字`)
+  if (item?.contract === false) parts.push('未建档')
+  return parts.join(' · ')
 }
 
 /**
- * 构思／约束的新建入口（工单H1）：面板尾部那行常驻输入收进对应区标题行右侧的「＋」。
- * 点开才在区顶出现输入行（照「新章标题」的 .nx-index-new 形态）：失焦／Enter 提交，Esc 收起。
- * 还没有条目时也能新建——入口常驻在区标题上，不靠空态里的按钮。
+ * 新建入口（批次33 · IDE 化）：常驻的「新标题＋新建」输入排全拆，改成区标题行右侧一枚
+ * hover 显形「＋」（照批次31 大纲那枚 outline-append-node 的先例）。点开才在区顶出现一行
+ * 临时输入：Enter 建档、Esc 或失焦取消（都不建档）。「先起名再建档」这条边界不变。
  */
-const newNoteOpen = ref(false)
-const newNoteTitle = ref('')
-const newNoteInput = ref(null)
-const newRuleOpen = ref(false)
-const newRuleTitle = ref('')
-const newRuleInput = ref(null)
+const newItem = ref(null)
+const newItemInput = ref(null)
 
-async function toggleNewNote() {
-  if (newNoteOpen.value) {
-    // 输入行开着时再点「＋」＝提交（mousedown.prevent 挡住 blur，避免先提交再重开）。
-    await submitNewNote()
+function toggleNewItem(kind) {
+  if (newItem.value?.kind === kind) {
+    closeNewItem()
     return
   }
-  newNoteOpen.value = true
-  newNoteTitle.value = ''
-  await nextTick()
-  newNoteInput.value?.focus()
+  newItem.value = { kind, title: '' }
+  void nextTick(() => newItemInput.value?.focus())
 }
 
-function closeNewNote() {
-  newNoteOpen.value = false
-  newNoteTitle.value = ''
+function closeNewItem() {
+  newItem.value = null
 }
 
-async function submitNewNote() {
-  const title = newNoteTitle.value.trim()
-  closeNewNote()
+async function submitNewItem() {
+  const draft = newItem.value
+  if (!draft) return
+  const title = String(draft.title ?? '').trim()
+  closeNewItem()
   if (!title) return
-  await props.data.createNote(title)
-}
-
-async function toggleNewRule() {
-  if (newRuleOpen.value) {
-    // 输入行开着时再点「＋」＝提交（mousedown.prevent 挡住 blur，避免先提交再重开）。
-    await submitNewRule()
-    return
-  }
-  newRuleOpen.value = true
-  newRuleTitle.value = ''
-  await nextTick()
-  newRuleInput.value?.focus()
-}
-
-function closeNewRule() {
-  newRuleOpen.value = false
-  newRuleTitle.value = ''
-}
-
-async function submitNewRule() {
-  const title = newRuleTitle.value.trim()
-  closeNewRule()
-  if (!title) return
-  await props.data.createRule(title)
+  if (draft.kind === 'chapters') await props.data.createChapter(title)
+  else if (draft.kind === 'documents') await props.data.createDocument(title)
+  else if (draft.kind === 'scripts') await props.data.createScript(title)
+  else if (draft.kind === 'notes') await props.data.createNote(title)
+  else if (draft.kind === 'rules') await props.data.createRule(title)
 }
 
 // 换板＝换树：目录窗自己负责把这一板的东西列出来（核心区不替它列），且只列本载体那一棵。
 // 协议 v1.1-A：小说板不再顺手取大纲／构思／世界书——那些是别的栏的树。
 watch(() => props.board?.id, () => {
-  newTitle.value = ''
-  closeNewNote()
-  closeNewRule()
+  closeNewItem()
   if (treeKind.value === 'chapters') {
     void props.data.loadChapters()
   } else if (treeKind.value === 'outline') {
@@ -308,26 +277,49 @@ watch(() => props.board?.id, () => {
 
       <!-- 小说（协议 v1.1-A：这一栏只有正文一棵树；提案审阅已迁统一二级页，工单B1） -->
       <template v-if="treeKind === 'chapters'">
-        <div class="nx-index-new">
-          <input v-model="newTitle" class="nx-field is-tiny" placeholder="新章标题" @keydown.enter.prevent="createChapter">
-          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newTitle.trim()" @click="createChapter">新建</button>
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">{{ treeDir }}</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="index-new-toggle"
+            aria-label="新建章节"
+            :aria-expanded="(newItem?.kind === 'chapters').toString()"
+            v-workbench-tooltip="{ text: '新建章节', side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewItem('chapters')"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
         </div>
-        <p class="workspace-nav-section">{{ treeDir }}</p>
+        <div v-if="newItem?.kind === 'chapters'" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newItemInput"
+            v-model="newItem.title"
+            class="nx-field is-tiny"
+            data-test="index-new-input"
+            placeholder="新章节标题"
+            aria-label="新章节标题"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
+          >
+        </div>
         <!-- 卷→章（工单B）：有子目录时先出卷标题（不可点），卷下是章行；平铺时只有一个无名组。 -->
         <template v-for="(group, groupIndex) in chapterGroups" :key="group.name || `flat-${groupIndex}`">
           <p v-if="group.name" class="workspace-nav-section nx-volume" data-test="chapter-volume">{{ group.name }}</p>
           <ul class="nx-tree">
-            <li v-for="(item, localIndex) in group.chapters" :key="item.file" class="nx-tree-line">
+            <li v-for="item in group.chapters" :key="item.file" class="nx-tree-line">
               <button
                 type="button"
                 class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
                 :class="{ 'is-active': isChapterOpen(item) }"
                 :aria-current="isChapterOpen(item) ? 'page' : null"
+                :title="rowHint(item)"
                 @click="data.openChapter(item)"
                 @contextmenu.prevent.stop="onRowContextMenu"
               >
-                <span class="workspace-nav-label">{{ chapterNumber(item, localIndex) }}. {{ item.title }}</span>
-                <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
+                <span class="workspace-nav-label">{{ item.title }}</span>
               </button>
               <button
                 type="button"
@@ -386,7 +378,7 @@ watch(() => props.board?.id, () => {
               @click="data.selectOutlineNode(index)"
               @contextmenu.prevent.stop="openOutlineNodeMenu($event, index)"
             >
-              <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
+              <span class="workspace-nav-label">{{ node.title }}</span>
             </button>
             <button
               type="button"
@@ -412,32 +404,34 @@ watch(() => props.board?.id, () => {
 
       <!-- 构思（协议 v1.1-A：独立一栏）。行可点开——正文随 pinax_notes_list 一起回来，
            点击只换核心区的面板，不再发第二次读；目录还没写就给一行说明，不当成错误。
-           新建（工单H1）：入口是区标题右侧的「＋」，点开才在区顶出现输入行（失焦／Enter 提交，Esc 收起）。 -->
+           新建（批次33）：区标题右侧 hover 显形的「＋」，点开才出现临时输入行（Enter 建档，Esc／失焦取消）。 -->
       <template v-else-if="treeKind === 'notes'">
         <div class="nx-index-section-head">
           <p class="workspace-nav-section">{{ treeDir }}</p>
           <button
             type="button"
             class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="index-new-toggle"
             aria-label="新建构思"
-            :aria-expanded="newNoteOpen.toString()"
+            :aria-expanded="(newItem?.kind === 'notes').toString()"
             v-workbench-tooltip="{ text: '新建构思', side: 'left' }"
             @mousedown.prevent
-            @click="toggleNewNote"
+            @click="toggleNewItem('notes')"
           >
             <WorkbenchIcon name="plus" :size="14" />
           </button>
         </div>
-        <div v-if="newNoteOpen" class="nx-index-new nx-index-new-inline">
+        <div v-if="newItem?.kind === 'notes'" class="nx-index-new nx-index-new-inline">
           <input
-            ref="newNoteInput"
-            v-model="newNoteTitle"
+            ref="newItemInput"
+            v-model="newItem.title"
             class="nx-field is-tiny"
+            data-test="index-new-input"
             placeholder="新构思标题"
             aria-label="新构思标题"
-            @keydown.enter.prevent="submitNewNote"
-            @keydown.esc.prevent="closeNewNote"
-            @blur="submitNewNote"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
           >
         </div>
         <ul class="nx-tree">
@@ -447,11 +441,11 @@ watch(() => props.board?.id, () => {
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
               :class="{ 'is-active': isNoteOpen(item) }"
               :aria-current="isNoteOpen(item) ? 'page' : null"
+              :title="rowHint(item)"
               @click="data.openNote(item)"
               @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.title }}</span>
-              <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
             </button>
             <button
               type="button"
@@ -521,11 +515,11 @@ watch(() => props.board?.id, () => {
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
               :class="{ 'is-active': isEntryOpen(item) }"
               :aria-current="isEntryOpen(item) ? 'page' : null"
+              :title="rowHint(item)"
               @click="data.openEntry(item)"
               @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.name }}</span>
-              <span class="workspace-nav-meta">{{ item.chars }} 字<template v-if="item.contract === false"> · 未建档</template></span>
             </button>
             <button
               type="button"
@@ -543,32 +537,34 @@ watch(() => props.board?.id, () => {
 
       <!-- 约束（协议 v1.1-A：设定栏只剩这一棵内容树；世界书已独立成栏）。
            行可点开——正文随 pinax_rule_list 一起回来，点击只换核心区的面板，不再发第二次读；
-           新建（工单H1）：与构思同一形态——区标题右侧「＋」，点开才出现输入行。 -->
+           新建（批次33）：与构思同一形态——区标题右侧 hover 显形的「＋」，点开才是临时输入行。 -->
       <template v-else-if="treeKind === 'rules'">
         <div class="nx-index-section-head">
           <p class="workspace-nav-section">{{ treeDir }}</p>
           <button
             type="button"
             class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="index-new-toggle"
             aria-label="新建约束"
-            :aria-expanded="newRuleOpen.toString()"
+            :aria-expanded="(newItem?.kind === 'rules').toString()"
             v-workbench-tooltip="{ text: '新建约束', side: 'left' }"
             @mousedown.prevent
-            @click="toggleNewRule"
+            @click="toggleNewItem('rules')"
           >
             <WorkbenchIcon name="plus" :size="14" />
           </button>
         </div>
-        <div v-if="newRuleOpen" class="nx-index-new nx-index-new-inline">
+        <div v-if="newItem?.kind === 'rules'" class="nx-index-new nx-index-new-inline">
           <input
-            ref="newRuleInput"
-            v-model="newRuleTitle"
+            ref="newItemInput"
+            v-model="newItem.title"
             class="nx-field is-tiny"
+            data-test="index-new-input"
             placeholder="新约束标题"
             aria-label="新约束标题"
-            @keydown.enter.prevent="submitNewRule"
-            @keydown.esc.prevent="closeNewRule"
-            @blur="submitNewRule"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
           >
         </div>
         <ul class="nx-tree">
@@ -578,11 +574,11 @@ watch(() => props.board?.id, () => {
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
               :class="{ 'is-active': isRuleOpen(item) }"
               :aria-current="isRuleOpen(item) ? 'page' : null"
+              :title="rowHint(item)"
               @click="data.openRule(item)"
               @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.title }}</span>
-              <span class="workspace-nav-meta">第 {{ item.revision }} 版</span>
             </button>
           </li>
         </ul>
@@ -591,14 +587,37 @@ watch(() => props.board?.id, () => {
       </template>
 
       <!-- 资料（工单G1）：资料板的树。行可点开——点行进中栏的阅读面（编辑在那里按）；
-           行文＝篇名＋字数＋版本号；目录还没写就给一行说明，不当成错误。
+           批次33 起行＝篇名，字数与版本退到行 tooltip；目录还没写就给一行说明，不当成错误。
            这里不摆「历史…」：资料的历史还没接（工单边界），给一个点了没东西的按钮更糟。 -->
       <template v-else-if="treeKind === 'documents'">
-        <div class="nx-index-new">
-          <input v-model="newTitle" class="nx-field is-tiny" placeholder="新资料标题" @keydown.enter.prevent="createDocument">
-          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newTitle.trim()" @click="createDocument">新建</button>
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">{{ treeDir }}</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="index-new-toggle"
+            aria-label="新建资料"
+            :aria-expanded="(newItem?.kind === 'documents').toString()"
+            v-workbench-tooltip="{ text: '新建资料', side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewItem('documents')"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
         </div>
-        <p class="workspace-nav-section">{{ treeDir }}</p>
+        <div v-if="newItem?.kind === 'documents'" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newItemInput"
+            v-model="newItem.title"
+            class="nx-field is-tiny"
+            data-test="index-new-input"
+            placeholder="新资料标题"
+            aria-label="新资料标题"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
+          >
+        </div>
         <ul class="nx-tree">
           <li v-for="item in data.documents" :key="item.file" class="nx-tree-line">
             <button
@@ -606,11 +625,11 @@ watch(() => props.board?.id, () => {
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
               :class="{ 'is-active': isDocumentOpen(item) }"
               :aria-current="isDocumentOpen(item) ? 'page' : null"
+              :title="rowHint(item)"
               @click="data.openDocument(item)"
               @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.title }}</span>
-              <span class="workspace-nav-meta">{{ item.totalChars }} 字 · 第 {{ item.revision }} 版</span>
             </button>
           </li>
         </ul>
@@ -619,14 +638,37 @@ watch(() => props.board?.id, () => {
       </template>
 
       <!-- 剧本（批次26 · M6 提前）：剧本板的树。行可点开——点行进中栏的阅读面（编辑在那里按）；
-           行文＝篇名＋字数＋版本号；目录还没写就给一行说明，不当成错误。
+           批次33 起行＝篇名，字数与版本退到行 tooltip；目录还没写就给一行说明，不当成错误。
            与资料同一口径：这里不摆「历史…」（剧本的历史还没接，给一个点了没东西的按钮更糟）。 -->
       <template v-else-if="treeKind === 'scripts'">
-        <div class="nx-index-new">
-          <input v-model="newTitle" class="nx-field is-tiny" placeholder="新剧本标题" aria-label="新剧本标题" @keydown.enter.prevent="createScript">
-          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy || !newTitle.trim()" @click="createScript">新建</button>
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">{{ treeDir }}</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="index-new-toggle"
+            aria-label="新建剧本"
+            :aria-expanded="(newItem?.kind === 'scripts').toString()"
+            v-workbench-tooltip="{ text: '新建剧本', side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewItem('scripts')"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
         </div>
-        <p class="workspace-nav-section">{{ treeDir }}</p>
+        <div v-if="newItem?.kind === 'scripts'" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newItemInput"
+            v-model="newItem.title"
+            class="nx-field is-tiny"
+            data-test="index-new-input"
+            placeholder="新剧本标题"
+            aria-label="新剧本标题"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
+          >
+        </div>
         <ul class="nx-tree">
           <li v-for="item in data.scripts" :key="item.file" class="nx-tree-line">
             <button
@@ -634,11 +676,11 @@ watch(() => props.board?.id, () => {
               class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
               :class="{ 'is-active': isScriptOpen(item) }"
               :aria-current="isScriptOpen(item) ? 'page' : null"
+              :title="rowHint(item)"
               @click="data.openScript(item)"
               @contextmenu.prevent.stop="onRowContextMenu"
             >
               <span class="workspace-nav-label">{{ item.title }}</span>
-              <span class="workspace-nav-meta">{{ item.totalChars }} 字 · 第 {{ item.revision }} 版</span>
             </button>
           </li>
         </ul>
@@ -792,18 +834,43 @@ watch(() => props.board?.id, () => {
   padding-inline-end: 72px;
 }
 /* 大纲「＋」（P18 第 2 条：按需浮现）：默认不可见，hover／聚焦这一区才显形。
-   opacity 只管看得见与否——命中区始终在，键盘也能到（focus-visible 直接显形）。 */
-.nx-index-append-node {
+   opacity 只管看得见与否——命中区始终在，键盘也能到（focus-visible 直接显形）。
+   批次33：五棵树的「新建＋」与行尾历史钮走同一套显形规则（同一枚区标题行、同一档动效）。 */
+.nx-index-append-node,
+.nx-index-add-toggle {
   opacity: 0;
   transition: opacity 120ms ease;
 }
 .nx-index-section-head:hover .nx-index-append-node,
 .nx-index-section-head:focus-within .nx-index-append-node,
-.nx-index-append-node:focus-visible {
+.nx-index-append-node:focus-visible,
+.nx-index-section-head:hover .nx-index-add-toggle,
+.nx-index-section-head:focus-within .nx-index-add-toggle,
+.nx-index-add-toggle:focus-visible {
   opacity: 0.8;
 }
-.nx-index-section-head:hover .nx-index-append-node:hover {
+.nx-index-section-head:hover .nx-index-append-node:hover,
+.nx-index-section-head:hover .nx-index-add-toggle:hover {
   opacity: 1;
+}
+/* 行尾历史钮（批次33 · 索引窗 IDE 化）：默认不占视觉，hover 这一行或键盘聚焦到它才显形。
+   opacity 只管看得见与否——按钮始终在文档流里、始终可 Tab 到（无鼠标可达）。 */
+.nx-index-history {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.nx-tree-line:hover .nx-index-history,
+.nx-tree-line:focus-within .nx-index-history,
+.nx-index-history:focus-visible {
+  opacity: 0.85;
+}
+/* 降级动作偏好：显形不做淡入淡出，直接出现／消失。 */
+@media (prefers-reduced-motion: reduce) {
+  .nx-index-append-node,
+  .nx-index-add-toggle,
+  .nx-index-history {
+    transition: none;
+  }
 }
 /* 世界书视图切换（批次28 · 工单3）：区标题行右侧一枚小钮，与「＋」「悬浮」同一条基准线；
    文案是「表」（切到表格）／「列」（切回列表），命中区压到行高内，不另起一行。 */

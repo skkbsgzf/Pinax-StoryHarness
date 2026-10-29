@@ -660,11 +660,12 @@ describe('Obsidian 三栏', () => {
     expect(volumes[0].element.tagName).toBe('P')
     const rows = wrapper.findAll('.nx-index-window .nx-tree-item')
     expect(rows).toHaveLength(4)
+    // 批次33（索引窗 IDE 化）：行＝名字，数字前缀已拆（顺序由文件名与排序自明）。
     expect(rows.map((row) => row.text())).toEqual([
-      expect.stringContaining('1. 第001章-雨夜'),
-      expect.stringContaining('2. 第002章-停摆'),
-      expect.stringContaining('3. 第003章-雪夜'),
-      expect.stringContaining('4. 第004章-尾声')
+      '第001章-雨夜',
+      '第002章-停摆',
+      '第003章-雪夜',
+      '第004章-尾声'
     ])
     // 顺序：卷内的章在卷标题之后——第一卷的两行夹在第一卷与第二卷之间。
     const html = wrapper.find('.nx-index-window .nx-index-body').element.innerHTML
@@ -700,8 +701,8 @@ describe('Obsidian 三栏', () => {
     await flushPromises()
     expect(flatWrapper.findAll('[data-test="chapter-volume"]')).toHaveLength(0)
     expect(flatWrapper.findAll('.nx-index-window .nx-tree-item').map((row) => row.text())).toEqual([
-      expect.stringContaining('1. 开场'),
-      expect.stringContaining('2. 雨夜')
+      '开场',
+      '雨夜'
     ])
     flatWrapper.unmount()
   })
@@ -1501,7 +1502,9 @@ describe('提案审阅（工单B1 · 协议 v1.1-B：列表在二级页，审阅
     expect(bridge.calls.read).toHaveLength(1)
     const pane = wrapper.find('[data-pane-id="novel.editor"]')
     expect(pane.exists()).toBe(true)
-    expect(pane.text()).toContain('提案 · 第001章-雨夜')
+    // 批次33：文档头只有一行标题「提案审阅 · 文件名」，meta 沉到底部 hint。
+    expect(pane.text()).toContain(`提案审阅 · ${PROPOSAL.name}`)
+    expect(pane.find('.doc-meta-hint').text()).toContain('正文/雨夜.md')
     expect(pane.text()).toContain('提案说明：把雨提前一段')
     expect(pane.find('.editor-text, .entry-text').text()).toBe('雨夜。')
     expect(pane.find('[aria-label="提案新文"]').text()).toBe('雨夜，巷子里没人。')
@@ -2688,7 +2691,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await moveMenu.find('[data-test="outline-node-move-down"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
-    expect(rows().map((row) => row.text())).toEqual(['1. 第二折：钟楼', '2. 第一折：停摆的表', '3. 开场：雨夜进城'])
+    expect(rows().map((row) => row.text())).toEqual(['第二折：钟楼', '第一折：停摆的表', '开场：雨夜进城'])
     await paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const moved = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
@@ -2700,7 +2703,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await removeMenu.find('[data-test="outline-node-remove"]').trigger('click')
     await flushPromises()
     expect(rows()).toHaveLength(2)
-    expect(paneNow().find('.editor-meta').text()).toContain('共 2 个节点')
+    expect(paneNow().find('.doc-meta-hint').text()).toContain('共 2 个节点')
     await paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const removed = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
@@ -2711,7 +2714,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await wrapper.find('[data-test="outline-append-node"]').trigger('click')
     await flushPromises()
     expect(rows()).toHaveLength(3)
-    expect(rows()[2].text()).toContain('3. 未命名节点')
+    expect(rows()[2].text()).toBe('未命名节点')
     await paneNow().find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     const appended = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)

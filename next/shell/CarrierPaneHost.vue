@@ -37,6 +37,14 @@ import { resolvePaneView } from './viewRegistry.mjs'
  *      （索引窗树行右键菜单／hover 显形）、Ctrl+S＋保存 chip；**常驻按钮行一律取消**；
  *   3. 元数据默认折叠：条目的关键词／标签／摘要／关系收进一行「条目信息」层（照 Obsidian properties）。
  * 面板型界面（提案审阅的两版对照）不受此合同约束——两份文档需要视觉分隔。
+ *
+ * 批次33（作者 2026-10-30 裁定）把第 2 条的「头部」再收一刀——文档头只放一个标题：
+ *   「作为一个 doc 来说，就是标题栏放一个标题，其他东西就不用放了，最多在底部放一些提示。」
+ *   1. 头部只剩一行 .doc-title（章节名／条目名／资料名／剧本名／规则名／提案文件名）；
+ *      「正文」「演示之书 · novel」那层身份与项目名都不在文档头里再念一遍——
+ *      载体身份在竖条上，项目名在标题栏；
+ *   2. 路径 · 第 N 版 · N 字（条目再加关键词／摘要）收成正文之下的 .doc-meta-hint；
+ *   3. 写作面聚焦不再套蓝框（.editor-area 的 outline 规则已拆，焦点指示就是光标）。
  */
 const props = defineProps({
   pane: { type: Object, default: null },
@@ -300,12 +308,8 @@ watch(() => props.data.editingEntry, (editing) => {
 
     <template v-if="viewKind === 'chapter-editor'">
       <div v-if="data.chapter" class="editor">
-        <div class="editor-head nx-pane-header">
-          <h4 class="pane-sub">{{ data.chapter.title }}</h4>
-          <span class="editor-meta">
-            {{ data.chapter.file }} · 第 {{ data.chapter.revision }} 版 · {{ data.chapter.totalChars }} 字
-            <em v-if="data.chapter.truncated">（当前只载入前段）</em>
-          </span>
+        <div class="doc-head">
+          <h2 class="doc-title">{{ data.chapter.title }}</h2>
           <span v-if="chipVisible && saveChip" class="nx-pane-actions">
             <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -321,6 +325,9 @@ watch(() => props.data.editingEntry, (editing) => {
           aria-label="正文编辑器"
           @input="data.setDraft($event.target.value)"
         />
+        <p class="doc-meta-hint">
+          {{ data.chapter.file }} · 第 {{ data.chapter.revision }} 版 · {{ data.chapter.totalChars }} 字<em v-if="data.chapter.truncated">（当前只载入前段）</em>
+        </p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一章，或在那里新建一章。</p>
     </template>
@@ -329,12 +336,8 @@ watch(() => props.data.editingEntry, (editing) => {
          保存走载体自有的 pinax_notes_save（带修订号，冲突如实摊开）。 -->
     <template v-else-if="viewKind === 'notes-editor'">
       <div v-if="data.note" class="editor">
-        <div class="editor-head nx-pane-header">
-          <h4 class="pane-sub">{{ data.note.title }}</h4>
-          <span class="editor-meta">
-            {{ data.note.file }} · 第 {{ data.note.revision }} 版 · {{ data.note.totalChars }} 字
-            <em v-if="data.note.truncated">（当前只载入前段）</em>
-          </span>
+        <div class="doc-head">
+          <h2 class="doc-title">{{ data.note.title }}</h2>
           <span v-if="chipVisible && saveChip" class="nx-pane-actions">
             <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -350,6 +353,9 @@ watch(() => props.data.editingEntry, (editing) => {
           aria-label="构思编辑器"
           @input="data.setNoteDraft($event.target.value)"
         />
+        <p class="doc-meta-hint">
+          {{ data.note.file }} · 第 {{ data.note.revision }} 版 · {{ data.note.totalChars }} 字<em v-if="data.note.truncated">（当前只载入前段）</em>
+        </p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇构思，或用索引窗「构思」区的 ＋ 新建一篇。</p>
     </template>
@@ -360,9 +366,17 @@ watch(() => props.data.editingEntry, (editing) => {
          树区标题行的「＋」在末尾追一个同级节点；保存只有 Ctrl+S，结果只进头部 chip。 -->
     <template v-else-if="viewKind === 'outline-editor'">
       <div v-if="data.outlineDraft" class="editor">
-        <div class="editor-head nx-pane-header">
-          <h4 class="pane-sub">大纲 · {{ data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? '节点' }}</h4>
-          <span class="editor-meta">大纲/outline.json · 第 {{ data.outlineRevision ?? 0 }} 版 · 共 {{ data.outlineDraft.nodes.length }} 个节点</span>
+        <!-- 头部只有一行标题（批次33）：大纲文档的名字就是节点标题本身（可改的那枚输入框），
+             右端留保存 chip；版本／节点数沉到正文之下的 .doc-meta-hint。 -->
+        <div class="doc-head">
+          <input
+            class="doc-title outline-title"
+            :value="data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? ''"
+            spellcheck="false"
+            aria-label="大纲节点标题"
+            title="改名、备注、增删与排序都先记在草稿上，Ctrl+S 保存整份大纲"
+            @input="data.setOutlineNodeTitle(data.outlineNodeIndex, $event.target.value)"
+          >
           <span v-if="chipVisible && saveChip" class="nx-pane-actions">
             <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -371,14 +385,6 @@ watch(() => props.data.editingEntry, (editing) => {
             </span>
           </span>
         </div>
-        <input
-          class="doc-title outline-title"
-          :value="data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? ''"
-          spellcheck="false"
-          aria-label="大纲节点标题"
-          title="改名、备注、增删与排序都先记在草稿上，Ctrl+S 保存整份大纲"
-          @input="data.setOutlineNodeTitle(data.outlineNodeIndex, $event.target.value)"
-        >
         <!-- 节点备注（批次28 · 工单1c）：这一节要写什么，一句话；note 是节点上的普通字段，
              随整份草稿保存走（工具原样透传，不需要改合同）。批次31 起无边框，是标题下的第二行。 -->
         <textarea
@@ -391,6 +397,7 @@ watch(() => props.data.editingEntry, (editing) => {
           aria-label="大纲节点备注（最多 200 字）"
           @input="data.setOutlineNodeNote(data.outlineNodeIndex, $event.target.value)"
         />
+        <p class="doc-meta-hint">大纲/outline.json · 第 {{ data.outlineRevision ?? 0 }} 版 · 共 {{ data.outlineDraft.nodes.length }} 个节点</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一个大纲节点。</p>
     </template>
@@ -400,11 +407,10 @@ watch(() => props.data.editingEntry, (editing) => {
          采纳＝按此刻的章节修订号走载体 save（写入为新一版），弃用＝删提案文件；两者都不静默合并。 -->
     <template v-else-if="viewKind === 'proposal-review'">
       <div v-if="data.proposal" class="editor proposal-review">
-        <div class="editor-head nx-pane-header">
-          <h4 class="pane-sub">提案 · {{ data.proposal.target?.title ?? data.proposal.name }}</h4>
-          <span class="editor-meta">
-            {{ data.proposal.target?.file ?? '（没有目标章）' }} · {{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字 · {{ stampOf(data.proposal.createdAt) }}
-          </span>
+        <!-- 头部同样归一（批次33）：一行标题「提案审阅 · 文件名」，meta 沉到正文之下。
+             两版对照的框保留（P18 第 5 条豁免：两份文档需要视觉分隔）。 -->
+        <div class="doc-head">
+          <h2 class="doc-title">提案审阅 · {{ data.proposal.name ?? data.proposal.target?.file ?? '提案' }}</h2>
         </div>
         <p v-if="data.proposal.note" class="pane-hint proposal-note">提案说明：{{ data.proposal.note }}</p>
         <div class="proposal-stack">
@@ -437,6 +443,9 @@ watch(() => props.data.editingEntry, (editing) => {
           <button type="button" class="control-quiet proposal-discard" :disabled="data.busy" @click="data.discardProposal()">弃用</button>
         </div>
         <p v-if="data.proposal.status === 'adopted'" class="pane-hint">这条提案已经采纳过；再采纳会按当前章节版本重新写入一版。</p>
+        <p class="doc-meta-hint">
+          {{ data.proposal.target?.file ?? '（没有目标章）' }} · {{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字 · {{ stampOf(data.proposal.createdAt) }}
+        </p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「提案」区选一条。</p>
     </template>
@@ -445,12 +454,8 @@ watch(() => props.data.editingEntry, (editing) => {
          保存走载体自有的 pinax_rule_save（带修订号，冲突如实摊开）。 -->
     <template v-else-if="viewKind === 'rule-editor'">
       <div v-if="data.rule" class="editor">
-        <div class="editor-head nx-pane-header">
-          <h4 class="pane-sub">{{ data.rule.title }}</h4>
-          <span class="editor-meta">
-            {{ data.rule.file }} · 第 {{ data.rule.revision }} 版 · {{ data.rule.totalChars }} 字
-            <em v-if="data.rule.truncated">（当前只载入前段）</em>
-          </span>
+        <div class="doc-head">
+          <h2 class="doc-title">{{ data.rule.title }}</h2>
           <span v-if="chipVisible && saveChip" class="nx-pane-actions">
             <span class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -466,15 +471,17 @@ watch(() => props.data.editingEntry, (editing) => {
           aria-label="约束编辑器"
           @input="data.setRuleDraft($event.target.value)"
         />
+        <p class="doc-meta-hint">
+          {{ data.rule.file }} · 第 {{ data.rule.revision }} 版 · {{ data.rule.totalChars }} 字<em v-if="data.rule.truncated">（当前只载入前段）</em>
+        </p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「约束」区选一份约束，或用那里的 ＋ 新建一份。</p>
     </template>
 
     <template v-else-if="viewKind === 'entry-detail'">
       <div v-if="data.entry" class="entry-body">
-        <div class="entry-head nx-pane-header">
-          <h4 class="pane-sub">{{ data.entry.name }}</h4>
-          <span class="entry-meta">{{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="data.entry.keys?.length"> · 关键词：{{ data.entry.keys.join('、') }}</template><template v-if="clipSummary(data.entry.summary)"> · 摘要：{{ clipSummary(data.entry.summary) }}</template><template v-if="!data.entry.contract">（未建档）</template></span>
+        <div class="doc-head">
+          <h2 class="doc-title">{{ data.entry.name }}</h2>
           <span class="nx-pane-actions">
             <!-- 保存 chip：保存的唯一常驻形态（批次31 · P18）；阅读态也留着，让刚才那一下的结果看得见。 -->
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
@@ -605,6 +612,10 @@ watch(() => props.data.editingEntry, (editing) => {
              渲染器只产出自己拼的标签，输入整段先转义，所以 v-html 的来源是可信的。 -->
         <div v-else class="entry-text nx-rendered-md" data-test="entry-rendered" v-html="entryHtml" />
         <p v-if="data.entry.contentTruncated" class="pane-notice">只显示前 {{ data.entry.content.length }} 字，全篇 {{ data.entry.contentChars }} 字。</p>
+        <!-- meta 沉底（批次33）：路径 · 第 N 版 · N 字（条目再加关键词／摘要）——头部不放 meta。 -->
+        <p class="doc-meta-hint">
+          {{ data.entry.path }} · 第 {{ data.entry.revision }} 版 · {{ data.entry.contentChars }} 字<template v-if="data.entry.keys?.length"> · 关键词：{{ data.entry.keys.join('、') }}</template><template v-if="clipSummary(data.entry.summary)"> · 摘要：{{ clipSummary(data.entry.summary) }}</template><template v-if="!data.entry.contract">（未建档）</template>
+        </p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一条设定。</p>
       <ul v-if="data.entryWarnings.length" class="pane-warn">
@@ -650,9 +661,8 @@ watch(() => props.data.editingEntry, (editing) => {
         </ul>
       </section>
       <div v-if="data.document" class="entry-body">
-        <div class="entry-head nx-pane-header">
-          <h4 class="pane-sub">{{ data.document.title }}</h4>
-          <span class="entry-meta">{{ data.document.file }} · 第 {{ data.document.revision }} 版 · {{ data.document.totalChars }} 字</span>
+        <div class="doc-head">
+          <h2 class="doc-title">{{ data.document.title }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -676,6 +686,7 @@ watch(() => props.data.editingEntry, (editing) => {
         <p v-if="data.document.truncated" class="pane-notice">
           只载入了前 {{ data.document.text?.length ?? 0 }} 字，全篇 {{ data.document.totalChars }} 字：保存会覆盖未载入的部分。
         </p>
+        <p class="doc-meta-hint">{{ data.document.file }} · 第 {{ data.document.revision }} 版 · {{ data.document.totalChars }} 字</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇资料，或在那里新建一篇。</p>
     </template>
@@ -685,9 +696,8 @@ watch(() => props.data.editingEntry, (editing) => {
          保存走载体自有的 pinax_script_save，带读到的修订号，冲突如实摊开。 -->
     <template v-else-if="viewKind === 'script-editor'">
       <div v-if="data.script" class="entry-body">
-        <div class="entry-head nx-pane-header">
-          <h4 class="pane-sub">{{ data.script.title }}</h4>
-          <span class="entry-meta">{{ data.script.file }} · 第 {{ data.script.revision }} 版 · {{ data.script.totalChars }} 字</span>
+        <div class="doc-head">
+          <h2 class="doc-title">{{ data.script.title }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -711,6 +721,7 @@ watch(() => props.data.editingEntry, (editing) => {
         <p v-if="data.script.truncated" class="pane-notice">
           只载入了前 {{ data.script.text?.length ?? 0 }} 字，全篇 {{ data.script.totalChars }} 字：保存会覆盖未载入的部分。
         </p>
+        <p class="doc-meta-hint">{{ data.script.file }} · 第 {{ data.script.revision }} 版 · {{ data.script.totalChars }} 字</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇剧本，或在那里新建一篇。</p>
     </template>

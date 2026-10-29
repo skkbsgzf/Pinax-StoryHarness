@@ -417,23 +417,13 @@ body {
   color: var(--archive-ink);
   overflow: auto;
 }
+/* 核心区面板头（批次33 · 作者裁定「标题栏放一个标题，其他东西就不用放了」）：
+   「正文／演示之书 · novel」这一层不再在文档头上念第二遍——载体身份在竖条上，
+   项目名在标题栏；文档头只剩文档自己的名字（.doc-title）与底部一行 hint（.doc-meta-hint）。
+   CenterSlotHost.vue 不在本批允许文件里，所以这里用样式层收掉这一块；
+   DOM 仍在（等下一批动 CenterSlotHost 时整块删除，届时这条规则一并退役）。 */
 .center-head {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--hairline-soft);
-}
-.center-title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--nx-fs-2xl);
-  font-weight: 600;
-  line-height: 1.3;
-  color: var(--archive-ink);
-}
-.center-sub {
-  margin: 5px 0 0;
-  font-size: var(--fs-sm);
-  line-height: 1.6;
-  color: var(--text-muted);
+  display: none;
 }
 .center-empty {
   margin: 0;
@@ -616,12 +606,6 @@ body {
   color: var(--text-muted);
   line-height: 1.7;
 }
-.pane-sub {
-  margin: 0;
-  font-size: var(--nx-fs-md);
-  font-weight: 600;
-  color: var(--archive-ink);
-}
 .pane-hint {
   margin: 0;
   color: var(--text-muted);
@@ -659,7 +643,6 @@ body {
 }
 .shelf-head,
 .entries-head,
-.editor-head,
 .editor-foot {
   display: flex;
   align-items: center;
@@ -680,8 +663,9 @@ body {
 .pane-btn {
   font-size: var(--nx-fs-md);
 }
-.editor-meta,
-.entry-meta {
+/* 面板内的一行小字（提案审阅的两块对照各带自己的字数／版本）：文档头不放 meta（批次33），
+   这里只剩面板内部的度量说明。 */
+.editor-meta {
   font-size: var(--nx-fs-2xs);
   color: var(--text-muted);
 }
@@ -693,7 +677,9 @@ body {
    没有描边、没有卡片背景、没有圆角，只留呼吸留白（padding）。
    禁止「中间一个框把内容装进去」：框一出现，作者看到的就是控件，不是稿子。
    写法说明：textarea 的 UA 描边用 border-style: none 摘掉（P18 门禁要求这一块里
-   不许再出现 border:／border-radius: 的声明——谁把框加回来，那条断言当场红）。 */
+   不许再出现 border:／border-radius: 的声明——谁把框加回来，那条断言当场红）。
+   批次33：连聚焦时的 outline 也拆了——写作面的焦点指示就是光标，不是一圈蓝框
+   （门禁对 .editor-area 的规则块反向断言「不得出现 outline:」）。 */
 .editor-area {
   width: 100%;
   flex: 1 1 auto;
@@ -709,27 +695,30 @@ body {
   line-height: var(--writing-line-height, 1.9);
   resize: vertical;
 }
-.editor-area:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+/* 文档标题（批次33 · P18 头部归一）：头部的展示体与大纲节点标题共用一套字——一行大字，
+   没有底色、没有描边、没有圆角。头部行里它就是文档的名字（章节名／条目名／资料名／剧本名／
+   规则名／提案审阅的文件名），不再叠「正文」「演示之书 · novel」这类身份标签。 */
+.doc-title {
+  margin: 0;
+  font-family: var(--font-writing);
+  font-size: var(--nx-fs-xl);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--archive-ink);
 }
-/* 文档式输入（批次31 · P18 第 2 条第 4 款）：大纲节点标题＝一行无边框大字，备注＝标题下的第二行。
-   两者都不是「控件」——没有底色、没有描边、没有圆角，焦点只给一层极轻的底纹（不画框）。 */
-.doc-title,
+/* 可编辑的文档标题（大纲节点）：输入框形态，度量随 .doc-title，框一律不画。 */
+input.doc-title {
+  width: 100%;
+  padding: 2px 0;
+  border-style: none;
+  background: transparent;
+}
 .doc-field {
   width: 100%;
   padding: 2px 0;
   border-style: none;
   background: transparent;
-  color: var(--archive-ink);
   font-family: var(--font-writing);
-}
-.doc-title {
-  font-size: var(--nx-fs-xl);
-  font-weight: 600;
-  line-height: 1.4;
-}
-.doc-field {
   font-size: var(--nx-fs-md);
   line-height: 1.7;
   color: var(--text-primary);
@@ -740,6 +729,42 @@ body {
   outline: 0;
   background: color-mix(in srgb, var(--archive-ink) 4%, transparent);
 }
+/* 文档头（批次33 · P18 头部归一的容器）：只有一行——标题在左（吃掉剩余宽度），
+   右端至多两个 quiet 操作（保存 chip／编辑·取消）。meta 不在头部。 */
+.doc-head {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.doc-head .doc-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-head .nx-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+/* 文档底部 hint（批次33）：路径 · 第 N 版 · N 字（条目再加关键词）——作者说的话
+   「最多在底部放一些提示」。muted 小字，度量走 --nx-fs-2xs 刻度，横向留白与正文同一档。 */
+.doc-meta-hint {
+  margin: 0;
+  padding: 0 20px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.doc-meta-hint em {
+  color: var(--signal-warm);
+  font-style: normal;
+}
 /* 条目／资料／剧本的窗格外壳（批次31 · P18 第 1 条）：不再是一张卡片——
    正文满幅铺在窗格底色上，只留纵向留白（横向留白由 .center 的 24px 给，
    正文 textarea 自己还有一层 padding，那是呼吸，不是框）。 */
@@ -748,27 +773,6 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-.entry-head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-/* P2 pane 头部（工单C · 协议 §1）：五个视图共用的头部容器——
-   h4.pane-sub 标题＋.editor-meta/.entry-meta 元信息在左，动作位（保存 chip／编辑钮）靠右。
-   定义在 .editor-head／.entry-head 之后，作为统一布局口径覆盖两者原先的对齐差。 */
-.nx-pane-header {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.nx-pane-header .nx-pane-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
 }
 .entry-text {
   margin: 0;

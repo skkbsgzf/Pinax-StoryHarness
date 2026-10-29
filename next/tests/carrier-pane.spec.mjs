@@ -349,6 +349,29 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
+  it('文档头归一（批次33）：头部只有一行 .doc-title，meta 沉到正文之下的 .doc-meta-hint', async () => {
+    const tools = fakeTools()
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const pane = wrapper.find('[data-pane-id="novel.editor"]')
+    // 头部＝一行标题：没有「正文」那一层，也没有常驻 meta。
+    expect(pane.find('.doc-head .doc-title').text()).toBe('第002章')
+    expect(pane.find('.pane-sub').exists()).toBe(false)
+    expect(pane.find('.editor-meta').exists()).toBe(false)
+    // meta 沉到正文之下：路径 · 第 N 版 · N 字。
+    const hint = pane.find('.doc-meta-hint')
+    expect(hint.text()).toContain('正文/第002章.md')
+    expect(hint.text()).toContain('第 1 版')
+    expect(hint.text()).toContain('8 字')
+    // 位置：标题在正文之上，hint 在正文之下。
+    const html = pane.element.innerHTML
+    expect(html.indexOf('doc-title')).toBeLessThan(html.indexOf('editor-area'))
+    expect(html.indexOf('editor-area')).toBeLessThan(html.indexOf('doc-meta-hint'))
+    wrapper.unmount()
+  })
+
   it('Ctrl+S 保存带读到的修订号；服务端拒（版本不符）时保存 chip 常驻并给「重新载入」', async () => {
     const tools = fakeTools()
     const data = useBoardData(tools)
@@ -358,8 +381,8 @@ describe('小说载体', () => {
 
     // 工单H1：四个编辑面不再有常驻保存按钮，保存由编辑器聚焦时的 Ctrl+S 触发。
     expect(wrapper.find('.editor-foot .pane-btn.is-primary').exists()).toBe(false)
-    // 工单C（P2）：编辑面头部统一进 .nx-pane-header 容器。
-    expect(wrapper.find('.nx-pane-header .pane-sub').exists()).toBe(true)
+    // 工单C（P2）：编辑面头部统一进 .doc-head 容器；批次33 起头部只有一行 .doc-title。
+    expect(wrapper.find('.doc-head .doc-title').exists()).toBe(true)
     await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。')
     await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
@@ -371,8 +394,8 @@ describe('小说载体', () => {
     expect(chip.exists()).toBe(true)
     expect(chip.classes()).toContain('is-saved')
     expect(chip.text()).toContain('已保存 · 第 2 版')
-    // 工单C（P2）：保存 chip 落在头部右侧动作位（.nx-pane-actions）。
-    expect(wrapper.find('.nx-pane-header .nx-pane-actions .nx-save-chip').exists()).toBe(true)
+    // 工单C（P2）：保存 chip 落在头部右侧动作位（.doc-head .nx-pane-actions）。
+    expect(wrapper.find('.doc-head .nx-pane-actions .nx-save-chip').exists()).toBe(true)
 
     const conflict = fakeTools({ stale: true })
     const conflictData = useBoardData(conflict)
@@ -489,7 +512,8 @@ describe('小说载体', () => {
 
     const rows = wrapper.findAll('.nx-index-window .nx-tree-item')
     // （工单B2 起大纲行也在 .nx-tree-item 里：按章节标题定位那一行。）
-    expect(rows.find((row) => row.text().includes('第002章')).text()).toContain('第 2 版')
+    // 批次33：版本号从可见 meta 退到行的 title（悬停才出现，IDE 的 hover 同一口径）。
+    expect(rows.find((row) => row.text().includes('第002章')).attributes('title')).toContain('第 2 版')
     wrapper.unmount()
   })
 
@@ -505,10 +529,10 @@ describe('小说载体', () => {
     const indexWindow = wrapper.find('.nx-index-window')
     const sections = indexWindow.findAll('.workspace-nav-section').map((node) => node.text())
     expect(sections).toContain('大纲')
-    // 工单B2 起大纲行可点选（button 词汇，不再是静态 span）：行文仍是「序号＋标题」。
+    // 工单B2 起大纲行可点选（button 词汇，不再是静态 span）：批次33 起行文只有名字（数字前缀已拆）。
     const outlineRows = indexWindow.findAll('.nx-tree-item').filter((row) => row.text().includes('开场：雨夜进城') || row.text().includes('第一折'))
     expect(outlineRows).toHaveLength(2)
-    expect(outlineRows[0].text()).toContain('1. 开场：雨夜进城')
+    expect(outlineRows[0].text()).toBe('开场：雨夜进城')
     expect(outlineRows[0].element.tagName).toBe('BUTTON')
     wrapper.unmount()
 
@@ -535,8 +559,9 @@ describe('小说载体', () => {
     await flushPromises()
     expect(wrapper.find('[aria-label="大纲节点标题"]').exists()).toBe(true)
     // 工单C（P2/P3）：头部是统一容器；批次31（P18）起常驻保存按钮拆净——保存只有 Ctrl+S，
-    // 结果进头部 chip，版本号留在 meta 行。
-    expect(wrapper.find('.nx-pane-header .pane-sub').text()).toContain('大纲')
+    // 结果进头部 chip；批次33 起头部的标题就是那枚可改的节点标题，版本在底部 hint。
+    expect(wrapper.find('.doc-head input.doc-title').exists()).toBe(true, '标题输入框就是文档头那一行标题')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('大纲/outline.json')
     expect(wrapper.find('.control-primary').exists()).toBe(false)
 
     await wrapper.find('[aria-label="大纲节点标题"]').setValue('开场：雪夜进城')
@@ -547,14 +572,14 @@ describe('小说载体', () => {
     expect(saved.args.expectedRevision).toBe(1)
     expect(saved.args.nodes.map((node) => node.title)).toEqual(['开场：雪夜进城', '第一折：停摆的表'])
     // 批次19 H1 收尾：保存结果只进头部 chip，不再铺「已保存大纲 · …」常驻 notice（断言同步）。
-    const chip = wrapper.find('.nx-pane-header .nx-pane-actions .nx-save-chip')
+    const chip = wrapper.find('.doc-head .nx-pane-actions .nx-save-chip')
     expect(chip.exists()).toBe(true)
     expect(chip.classes()).toContain('is-saved')
     expect(chip.text()).toContain('已保存 · 第 2 版')
     expect(wrapper.find('.pane-notice').exists()).toBe(false)
-    // 成功后就地刷新树：索引窗那行跟着改，修订号进第 2 版。
+    // 成功后就地刷新树：索引窗那行跟着改，修订号进第 2 版（批次33：版本在行的 title 上）。
     expect(wrapper.findAll('.nx-tree-item').find((row) => row.text().includes('开场：雪夜进城'))).toBeTruthy()
-    expect(wrapper.find('.editor-meta').text()).toContain('第 2 版')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('第 2 版')
     wrapper.unmount()
   })
 
@@ -584,7 +609,7 @@ describe('小说载体', () => {
     await flushPromises()
     expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
     expect(rows()).toHaveLength(3)
-    expect(rows()[2].text()).toContain('3. 未命名节点')
+    expect(rows()[2].text()).toBe('未命名节点')
 
     // 再右键新行「加子节点」：多记一条 from→to 连线（层级语义住在 edges 里）。
     rows()[2].element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 240 }))
@@ -605,7 +630,7 @@ describe('小说载体', () => {
     expect(saved.args.edges).toContainEqual({ from: saved.args.nodes[2].id, to: saved.args.nodes[3].id })
     expect(saved.args.edges).toContainEqual({ from: 'n1', to: 'n2' })
     expect(saved.args.expectedRevision).toBe(1)
-    expect(wrapper.find('.nx-pane-header .nx-save-chip').text()).toContain('已保存 · 第 2 版')
+    expect(wrapper.find('.doc-head .nx-save-chip').text()).toContain('已保存 · 第 2 版')
     wrapper.unmount()
   })
 
@@ -624,7 +649,7 @@ describe('小说载体', () => {
     await wrapper.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     expect(tools.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(1)
-    const outlineChip = wrapper.find('.nx-pane-header .nx-pane-actions .nx-save-chip')
+    const outlineChip = wrapper.find('.doc-head .nx-pane-actions .nx-save-chip')
     expect(outlineChip.exists()).toBe(true)
     expect(outlineChip.text()).toContain('已保存 · 第 2 版')
     expect(wrapper.find('.pane-notice').exists()).toBe(false)
@@ -640,7 +665,7 @@ describe('小说载体', () => {
     await stale.find('[aria-label="大纲节点标题"]').setValue('冲突里的改名')
     await stale.find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
-    const staleChip = stale.find('.nx-pane-header .nx-save-chip')
+    const staleChip = stale.find('.doc-head .nx-save-chip')
     expect(staleChip.classes()).toContain('is-error')
     expect(staleChip.text()).toContain('版本冲突')
     await staleChip.find('.nx-save-chip-action').trigger('click')
@@ -664,22 +689,22 @@ describe('小说载体', () => {
     await entry.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     expect(entryTools.calls.filter((call) => call.tool === 'pinax_worldbook_save')).toHaveLength(1)
-    let entryChip = entry.find('.nx-pane-header .nx-pane-actions .nx-save-chip')
+    let entryChip = entry.find('.doc-head .nx-pane-actions .nx-save-chip')
     expect(entryChip.exists()).toBe(true)
     expect(entryChip.text()).toContain('已保存 · 第 2 版')
     // 保存成功退出编辑态；chip 仍挂在动作位（阅读态也看得见刚才那一下的结果）。
     expect(entry.find('.entry-text').exists()).toBe(true)
-    expect(entry.find('.nx-pane-header .nx-pane-actions .entry-edit').exists()).toBe(true)
+    expect(entry.find('.doc-head .nx-pane-actions .entry-edit').exists()).toBe(true)
 
     await entry.find('.entry-edit').trigger('click')
     await flushPromises()
     // 取消退到头部右端（与「编辑」同一个位置），正文里不再有按钮行。
-    expect(entry.find('.nx-pane-header .nx-pane-actions .entry-cancel').exists()).toBe(true)
+    expect(entry.find('.doc-head .nx-pane-actions .entry-cancel').exists()).toBe(true)
     await entry.find('.editor-area').setValue('冷穿越剧版主角，醒来在雪夜，袖中多了一枚停摆的表。雨声未停。')
     await entry.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
     await flushPromises()
     expect(entryTools.calls.filter((call) => call.tool === 'pinax_worldbook_save')).toHaveLength(2)
-    entryChip = entry.find('.nx-pane-header .nx-pane-actions .nx-save-chip')
+    entryChip = entry.find('.doc-head .nx-pane-actions .nx-save-chip')
     expect(entryChip.text()).toContain('已保存 · 第 3 版')
     entry.unmount()
   })
@@ -769,7 +794,9 @@ describe('小说载体', () => {
     expect(wrapper.find('[data-test="settings-panel-proposals"]').exists()).toBe(false)
     expect(tools.calls.some((call) => call.tool === 'pinax_proposal_read')).toBe(true)
     const pane = wrapper.find('[data-pane-id="novel.editor"]')
-    expect(pane.text()).toContain('提案 · 第002章-雨夜')
+    // 批次33：文档头只有一行标题「提案审阅 · 文件名」，目标章沉到底部 hint。
+    expect(pane.text()).toContain(`提案审阅 · ${PROPOSAL.name}`)
+    expect(pane.find('.doc-meta-hint').text()).toContain('正文/第002章.md')
     expect(pane.text()).toContain('提案说明：把雨提前一段')
     expect(pane.text()).toContain('当前正文')
     expect(pane.text()).toContain('提案新文')
@@ -839,17 +866,49 @@ describe('小说载体', () => {
     second.unmount()
   })
 
-  it('新建章节走 expectedRevision 0', async () => {
+  it('新建章节走 expectedRevision 0（批次33：区头 ＋ → 临时输入 → Enter 建档）', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    await wrapper.find('.nx-index-new .nx-field').setValue('第003章-雪夜')
-    await wrapper.find('.nx-index-new .nx-index-add').trigger('click')
+    // 常驻输入排已拆：区标题右侧只有一枚 ＋，点开才是临时输入行。
+    expect(wrapper.find('.nx-index-new').exists()).toBe(false)
+    await wrapper.find('[aria-label="新建章节"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="index-new-input"]').setValue('第003章-雪夜')
+    await wrapper.find('[data-test="index-new-input"]').trigger('keydown', { key: 'Enter' })
     await flushPromises()
     const created = tools.calls.find((call) => call.tool === 'pinax_chapter_save' && call.args.title)
     expect(created.args).toEqual({ title: '第003章-雪夜', text: '第003章-雪夜\n', expectedRevision: 0 })
+    expect(wrapper.find('[data-test="index-new-input"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('区头 ＋ 的取消路径（批次33）：Esc 与失焦都不建档', async () => {
+    const tools = fakeTools()
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const created = () => tools.calls.some((call) => call.tool === 'pinax_chapter_save' && call.args.title)
+    // Esc：输入行退场，一个新建请求都不发。
+    await wrapper.find('[aria-label="新建章节"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="index-new-input"]').setValue('不要落盘的标题')
+    await wrapper.find('[data-test="index-new-input"]').trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(wrapper.find('[data-test="index-new-input"]').exists()).toBe(false)
+    expect(created()).toBe(false)
+
+    // 失焦：同样只是取消（批次33 的口径：Enter 才建档）。
+    await wrapper.find('[aria-label="新建章节"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="index-new-input"]').setValue('也不落盘')
+    await wrapper.find('[data-test="index-new-input"]').trigger('blur')
+    await flushPromises()
+    expect(wrapper.find('[data-test="index-new-input"]').exists()).toBe(false)
+    expect(created()).toBe(false)
     wrapper.unmount()
   })
 
@@ -877,8 +936,8 @@ describe('小说载体', () => {
     expect(wrapper.find('.editor-area').element.value).toBe('袖口的表停在十二点差三分。')
     // 工单H1：打开不再铺「已载入 N 字 · 第 N 版」的 notice；字数与版本在编辑面 meta 行。
     expect(wrapper.find('.pane-notice').exists()).toBe(false)
-    expect(wrapper.find('.editor-meta').text()).toContain('14 字')
-    expect(wrapper.find('.editor-meta').text()).toContain('第 1 版')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('14 字')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('第 1 版')
     wrapper.unmount()
   })
 
@@ -916,7 +975,7 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
-  it('索引窗「构思」区的 ＋（工单H1）：输入行不常驻；Esc 收起不落盘，失焦提交', async () => {
+  it('索引窗「构思」区的 ＋（批次33）：输入行不常驻；Esc 与失焦都只取消，Enter 才建档', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -938,11 +997,20 @@ describe('小说载体', () => {
     expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(false)
     expect(tools.calls.some((call) => call.tool === 'pinax_notes_save' && call.args.title)).toBe(false)
 
-    // 失焦提交：以标题作首行落盘（expectedRevision 0）。
+    // 失焦同样只是取消（批次33 把「失焦提交」改成「失焦取消」：Enter 才建档）。
     await addButton.trigger('click')
     await flushPromises()
     await wrapper.find('[aria-label="新构思标题"]').setValue('巷口的灯')
     await wrapper.find('[aria-label="新构思标题"]').trigger('blur')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(false)
+    expect(tools.calls.some((call) => call.tool === 'pinax_notes_save' && call.args.title)).toBe(false)
+
+    // Enter 才建档：以标题作首行落盘（expectedRevision 0）。
+    await addButton.trigger('click')
+    await flushPromises()
+    await wrapper.find('[aria-label="新构思标题"]').setValue('巷口的灯')
+    await wrapper.find('[aria-label="新构思标题"]').trigger('keydown', { key: 'Enter' })
     await flushPromises()
     const created = tools.calls.find((call) => call.tool === 'pinax_notes_save' && call.args.title)
     expect(created.args).toEqual({ title: '巷口的灯', text: '巷口的灯\n', expectedRevision: 0 })
@@ -983,7 +1051,9 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     expect(tools.calls.some((call) => call.tool === 'pinax_worldbook_list')).toBe(true)
     const rows = wrapper.findAll('.nx-index-window .nx-tree-item')
     expect(rows).toHaveLength(2)
-    expect(rows[1].text()).toContain('未建档')
+    // 批次33：行上只剩名字，「N 字 · 未建档」退到行的 title。
+    expect(rows[1].text()).toBe('随手记')
+    expect(rows[1].attributes('title')).toContain('未建档')
     expect(wrapper.find('.nx-index-window').text()).toContain('不符合文件契约')
 
     expect(wrapper.find('.entry-text').text()).toContain('醒来在雪夜')
@@ -1018,13 +1088,13 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('worldbook.entries'), data } })
     await flushPromises()
 
-    // 阅读态：entry-text 摊开正文，entry-head 里有「编辑」；还没有 textarea。
+    // 阅读态：entry-text 摊开正文，文档头右端有「编辑」；还没有 textarea。
     expect(wrapper.find('.entry-text').exists()).toBe(true)
     expect(wrapper.find('.entry-edit').text()).toBe('编辑')
     expect(wrapper.find('.editor-area').exists()).toBe(false)
-    // 工单C（P2）：条目头部也是 .nx-pane-header，编辑钮在右侧动作位。
-    expect(wrapper.find('.entry-head').classes()).toContain('nx-pane-header')
-    expect(wrapper.find('.nx-pane-header .nx-pane-actions .entry-edit').exists()).toBe(true)
+    // 工单C（P2）：条目头部也是 .doc-head，编辑钮在右侧动作位（批次33：头部只有一行标题）。
+    expect(wrapper.find('.doc-head').exists()).toBe(true)
+    expect(wrapper.find('.doc-head .nx-pane-actions .entry-edit').exists()).toBe(true)
 
     await wrapper.find('.entry-edit').trigger('click')
     await flushPromises()
@@ -1033,7 +1103,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     // 批次31（P18）：底部按钮行拆净——保存只剩 Ctrl+S，取消退到头部右端；正文里没有主按钮。
     expect(wrapper.find('.editor-foot').exists()).toBe(false)
     expect(wrapper.find('.control-primary').exists()).toBe(false)
-    expect(wrapper.find('.nx-pane-header .nx-pane-actions .entry-cancel').exists()).toBe(true)
+    expect(wrapper.find('.doc-head .nx-pane-actions .entry-cancel').exists()).toBe(true)
     const area = wrapper.find('.editor-area')
     expect(area.element.value).toBe('冷穿越剧版主角，醒来在雪夜。')
 
@@ -1053,7 +1123,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     })
     // 保存成功：退出编辑态，重读把版本号与正文一起刷新。
     expect(wrapper.find('.entry-text').exists()).toBe(true)
-    expect(wrapper.find('.entry-meta').text()).toContain('第 2 版')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('第 2 版')
     expect(wrapper.find('.entry-text').text()).toContain('停摆的表')
 
     // 取消：原样退回阅读态，一个工具都不调。
@@ -1077,8 +1147,8 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     await flushPromises()
 
     // 阅读态：既有 meta 行末尾多一格关键词（数组用顿号连）与一格摘要（原文），不另起一行。
-    expect(wrapper.find('.entry-meta').text()).toContain('关键词：柯秒')
-    expect(wrapper.find('.entry-meta').text()).toContain('摘要：雪夜醒来的主角，袖中有一枚停摆的表。')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('关键词：柯秒')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('摘要：雪夜醒来的主角，袖中有一枚停摆的表。')
 
     await wrapper.find('.entry-edit').trigger('click')
     await flushPromises()
@@ -1125,7 +1195,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     expect(saved.args.meta).toEqual({ keys: ['柯秒', '秒子'], tags: ['主角', '停摆的表'], summary: '雨夜醒来的主角，袖中的表停了。', relations: [] })
     // 保存后回到阅读态：摘要以磁盘（工具重读）为准，不拿草稿自说自话。
     expect(wrapper.find('.entry-text').exists()).toBe(true)
-    expect(wrapper.find('.entry-meta').text()).toContain('摘要：雨夜醒来的主角，袖中的表停了。')
+    expect(wrapper.find('.doc-meta-hint').text()).toContain('摘要：雨夜醒来的主角，袖中的表停了。')
 
     // 摘要留空＝清空（空串随 meta 传，与工具 schema 同一口径）；阅读态不再显示这一格。
     // 再进编辑态：折叠层回到收起（下一次进来仍是先看正文），展开才改摘要。
@@ -1139,7 +1209,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     await flushPromises()
     const cleared = tools.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1)
     expect(cleared.args.meta.summary).toBe('')
-    expect(wrapper.find('.entry-meta').text()).not.toContain('摘要：')
+    expect(wrapper.find('.doc-meta-hint').text()).not.toContain('摘要：')
     wrapper.unmount()
 
     // 裸 md（没有 frontmatter）：编辑态不出折叠层与这三栏，只给一句话说明；保存也不带 meta。
@@ -1265,7 +1335,7 @@ describe('资料载体', () => {
     // 保存成功后回到阅读态：版本号与正文以保存结果为准。
     expect(pane().find('textarea.editor-area').exists()).toBe(false)
     expect(pane().find('[aria-label="资料正文"]').text()).toContain('三条被划掉的注释')
-    expect(pane().find('.entry-meta').text()).toContain('第 2 版')
+    expect(pane().find('.doc-meta-hint').text()).toContain('第 2 版')
 
     // 取消：原样退回阅读态（草稿不落盘，也不改写阅读态的正文），一个工具都不调。
     const callsBefore = tools.calls.length
@@ -1282,7 +1352,7 @@ describe('资料载体', () => {
     wrapper.unmount()
   })
 
-  it('资料板新建：索引窗「新资料标题」走 pinax_document_save 的 expectedRevision 0', async () => {
+  it('资料板新建：索引窗区头 ＋ → 临时输入 → Enter 走 pinax_document_save 的 expectedRevision 0', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: referenceShellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -1292,8 +1362,10 @@ describe('资料载体', () => {
     await flushPromises()
     expect(wrapper.find('.nx-index-window').text()).toContain('资料还没有内容（资料/）')
 
-    await wrapper.find('.nx-index-new .nx-field').setValue('年表补遗')
-    await wrapper.find('.nx-index-new .nx-index-add').trigger('click')
+    await wrapper.find('[aria-label="新建资料"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="index-new-input"]').setValue('年表补遗')
+    await wrapper.find('[data-test="index-new-input"]').trigger('keydown', { key: 'Enter' })
     await flushPromises()
 
     const created = tools.calls.find((call) => call.tool === 'pinax_document_save' && call.args.title)

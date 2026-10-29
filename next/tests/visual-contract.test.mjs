@@ -226,21 +226,21 @@ test('主页面上不许摆无效模块：骨架目录、板块声明、保存�
   assert.ok(!pane.includes('editor-note'), '正文面板不该再摆保存口径的脚注')
 })
 
-test('载体面板 P2/P3（协议 §1）：头部统一进 .nx-pane-header，保存按钮不许带版本号', async () => {
-  // P3 文案门禁（协议 §6.1）：版本号不进按钮文案——版本在头部 meta 与历史面板看。
+test('载体面板 P2/P3（协议 §1）：头部统一进 .doc-head，保存按钮不许带版本号', async () => {
+  // P3 文案门禁（协议 §6.1）：版本号不进按钮文案——版本在文档底部 hint 与历史面板看。
   for (const file of ['CarrierPaneHost.vue', 'AppNext.vue']) {
     const source = await readFile(join(shellDir, file), 'utf-8')
     assert.ok(!source.includes('保存为第'), `${file} 出现「保存为第」：保存按钮统一叫「保存」（P3）`)
     assert.ok(!source.includes('保存为新版本'), `${file} 出现「保存为新版本」：保存按钮统一叫「保存」（P3）`)
   }
 
-  // P2 落地抽查：每个视图的头部是一个 .nx-pane-header 容器
+  // P2 落地抽查：每个视图的头部是一个 .doc-head 容器
   // （chapter／notes／outline／entry(+rule)／proposal，资料面同样归入）。
   const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
-  const headers = (pane.match(/class="[^"]*\bnx-pane-header\b/g) ?? []).length
-  assert.ok(headers >= 5, `.nx-pane-header 只落了 ${headers} 处：五个视图的头部都要归一进这个容器`)
-  const titles = (pane.match(/<h4 class="pane-sub">/g) ?? []).length
-  assert.ok(titles >= 5, `h4.pane-sub 只找到 ${titles} 处：每个视图头部都要有标题（P2）`)
+  const headers = (pane.match(/class="doc-head"/g) ?? []).length
+  assert.ok(headers >= 5, `.doc-head 只落了 ${headers} 处：五个视图的头部都要归一进这个容器`)
+  const titles = (pane.match(/class="doc-title[ "]/g) ?? []).length
+  assert.ok(titles >= 5, `.doc-title 只找到 ${titles} 处：每个视图头部都要有一行标题（P2）`)
 })
 
 test('选中色分级全部来自老版原件：Next 不许抄一份公式', async () => {
@@ -560,6 +560,83 @@ test('P18 文档为主：正文去框、常驻保存按钮拆净、节点操作�
   assert.match(pane, /data-test="entry-meta-toggle"/u, '编辑面要有一行「条目信息」开关')
   assert.match(pane, /v-if="entryMetaOpen"[^>]*class="entry-meta-edit"/u, '条目字段容器必须是 v-if="entryMetaOpen"（默认折叠，不是 v-show）')
   assert.doesNotMatch(pane, /v-show="entryMetaOpen"/u, '折叠层不许用 v-show 假装折叠（字段仍在 DOM 里）')
+})
+
+/**
+ * 批次33（作者 2026-10-30）：「作为一个 doc 来说，就是标题栏放一个标题，其他东西就不用放了，
+ * 最多在底部放一些提示。」「左侧部分：正常的 IDE 是怎么设计的，你就怎么设计呗。」
+ *
+ * 两条合同落到机器门口：
+ *   A. 文档头归一：头部只有一行 .doc-title，meta 沉到正文之下的 .doc-meta-hint；
+ *      双层头（pane-sub 标题＋身份／项目名那一层）不在场；.editor-area 不再套聚焦蓝框。
+ *   B. 索引窗 IDE 化：行＝名字（没有「1. 」数字前缀）、版本／字数只在行的 title 里、
+ *      历史钮与区头 ＋ 默认不显示（hover／键盘聚焦才显形）、新建走临时输入行。
+ */
+test('批次33 文档头归一：一行 .doc-title ＋ 底部 .doc-meta-hint，双层头与聚焦蓝框都不在', async () => {
+  const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+
+  // ① 头部只剩一行标题；meta 在底部 hint 上。
+  assert.match(pane, /class="doc-head"/u, '编辑面头部要用 .doc-head（一行标题＋右端 quiet 动作）')
+  assert.match(pane, /class="doc-title"/u, '头部要有 .doc-title 展示体（章节名／条目名／资料名／剧本名／规则名）')
+  assert.ok((pane.match(/class="doc-meta-hint"/g) ?? []).length >= 5,
+    `.doc-meta-hint 只落了 ${(pane.match(/class="doc-meta-hint"/g) ?? []).length} 处：每个文档面的 meta 都要沉到底部`)
+
+  // ② 双层头不在场：pane-sub 与它的样式一起退役（身份在竖条、项目名在标题栏，文档头不再念）。
+  assert.ok(!pane.includes('pane-sub'), '文档头还留着 .pane-sub 双层头的标题（P18 头部归一：头部只有 .doc-title）')
+  assert.ok(!layout.includes('.pane-sub'), 'next-shell.css 里还留着 .pane-sub 的规则（标题已统一走 .doc-title）')
+  assert.ok(!pane.includes('nx-pane-header'), '旧头部容器 .nx-pane-header 已被 .doc-head 取代')
+
+  // ③ 写作面聚焦不套蓝框：.editor-area 的规则块不许出现 outline:，那条 focus-visible 规则整条删除。
+  const area = ruleBody(layout, '.editor-area {')
+  assert.ok(area, 'next-shell.css 里没有 .editor-area 规则')
+  assert.doesNotMatch(area, /outline\s*:/u, '.editor-area 又在聚焦时画框了：写作面的焦点指示就是光标')
+  assert.ok(!layout.includes('.editor-area:focus-visible'),
+    '.editor-area:focus-visible 那条 outline 规则要整条删掉（改成 outline: 0 也不行）')
+
+  // ④ 核心区面板头（「正文／演示之书 · novel」那一层）不再出现在文档上方：
+  //    CenterSlotHost.vue 不在本批允许文件里，先由布局层收掉（display: none）；
+  //    下一批把 DOM 整块删掉时，这条断言随之退役。
+  const head = ruleBody(layout, '.center-head {')
+  assert.ok(head, 'next-shell.css 里没有 .center-head 规则')
+  assert.match(head, /display:\s*none/u, '核心区面板头要收掉：文档头只留文档自己的标题')
+})
+
+test('批次33 索引窗 IDE 化：行＝名字、版本进 title、历史与新建 hover 显形、新建走临时输入行', async () => {
+  const index = await readFile(join(shellDir, 'IndexWindow.vue'), 'utf-8')
+
+  // ① 行＝名字：数字前缀全拆（章节与大纲同一口径）。
+  assert.doesNotMatch(index, /\{\{\s*index\s*\+\s*1\s*\}\}/u, '索引窗还在行首印「N. 」数字前缀（IDE 的文件树只写名字）')
+
+  // ② 版本／字数不做常驻 meta：只在行的 title 里（悬停才有）。
+  for (const gone of [
+    '<span class="workspace-nav-meta">第 {{ item.revision }} 版</span>',
+    '{{ item.totalChars }} 字 · 第 {{ item.revision }} 版',
+    '{{ item.chars }} 字'
+  ]) {
+    assert.ok(!index.includes(gone), `索引窗还在行上摆可见 meta：${gone}（应进 title 属性）`)
+  }
+  assert.ok((index.match(/:title="rowHint\(item\)"/g) ?? []).length >= 5,
+    '树行要把「文件名 · 第 N 版 · N 字」放进 title（hover 才出现）')
+
+  // ③ 新建：常驻输入排拆净，区头 ＋ 点开的是临时输入行（Enter 建档、Esc／失焦取消）。
+  assert.ok(!index.includes('新章标题'), '常驻的「新章节标题」输入排还在（应只剩区头 ＋）')
+  const guarded = (index.match(/v-if="newItem\?\.kind === '/g) ?? []).length
+  assert.ok(guarded >= 5, `临时输入行只接了 ${guarded} 棵树的 v-if 守卫（章节／构思／约束／资料／剧本都要有）`)
+  const toggles = (index.match(/data-test="index-new-toggle"/g) ?? []).length
+  assert.ok(toggles >= 5, `区头 ＋ 只落了 ${toggles} 棵树下`)
+  assert.match(index, /@keydown\.enter\.prevent="submitNewItem"/u, 'Enter 才建档')
+  assert.match(index, /@blur="closeNewItem"/u, '失焦是取消，不是提交（Esc／失焦都不建档）')
+
+  // ④ 动作 hover 显形：opacity 从 0 起，hover／focus-within／focus-visible 才显出来；
+  //    降级动作偏好下不做动画（键盘仍可达：命中区一直在）。
+  const style = /<style scoped>([\s\S]*?)<\/style>/u.exec(index)?.[1] ?? ''
+  assert.ok(style, 'IndexWindow 的样式块没找到')
+  assert.match(ruleBody(style, '.nx-index-history {') ?? '', /opacity:\s*0/u, '历史钮默认应是不可见（hover 才显形）')
+  assert.match(style, /\.nx-tree-line:hover \.nx-index-history/u, 'hover 这一行要显形历史钮')
+  assert.match(style, /\.nx-tree-line:focus-within \.nx-index-history/u, '键盘聚焦到行内控件也要显形（无鼠标可达）')
+  assert.match(style, /\.nx-index-add-toggle:focus-visible/u, '区头 ＋ 要能被键盘聚焦（focus-visible 同样显形）')
+  assert.match(style, /prefers-reduced-motion: reduce/u, '降级动作偏好下显形不做动画')
 })
 
 /**
