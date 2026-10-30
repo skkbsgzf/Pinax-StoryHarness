@@ -775,6 +775,7 @@ async function openOutlineNodeFromWidget(index) {
   if (!data.outline?.length) await data.loadOutline()
   data.selectOutlineNode(index)
 }
+
 /** 提案的目标是正文：审阅面只挂在「正文」那一栏（协议 v1.1-A 的载体分栏，一栏一棵树）。 */
 const chapterBoardId = computed(() => {
   const byDir = boards.value.find((board) => (board.dataDirs ?? []).includes('正文'))

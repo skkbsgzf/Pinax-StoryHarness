@@ -2938,8 +2938,9 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     ])
     expect(bodyRows[1].text()).toContain('随手记')
     // 表格里不再重复列表那一列版本／未建档脚注（未建档在详情面看）。
-    expect(wrapper.find('[data-test="entries-view-toggle"]').attributes('aria-label')).toBe('切换为列表视图')
-    expect(wrapper.find('[data-test="entries-view-toggle"]').text()).toBe('列')
+    // 批次36：切换钮显示「下一步」——表格视图的下一步是图谱。
+    expect(wrapper.find('[data-test="entries-view-toggle"]').attributes('aria-label')).toBe('切换为图谱视图')
+    expect(wrapper.find('[data-test="entries-view-toggle"]').text()).toBe('图')
 
     // 行点击＝打开该条目（与列表同一 openEntry）：走 read、中栏换成条目详情。
     await bodyRows[0].trigger('click')
@@ -2953,15 +2954,21 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     expect(globalThis.localStorage.getItem('entriesView.D:/tmp/大梦')).toBe('table')
     wrapper.unmount()
 
-    // 重新挂载读回同一份选择：还是表格视图。
+    // 重新挂载读回同一份选择：还是表格视图。批次36 起切换是三态循环（列表→表格→图谱）：
+    // 表格再切是图谱，图谱再切才回列表——三档都落同一个键。
     const again = mount(AppNext, { props: { bridge: writingBridge() } })
     await flushPromises()
     await openBoard(again, '世界书')
     expect(again.find('[data-test="entries-table"]').exists()).toBe(true)
-    // 切回列表：状态同样落盘。
     await again.find('[data-test="entries-view-toggle"]').trigger('click')
     await flushPromises()
     expect(again.find('[data-test="entries-table"]').exists()).toBe(false)
+    expect(again.find('[data-test="entries-graph"]').exists()).toBe(true)
+    expect(globalThis.localStorage.getItem('entriesView.D:/tmp/大梦')).toBe('graph')
+    await again.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    expect(again.find('[data-test="entries-graph"]').exists()).toBe(false)
+    expect(again.find('.nx-index-window .nx-tree-item').exists()).toBe(true)
     expect(globalThis.localStorage.getItem('entriesView.D:/tmp/大梦')).toBe('list')
     again.unmount()
   })
@@ -3054,15 +3061,22 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     expect(lists.map((list) => list.findAll('.nx-tree-item').length)).toEqual([2, 2, 1])
     expect(wrapper.find('.nx-index-window').text()).not.toContain('未分类')
 
-    // 表格视图：多一列「类别」，值来自条目的 cat。
+    // 表格视图：多一列「类别」，值来自条目的 cat；批次36 起表格按类别分组（组头带条数）。
     await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
     await flushPromises()
     const table = wrapper.find('[data-test="entries-table"]')
     expect(table.findAll('th').map((th) => th.text())).toEqual(['名称', '类别', '类型', '关键词', '字数', '摘要'])
-    // 表格按工具给的顺序列条目（类别列的值来自条目的 cat）。
-    expect(table.findAll('tbody tr').map((row) => row.findAll('td')[1].text())).toEqual(CATEGORIZED.map((entry) => entry.cat))
+    const groupRows = table.findAll('[data-test="entries-table-group"]')
+    expect(groupRows.map((row) => row.text())).toEqual(['编年 · 2 条', '人物 · 2 条', '设定 · 1 条'])
+    // 表格按工具给的顺序列条目（组头行不是数据行）。
+    expect(table.findAll('tbody tr.nx-entries-row').map((row) => row.findAll('td')[1].text())).toEqual(CATEGORIZED.map((entry) => entry.cat))
 
     // 新建（区头 ＋）：临时行带类别下拉，选项＝既有类别，默认第一个；选中的类别决定落点。
+    // 批次36：表格再切是图谱（节点都在），图谱再切才回列表。
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="entries-graph"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="entries-graph"]').findAll('.nx-entry-graph-node')).toHaveLength(CATEGORIZED.length)
     await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
     await flushPromises()
     await wrapper.find('[data-test="index-new-toggle"]').trigger('click')
@@ -3098,6 +3112,159 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await flushPromises()
     expect(legacy.calls.filter((call) => call.tool === 'pinax_worldbook_save').at(-1).args.path).toBe('新条目.md')
     old.unmount()
+  })
+
+  // —— 批次36：Dataview 式表格（排序／筛选）与知识图谱 ——————————————————————————
+
+  it('世界书条目表格（批次36）：列头三态排序（升→降→默认），排序在组内生效、组头顺序不动', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({ entries: CATEGORIZED, categories: [...CATEGORIES] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+
+    const names = () => wrapper.findAll('[data-test="entries-table"] tbody tr.nx-entries-row').map((row) => row.findAll('td')[0].text())
+    const header = wrapper.find('[data-test="entries-sort-chars"]')
+    expect(header.text()).toBe('字数', '默认不排序，列头没有指示符')
+    expect(names()).toEqual(CATEGORIZED.map((entry) => entry.name))
+
+    // 升序：组头仍是 编年/人物/设定，组内按字数 10,12／18,20／16 摆。
+    await header.trigger('click')
+    await flushPromises()
+    expect(header.text()).toBe('字数▲')
+    expect(names()).toEqual(['编年·停摆的表', '编年·雨夜', '人物·柯秒', '地点·槐巷', '设定·钟楼'])
+
+    // 降序：组内倒过来，组头顺序不动。
+    await header.trigger('click')
+    await flushPromises()
+    expect(header.text()).toBe('字数▼')
+    expect(names()).toEqual(['编年·雨夜', '编年·停摆的表', '地点·槐巷', '人物·柯秒', '设定·钟楼'])
+
+    // 第三下回默认：指示符消失，顺序回到工具给的。
+    await header.trigger('click')
+    await flushPromises()
+    expect(header.text()).toBe('字数')
+    expect(names()).toEqual(CATEGORIZED.map((entry) => entry.name))
+    wrapper.unmount()
+  })
+
+  it('世界书条目表格（批次36）：筛选输入与类别下拉过滤行数，两者叠加；组头跟着只剩命中的组', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({ entries: CATEGORIZED, categories: [...CATEGORIES] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+
+    const dataRows = () => wrapper.findAll('[data-test="entries-table"] tbody tr.nx-entries-row')
+    const groupLabels = () => wrapper.findAll('[data-test="entries-table-group"]').map((row) => row.text())
+
+    // 文本筛选命中名称，也命中关键词（槐巷是地点·槐巷的 aliases）与摘要。
+    await wrapper.find('[data-test="entries-filter-input"]').setValue('柯秒')
+    await flushPromises()
+    expect(dataRows()).toHaveLength(1)
+    expect(dataRows()[0].text()).toContain('人物·柯秒')
+    await wrapper.find('[data-test="entries-filter-input"]').setValue('槐巷')
+    await flushPromises()
+    expect(dataRows()).toHaveLength(1)
+    expect(dataRows()[0].text()).toContain('地点·槐巷')
+    await wrapper.find('[data-test="entries-filter-input"]').setValue('查无此条')
+    await flushPromises()
+    expect(dataRows()).toHaveLength(0)
+    expect(wrapper.find('[data-test="entries-table-group"]').exists()).toBe(false)
+
+    // 清空文本回全量；类别下拉只留该组。
+    await wrapper.find('[data-test="entries-filter-input"]').setValue('')
+    await flushPromises()
+    expect(dataRows()).toHaveLength(5)
+    await wrapper.find('[data-test="entries-filter-category"]').setValue('编年')
+    await flushPromises()
+    expect(dataRows()).toHaveLength(2)
+    expect(dataRows().every((row) => row.findAll('td')[1].text() === '编年')).toBe(true)
+    expect(groupLabels()).toEqual(['编年 · 2 条'])
+
+    // 叠加：类别编年 ＋ 文本雨夜＝1 行；换成设定后一条都不剩。
+    await wrapper.find('[data-test="entries-filter-input"]').setValue('雨夜')
+    await flushPromises()
+    expect(dataRows()).toHaveLength(1)
+    await wrapper.find('[data-test="entries-filter-category"]').setValue('设定')
+    await flushPromises()
+    expect(dataRows()).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('世界书知识图谱（批次36）：SVG 在场、节点数＝条目数、hover 高亮邻边、点节点与列表同一个 openEntry、未落图如实计数', async () => {
+    globalThis.localStorage?.clear()
+    // 钟楼被两条编年引用（跨类边），另有一条边指向不存在的条目（如实计数，不画幽灵节点）。
+    const withRelations = CATEGORIZED.map((entry, index) => ({
+      ...entry,
+      relations: index === 0
+        ? [{ to: '设定·钟楼', type: '见证' }, { to: '查无此条', type: '悬空' }]
+        : index === 1 ? [{ to: '设定·钟楼' }] : []
+    }))
+    const bridge = writingBridge({ entries: withRelations, categories: [...CATEGORIES] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+    // 列表 → 表格 → 图谱（三态循环两步）。
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+
+    const graph = wrapper.find('[data-test="entries-graph"]')
+    expect(graph.exists()).toBe(true)
+    expect(graph.find('svg').exists()).toBe(true)
+    expect(graph.findAll('.nx-entry-graph-node')).toHaveLength(withRelations.length, '每个条目一个节点，没有幽灵节点')
+    expect(graph.findAll('.nx-entry-graph-edge')).toHaveLength(2, '跨类边落图（无向去重）')
+
+    // 图例：三个类别各一枚色样；未落图的边如实计数。
+    const legend = wrapper.find('[data-test="entries-graph-legend"]')
+    expect(legend.exists()).toBe(true)
+    expect(legend.findAll('.nx-entry-graph-legend-item').map((item) => item.text())).toEqual(['编年', '人物', '设定'])
+    expect(wrapper.find('[data-test="entries-graph-unmatched"]').text()).toBe('1 条关系边未落图（目标不存在）')
+
+    // hover 高亮邻边：停摆的表只连钟楼一条，其余压暗（柯秒没有关系边，悬停不高亮任何一条）。
+    const node = graph.findAll('.nx-entry-graph-node').find((candidate) => candidate.text() === '编年·停摆的表')
+    expect(node, '图谱里应有「编年·停摆的表」这个节点').toBeTruthy()
+    await node.trigger('mouseenter')
+    await flushPromises()
+    expect(graph.findAll('.nx-entry-graph-edge.is-hi')).toHaveLength(1)
+    expect(graph.findAll('.nx-entry-graph-edge.is-dim')).toHaveLength(1)
+    await node.trigger('mouseleave')
+    await flushPromises()
+    expect(graph.findAll('.nx-entry-graph-edge.is-hi')).toHaveLength(0)
+
+    // 点节点打开条目：与列表／表格同一个 openEntry（按 path）。
+    await node.trigger('click')
+    await flushPromises()
+    const lastRead = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_read').at(-1)
+    expect(lastRead.args).toEqual({ path: '世界书/编年/编年·停摆的表.md' })
+    expect(wrapper.find('[data-pane-id="worldbook.entries"]').text()).toContain('编年·停摆的表')
+    wrapper.unmount()
+  })
+
+  it('世界书知识图谱（批次36）：没有关系也没有崩——节点都在、图例只有类别、没有未落图计数', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({ entries: CATEGORIZED, categories: [...CATEGORIES] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')
+    await flushPromises()
+
+    const graph = wrapper.find('[data-test="entries-graph"]')
+    expect(graph.findAll('.nx-entry-graph-node')).toHaveLength(CATEGORIZED.length)
+    expect(graph.findAll('.nx-entry-graph-edge')).toHaveLength(0)
+    expect(wrapper.find('[data-test="entries-graph-unmatched"]').exists()).toBe(false, '没有未落图的边就不摆这行计数')
+    // 关系富集读失败的条目在索引窗的 warning 里可见（图谱少边时作者看得到原因）。
+    expect(wrapper.find('.nx-index-warn').exists()).toBe(false)
+    wrapper.unmount()
   })
 
   it('章节标题不带排序前缀（批次34）：行＝「倒带」，原名只留在行的 title 提示里', async () => {

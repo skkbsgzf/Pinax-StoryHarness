@@ -750,9 +750,36 @@ export function useBoardData(bridge) {
     state.categories = Array.isArray(listed.value.categories) ? listed.value.categories : []
     state.listWarnings = listed.value.warnings ?? []
     state.loadedTrees.entries = true
+    // 关系富集（批次36 · 图谱）：列表工具不带回 relations（只有 read 带），而图谱的边全靠它。
+    // 这里用既有 read 工具按 path 补齐（不算新增工具调用）；读失败的条目按没有关系处理，
+    // 失败数如实进 listWarnings——图谱上少一条边，作者在图例的「未落图」计数里看得到差多少。
+    await enrichEntryRelations()
     const current = state.entry ? state.entries.find((item) => item.path === state.entry.path) : null
     if (!state.entry && state.entries.length) await openEntry(state.entries[0])
     else if (current) await openEntry(current)
+  }
+
+  /** 给 state.entries 逐条补 relations（并发 read，条目本身已带 path）。 */
+  async function enrichEntryRelations() {
+    const entries = state.entries
+    if (!entries.length) return
+    const results = await Promise.all(entries.map(async (entry) => {
+      const read = await tool('pinax_worldbook_read', { path: entry.path })
+      if (!read.ok) return null
+      return Array.isArray(read.value.entry?.relations) ? read.value.entry.relations : []
+    }))
+    let failed = 0
+    results.forEach((relations, index) => {
+      const entry = entries[index]
+      if (!entry) return
+      if (relations === null) {
+        failed += 1
+        entry.relations = []
+        return
+      }
+      entry.relations = relations
+    })
+    if (failed) state.listWarnings = [...state.listWarnings, `${failed} 条条目读取关系失败，图谱的关系边可能不全。`]
   }
 
   async function openEntry(item) {
