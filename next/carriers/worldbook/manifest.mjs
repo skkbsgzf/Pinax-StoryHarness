@@ -33,8 +33,8 @@ export const WORLDBOOK_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree' },
-      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.reader' }
+      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.reader', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

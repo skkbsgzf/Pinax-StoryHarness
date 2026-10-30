@@ -661,7 +661,10 @@ function setOverlayOpen(paneId, open, instance) {
 }
 
 function toggleBoardOverlay(paneId) {
-  setOverlayOpen(paneId, !(paneFormOf(paneId) === 'overlay' && minimizedOf(paneId) === 'none'))
+  const willOpen = !(paneFormOf(paneId) === 'overlay' && minimizedOf(paneId) === 'none')
+  // 批次35（空白卡修复）：开卡即补一次取数（已取过的树不重取）——卡片内容不等下一次板激活。
+  if (willOpen) void ensureOverlayData(paneId)
+  setOverlayOpen(paneId, willOpen)
 }
 
 /** 缩成气泡球（作者原话）：位置不变，只换最小化这一轴。 */
@@ -672,10 +675,24 @@ function bubblePane(paneId, instance) {
   return hostWorkspace.minimize(target, 'bubble')
 }
 
-/** 气泡／标签展开：回到最小化之前的位置（placement 不动）。 */
+/**
+ * 气泡／侧缘标签回卡片：只动最小化那一轴（placement 不动）。
+ * 「还原」一词在批次35 之后只留给「从全屏还原」——两个动作各说各的（见 FloatingWidget 的事件表）。
+ */
 function expandPane(paneId, instance) {
   if (!paneId) return
   hostWorkspace.expand(resolveInstance(paneId, instance))
+}
+
+/**
+ * 还原（放大钮的第二面，批次35）：这块 pane 从全屏回到进全屏之前的位置。
+ * 工作区的 restore 轴记着那个位置（applyPaneForm 走的就是这条记忆），所以这里只给形态不给坐标。
+ * 与「从气泡／侧缘标签回卡片」（toggle）是两件事，两个词各说各的。
+ */
+function restorePaneFromFullscreen(paneId) {
+  const id = String(paneId ?? '')
+  if (!id) return null
+  return applyPaneForm(id, restoreFormFor(id))
 }
 
 /** 再开一份：同一块 pane 的第二份实例，状态各记各的（大纲浮在正文上时中栏也能有一份树）。 */
@@ -684,6 +701,59 @@ function duplicatePane(paneId) {
   const instance = hostWorkspace.openInstance(paneId, { placement: 'overlay' })
   if (instance) void preparePaneData(paneId)
   return instance
+}
+
+/**
+ * 关闭（批次35 的「×」钮）：回到停靠，不是收起——#2 起连同实例记录一起删掉（workspace.closeInstance）。
+ * 与「收起」（minimized=collapsed，右侧缘小标签）分开：收起只剩 Esc 一条路。
+ */
+function closeOverlayInstance(paneId, instance) {
+  if (!paneId) return null
+  return hostWorkspace.closeInstance(resolveInstance(paneId, instance))
+}
+
+/** 钉住（批次35）：位置锁定＋进 .pinax/workspace.json；再点解除。状态只走工作区，组件不自留一份。 */
+function setPanePinned(instance, pinned) {
+  if (!instance) return null
+  return hostWorkspace.setPinned(instance, pinned === true)
+}
+
+/** 这块 pane 属于哪个载体（分屏与右键菜单都要找它）。 */
+function boardForPane(paneId) {
+  const id = String(paneId ?? '')
+  if (!id) return null
+  return boards.value.find((item) => (item.centerPanes ?? []).some((pane) => pane.id === id))
+    ?? boards.value.find((item) => (item.panes ?? []).some((pane) => pane.id === id))
+    ?? null
+}
+
+/**
+ * 分屏（批次35 · 「分屏是一等公民」）：把这块 pane 的内容送进中栏右侧副栏，浮窗随之退场。
+ * 落点分两种：
+ *   - 浮的是中栏 pane 自己（右键把它摆成浮窗）：落点就是它自己——形态切成 split 即摘掉浮窗层；
+ *   - 浮的是 overlay 槽的小窗（outline.widget）：它的正装是同一载体声明的中栏 pane，落点是那块。
+ * 落点与浮窗是同一块 pane 时**不能**再 closeInstance——那会把刚切好的 split 收回 dock（分屏自毁）。
+ */
+function splitPaneFromWidget(paneId, instance) {
+  const id = String(paneId ?? '')
+  if (!id) return null
+  // 浮的是 overlay 槽的小窗（outline.widget）不在 board.panes 投影里，boardForPane 会扑空并回退到
+  // widget 自己——落点就错了（批次35 夜验抓的）。正确的映射：谁声明了这枚 overlay，就送谁的中栏 pane。
+  const board = boards.value.find((item) => item.overlayPane?.id === id) ?? boardForPane(id)
+  const isCenterPane = board?.centerPanes?.some((pane) => pane.id === id) ?? false
+  const target = isCenterPane ? id : (board?.centerPanes?.[0]?.id ?? id)
+  const result = applyPaneForm(target, 'split')
+  if (!result?.ok) return result
+  // 落点是别家 pane 时，浮窗实例照常关闭（回停靠，与 × 同一语义）。
+  if (target !== id) closeOverlayInstance(id, instance)
+  return result
+}
+
+/** 迷你卡里的右键：与索引窗树行同一枚宿主「打开方式」菜单（不另造第二套）。 */
+function openPaneContextMenu(paneId, event) {
+  const board = boardForPane(paneId)
+  if (!board) return
+  openContextMenu(board.id, { x: event?.clientX ?? 0, y: event?.clientY ?? 0 })
 }
 
 /** 拖动结束：几何回宿主（本组件不自己存坐标）。 */
@@ -865,6 +935,48 @@ async function preparePaneData(paneId) {
   else if (id.startsWith('worldbook.')) await data.loadEntries()
   else if (id.startsWith('setting.')) await data.loadRules()
   else if (id.startsWith('reference.')) await data.loadDocuments()
+  else if (id.startsWith('script.')) await data.loadScripts()
+}
+
+/** pane 前缀 → useBoardData 里那棵树的名字（只用于「取过数没有」这一格，取数入口仍是 preparePaneData）。 */
+const PANE_TREE_KEYS = Object.freeze([
+  ['novel.', 'chapters'],
+  ['outline.', 'outline'],
+  ['notes.', 'notes'],
+  ['worldbook.', 'entries'],
+  ['setting.', 'rules'],
+  ['reference.', 'documents'],
+  ['script.', 'scripts']
+])
+
+function treeKeyForPane(paneId) {
+  const id = String(paneId ?? '')
+  const hit = PANE_TREE_KEYS.find(([prefix]) => id.startsWith(prefix))
+  return hit ? hit[1] : null
+}
+
+/**
+ * 悬浮卡的数据闸（批次35 · 修「先开浮窗就是空卡」）：卡片挂载时先补一次取数，
+ * 走的是停靠板同一条口（preparePaneData → 载体工具 → runtimeToolCall），不是第二套读法。
+ * 已经取过的树不重取——重取会把作者手上的草稿（大纲节点、条目编辑）冲掉；
+ * 在途期间由 overlayLoading 让卡片显示载入语，而不是先摊一棵空树。
+ */
+const overlayLoading = ref({})
+
+async function ensureOverlayData(paneId) {
+  const id = String(paneId ?? '')
+  if (!id) return
+  const key = treeKeyForPane(id)
+  if (!key || data.loadedTrees?.[key]) return
+  if (overlayLoading.value[id]) return
+  overlayLoading.value = { ...overlayLoading.value, [id]: true }
+  try {
+    await preparePaneData(id)
+  } finally {
+    const next = { ...overlayLoading.value }
+    delete next[id]
+    overlayLoading.value = next
+  }
 }
 
 /**
@@ -1410,23 +1522,36 @@ onBeforeUnmount(() => {
             :open="(paneState(instance)?.minimized ?? 'none') === 'none'"
             :minimized="paneState(instance)?.minimized ?? 'none'"
             :geometry="geometryOf(instance)"
+            :pinned="paneState(instance)?.pinned === true"
+            :expanded="paneFormOf(pane.paneId) === 'fullscreen'"
             :title="pane.title"
             :width="pane.width"
             :suspend-esc="settingsOpen"
-            @close="setOverlayOpen(pane.paneId, false, instance)"
-            @toggle="setOverlayOpen(pane.paneId, true, instance)"
+            @close="closeOverlayInstance(pane.paneId, instance)"
+            @collapse="setOverlayOpen(pane.paneId, false, instance)"
+            @toggle="expandPane(pane.paneId, instance)"
             @bubble="bubblePane(pane.paneId, instance)"
-            @restore="expandPane(pane.paneId, instance)"
+            @restore="restorePaneFromFullscreen(pane.paneId)"
             @expand="enterFullscreen(pane.paneId)"
             @duplicate="duplicatePane(pane.paneId)"
+            @pin="setPanePinned(instance, $event)"
+            @split="splitPaneFromWidget(pane.paneId, instance)"
+            @mounted="ensureOverlayData($event)"
             @geometry="savePaneGeometry(instance, $event)"
           >
             <template v-if="pane.paneId === 'outline.widget'">
-              <p v-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
+              <!-- 批次35（空白卡修复）：取数在途先给载入语，不摊一棵空树。 -->
+              <p v-if="overlayLoading[pane.paneId]" class="nx-overlay-empty">正在载入大纲…</p>
+              <p v-else-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
               <p v-else-if="!data.outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
               <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
                 <li v-for="(node, index) in data.outline" :key="node.id ?? `overlay-node-${index}`">
-                  <button type="button" class="workspace-nav-item workspace-nav-item--tree nx-tree-row" @click="openOutlineNodeFromWidget(index)">
+                  <button
+                    type="button"
+                    class="workspace-nav-item workspace-nav-item--tree nx-tree-row"
+                    @click="openOutlineNodeFromWidget(index)"
+                    @contextmenu.stop.prevent="openPaneContextMenu(pane.paneId, $event)"
+                  >
                     <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
                   </button>
                 </li>
@@ -1446,15 +1571,21 @@ onBeforeUnmount(() => {
         :open="minimizedOf(pane.id) === 'none'"
         :minimized="minimizedOf(pane.id)"
         :geometry="geometryOf(pane.instance)"
+        :pinned="paneState(pane.instance)?.pinned === true"
+        :expanded="paneFormOf(pane.id) === 'fullscreen'"
         :title="pane.title"
         :width="360"
         :suspend-esc="settingsOpen"
-        @close="setOverlayOpen(pane.id, false)"
+        @close="closeOverlayInstance(pane.id, pane.instance)"
+        @collapse="setOverlayOpen(pane.id, false)"
         @toggle="setOverlayOpen(pane.id, true)"
         @bubble="bubblePane(pane.id)"
         @restore="expandPane(pane.id)"
         @expand="enterFullscreen(pane.id)"
         @duplicate="duplicatePane(pane.id)"
+        @pin="setPanePinned(pane.instance, $event)"
+        @split="splitPaneFromWidget(pane.id, pane.instance)"
+        @mounted="ensureOverlayData($event)"
         @geometry="savePaneGeometry(pane.instance, $event)"
       >
         <CarrierPaneHost :pane="pane" :data="data" />

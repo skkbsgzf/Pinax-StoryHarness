@@ -99,6 +99,10 @@ export function useBoardData(bridge) {
     entryMetaDraft: { keys: '', tags: '', summary: '', relations: [] },
     listWarnings: [],
     entryWarnings: [],
+    /** 每棵树「取过数没有」（批次35）：悬浮卡挂载时据此决定要不要补一次 loadXxx——
+     *  已经取过就不再打扰（重取会把作者手上的草稿冲掉，尤其大纲的 outlineDraft）。
+     *  只由下面的 loadXxx 自己记；界面读，不写。 */
+    loadedTrees: { chapters: false, outline: false, notes: false, rules: false, entries: false, documents: false, scripts: false },
     selection: { type: null, item: null }
   })
 
@@ -139,6 +143,7 @@ export function useBoardData(bridge) {
       return
     }
     state.chapters = listed.value.chapters ?? []
+    state.loadedTrees.chapters = true
     // 卷→章两级（工单B）：章的卷名以工具返回的 volume 字段为准（顶层章为 null）；
     // 缺字段时按章节相对路径的 正文/<卷>/<章>.md 分段现算。两级封顶，更深的层级按同一卷归类。
     state.chapterGroups = groupChaptersByVolume(state.chapters, listed.value.volumes)
@@ -218,6 +223,7 @@ export function useBoardData(bridge) {
       return
     }
     state.notes = listed.value.notes ?? []
+    state.loadedTrees.notes = true
     // 换板后再回来：让打开着的那篇跟上最新修订号与正文，别摊着一份上一秒的草稿来源。
     const current = state.note ? state.notes.find((item) => item.file === state.note.file) : null
     if (current) {
@@ -296,6 +302,8 @@ export function useBoardData(bridge) {
       return
     }
     state.rules = listed.value.rules ?? []
+    // 悬浮卡/恢复路径据此判断「取过数没有」（批次35）：成功才记，失败下次挂载重试。
+    state.loadedTrees.rules = true
     // 换板后再回来：让打开着的那份跟上最新修订号与正文，别摊着一份上一秒的草稿来源。
     const current = state.rule ? state.rules.find((item) => item.file === state.rule.file) : null
     if (current) {
@@ -378,6 +386,7 @@ export function useBoardData(bridge) {
       return
     }
     state.documents = listed.value.documents ?? []
+    state.loadedTrees.documents = true
     const current = state.document ? state.documents.find((item) => item.file === state.document.file) : null
     if (current) await openDocument(current)
   }
@@ -486,6 +495,7 @@ export function useBoardData(bridge) {
       return
     }
     state.scripts = listed.value.scripts ?? []
+    state.loadedTrees.scripts = true
     const current = state.script ? state.scripts.find((item) => item.file === state.script.file) : null
     if (current) await openScript(current)
   }
@@ -724,9 +734,10 @@ export function useBoardData(bridge) {
   async function loadEntries() {
     state.busy = true
     state.treeError = null
-    // 设定板块没有大纲树（工单A3）：换到这块板就把大纲清空，别让上一块板的节点挂在状态里。
-    state.outline = []
-    state.outlineError = null
+    // 大纲树不归世界书这一栏（协议 v1.1-A：一载体一棵本域内容树）：这一栏只管条目。
+    // 也不在这里清空 state.outline —— 悬浮大纲卡是常驻窗（写作时也可用），
+    // 换栏就把它的树清掉会让卡片摊成空树（批次35 空白卡修复的真实成因）。
+    // 大纲树由 loadOutline 自己管：换到大纲栏重列一次（连草稿一起重列，那是既有口径）。
     const listed = await tool('pinax_worldbook_list', { limit: 500 })
     state.busy = false
     if (!listed.ok) {
@@ -738,6 +749,7 @@ export function useBoardData(bridge) {
     state.entries = listed.value.entries ?? []
     state.categories = Array.isArray(listed.value.categories) ? listed.value.categories : []
     state.listWarnings = listed.value.warnings ?? []
+    state.loadedTrees.entries = true
     const current = state.entry ? state.entries.find((item) => item.path === state.entry.path) : null
     if (!state.entry && state.entries.length) await openEntry(state.entries[0])
     else if (current) await openEntry(current)
@@ -912,6 +924,8 @@ export function useBoardData(bridge) {
     state.outlineEdges = read.value.edges ?? []
     state.outline = decorateOutlineNodes(read.value.nodes ?? [], state.outlineEdges)
     state.outlineRevision = read.value.revision ?? null
+    // 悬浮大纲卡据此不再重取（批次35）：重取会把中栏的 outlineDraft 冲掉。
+    state.loadedTrees.outline = true
   }
 
   /** 点索引窗的大纲行：把整份文档拷成草稿（只拷一次），选中该节点——中栏换大纲编辑面。 */

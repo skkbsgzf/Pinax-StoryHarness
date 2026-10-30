@@ -913,21 +913,47 @@ input.doc-title {
   align-items: center;
   gap: 2px;
   flex: none;
+  /* 批次35：标题条常驻的是这组小钮——hover 前弱化，hover／键盘聚焦才显形。 */
+  opacity: 0.55;
+  transition: opacity 120ms ease;
 }
-.nx-overlay-expand {
-  flex: none;
-  min-height: 24px;
-  padding: 0 6px;
-  font-size: var(--nx-fs-2xs);
-  color: var(--text-muted);
+.nx-overlay-widget:hover .nx-overlay-actions,
+.nx-overlay-widget:focus-within .nx-overlay-actions {
+  opacity: 1;
 }
-.nx-overlay-collapse {
+/* 一枚钮一件事（放大／缩小／吸附／分屏／固定／再开一份／关闭）：尺寸统一，状态只用
+   颜色与底色（is-active＝这条轴此刻成立），不再用「全屏」「+1」这种会变的文案。 */
+.nx-overlay-btn {
   flex: none;
   width: 24px;
   min-height: 24px;
   padding: 0;
   justify-content: center;
   color: var(--text-muted);
+}
+.nx-overlay-btn:hover:not(:disabled) {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
+}
+.nx-overlay-btn.is-active {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
+}
+.nx-overlay-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+/* 缩小（气泡）用一枚实心点：与旁边的线性图标同视觉重量，不额外引图标名。 */
+.nx-overlay-dot {
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+/* 钉住：位置锁定，标题条不再给「可以拖」的手势暗示。 */
+.nx-overlay-widget.is-pinned .nx-overlay-head {
+  cursor: default;
 }
 .nx-overlay-body {
   flex: 1 1 auto;

@@ -11,6 +11,10 @@
  *   geometry  { x, y, w, h, snap }               像素与吸附边（只对 overlay 有意义）
  *   restore    上一次非全屏的 placement           全屏「还原」回到哪
  *   z          浮层叠序（越大越靠前）
+ *   pinned     钉住（批次35）：位置锁定（禁拖）＋进存档；再点解除
+ *
+ * pinned 是加法字段（schema version 不动）：老存档没有它就当 false，新存档多出来的字段
+ * 由 normalizeEntry 逐条判定（只认 true），脏值不影响其它轴。
  *
  * 实例 id 是 `<paneId>#<n>`（n 从 1 起）：同一块 pane 可以开两份——「大纲浮在正文上的同时，
  * 中栏也能有一份树」。状态按实例存，所以两份互不串。
@@ -98,7 +102,8 @@ export function defaultEntry(paneId, index = 1) {
     minimized: DEFAULT_MINIMIZED,
     geometry: null,
     restore: DEFAULT_PLACEMENT,
-    z: 0
+    z: 0,
+    pinned: false
   }
 }
 
@@ -122,7 +127,9 @@ export function normalizeEntry(value, fallbackInstance = '') {
     // 气泡态不展示几何，但保留下来：展开时要回到原位置。
     geometry: normalizeGeometry(value.geometry),
     restore,
-    z: Number.isSafeInteger(value.z) && value.z >= 0 ? value.z : 0
+    z: Number.isSafeInteger(value.z) && value.z >= 0 ? value.z : 0,
+    // 批次35：钉住只有 true 算数——'yes'／1／{} 一律当没钉（脏数据不带进状态机）。
+    pinned: value.pinned === true
   }
 }
 
@@ -350,6 +357,45 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     return { ok: true, changed: true, instance: entry.instance, geometry: { ...normalized } }
   }
 
+  /**
+   * 钉住（批次35 作者原话「没有『钉子』可以去固定」）：位置锁定＋进 `.pinax/workspace.json`。
+   * 只改这一轴——placement／minimized／geometry 一个字不动（钉住的是「现在这个样子」）；
+   * 再点一下就解除。true 之外的入参一律按「解除」处理（按钮只会发 true／false）。
+   */
+  function setPinned(instance, pinned) {
+    const entry = ensure(instance)
+    if (!entry) return { ok: false, error: { code: 'INVALID_INSTANCE', message: '钉住需要 <paneId>#<n> 形式的实例 id' } }
+    const next = pinned === true
+    if (entry.pinned === next) return { ok: true, changed: false, instance: entry.instance, pinned: next }
+    entry.pinned = next
+    commit()
+    return { ok: true, changed: true, instance: entry.instance, pinned: next }
+  }
+
+  /**
+   * 关闭一条浮窗实例（批次35 的「×」钮）：回到停靠，而不是收起成侧缘标签。
+   * #1 是每块 pane 的缺省实例（instancesOf 永远给 #1），所以只把它收回 dock；
+   * #2 起是「再开一份」造出来的临时实例，关掉就整条记录删除（否则它会以收起标签的形态赖着）。
+   * 钉住不动：钉的是这条实例的位置，跟它此刻停在哪一栏无关。
+   */
+  function closeInstance(instance) {
+    const parsed = parseInstanceId(instance)
+    if (!parsed) return { ok: false, error: { code: 'INVALID_INSTANCE', message: '关闭需要 <paneId>#<n> 形式的实例 id' } }
+    const entry = entries[parsed.id]
+    if (!entry) return { ok: true, changed: false, instance: parsed.id, removed: false }
+    if (parsed.index === 1) {
+      const changed = entry.placement !== 'dock' || entry.minimized !== 'none'
+      entry.placement = 'dock'
+      entry.minimized = 'none'
+      entry.restore = 'dock'
+      if (changed) commit()
+      return { ok: true, changed, instance: parsed.id, removed: false }
+    }
+    delete entries[parsed.id]
+    commit()
+    return { ok: true, changed: true, instance: parsed.id, removed: true }
+  }
+
   function bringToFront(instance) {
     const entry = ensure(instance)
     if (!entry) return { ok: false, error: { code: 'INVALID_INSTANCE', message: '叠序需要实例 id' } }
@@ -441,6 +487,8 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     minimize,
     expand,
     setGeometry,
+    setPinned,
+    closeInstance,
     bringToFront,
     dockPane,
     adoptLegacy,

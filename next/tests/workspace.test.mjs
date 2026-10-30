@@ -54,7 +54,7 @@ test('实例 id：<paneId>#<n>；不带 # 的旧写法当 #1，越界与非法�
   assert.equal(parseInstanceId('正文#1'), null)
 })
 
-test('四轴往返：placement/minimized/geometry/restore/z 落盘再读回不变形', () => {
+test('四轴往返：placement/minimized/geometry/restore/z（＋pinned 加法轴）落盘再读回不变形', () => {
   const store = createWorkspaceStore()
   store.place('outline.tree#1', 'overlay')
   store.setGeometry('outline.tree#1', { x: 1180, y: 96, w: 320, h: 520, snap: 'right' })
@@ -70,8 +70,74 @@ test('四轴往返：placement/minimized/geometry/restore/z 落盘再读回不�
     minimized: 'bubble',
     geometry: { x: 1180, y: 96, w: 320, h: 520, snap: 'right' },
     restore: 'overlay',
-    z: 1
+    z: 1,
+    pinned: false
   })
+})
+
+test('钉住（批次35）：setPinned 往返落盘；只动 pinned 轴，placement/minimized/geometry 不陪葬', () => {
+  const store = createWorkspaceStore()
+  store.place('outline.widget#1', 'overlay')
+  store.setGeometry('outline.widget#1', { x: 120, y: 64, w: 300, h: 480, snap: null })
+  store.minimize('outline.widget#1', 'none')
+
+  const pinned = store.setPinned('outline.widget#1', true)
+  assert.equal(pinned.ok, true)
+  assert.equal(pinned.changed, true)
+  const entry = store.get('outline.widget#1')
+  assert.equal(entry.pinned, true)
+  assert.equal(entry.placement, 'overlay', '钉的是「现在这个样子」，位置轴不动')
+  assert.equal(entry.minimized, 'none')
+  assert.deepEqual(entry.geometry, { x: 120, y: 64, w: 300, h: 480, snap: null })
+
+  // true 之外的入参一律按「解除」处理；再点一次（false）解除。
+  assert.equal(store.setPinned('outline.widget#1', 'yes').pinned, false)
+  assert.equal(store.setPinned('outline.widget#1', true).pinned, true)
+  const unpinned = store.setPinned('outline.widget#1', false)
+  assert.equal(unpinned.changed, true)
+  assert.equal(store.get('outline.widget#1').pinned, false)
+
+  // 往返：存档读回，pinned 还是 true。
+  store.setPinned('outline.widget#1', true)
+  const revived = createWorkspaceStore({ initial: store.serialize() })
+  assert.equal(revived.get('outline.widget#1').pinned, true)
+
+  // 非法实例照常拒绝（空串解析不出实例 id）。
+  assert.equal(store.setPinned('', true).error.code, 'INVALID_INSTANCE')
+})
+
+test('钉住存档兼容：老存档没有 pinned 当 false；脏值（\'yes\'/1）不进门；未知字段丢弃', () => {
+  const normalized = normalizeWorkspace({
+    version: WORKSPACE_VERSION,
+    entries: {
+      // 老存档：没有 pinned 字段。
+      'outline.tree#1': { instance: 'outline.tree#1', pane: 'outline.tree', placement: 'overlay', minimized: 'none' },
+      // 新存档：pinned 是脏值；顺带带一个宿主不认识的字段。
+      'outline.tree#2': { instance: 'outline.tree#2', pane: 'outline.tree', placement: 'overlay', minimized: 'none', pinned: 'yes', mystery: 1 },
+      'outline.tree#3': { instance: 'outline.tree#3', pane: 'outline.tree', placement: 'overlay', minimized: 'none', pinned: 1 }
+    }
+  })
+  assert.equal(normalized.warnings.length, 0, '加法字段不许记账（schema version 不动）')
+  assert.equal(normalized.entries['outline.tree#1'].pinned, false, '老存档当没钉')
+  assert.equal(normalized.entries['outline.tree#2'].pinned, false, "'yes' 不是钉")
+  assert.equal(normalized.entries['outline.tree#3'].pinned, false, '1 不是钉')
+  assert.equal('mystery' in normalized.entries['outline.tree#2'], false, '未知字段丢弃')
+})
+
+test('磁盘层透传加法字段：pinned 写进 .pinax/workspace.json 再读回原样', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pinax-workspace-pin-'))
+  const disk = createFileWorkspaceStore({ root })
+  const snapshot = {
+    version: WORKSPACE_VERSION,
+    entries: {
+      'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', placement: 'overlay', minimized: 'none', geometry: null, restore: 'overlay', z: 1, pinned: true }
+    }
+  }
+  const written = await disk.write(snapshot)
+  assert.equal(written.ok, true)
+  const read = await disk.read()
+  assert.equal(read.ok, true)
+  assert.equal(read.value.entries['outline.widget#1'].pinned, true, '主进程层不洗 pinned——逐条净化只在 workspace.mjs')
 })
 
 test('全屏记来源：从 dock 进全屏、还原回 dock；从 overlay 进则还原回 overlay', () => {

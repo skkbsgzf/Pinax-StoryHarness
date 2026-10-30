@@ -663,6 +663,7 @@ test('协议 v1.2 P18–P21 → M2.5-C：形态词表归宿主，状态在 works
   assert.doesNotMatch(forms, /\.localStorage/u, '形态记忆归 workspace（主进程通道），词表模块不碰浏览器缓存')
 
   // M2.5-C：状态机在 workspace.mjs，四轴一个不少：placement / minimized / geometry / restore。
+  // 批次35 起另有加法轴 pinned（钉住）：setPinned 是唯一写口。
   const workspace = await readFile(join(shellDir, 'workspace.mjs'), 'utf-8')
   for (const needle of [
     "PLACEMENTS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen'])",
@@ -670,7 +671,8 @@ test('协议 v1.2 P18–P21 → M2.5-C：形态词表归宿主，状态在 works
     'export function createWorkspaceStore',
     'export function instanceIdFor',
     'restorePlacement',
-    'setGeometry'
+    'setGeometry',
+    'setPinned'
   ]) {
     assert.ok(workspace.includes(needle), `工作区四轴缺：${needle}`)
   }
@@ -683,7 +685,18 @@ test('协议 v1.2 P18–P21 → M2.5-C：形态词表归宿主，状态在 works
   assert.match(app, /sanitizePaneForms\(pane\.forms\)/u, '右键菜单必须按 manifest.panes 的 forms 声明列（P18）')
 
   const widget = await readFile(join(shellDir, 'FloatingWidget.vue'), 'utf-8')
-  for (const needle of ['is-snapped-left', 'is-snapped-right', '扩至全屏', "emit('expand')", 'detectSnap']) {
+  // 批次35：放大/还原是同一个钮的两面（toggleExpand），按钮组七钮各带 data-action。
+  for (const needle of [
+    'is-snapped-left',
+    'is-snapped-right',
+    'toggleExpand',
+    "emit('expand')",
+    'detectSnap',
+    'data-action="pin"',
+    "emit('pin'",
+    "emit('split')",
+    "emit('close')"
+  ]) {
     assert.ok(widget.includes(needle), `FloatingWidget 缺 P20 动作：${needle}`)
   }
 

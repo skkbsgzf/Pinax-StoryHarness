@@ -2035,9 +2035,10 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     await flushPromises()
   }
 
-  it('开/收/展开：索引窗「悬浮」钮打开右上卡片，收起成侧缘小标签，点标签再展开；Esc 收起', async () => {
+  it('开/收/关：索引窗「悬浮」钮打开右上卡片；Esc 收起成侧缘小标签，点标签再展开；× 关闭回停靠', async () => {
     globalThis.localStorage?.clear()
-    const bridge = overlayBridge()
+    const workspace = { version: 1, entries: {} }
+    const bridge = overlayBridge({ workspace })
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
     await openOutlineBoard(wrapper)
@@ -2058,8 +2059,8 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     expect(rows[0].text()).toContain('开场：雨夜进城')
     expect(rows[1].text()).toContain('第一折：停摆的表')
 
-    // 收起：卡片退场，右侧缘留一枚小标签。
-    await widget.find('[aria-label="收起悬浮窗"]').trigger('click')
+    // 收起（批次35 起只剩 Esc 一条路）：卡片退场，右侧缘留一枚小标签。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
     expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
     const tab = wrapper.find('.nx-overlay-tab')
@@ -2072,11 +2073,12 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     await flushPromises()
     expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
 
-    // Esc 收起（统一二级页没开时）。
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    // 关闭（×）：#1 回停靠，不是收起——侧缘标签也不留。
+    await wrapper.find('[data-overlay-instance="outline.widget#1"] [aria-label="关闭悬浮窗"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
-    expect(wrapper.find('.nx-overlay-tab').exists()).toBe(true)
+    expect(wrapper.find('.nx-overlay-tab').exists()).toBe(false)
+    expect(workspace.entries['outline.widget#1'].placement).toBe('dock')
     wrapper.unmount()
   })
 
@@ -2238,14 +2240,16 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     expect(hostWorkspace.get('outline.widget#1').geometry.x).toBe(40)
     expect(hostWorkspace.get('outline.widget#2').geometry.x).toBe(200)
 
-    // 收起 #2：只有 #2 变侧缘标签，#1 的卡片还在。
-    await wrapper.find('[data-overlay-instance="outline.widget#2"] [aria-label="收起悬浮窗"]').trigger('click')
+    // 关闭 #1（×＝回停靠）：#1 的卡片退场，#2 仍是卡片——实例状态互不牵连。
+    await wrapper.find('[data-overlay-instance="outline.widget#1"] [aria-label="关闭悬浮窗"]').trigger('click')
     await flushPromises()
+    expect(hostWorkspace.get('outline.widget#1').placement).toBe('dock')
     expect(hostWorkspace.get('outline.widget#1').minimized).toBe('none')
-    expect(hostWorkspace.get('outline.widget#2').minimized).toBe('collapsed')
-    expect(wrapper.findAll('.nx-overlay-widget')).toHaveLength(1)
-    const tabs = wrapper.findAll('.nx-overlay-tab')
-    expect(tabs.map((node) => node.attributes('data-overlay-instance'))).toEqual(['outline.widget#2'])
+    expect(hostWorkspace.get('outline.widget#2').placement).toBe('overlay')
+    expect(hostWorkspace.get('outline.widget#2').minimized).toBe('none')
+    const remaining = wrapper.findAll('.nx-overlay-widget')
+    expect(remaining.map((node) => node.attributes('data-overlay-instance'))).toEqual(['outline.widget#2'])
+    expect(wrapper.findAll('.nx-overlay-tab')).toHaveLength(0)
     wrapper.unmount()
     globalThis.localStorage?.clear()
   })
@@ -2490,7 +2494,8 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     await flushPromises()
     await openOutlineWidget(wrapper)
 
-    const expand = wrapper.find('[aria-label="扩至全屏"]')
+    // 批次35：放大钮（全屏 ↔ 还原是同一个钮的两面；此刻在卡片里只见「放大」这一面）。
+    const expand = wrapper.find('[data-overlay-instance="outline.widget#1"] [aria-label="放大"]')
     expect(expand.exists()).toBe(true)
     await expand.trigger('click')
     await flushPromises()
@@ -2510,6 +2515,146 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
     // 还原目标是进全屏前的位置（restore 轴记住 overlay），不是外壳里的补丁 ref。
     expect(workspace.entries['outline.widget#1'].placement).toBe('overlay')
+    wrapper.unmount()
+  })
+
+  // —— 批次35：浮窗控件组归位＋分屏一等公民＋钉住＋空白卡修复 ————————————————————
+  it('标题条按钮组：放大／缩小／吸附／分屏／固定／再开一份／关闭 七钮在场，aria 齐全顺序固定', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineWidget(wrapper)
+
+    const actions = wrapper.find('[data-overlay-instance="outline.widget#1"] .nx-overlay-head')
+      .findAll('[data-action]')
+      .map((node) => node.attributes('data-action'))
+    // 顺序固定（作者裁定）：一个钮一件事；旧的 +1／●／全屏／– 四钮已并入这套语义。
+    expect(actions).toEqual(['expand', 'bubble', 'snap', 'split', 'pin', 'duplicate', 'close'])
+
+    const head = wrapper.find('[data-overlay-instance="outline.widget#1"] .nx-overlay-head')
+    const labelOf = (action) => head.find(`[data-action="${action}"]`).attributes('aria-label')
+    expect(labelOf('expand')).toBe('放大')
+    expect(labelOf('bubble')).toBe('缩成气泡球')
+    expect(labelOf('snap')).toBe('吸附到侧边')
+    expect(labelOf('split')).toBe('分屏')
+    expect(labelOf('pin')).toBe('固定')
+    expect(labelOf('duplicate')).toBe('再开一份')
+    expect(labelOf('close')).toBe('关闭悬浮窗')
+    wrapper.unmount()
+  })
+
+  it('固定（pin）：钉住进工作区存档并禁拖；吸附钮随之禁用；再点解除', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineWidget(wrapper)
+    const widget = () => wrapper.find('[data-overlay-instance="outline.widget#1"]')
+
+    await widget().find('[data-action="pin"]').trigger('click')
+    await flushPromises()
+    expect(widget().attributes('data-pinned')).toBe('true')
+    expect(widget().classes()).toContain('is-pinned')
+    expect(widget().find('[data-action="pin"]').attributes('aria-pressed')).toBe('true')
+    expect(widget().find('[data-action="pin"]').attributes('aria-label')).toBe('解除固定')
+    expect(workspace.entries['outline.widget#1'].pinned).toBe(true, '钉住进 .pinax/workspace.json 存档')
+
+    // 钉住禁拖：标题条按下＋移动＋松手，坐标不动（geometry 还是 null）。
+    widget().find('.nx-overlay-head').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 140, clientY: 130, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 140, clientY: 130, bubbles: true }))
+    await flushPromises()
+    expect(hostWorkspace.get('outline.widget#1').geometry).toBe(null)
+    expect(widget().attributes('style')).not.toContain('left:')
+
+    // 吸附钮随之禁用（钉住的是「现在这个样子」，吸附会改位置）。
+    expect(widget().find('[data-action="snap"]').attributes('disabled')).toBeDefined()
+
+    // 再点解除：位置重新可拖，存档同步。
+    await widget().find('[data-action="pin"]').trigger('click')
+    await flushPromises()
+    expect(widget().attributes('data-pinned')).toBe('false')
+    expect(workspace.entries['outline.widget#1'].pinned).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('吸附钮：点按吸到侧边（与拖到边缘同一状态机），再点解除并退开判定带', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineWidget(wrapper)
+    const widget = () => wrapper.find('[data-overlay-instance="outline.widget#1"]')
+
+    // 没拖过的卡片默认在右上角 → 吸右。
+    await widget().find('[data-action="snap"]').trigger('click')
+    await flushPromises()
+    expect(widget().classes()).toContain('is-snapped-right')
+    expect(widget().attributes('data-snap')).toBe('right')
+    expect(widget().find('[data-action="snap"]').attributes('aria-pressed')).toBe('true')
+    expect(widget().find('[data-action="snap"]').attributes('aria-label')).toBe('解除吸附')
+    expect(workspace.entries['outline.widget#1'].geometry.snap).toBe('right')
+
+    // 再点解除：snap 清掉，位置退开 32px 判定带（不然一松手又被判成吸附）。
+    await widget().find('[data-action="snap"]').trigger('click')
+    await flushPromises()
+    const stored = workspace.entries['outline.widget#1'].geometry
+    expect(stored.snap).toBe(null)
+    expect(stored.x).toBeGreaterThan(32)
+    expect(widget().attributes('data-snap')).toBeUndefined()
+    expect(widget().find('[data-action="snap"]').attributes('aria-label')).toBe('吸附到侧边')
+    wrapper.unmount()
+  })
+
+  it('分屏钮：浮窗内容落中栏副栏，浮窗实例随之关闭（分屏一等公民）', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineWidget(wrapper)
+
+    await wrapper.find('[data-overlay-instance="outline.widget#1"] [data-action="split"]').trigger('click')
+    await flushPromises()
+
+    // 浮窗内容进了中栏右侧副栏（走既有 paneForms 通路：outline.editor 进 split）。
+    const split = wrapper.find('.nx-split')
+    expect(split.exists()).toBe(true)
+    expect(split.attributes('data-split-pane')).toBe('outline.editor')
+    expect(wrapper.find('.nx-split-side [data-pane-id="outline.editor"]').exists()).toBe(true)
+    // 浮窗实例关闭（×＝回停靠的同一语义），侧缘标签也不留。
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(false)
+    expect(wrapper.find('.nx-overlay-tab').exists()).toBe(false)
+    expect(workspace.entries['outline.widget#1'].placement).toBe('dock')
+    expect(workspace.entries['outline.editor#1'].placement).toBe('split')
+    wrapper.unmount()
+  })
+
+  it('空白卡修复：没访问过大纲板，浮窗挂载即触发 loadOutline，卡片不摊空树', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    // 存档里 outline.widget#1 上次启动就以浮窗开着——本次启动直接落在小说板，大纲板一次都没访问。
+    const workspace = {
+      version: 1,
+      entries: {
+        'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', placement: 'overlay', minimized: 'none' }
+      }
+    }
+    const bridge = multiFormBridge({ workspace })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const widget = wrapper.find('.nx-overlay-widget')
+    expect(widget.exists()).toBe(true)
+    expect(bridge.request.mock.calls.some((call) => call[1]?.tool === 'pinax_outline_read')).toBe(true)
+    const rows = widget.findAll('.nx-overlay-tree .workspace-nav-item')
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows[0].text()).toContain('开场：雨夜进城')
     wrapper.unmount()
   })
 })

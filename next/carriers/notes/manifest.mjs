@@ -32,8 +32,8 @@ export const NOTES_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list' },
-      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor' }
+      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

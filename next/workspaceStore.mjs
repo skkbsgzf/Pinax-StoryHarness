@@ -25,7 +25,9 @@ function emptyValue(exists) {
   return { version: WORKSPACE_VERSION, entries: {}, warnings: [], exists }
 }
 
-/** 主进程侧的形状把关：不做逐条净化（那是渲染层 workspace.mjs 的活），只拒「根本不是工作区」的东西。 */
+/** 主进程侧的形状把关：不做逐条净化（那是渲染层 workspace.mjs 的活），只拒「根本不是工作区」的东西。
+ *  条目里的字段一律原样透传——新增的加法字段（批次35 的 `pinned`，以后的同类）不在这里被洗掉，
+ *  也不在这里校验（逐条净化只有一处：next/shell/workspace.mjs 的 normalizeEntry）。 */
 function validateSnapshot(snapshot) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
     return { ok: false, error: { code: 'INVALID_INPUT', message: '工作区快照必须是对象' } }
