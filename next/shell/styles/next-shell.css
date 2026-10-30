@@ -1185,3 +1185,86 @@ input.doc-title {
   line-height: 1.65;
   white-space: pre;
 }
+
+/* —— Wiki 双链与反向链接（批次38）———————————————————————————————— */
+/* 条目阅读态里其它条目的名字：可点、点开跳那个条目。虚线下划线＝wiki 惯例，hover 才实。 */
+.nx-wikilink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  cursor: pointer;
+}
+.nx-wikilink:hover { text-decoration-style: solid; }
+/* 反向链接行：跟 doc-meta-hint 同一档小字，chip 是 quiet 钮（点开跳那条）。 */
+.entry-backlinks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.entry-backlinks-label { color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.entry-backlink { padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font-size: var(--nx-fs-2xs); cursor: pointer; }
+.entry-backlink:hover { color: var(--text-primary); border-color: var(--workbench-selected); }
+
+/* —— 正文写作动作（批次41）———————————————————————————————————————
+   对齐老前端写作页的「续写／改写」：动作带贴在正文下方，正文一聚焦才浮现（P18 第 2 条：
+   常驻按钮行一律取消）。它不是文档的一部分，所以只给一层极淡的底，不画边框、不圆角——
+   作者看到的那一层仍然是稿子，动作只是脚注。 */
+.nx-writing-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px 2px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.nx-writing-action {
+  padding: 3px 8px;
+  color: var(--text-secondary);
+}
+.nx-writing-action:hover:not(:disabled) { color: var(--archive-ink); }
+.nx-writing-ask {
+  flex: 1 1 180px;
+  min-width: 120px;
+  padding: 3px 0;
+  border-style: none;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-writing-ask:focus-visible { outline: 0; border-bottom-color: var(--workbench-selected); }
+.nx-writing-hint,
+.nx-writing-busy { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.nx-writing-busy { color: var(--accent); }
+/* 结果面板：这是「还没落进正文」的一段外来文字，允许有分隔（P18 对面板的豁免），
+   但仍是同一页纸上的淡痕——一条上细线，一个极浅的底。 */
+.nx-writing-result {
+  margin: 4px 20px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.nx-writing-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.nx-writing-result-label { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.nx-writing-text {
+  margin: 8px 0 0;
+  padding: 0;
+  font-family: var(--font-writing);
+  font-size: var(--writing-font-size, var(--nx-fs-lg));
+  line-height: var(--writing-line-height, 1.9);
+  color: var(--archive-ink-soft);
+  white-space: pre-wrap;
+}
+.nx-writing-error {
+  margin: 6px 20px 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--signal-warm);
+}

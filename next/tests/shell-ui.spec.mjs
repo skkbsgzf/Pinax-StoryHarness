@@ -395,6 +395,60 @@ describe('运行时栏', () => {
     wrapper.unmount()
   })
 
+  it('工具循环接上真链后过程可见：tool-start 换阶段语，tool-end 与 proposal-created 落进过程层（批次37）', async () => {
+    const handlers = new Map()
+    let settle = null
+    const response = new Promise((resolve) => { settle = resolve })
+    const bridge = {
+      request: vi.fn(async (channel) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        if (channel === IPC_CHANNELS.runtimeAsk) return response
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      }),
+      onEvent: (channel, handler) => {
+        handlers.set(channel, handler)
+        return () => handlers.delete(channel)
+      },
+      channels: IPC_CHANNELS
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('顺手把雨提前一段')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    const askId = bridge.request.mock.calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1].askId
+    const emit = handlers.get(IPC_PUSH.runtimeAskEvent)
+    expect(typeof emit).toBe('function')
+
+    emit({ askId, event: { stage: 'step', step: 1, tools: ['pinax_chapter_read', 'pinax_chapter_write'] } })
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).toContain('工具第 1 步')
+
+    emit({ askId, event: { stage: 'tool-start', name: 'pinax_chapter_read', callId: 'c1' } })
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__thinking').text()).toContain('正在调用 pinax_chapter_read')
+
+    emit({ askId, event: { stage: 'tool-end', name: 'pinax_chapter_read', callId: 'c1', ok: true, ms: 12 } })
+    emit({ askId, event: { stage: 'tool-denied', name: 'pinax_chapter_write', callId: 'c2', code: 'WRITE_BLOCKED' } })
+    emit({ askId, event: { stage: 'proposal-created', name: 'pinax_chapter_write', callId: 'c3', proposalId: '20261030-120000-chapter_save-ab12' } })
+    settle({ ok: true, value: { source: 'in-process-advisor', text: '我把雨提前了，提案放你案头。', askId } })
+    await flushPromises()
+
+    const trail = wrapper.find('details.authoring-knowledge__trail')
+    expect(trail.exists()).toBe(true)
+    // 工具三步都要在过程层里看得见：调了哪把、返回多久、被拒原因、生成了哪份提案。
+    expect(trail.text()).toContain('工具第 1 步')
+    expect(trail.text()).toContain('调用工具')
+    expect(trail.text()).toContain('pinax_chapter_read')
+    expect(trail.text()).toContain('工具返回')
+    expect(trail.text()).toContain('12ms')
+    expect(trail.text()).toContain('写入被拒')
+    expect(trail.text()).toContain('WRITE_BLOCKED')
+    expect(trail.text()).toContain('生成提案')
+    expect(trail.text()).toContain('20261030-120000-chapter_save-ab12')
+    wrapper.unmount()
+  })
+
   it('两问同时在途：事件按 askId 分桶，各自只落回自己的回答（批次29）', async () => {
     const handlers = new Map()
     const deferred = []
@@ -1533,6 +1587,38 @@ describe('提案审阅（工单B1 · 协议 v1.1-B：列表在二级页，审阅
     expect(panel.find('[data-test="proposals-section"]').text()).toContain('还没有提案')
     expect(panel.findAll('[data-test^="proposal-row-"]')).toHaveLength(0)
     wrapper.unmount()
+  })
+
+  it('批次37：主进程推 proposals-changed 时自动重列（防抖），别的类别不动；离开设置后不再重列', async () => {
+    const handlers = new Map()
+    const bridge = proposalsBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.reviewProposals' })
+    await flushPromises()
+
+    const emit = handlers.get(IPC_EVENT.projectEvent)
+    expect(typeof emit).toBe('function')
+    const before = bridge.calls.list.length
+    // 同一次提问可能连发两三条：防抖后只重列一次。
+    emit({ kind: 'proposals-changed', at: '2026-10-30T00:00:00.000Z' })
+    emit({ kind: 'proposals-changed', at: '2026-10-30T00:00:01.000Z' })
+    await new Promise((resolve) => setTimeout(resolve, 220))
+    await flushPromises()
+    expect(bridge.calls.list.length).toBe(before + 1)
+
+    // 别的类别（正文变了）不该让提案列表重列。
+    const quiet = bridge.calls.list.length
+    emit({ kind: 'manuscript-changed', at: '2026-10-30T00:00:02.000Z' })
+    await new Promise((resolve) => setTimeout(resolve, 220))
+    await flushPromises()
+    expect(bridge.calls.list.length).toBe(quiet)
+
+    wrapper.unmount()
+    // 卸载后退订：事件表里已没有监听者，再来事件也不会多列一次。
+    expect(handlers.has(IPC_EVENT.projectEvent)).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 220))
+    expect(bridge.calls.list.length).toBe(quiet)
   })
 })
 
@@ -3383,6 +3469,44 @@ describe('大纲转换（批次30）', () => {
     // 同一项目没换根，refresh 的 projectRoot 监听不会触发——转换后必须显式重列大纲树，左树才立刻长出节点。
     expect(bridge.request.mock.calls.some(([channel, payload]) => channel === IPC_CHANNELS.runtimeToolCall && payload?.tool === 'pinax_outline_read')).toBe(true)
     wrapper.unmount()
+  })
+
+  it('批次37：outline-changed 事件让本节自动重扫（dryRun），其它类别不动；离开设置后退订', async () => {
+    const handlers = new Map()
+    const calls = []
+    handlers.set(IPC_CHANNELS.outlineImport, vi.fn(async (payload) => {
+      calls.push(payload)
+      return { ok: true, value: SCAN }
+    }))
+    const bridge = outlineBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    await wrapper.find('[data-test="settings-tab-outline-import"]').trigger('click')
+    await flushPromises()
+
+    const emit = handlers.get(IPC_EVENT.projectEvent)
+    expect(typeof emit).toBe('function')
+    const before = calls.length
+
+    // 正文变了与本节无关：不重扫。
+    emit({ kind: 'manuscript-changed', at: '2026-10-30T00:00:00.000Z' })
+    await flushPromises()
+    expect(calls.length).toBe(before)
+
+    // 大纲目录变了（别处改/导入）：自动重扫一次，仍只读。
+    emit({ kind: 'outline-changed', at: '2026-10-30T00:00:01.000Z' })
+    await flushPromises()
+    expect(calls.length).toBe(before + 1)
+    expect(calls.at(-1)).toEqual({ dryRun: true })
+    expect(wrapper.find('[aria-label="大纲转换"] [data-test="outline-scan"]').text()).toContain('2 个章节标题')
+
+    wrapper.unmount()
+    // 卸载后退订：事件表里已没有监听者（直接调上面捕获的旧函数不算，它绕过桥）。
+    expect(handlers.has(IPC_EVENT.projectEvent)).toBe(false)
+    await flushPromises()
+    expect(calls.length).toBe(before + 1)
   })
 
   it('冲突与空目录如实摊开：STALE_REVISION 的 code 与 message 都显示，不假装成功', async () => {

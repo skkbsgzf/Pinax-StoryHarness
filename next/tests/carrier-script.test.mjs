@@ -84,7 +84,12 @@ test('注册顺序：剧本排在 worldbook 之后（竖条一格一载体）', 
     'pinax.carrier.worldbook',
     'pinax.carrier.script',
     'pinax.carrier.setting',
-    'pinax.carrier.reference'
+    'pinax.carrier.reference',
+    'pinax.carrier.material',
+    'pinax.carrier.comic',
+    'pinax.carrier.video',
+    'pinax.carrier.experience',
+    'pinax.carrier.online'
   ])
 })
 

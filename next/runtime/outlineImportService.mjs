@@ -1,6 +1,7 @@
 import { fail, ok } from '../kernel/errors.mjs'
 import { OUTLINE_CARRIER, OUTLINE_CARRIER_ID } from '../carriers/outline/manifest.mjs'
 import { parseOutlineProse } from './outlineProse.mjs'
+import { emitProjectEvent } from './eventBus.mjs'
 
 /**
  * 大纲转换服务（批次30 · 任务二）：散文章节稿 → `大纲/outline.json` 的章节节点。
@@ -165,6 +166,10 @@ export async function importOutlineChapters({ root, fileService, dryRun = true }
   })
   // STALE_REVISION 原样上抛：不重试、不合并、不半写。
   if (!written.ok) return written
+
+  // 批次37：大纲真的变了才发事件（重跑幂等与 dryRun 都不发）。
+  // 事件是旁路：广播失败既不影响已经落盘的写入，也不改返回值。
+  emitProjectEvent(root, { kind: 'outline-changed' })
 
   return ok({
     ...base,

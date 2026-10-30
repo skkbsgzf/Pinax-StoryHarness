@@ -1,5 +1,6 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { IPC_EVENT } from '../ipcContract.mjs'
 
 /**
  * 提案审阅 Section（工单B1：协议 v1.1-B 的落点）。
@@ -16,17 +17,51 @@ import { onMounted, ref } from 'vue'
  *
  * 只读边界：本节的「点开」不改任何文件；采纳要作者在审阅面按下去，才走 pinax_chapter_save
  * （带当前章节修订号，提案状态由文件服务原子写回）。
+ *
+ * 批次37：主进程把 `proposals-changed` 推过来时自动重列（工具循环写下提案／采纳提案都会发），
+ * 不用关弹窗再打开。重列仍只调 loadProposals，不绕过 runtime 工具面。
  */
 const props = defineProps({
   /** useBoardData 的返回值：proposals／proposalsError／proposalWarnings 都是它维护的那一份。 */
   data: { type: Object, default: null },
   /** 点开一条提案：async (item) => void（外壳负责关弹窗并置 selection）。 */
-  open: { type: Function, default: null }
+  open: { type: Function, default: null },
+  /** 主进程桥：批次37 起用来订阅项目事件（proposals-changed → 自动重列），不新增取数路径。 */
+  bridge: { type: Object, default: null }
 })
 
 const loading = ref(false)
+/** 项目事件退订函数与重列防抖（同一次提问可能连发两三条 proposals-changed）。 */
+let offProjectEvent = null
+let reloadTimer = null
 
-onMounted(() => { void reload() })
+/** 提案目录变了：防抖后重列一次；真正的数据仍走 data.loadProposals（pinax_proposal_list）。 */
+function onProjectEvent(payload) {
+  if (payload?.kind !== 'proposals-changed') return
+  if (reloadTimer) clearTimeout(reloadTimer)
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null
+    void reload()
+  }, 150)
+}
+
+onMounted(() => {
+  if (typeof props.bridge?.onEvent === 'function') {
+    offProjectEvent = props.bridge.onEvent(IPC_EVENT.projectEvent, onProjectEvent)
+  }
+  void reload()
+})
+
+onBeforeUnmount(() => {
+  if (offProjectEvent) {
+    offProjectEvent()
+    offProjectEvent = null
+  }
+  if (reloadTimer) {
+    clearTimeout(reloadTimer)
+    reloadTimer = null
+  }
+})
 
 async function reload() {
   if (typeof props.data?.loadProposals !== 'function') return

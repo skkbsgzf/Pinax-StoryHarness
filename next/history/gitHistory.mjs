@@ -12,7 +12,8 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   <root>/.pinax/state/history-dirty.json  ← 脏清单
  *
  * 机制：写入只标脏；提交时把允许前缀整棵目录逐个 `git add` 后提交一次快照。
- *   - 允许前缀：正文/ 大纲/ 世界书/ 构思/ 约束/ 资料/、.pinax/project.json（D0 工单口径）
+ *   - 允许前缀：正文/ 大纲/ 世界书/ 构思/ 约束/ 资料/ 剧本/ 素材/ 漫画/ 视频/ 体验/ 联机/、
+ *     .pinax/project.json（D0 工单口径；批次40 补剧本与 M4／M5 记录目录）
  *     与 .pinax/proposals/（工单E3：模型改稿的提案也是作者要能回溯的留痕）；
  *   - `assets/` 与 `.pinax/` 的其余部分不进历史（体积与噪声控制，见设计 §4）；
  *   - 脏清单只是「要不要提交」的触发闸，不是增量补丁清单：一次快照永远是允许前缀的完整状态，
@@ -40,8 +41,10 @@ export const HISTORY_DIRTY_SPEC = 'pinax-history-dirty@1'
 /** 仓库本地身份：绝不继承／污染用户全局 git 配置。 */
 export const HISTORY_IDENTITY = Object.freeze({ name: 'pinax', email: 'pinax@local' })
 
-/** D0 允许进历史的目录（顶格一级目录名）。 */
-export const HISTORY_ALLOWED_DIRS = Object.freeze(['正文', '大纲', '世界书', '构思', '约束', '资料'])
+/** D0 允许进历史的目录（顶格一级目录名）。
+ *  批次40（M4／M5）补上 剧本/ 与五块记录型载体的目录：它们都是作者的项目真源，
+ *  只进历史不改变权限口径（写入仍要过各自的载体工具与文件服务三道闸）。 */
+export const HISTORY_ALLOWED_DIRS = Object.freeze(['正文', '大纲', '世界书', '构思', '约束', '资料', '剧本', '素材', '漫画', '视频', '体验', '联机'])
 /** D0 允许进历史的单文件。 */
 export const HISTORY_ALLOWED_FILES = Object.freeze(['.pinax/project.json'])
 /** 允许进历史的嵌套目录（相对路径，至少再有一层文件名）——工单E3：提案留痕。

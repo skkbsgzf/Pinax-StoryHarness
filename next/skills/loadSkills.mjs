@@ -15,7 +15,57 @@ import { join } from 'node:path'
  */
 export const SKILL_FILE = 'SKILL.md'
 export const SKILL_OUTPUTS = Object.freeze(['proposal', 'checklist'])
+/** 源码轨（开发态）的技能目录：next/skills/ 自身。打包后这个常量指向 bundle 目录，不能直接拿来用。 */
 export const DEFAULT_SKILLS_DIR = fileURLToPath(new URL('./', import.meta.url))
+
+/** 这个目录里至少有一个子目录带 SKILL.md 才算「技能目录」（空目录／别的东西不算）。 */
+async function hasSkillDirectories(dir) {
+  let entries = []
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    try {
+      await readFile(join(dir, entry.name, SKILL_FILE), 'utf-8')
+      return true
+    } catch {
+      // 这个子目录不是技能包，继续看下一个。
+    }
+  }
+  return false
+}
+
+/**
+ * 技能目录的落点解析（批次37 · 任务三）。
+ *
+ * 为什么要解析：loadSkills 在打包后的**外壳 bundle 里**运行（next/.build/pinax-next-shell-main.mjs），
+ * `import.meta.url` 指向 bundle 文件本身——`./` 就成了 next/.build/，而技能源码在 next/skills/。
+ * 于是装机后技能清单永远是空的（M2.5-B 已记账的欠账）。
+ *
+ * 三个候选，按顺序：
+ *   1) PINAX_NEXT_SKILLS_DIR（验收／自定安装位用，显式覆盖优先）；
+ *   2) <模块目录>/skills —— 装机轨：构建期把 next/skills/ 拷到 next/.build/skills/；
+ *   3) <模块目录> 自身 —— 开发轨：模块就是 next/skills/loadSkills.mjs；
+ *   4) <模块目录>/../skills —— 模块被再嵌一层时（如 .build/xxx/）的回退。
+ * 找不到任何一个带 SKILL.md 的目录时返回第一个候选，让 readdir 的失败如实进 rejected。
+ */
+export async function resolveSkillsDir({ env = process.env, moduleDir = DEFAULT_SKILLS_DIR } = {}) {
+  const candidates = [
+    typeof env?.PINAX_NEXT_SKILLS_DIR === 'string' && env.PINAX_NEXT_SKILLS_DIR.trim()
+      ? env.PINAX_NEXT_SKILLS_DIR.trim()
+      : null,
+    join(moduleDir, 'skills'),
+    moduleDir,
+    join(moduleDir, '..', 'skills')
+  ].filter(Boolean)
+  for (const candidate of candidates) {
+    if (await hasSkillDirectories(candidate)) return candidate
+  }
+  return candidates[0]
+}
 
 function unquote(value) {
   const text = String(value ?? '').trim()
@@ -105,13 +155,16 @@ export function parseSkillMarkdown(markdown, { dir = '', nameHint = '' } = {}) {
  * 装载一整个技能目录。`availableTools` 是这一刻工具面上的名字（含 pinax_skill_read 自己）。
  * 返回 { skills, rejected }：rejected 里每条约 { dir, code, message }，不抛错、不静默吞。
  */
-export async function loadSkills({ dir = DEFAULT_SKILLS_DIR, availableTools = [] } = {}) {
+export async function loadSkills({ dir = null, availableTools = [] } = {}) {
+  // 不传 dir 就按「开发轨／装机轨」解析（批次37）：打包后模块目录是 next/.build/，
+  // 技能跟着拷到 .build/skills/；源码轨则直接是 next/skills/。
+  const skillsDir = dir ?? await resolveSkillsDir()
   const onSurface = new Set((Array.isArray(availableTools) ? availableTools : []).map((name) => String(name)))
   let entries = []
   try {
-    entries = await readdir(dir, { withFileTypes: true })
+    entries = await readdir(skillsDir, { withFileTypes: true })
   } catch (error) {
-    return { skills: [], rejected: [{ dir, code: 'SKILLS_DIR_UNREADABLE', message: String(error?.message || error) }] }
+    return { skills: [], rejected: [{ dir: skillsDir, code: 'SKILLS_DIR_UNREADABLE', message: String(error?.message || error) }] }
   }
   const skills = []
   const rejected = []
@@ -122,7 +175,7 @@ export async function loadSkills({ dir = DEFAULT_SKILLS_DIR, availableTools = []
   for (const name of directories) {
     let markdown = ''
     try {
-      markdown = await readFile(join(dir, name, SKILL_FILE), 'utf-8')
+      markdown = await readFile(join(skillsDir, name, SKILL_FILE), 'utf-8')
     } catch {
       rejected.push({ dir: name, code: 'SKILL_FILE_MISSING', message: `${name}/${SKILL_FILE} 不存在` })
       continue

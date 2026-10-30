@@ -1,7 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
+import { linkifyEntryNames, computeBacklinks } from './wikiLinks.mjs'
 import { resolvePaneView } from './viewRegistry.mjs'
+import { recordCarrierOfPaneId } from './recordCarriers.mjs'
+import { availableWritingActions } from './writingActions.mjs'
 
 /**
  * 核心区里的载体面板：正文的编辑面、构思的编辑面、大纲的编辑面、世界书条目的阅读与编辑面
@@ -74,8 +77,133 @@ const viewPlaceholderReason = computed(() => {
 const entryHtml = computed(() => renderMarkdown(props.data.entry?.content ?? ''))
 const documentHtml = computed(() => renderMarkdown(props.data.document?.text ?? ''))
 const scriptHtml = computed(() => renderMarkdown(props.data.script?.text ?? ''))
+const recordHtml = computed(() => renderMarkdown(props.data.record?.body ?? ''))
+
+/**
+ * 正文写作动作（批次41 · 对齐老前端写作面）：「续写／改写／扩写／压缩／润色」收在正文下方一条轻量动作带上。
+ *
+ * 三个约定：
+ *   1) 动作带跟着写作面走——正文一聚焦就浮现，离开就收起；只剩「续写」时它也还在，
+ *      因为那是写作时最常按的那一下。有产出／生成中／报错时常驻，否则作者会看不到自己刚按出来的东西。
+ *   2) 结果不自动落进正文：先摆出来，作者按「插入光标处／替换选中段」才动稿子。
+ *      老版就是这个顺序——先看，再决定收不收。
+ *   3) 按钮用 mousedown.prevent，点它不会把焦点从 textarea 抢走，光标位置因此不会丢。
+ */
+const hasDraftSelection = computed(() => {
+  const range = props.data.draftSelection
+  return Boolean(range && Number(range.end) > Number(range.start))
+})
+const writingActions = computed(() => availableWritingActions({ hasSelection: hasDraftSelection.value }))
+const writingInstruction = ref('')
+const editorFocused = ref(false)
+const instructionFocused = ref(false)
+const writingBarVisible = computed(() => editorFocused.value || instructionFocused.value
+  || Boolean(props.data.writingBusy || props.data.writingResult || props.data.writingError))
+const writingBusy = computed(() => Boolean(props.data.writingBusy))
+const chapterArea = ref(null)
+
+/** 选区上报：正文面每次 select／keyup／mouseup 报一次，动作带据此决定出哪几个按钮。 */
+function onDraftSelect(event) {
+  const el = event?.target
+  if (!el || typeof el.selectionStart !== 'number') return
+  props.data.setDraftSelection(el.selectionStart, el.selectionEnd)
+}
+
+function startWriting(actionId) {
+  if (!actionId) return
+  instructionFocused.value = false
+  props.data.requestWriting(actionId, writingInstruction.value)
+}
+
+/** 落位后把光标放回正文（caret 由 applyWritingResult 算好）：作者接着往下写，不用再点一下。 */
+watch(() => [props.data.draftSelection?.start, props.data.draftSelection?.end], async () => {
+  const start = Number(props.data.draftSelection?.start ?? 0)
+  const end = Number(props.data.draftSelection?.end ?? start)
+  await nextTick()
+  const el = chapterArea.value
+  if (!el || document.activeElement !== el) return
+  if (el.selectionStart !== start || el.selectionEnd !== end) el.setSelectionRange(start, end)
+})
+
+/**
+ * 记录型载体（批次40 · M4／M5）：中间这条记录详情／编辑面由 pane id 首段认出是哪一栏。
+ * 类型与状态用清单里的建议值做下拉；遇到老数据里的陌生值，把它原样加进选项——
+ * 不做「读得到但一保存就被洗成默认值」那种事。
+ */
+const recordCarrier = computed(() => recordCarrierOfPaneId(props.pane?.id))
+const recordTags = computed(() => (Array.isArray(props.data.record?.tags) ? props.data.record.tags : []))
+const recordRefs = computed(() => (Array.isArray(props.data.record?.refs) ? props.data.record.refs : []))
+const recordMetaCount = computed(() => {
+  const meta = props.data.record?.meta
+  return meta && typeof meta === 'object' && !Array.isArray(meta) ? Object.keys(meta).length : 0
+})
+const recordTypeOptions = computed(() => withCurrent(recordCarrier.value?.types, props.data.recordDraft?.type))
+const recordStatusOptions = computed(() => withCurrent(recordCarrier.value?.statuses, props.data.recordDraft?.status))
+function withCurrent(list, current) {
+  const out = [...(Array.isArray(list) ? list : [])]
+  const value = String(current ?? '').trim()
+  if (value && !out.includes(value)) out.push(value)
+  return out
+}
+
+/** 删除的两步确认：第一下只把按钮文案换成「确认删除」，换一条记录或再点一下才真的删。 */
+const recordDeleteArmed = ref(false)
+watch(() => props.data.record?.id, () => {
+  recordDeleteArmed.value = false
+})
+function askRemoveRecord() {
+  if (!recordDeleteArmed.value) {
+    recordDeleteArmed.value = true
+    return
+  }
+  recordDeleteArmed.value = false
+  void props.data.removeRecord()
+}
 const proposalCurrentHtml = computed(() => renderMarkdown(props.data.proposalChapter?.text ?? '（目标章还没读到）'))
 const proposalDraftHtml = computed(() => renderMarkdown(props.data.proposal?.content ?? ''))
+
+/**
+ * Wiki 双链与反向链接（批次38）：条目阅读态里其它条目的名字包成可点链接；
+ * 反向链接（谁提到我）列成可点的 chip 行。都只吃 data.entries——与表格/图谱同源。
+ * 链接词表＝全名＋keys（frontmatter 的触发词就是 wiki 的 alias 语义：正文写短名
+ * 「柯秒」也要能跳到「人物·柯秒」全名条目）。同 token 撞多条目时先声明者赢。
+ */
+const entryRenderedEl = ref(null)
+const entryLinkTokens = computed(() => {
+  // 词表＝全名＋「·」后短名＋keys＋tags（大梦真稿的触发词住 tags，keys 全空——真数据教的）。
+  // 通用 tag（记忆/结构）靠 firstOnly 首现限链，不糊屏。
+  const tokens = []
+  for (const item of props.data.entries ?? []) {
+    if (!item?.name) continue
+    tokens.push(item.name)
+    const suffix = String(item.name).split('·')[1]
+    if (suffix && suffix.length >= 2) tokens.push(suffix)
+    for (const word of [...(item.keys ?? []), ...(item.tags ?? [])]) {
+      if (typeof word === 'string' && word.length >= 2 && !tokens.includes(word)) tokens.push(word)
+    }
+  }
+  const ownKeys = props.data.entry?.keys ?? []
+  return tokens.filter((token) => token !== props.data.entry?.name && !ownKeys.includes(token))
+})
+const entryBacklinks = computed(() => computeBacklinks(props.data.entries ?? [], props.data.entry?.name, props.data.entry?.path))
+watch([entryHtml, () => props.data.entry?.name, () => props.data.editingEntry], async () => {
+  if (props.data.editingEntry) return
+  await nextTick()
+  if (entryRenderedEl.value) linkifyEntryNames(entryRenderedEl.value, entryLinkTokens.value, { firstOnly: true })
+})
+function resolveEntryToken(token) {
+  return props.data.entries.find((candidate) => candidate.name === token || (candidate.keys ?? []).includes(token))
+}
+function onRenderedClick(event) {
+  const link = event.target?.closest?.('.nx-wikilink')
+  if (!link) return
+  const item = resolveEntryToken(link.dataset.entry)
+  if (item) props.data.openEntry(item)
+}
+async function openBacklink(backlink) {
+  const item = props.data.entries.find((candidate) => candidate.path === backlink.path || candidate.name === backlink.name)
+  if (item) await props.data.openEntry(item)
+}
 
 /** 提案头部的时刻：模型写这一版提案的时间（精确到分钟），解析不了就退回原话。 */
 function stampOf(value) {
@@ -162,6 +290,7 @@ const SAVE_TARGET_BY_VIEW = {
   'rule-editor': 'rule',
   'document-detail': 'document',
   'script-editor': 'script',
+  'records-editor': 'record',
   'entry-detail': 'entry'
 }
 
@@ -224,6 +353,7 @@ function saveCurrent() {
     case 'rule-editor': return props.data.saveRule()
     case 'document-detail': return props.data.saveDocument()
     case 'script-editor': return props.data.editingScript ? props.data.saveScript() : undefined
+    case 'records-editor': return props.data.editingRecord ? props.data.saveRecord() : undefined
     case 'entry-detail': return props.data.editingEntry ? props.data.saveEntry() : undefined
     default: return undefined
   }
@@ -256,6 +386,15 @@ async function reloadFromChip() {
   }
   if (target === 'document' && props.data.document) await props.data.openDocument(props.data.document)
   if (target === 'script' && props.data.script) await props.data.openScript(props.data.script)
+  if (target === 'record' && props.data.record) {
+    // 记录：先重列拿到最新文档修订号，再按 id 重读；不做静默合并。
+    const carrier = props.data.record.carrier
+    const id = props.data.record.id
+    await props.data.loadRecords(carrier, { syncCurrent: false })
+    const item = props.data.recordSets?.[carrier]?.records?.find((candidate) => candidate.id === id)
+    if (item) await props.data.openRecord(carrier, item)
+    return
+  }
   if (target === 'outline') {
     // loadOutline 会收起旧 chip（重读＝新状态）；节点下标按重读后的长度钳一下，节点被删也不越界。
     await props.data.loadOutline()
@@ -319,12 +458,75 @@ watch(() => props.data.editingEntry, (editing) => {
           </span>
         </div>
         <textarea
+          ref="chapterArea"
           class="editor-area"
           :value="data.draft"
           spellcheck="false"
           aria-label="正文编辑器"
           @input="data.setDraft($event.target.value)"
+          @focus="editorFocused = true"
+          @blur="editorFocused = false"
+          @select="onDraftSelect"
+          @keyup="onDraftSelect"
+          @mouseup="onDraftSelect"
         />
+        <!-- 写作动作带（批次41）：正文一聚焦就浮现，离开就收起。按钮不抢焦点（mousedown.prevent），
+             所以「选中一段 → 按改写」之后光标与选区都还在原处。 -->
+        <div v-if="writingBarVisible" class="nx-writing-bar" data-test="writing-bar">
+          <span class="nx-writing-actions">
+            <button
+              v-for="action in writingActions"
+              :key="action.id"
+              type="button"
+              class="control-quiet nx-writing-action"
+              :data-test="`writing-${action.id}`"
+              :disabled="writingBusy"
+              @mousedown.prevent
+              @click="startWriting(action.id)"
+            >{{ action.label }}</button>
+          </span>
+          <input
+            v-model="writingInstruction"
+            class="nx-writing-ask"
+            type="text"
+            maxlength="500"
+            spellcheck="false"
+            placeholder="这次的要求（可不填）"
+            aria-label="写作动作的额外要求"
+            data-test="writing-instruction"
+            @focus="instructionFocused = true"
+            @blur="instructionFocused = false"
+            @keydown.enter.prevent="startWriting(writingActions[0]?.id)"
+          >
+          <span v-if="writingBusy" class="nx-writing-busy" role="status">正在写…</span>
+          <span v-else-if="hasDraftSelection" class="nx-writing-hint">
+            已选中 {{ data.draftSelection.end - data.draftSelection.start }} 字
+          </span>
+        </div>
+        <!-- 生成结果先摆出来，不自动落进正文：作者按「插入／替换」才动稿子。 -->
+        <div v-if="data.writingResult" class="nx-writing-result" data-test="writing-result">
+          <div class="nx-writing-result-head">
+            <span class="nx-writing-result-label">{{ data.writingResult.label }} · 还没落进正文</span>
+            <span class="nx-writing-actions">
+              <button
+                type="button"
+                class="control-secondary nx-writing-apply"
+                data-test="writing-apply"
+                @mousedown.prevent
+                @click="data.applyWriting()"
+              >{{ data.writingResult.target === 'replace' ? '替换选中段' : '插入光标处' }}</button>
+              <button
+                type="button"
+                class="control-quiet nx-writing-discard"
+                data-test="writing-discard"
+                @mousedown.prevent
+                @click="data.discardWriting()"
+              >丢弃</button>
+            </span>
+          </div>
+          <div class="nx-writing-text">{{ data.writingResult.text }}</div>
+        </div>
+        <p v-if="data.writingError" class="nx-writing-error" data-test="writing-error">{{ data.writingError }}</p>
         <p class="doc-meta-hint">
           {{ data.chapter.file }} · 第 {{ data.chapter.revision }} 版 · {{ data.chapter.totalChars }} 字<em v-if="data.chapter.truncated">（当前只载入前段）</em>
         </p>
@@ -609,8 +811,27 @@ watch(() => props.data.editingEntry, (editing) => {
           @input="data.setEntryDraft($event.target.value)"
         />
         <!-- 阅读态（批次26）：md 原文渲染成 HTML（标题／粗体／列表／引用／代码块…）。
-             渲染器只产出自己拼的标签，输入整段先转义，所以 v-html 的来源是可信的。 -->
-        <div v-else class="entry-text nx-rendered-md" data-test="entry-rendered" v-html="entryHtml" />
+             渲染器只产出自己拼的标签，输入整段先转义，所以 v-html 的来源是可信的。
+             批次38：渲染后做 Wiki 双链（其它条目名 → 可点链接），点击经 openEntry 跳条目。 -->
+        <div
+          v-else
+          ref="entryRenderedEl"
+          class="entry-text nx-rendered-md"
+          data-test="entry-rendered"
+          @click="onRenderedClick"
+          v-html="entryHtml"
+        />
+        <!-- 反向链接（批次38）：谁提到我（relations 或正文包含），点一下跳过去。 -->
+        <div v-if="!data.editingEntry && entryBacklinks.length" class="entry-backlinks" data-test="entry-backlinks">
+          <span class="entry-backlinks-label">被引用</span>
+          <button
+            v-for="backlink in entryBacklinks"
+            :key="backlink.path || backlink.name"
+            type="button"
+            class="control-quiet entry-backlink"
+            @click="openBacklink(backlink)"
+          >{{ backlink.name }}</button>
+        </div>
         <p v-if="data.entry.contentTruncated" class="pane-notice">只显示前 {{ data.entry.content.length }} 字，全篇 {{ data.entry.contentChars }} 字。</p>
         <!-- meta 沉底（批次33）：路径 · 第 N 版 · N 字（条目再加关键词／摘要）——头部不放 meta。 -->
         <p class="doc-meta-hint">
@@ -724,6 +945,94 @@ watch(() => props.data.editingEntry, (editing) => {
         <p class="doc-meta-hint">{{ data.script.file }} · 第 {{ data.script.revision }} 版 · {{ data.script.totalChars }} 字</p>
       </div>
       <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇剧本，或在那里新建一篇。</p>
+    </template>
+
+    <!-- 记录型载体（批次40 · M4／M5）：素材／漫画／视频／体验／联机共用这条详情面。
+         阅读态＝md 渲染正文＋标签／引用／类型状态；编辑态＝标题、类型、状态、标签、引用与正文。
+         Ctrl+S 与头部「保存」走同一个 saveRecord；meta 不在界面上拆，但保存时原样带回。
+         删除是两步确认：第一下只换文案，换一条记录即复位。 -->
+    <template v-else-if="viewKind === 'records-editor'">
+      <div v-if="data.record && recordCarrier" class="entry-body">
+        <div class="doc-head">
+          <h2 class="doc-title">{{ data.record.title || data.record.id }}</h2>
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <template v-if="data.editingRecord">
+              <button type="button" class="control-secondary records-save" :disabled="data.busy" @click="data.saveRecord()">保存</button>
+              <button type="button" class="control-quiet records-cancel" :disabled="data.busy" @click="data.cancelEditRecord()">取消</button>
+            </template>
+            <template v-else>
+              <button type="button" class="control-secondary records-edit" @click="data.editRecord()">编辑</button>
+              <button type="button" class="control-quiet records-remove" :disabled="data.busy" @click="askRemoveRecord()">{{ recordDeleteArmed ? '确认删除' : '删除' }}</button>
+            </template>
+          </span>
+        </div>
+        <div v-if="data.editingRecord" class="entry-meta-edit records-form">
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">标题</span>
+            <input
+              class="nx-field"
+              :value="data.recordDraft.title"
+              spellcheck="false"
+              aria-label="记录标题"
+              @input="data.setRecordField('title', $event.target.value)"
+            >
+          </label>
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">类型</span>
+            <select class="nx-field" :value="data.recordDraft.type" aria-label="记录类型" @change="data.setRecordField('type', $event.target.value)">
+              <option v-for="option in recordTypeOptions" :key="option" :value="option">{{ option }}</option>
+            </select>
+          </label>
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">状态</span>
+            <select class="nx-field" :value="data.recordDraft.status" aria-label="记录状态" @change="data.setRecordField('status', $event.target.value)">
+              <option v-for="option in recordStatusOptions" :key="option" :value="option">{{ option }}</option>
+            </select>
+          </label>
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">标签</span>
+            <input
+              class="nx-field"
+              :value="data.recordDraft.tags"
+              spellcheck="false"
+              placeholder="逗号分隔"
+              aria-label="记录标签（逗号分隔）"
+              @input="data.setRecordField('tags', $event.target.value)"
+            >
+          </label>
+          <label class="entry-meta-field is-summary">
+            <span class="entry-meta-label">引用</span>
+            <textarea
+              class="nx-field"
+              :value="data.recordDraft.refs"
+              rows="2"
+              spellcheck="false"
+              placeholder="一行一条：相对路径或外链"
+              aria-label="记录引用（一行一条）"
+              @input="data.setRecordField('refs', $event.target.value)"
+            />
+          </label>
+        </div>
+        <textarea
+          v-if="data.editingRecord"
+          class="editor-area"
+          :value="data.recordDraft.body"
+          spellcheck="false"
+          aria-label="记录正文编辑器"
+          @input="data.setRecordField('body', $event.target.value)"
+        />
+        <div v-else class="entry-text nx-rendered-md" aria-label="记录正文" v-html="recordHtml" />
+        <p v-if="!data.editingRecord && recordTags.length" class="pane-hint">标签：{{ recordTags.join('、') }}</p>
+        <p v-if="!data.editingRecord && recordRefs.length" class="pane-hint">引用：{{ recordRefs.join(' · ') }}</p>
+        <p v-if="!data.editingRecord && recordMetaCount" class="pane-hint">这条记录还带着 {{ recordMetaCount }} 项载体私有字段（原样保存，界面不拆）。</p>
+        <p class="doc-meta-hint">{{ recordCarrier.dir }}/{{ recordCarrier.file }} · 第 {{ data.record.revision }} 版 · {{ data.record.type || '未分类' }} · {{ data.record.status || '无状态' }}</p>
+      </div>
+      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一条{{ recordCarrier?.title ?? '记录' }}，或在那里新建一条。</p>
     </template>
 
     <!-- 只在真的没有对应视图时才显示（批次15 验收修：原来挂在第二条链的 v-else 上，

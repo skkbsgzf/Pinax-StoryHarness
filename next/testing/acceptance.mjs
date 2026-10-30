@@ -10,7 +10,7 @@ import { createProject, initBareProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { buildRuntimeEnvelope } from '../runtime/contextProfiles.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, REFERENCE_CARRIER_ID, SCRIPT_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, COMIC_CARRIER_ID, EXPERIENCE_CARRIER_ID, MATERIAL_CARRIER_ID, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, ONLINE_CARRIER_ID, OUTLINE_CARRIER_ID, REFERENCE_CARRIER_ID, SCRIPT_CARRIER_ID, SETTING_CARRIER_ID, VIDEO_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { FIXTURE_NOVEL } from './fixtures.mjs'
 import { probePort } from './harness.mjs'
 
@@ -197,6 +197,62 @@ try {
   await carrierRuntime.stop()
   record('M2 全程零端口：载体工具服务过一轮后 39551 与 3001 仍无监听',
     (await probePort(39551)) === false && (await probePort(3001)) === false)
+
+  // ── 批次40：M4/M5 五块记录型载体（素材／漫画／视频／体验／联机）──────────────────
+  // 它们共用一份 JSON 真源＋四把工具；体验的 requires(script.scenes) 由闭包自动带剧本。
+  const recordsRoot = join(workspace, 'projects', '记录载体靶子')
+  const recordsRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+  for (const plugin of BUILT_IN_CARRIER_PLUGINS) recordsRegistry.install(plugin.manifest, plugin.impl, plugin.meta)
+  const recordsMade = await createProject({
+    root: recordsRoot,
+    name: '记录载体靶子',
+    primaryCarrier: MATERIAL_CARRIER_ID,
+    registry: recordsRegistry,
+    extraEnabled: [COMIC_CARRIER_ID, VIDEO_CARRIER_ID, EXPERIENCE_CARRIER_ID, ONLINE_CARRIER_ID]
+  })
+  const recordsDirs = recordsMade.ok ? await readdir(recordsRoot) : []
+  record('M4/M5 建项目：素材主载体＋漫画/视频/体验/联机四伴生，五块目录落盘；体验的依赖闭包自动带进剧本载体与 剧本/',
+    recordsMade.ok === true
+      && ['素材', '漫画', '视频', '体验', '联机', '剧本'].every((dir) => recordsDirs.includes(dir))
+      && recordsMade.value.enabled.includes(SCRIPT_CARRIER_ID),
+    recordsMade.ok ? `enabled=${recordsMade.value.enabled.join(',')}` : String(recordsMade.error?.message || ''))
+
+  const recordsOpened = await openProject({ root: recordsRoot, registry: recordsRegistry })
+  const recordsRuntime = createAgentRuntime({ registry: recordsRegistry, fileService: recordsOpened.value.fileService, view: recordsOpened.value.view })
+  const recordsStarted = await recordsRuntime.start()
+  record('M4/M5 聚合工具面：19 内核 ∪ 技能读取 1 ∪ 五块记录载体各四把＋剧本三把＝43，其中 23 个名字由载体服务',
+    recordsStarted.ok === true && recordsStarted.value.toolCount === 43 && recordsStarted.value.carrierTools === 23,
+    `toolCount=${recordsStarted.value?.toolCount} carrierTools=${recordsStarted.value?.carrierTools}`)
+
+  const recordsEmpty = await recordsRuntime.callTool('pinax_material_list', {})
+  const recordCreated = await recordsRuntime.callTool('pinax_material_save', {
+    title: '雨夜参考图', type: 'reference-image', status: 'inbox', body: '巷口一盏灯，雨线斜着落。', tags: ['雨夜'], meta: { width: 1200 }, expectedRevision: 0
+  })
+  const recordId = recordCreated.value.payload?.record?.id
+  const recordBlind = await recordsRuntime.callTool('pinax_material_save', { id: recordId, status: 'accepted', expectedRevision: 0 })
+  const recordUpdated = await recordsRuntime.callTool('pinax_material_save', { id: recordId, status: 'accepted', expectedRevision: 1 })
+  const recordRemoved = await recordsRuntime.callTool('pinax_material_remove', { id: recordId, expectedRevision: 2 })
+  const recordDoc = JSON.parse(await readFile(join(recordsRoot, '素材', '素材.json'), 'utf-8'))
+  record('M4/M5 记录底座：空文档 revision 0；新建 1→改 2→删 3；盲写被 STALE_REVISION 拒；未传字段保留；只删记录不删文件',
+    recordsEmpty.value.payload.ok === true && recordsEmpty.value.payload.revision === 0
+      && recordCreated.value.payload.ok === true && recordCreated.value.payload.revision === 1
+      && recordBlind.value.payload.ok === false && recordBlind.value.payload.code === NEXT_ERROR_CODES.STALE_REVISION
+      && recordUpdated.value.payload.ok === true && recordUpdated.value.payload.revision === 2
+      && recordUpdated.value.payload.record.tags?.join() === '雨夜'
+      && recordUpdated.value.payload.record.meta?.width === 1200
+      && recordRemoved.value.payload.ok === true && recordRemoved.value.payload.revision === 3
+      && recordDoc.schemaVersion === 1 && recordDoc.records.length === 0,
+    `空=${recordsEmpty.value.payload?.revision} 建=${recordCreated.value.payload?.revision} 盲写=${recordBlind.value.payload?.code} 改=${recordUpdated.value.payload?.revision} 删=${recordRemoved.value.payload?.revision}`)
+
+  // 另一块载体写的是另一份文档：互不串修订号。
+  const comicSaved = await recordsRuntime.callTool('pinax_comic_save', { title: '第1页', type: 'comic-page', expectedRevision: 0 })
+  const materialAfterComic = await recordsRuntime.callTool('pinax_material_list', {})
+  record('M4/M5 一载体一文档：漫画写入落 漫画/漫画.json，素材文档修订号不受影响',
+    comicSaved.value.payload.ok === true && comicSaved.value.payload.file === '漫画/漫画.json'
+      && materialAfterComic.value.payload.file === '素材/素材.json' && materialAfterComic.value.payload.revision === 3,
+    `漫画=${comicSaved.value.payload?.file}@${comicSaved.value.payload?.revision} 素材=${materialAfterComic.value.payload?.file}@${materialAfterComic.value.payload?.revision}`)
+
+  await recordsRuntime.stop()
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

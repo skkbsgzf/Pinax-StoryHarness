@@ -84,7 +84,7 @@ test('工具面：资料载体启用后四把工具进面、归属它；内核�
     const report = toolOwnershipReport(registry)
     assert.deepEqual(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 设定 2；资料三把不在内核 19 里')
     assert.equal(report.unclaimed.length, 14)
-    assert.deepEqual(report.declaredOutsideKernel.slice(-REFERENCE_TOOL_NAMES.length), [...REFERENCE_TOOL_NAMES], '资料四把是自有名字，逐条留名在门禁白名单里')
+    assert.deepEqual(report.declaredOutsideKernel.filter((name) => /^pinax_(document|reference)_/u.test(name)).sort(), [...REFERENCE_TOOL_NAMES].sort(), '资料四把是自有名字，逐条留名在门禁白名单里（批次40 起后面还有记录载体的名字，不能靠切片位置断言）')
     assert.deepEqual(report.withoutImplementation, [], '声明了就必须有实现，否则不许进面')
   } finally {
     await runtime.stop()

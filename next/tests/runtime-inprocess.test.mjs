@@ -113,7 +113,8 @@ test('注入 runner 后「问一句话」走通，提案只进 .pinax/proposals/
  * 两条腿一起核：空注册表必须还是内核全量（证明运行时不依附插件），
  * 装了随框架发布的载体后认领数必须真的往下走，且认领的名字都得有实现——
  * 否则聚合面会静默回落内核，作者看到的归属和实际服务的实现就不是同一回事。
- * 协议 v1.1-A 起是六块载体：认领面仍是 5 个内核名字（小说 2 ＋ 大纲 1 ＋ 世界书 2）。
+ * 随框架发布的是十二块载体：认领面仍是 5 个内核名字（小说 2 ＋ 大纲 1 ＋ 世界书 2），
+ * M4/M5 五块（素材／漫画／视频／体验／联机）只带自有名字，不认领内核工具。
  */
 test('工具归属核对：空注册表＝内核全量；装内置载体后认领 5、未认领 14，且认领的都有实现', () => {
   const bare = toolOwnershipReport(createRegistry({ kinds: Object.keys(PROJECT_KINDS) }))
@@ -127,6 +128,6 @@ test('工具归属核对：空注册表＝内核全量；装内置载体后认�
   assert.equal(report.kernelCount, 19, '内核名单仍是 19：技能读取归运行时原生工具，不进内核清单')
   assert.deepEqual([...report.claimed].sort(), ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read'])
   assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须逐批缩小')
-  assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'], '七载体自有名字：正文写口＋提案三把（小说）、大纲写半边、构思这对、世界书写口、剧本三条（批次26）、约束这对、资料三把＋检索（断言同步）')
+  assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search', 'pinax_material_list', 'pinax_material_read', 'pinax_material_save', 'pinax_material_remove', 'pinax_comic_list', 'pinax_comic_read', 'pinax_comic_save', 'pinax_comic_remove', 'pinax_video_list', 'pinax_video_read', 'pinax_video_save', 'pinax_video_remove', 'pinax_experience_list', 'pinax_experience_read', 'pinax_experience_save', 'pinax_experience_remove', 'pinax_online_list', 'pinax_online_read', 'pinax_online_save', 'pinax_online_remove'], '十二载体自有名字：正文写口＋提案三把（小说）、大纲写半边、构思这对、世界书写口、剧本三条（批次26）、约束这对、资料三把＋检索、M4/M5 五块记录载体各四把（断言同步）')
   assert.deepEqual(report.withoutImplementation, [], '声明了却没实现的工具会被面剔掉，这里必须为空')
 })

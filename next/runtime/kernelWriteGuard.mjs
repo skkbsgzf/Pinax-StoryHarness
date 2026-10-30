@@ -72,6 +72,17 @@ export const CARRIER_WRITE_CLASS = Object.freeze({
   pinax_script_save: Object.freeze({ dir: '剧本' }),
   pinax_rule_save: Object.freeze({ dir: '约束' }),
   pinax_document_save: Object.freeze({ dir: '资料' }),
+  // 批次40（M4／M5）：五块记录型载体各有一条写口与一条删口，都写自己那份 JSON 文档。
+  pinax_material_save: Object.freeze({ dir: '素材' }),
+  pinax_material_remove: Object.freeze({ dir: '素材' }),
+  pinax_comic_save: Object.freeze({ dir: '漫画' }),
+  pinax_comic_remove: Object.freeze({ dir: '漫画' }),
+  pinax_video_save: Object.freeze({ dir: '视频' }),
+  pinax_video_remove: Object.freeze({ dir: '视频' }),
+  pinax_experience_save: Object.freeze({ dir: '体验' }),
+  pinax_experience_remove: Object.freeze({ dir: '体验' }),
+  pinax_online_save: Object.freeze({ dir: '联机' }),
+  pinax_online_remove: Object.freeze({ dir: '联机' }),
   pinax_proposal_discard: Object.freeze({ dir: null })
 })
 

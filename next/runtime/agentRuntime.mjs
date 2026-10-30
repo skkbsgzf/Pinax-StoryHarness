@@ -3,6 +3,7 @@ import { buildGrantTable, canPerform } from '../kernel/scopeGrant.mjs'
 import { createRuntimeSurface } from './mcpSurface.mjs'
 import { connectInProcess } from './transportInProcess.mjs'
 import { normalizeWriteMode } from './writePolicy.mjs'
+import { subscribeProjectEvents } from './eventBus.mjs'
 import { RUNTIME_CONTRACT, RUNTIME_ID } from './runtimeContract.mjs'
 
 /**
@@ -21,6 +22,26 @@ export function createAgentRuntime(options = {}) {
   let link = null
   let toolCache = null
   let surfaceState = null
+  /** 项目事件的宿主投递（批次37）：一份订阅覆盖所有声明了 project.changed 的启用载体。 */
+  let detachProjectEvents = null
+
+  /**
+   * 把一次项目变更交给每个订阅载体的 impl.onProjectEvent（批次37，M2.5-C 承诺的兑现）。
+   * 今天没有载体实现这个钩子——投递路径是真实的、空的；未来某块载体要做「盘变了就重算缓存」，
+   * 在自己 impl 上加一个 onProjectEvent 即可，清单不用改（订阅声明已经在 manifest 里）。
+   */
+  function deliverProjectEvent(event, subscriberIds) {
+    for (const pluginId of subscriberIds) {
+      const handler = registry?.impl?.(pluginId)?.onProjectEvent
+      if (typeof handler !== 'function') continue
+      try {
+        const returned = handler({ ...event }, { pluginId })
+        if (returned && typeof returned.then === 'function') returned.then(null, () => {})
+      } catch {
+        // 事件是旁路：一个载体的处理器坏掉不影响别的载体，更不影响写入本身。
+      }
+    }
+  }
 
   const runtime = {
     contract: RUNTIME_CONTRACT,
@@ -30,12 +51,25 @@ export function createAgentRuntime(options = {}) {
     async start() {
       if (link) return ok({ already: true, toolCount: toolCache?.length ?? 0 })
       const surface = options.surface
-        ? { server: options.surface, carrierCount: 0, carrierToolNames: [], missingImplementations: [], aggregated: false }
+        ? { server: options.surface, carrierCount: 0, carrierToolNames: [], missingImplementations: [], aggregated: false, subscribedCarriers: [] }
         : await createRuntimeSurface({ registry, view: options.view, fileService, advisorBaseUrl: options.advisorBaseUrl, skillsDir: options.skillsDir })
       surfaceState = surface
       link = await connectInProcess(surface.server, { clientName: options.clientName ?? 'pinax-next-shell' })
       toolCache = await link.listTools()
-      return ok({ toolCount: toolCache.length, carrierTools: surface.carrierCount, aggregatedSurface: surface.aggregated, transports: ['in-process'], portsOpened: 0 })
+      // 宿主替声明了 project.changed 的启用载体挂投递：只认当前项目根，换项目＝换运行时＝新订阅。
+      const projectRoot = fileService?.root ?? options.view?.root ?? null
+      const subscribers = surface.subscribedCarriers ?? []
+      if (projectRoot && subscribers.length) {
+        detachProjectEvents = subscribeProjectEvents(projectRoot, (event) => deliverProjectEvent(event, subscribers))
+      }
+      return ok({
+        toolCount: toolCache.length,
+        carrierTools: surface.carrierCount,
+        aggregatedSurface: surface.aggregated,
+        subscribedCarriers: subscribers.length,
+        transports: ['in-process'],
+        portsOpened: 0
+      })
     },
 
     /**
@@ -48,6 +82,11 @@ export function createAgentRuntime(options = {}) {
     },
 
     async stop() {
+      // 订阅先退：换项目／关运行时之后，旧根的事件不该再投给这块载体。
+      if (detachProjectEvents) {
+        detachProjectEvents()
+        detachProjectEvents = null
+      }
       if (!link) return ok({ stopped: false })
       await link.close()
       link = null
@@ -66,6 +105,7 @@ export function createAgentRuntime(options = {}) {
         carrierToolNames: surfaceState?.carrierToolNames ?? [],
         aggregated: surfaceState?.aggregated ?? false,
         missingImplementations: surfaceState?.missingImplementations ?? [],
+        subscribedCarriers: surfaceState?.subscribedCarriers ?? [],
         writeGuard: surfaceState?.writeGuard ?? null,
         skills: surfaceState?.skills ?? { names: [], rejected: [], catalog: [] }
       }

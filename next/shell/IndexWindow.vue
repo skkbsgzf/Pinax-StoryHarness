@@ -4,6 +4,7 @@ import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchTooltip.js'
 import { outlineDepths as depthsOfOutline } from './outlineTree.mjs'
 import { nextEntriesView, readEntriesView, writeEntriesView } from './entriesView.mjs'
+import { recordCarrierOfPaneId } from './recordCarriers.mjs'
 import EntryGraph from './EntryGraph.vue'
 
 /**
@@ -128,7 +129,15 @@ const treeKind = computed(() => {
   if (paneId.startsWith('script.')) return 'scripts'
   if (paneId.startsWith('setting.')) return 'rules'
   if (paneId.startsWith('reference.')) return 'documents'
+  if (recordCarrierOfPaneId(paneId)) return 'records'
   return 'none'
+})
+
+/** 记录型载体（批次40）：当前栏的对照表项与它那棵树的列表。 */
+const recordCarrier = computed(() => recordCarrierOfPaneId(props.board?.treePaneId))
+const recordSet = computed(() => {
+  const key = recordCarrier.value?.key
+  return (key && props.data.recordSets?.[key]) || { records: [], error: null, loaded: false }
 })
 
 /** 树所在的目录名：取板块认领的第一个目录（小说＝正文，大纲＝大纲，构思＝构思…）。 */
@@ -140,6 +149,17 @@ const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data
 const isRuleOpen = (item) => props.data.selection?.type === 'rule' && props.data.selection.item?.file === item.file
 const isDocumentOpen = (item) => props.data.selection?.type === 'document' && props.data.selection.item?.file === item.file
 const isScriptOpen = (item) => props.data.selection?.type === 'script' && props.data.selection.item?.file === item.file
+const isRecordOpen = (item) => props.data.selection?.type === 'record'
+  && props.data.selection.item?.carrier === recordCarrier.value?.key
+  && props.data.selection.item?.id === item.id
+
+/** 记录行的提示：类型 · 状态 · 更新时间（记录没有文件路径与修订号那两栏）。 */
+function recordRowHint(item) {
+  return [item?.type, item?.status, item?.updatedAt ? `更新于 ${String(item.updatedAt).slice(0, 10)}` : '']
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join(' · ')
+}
 
 /** 卷→章两级（工单B）：useBoardData 组好组，这里只负责画；没有 groups 时退回平铺列表。 */
 const chapterGroups = computed(() => {
@@ -382,6 +402,7 @@ async function submitNewItem() {
   if (draft.kind === 'chapters') await props.data.createChapter(title)
   else if (draft.kind === 'documents') await props.data.createDocument(title)
   else if (draft.kind === 'scripts') await props.data.createScript(title)
+  else if (draft.kind === 'records' && recordCarrier.value) await props.data.createRecord(recordCarrier.value.key, title)
   else if (draft.kind === 'notes') await props.data.createNote(title)
   else if (draft.kind === 'rules') await props.data.createRule(title)
   else if (draft.kind === 'entries') await props.data.createEntry(title, draft.category ?? '')
@@ -407,6 +428,9 @@ watch(() => props.board?.id, () => {
   } else if (treeKind.value === 'scripts') {
     // 剧本（批次26）：剧本板只有这一棵树（剧本/）。
     void props.data.loadScripts()
+  } else if (treeKind.value === 'records' && recordCarrier.value) {
+    // 记录型载体（批次40）：素材／漫画／视频／体验／联机各列各的那棵记录树。
+    void props.data.loadRecords(recordCarrier.value.key)
   }
 }, { immediate: true })
 </script>
@@ -920,6 +944,58 @@ watch(() => props.board?.id, () => {
         </ul>
         <p v-if="!data.scripts.length && !data.scriptsError" class="nx-index-empty">剧本还没有内容（剧本/）。</p>
         <p v-if="data.scriptsError" class="nx-index-error">{{ data.scriptsError }}</p>
+      </template>
+
+      <!-- 记录型载体（批次40 · M4／M5）：素材／漫画／视频／体验／联机共用一棵记录树。
+           行可点开——点行进中栏的记录详情／编辑面；类型与状态退到行 tooltip。 -->
+      <template v-else-if="treeKind === 'records'">
+        <div class="nx-index-section-head">
+          <p class="workspace-nav-section">{{ treeDir }}</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="index-new-toggle"
+            :aria-label="`新建${recordCarrier?.title ?? '记录'}`"
+            :aria-expanded="(newItem?.kind === 'records').toString()"
+            v-workbench-tooltip="{ text: `新建${recordCarrier?.title ?? '记录'}`, side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewItem('records')"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
+        </div>
+        <div v-if="newItem?.kind === 'records'" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newItemInput"
+            v-model="newItem.title"
+            class="nx-field is-tiny"
+            data-test="index-new-input"
+            :placeholder="`新${recordCarrier?.title ?? '记录'}标题`"
+            :aria-label="`新${recordCarrier?.title ?? '记录'}标题`"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
+          >
+        </div>
+        <ul class="nx-tree">
+          <li v-for="item in recordSet.records" :key="item.id" class="nx-tree-line">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isRecordOpen(item) }"
+              :aria-current="isRecordOpen(item) ? 'page' : null"
+              :title="recordRowHint(item)"
+              @click="data.openRecord(recordCarrier.key, item)"
+              @contextmenu.prevent.stop="onRowContextMenu"
+            >
+              <span class="workspace-nav-label">{{ item.title || item.id }}</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!recordSet.records.length && !recordSet.error" class="nx-index-empty">
+          {{ recordCarrier?.title }}还没有记录（{{ recordCarrier?.dir }}/{{ recordCarrier?.file }}）。
+        </p>
+        <p v-if="recordSet.error" class="nx-index-error">{{ recordSet.error }}</p>
       </template>
 
       <ul v-if="data.listWarnings.length" class="nx-index-warn">

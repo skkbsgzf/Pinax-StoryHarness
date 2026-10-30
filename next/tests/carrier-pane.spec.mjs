@@ -5,7 +5,7 @@ import CarrierPaneHost from '../shell/CarrierPaneHost.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
 import { useBoardData } from '../shell/useBoardData.mjs'
-import { IPC_CHANNELS } from '../shell/ipcContract.mjs'
+import { IPC_CHANNELS, IPC_EVENT } from '../shell/ipcContract.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 
 /**
@@ -42,7 +42,7 @@ const PROPOSAL = {
   createdAt: '2026-10-28T14:00:00'
 }
 
-function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, outlineEdges = null, notes = [], proposals = [], rules = [], documents = [], scripts = [] } = {}) {
+function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, outlineEdges = null, notes = [], proposals = [], rules = [], documents = [], scripts = [], entries = null } = {}) {
   const state = {
     revision: 1,
     text: '雨从檐口滴下来。',
@@ -59,7 +59,7 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, ou
     rules: rules.map((item) => ({ ...item })),
     documents: documents.map((item) => ({ ...item })),
     scripts: scripts.map((item) => ({ ...item })),
-    entries: [
+    entries: entries ?? [
       { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true, summary: '雪夜醒来的主角，袖中有一枚停摆的表。' },
       { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
     ]
@@ -133,8 +133,8 @@ function fakeTools({ stale = false, chapterCount = 2, outlineMissing = false, ou
         // 批次34：索引窗按 path 打开条目（同一名字可住在两个类别目录里）。
         const hit = state.entries.find((item) => (payload.args.path && item.path === payload.args.path) || (item.id && item.id === payload.args.id) || (payload.args.name && (item.name === payload.args.name || item.name.includes(payload.args.name))))
         if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「世界书/」里没有 查无此人' } } }
-        const content = hit.savedText ?? (hit.name === '随手记' ? '一些还没整理的设定碎句。' : '冷穿越剧版主角，醒来在雪夜。')
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, entry: { ...hit, relations: [], keys: hit.aliases, content, contentChars: content.length, contentTruncated: false }, warnings: hit.contract ? [] : ['条目「随手记」未按世界书文件契约建档（未找到 frontmatter），返回的是整篇正文。'] } } }
+        const content = hit.savedText ?? hit.content ?? (hit.name === '随手记' ? '一些还没整理的设定碎句。' : '冷穿越剧版主角，醒来在雪夜。')
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, entry: { ...hit, relations: Array.isArray(hit.relations) ? hit.relations : [], keys: hit.aliases ?? hit.keys ?? [], content, contentChars: content.length, contentTruncated: false }, warnings: hit.contract ? [] : ['条目「随手记」未按世界书文件契约建档（未找到 frontmatter），返回的是整篇正文。'] } } }
       }
       if (payload.tool === 'pinax_worldbook_save') {
         const hit = state.entries.find((item) => item.path === payload.args.path)
@@ -1502,7 +1502,8 @@ describe('MD 原生渲染与剧本面（批次26）', () => {
     expect(rendered.exists()).toBe(true)
     expect(rendered.html()).toContain('<strong>粗体</strong>')
     expect(rendered.html()).toContain('<em>斜体</em>')
-    expect(rendered.html()).toContain('<h1>柯秒</h1>')
+    // 批次38：标题里的名字若命中其它条目的词表，会被包成 wikilink——两种形态都算对。
+    expect(rendered.html()).toMatch(/<h1>(<a class="nx-wikilink" data-entry="[^"]*">)?柯秒<\/h1>/)
     expect(rendered.html()).toContain('<li>一</li>')
 
     // 作者在正文里手写 HTML：转义后当文字显示，不会被浏览器当标签执行。
@@ -1554,6 +1555,130 @@ describe('MD 原生渲染与剧本面（批次26）', () => {
     expect(pane().find('textarea.editor-area').exists()).toBe(false)
     expect(pane().find('[aria-label="剧本正文"]').html()).toContain('<strong>话说</strong>')
     wrapper.unmount()
+  })
+})
+
+describe('Wiki 双链与反向链接（批次38）', () => {
+  /**
+   * 词表＝全名＋「·」后短名＋keys＋tags（CarrierPaneHost 的 entryLinkTokens）；
+   * 反向链接＝其它条目 relations[].to 提到我，或正文包含我的全名（computeBacklinks）。
+   * 这里用真 useBoardData 走 openEntry（pinax_worldbook_read 按 path），
+   * 证明「点链接真的换了条目」而不是只画了个下划线。
+   */
+  const wikiEntries = [
+    { id: 'wb-1', name: '人物·柯秒', keys: ['柯秒'], tags: ['主角'], path: '世界书/人物·柯秒.md', revision: 1, contract: true, content: '# 柯秒\n\n袖中有一枚停摆的表，与 物品·怀表 一同进城。', relations: [] },
+    { id: 'wb-2', name: '物品·怀表', keys: [], tags: [], path: '世界书/物品·怀表.md', revision: 1, contract: true, content: '柯秒 袖口的表。', relations: [{ to: '人物·柯秒' }] },
+    { id: null, name: '随手记', keys: [], tags: [], path: '世界书/随手记.md', revision: 1, contract: false, content: '一些还没整理的设定碎句。', relations: [] }
+  ]
+
+  it('条目名与短名包成可点 wikilink；点一下按 path 打开那条', async () => {
+    const tools = fakeTools({ entries: wikiEntries })
+    const data = useBoardData(tools)
+    await data.loadEntries()
+    // 先停在「随手记」，再切到柯秒：内容变了才触发阅读态的「渲染后链接化」看门狗
+    // （与作者点开另一条同一条路径；名字与正文都没变的赋值不会重渲染）。
+    await data.openEntry(data.entries[2])
+    const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('worldbook.entries'), data } })
+    await flushPromises()
+    data.entry = { ...data.entries[0] }
+    await flushPromises()
+
+    const rendered = wrapper.find('.entry-text.nx-rendered-md')
+    const full = rendered.find('a.nx-wikilink[data-entry="物品·怀表"]')
+    expect(full.exists(), '全名进了词表').toBe(true)
+    // 自己的名字与自己的 keys 不链自己；「柯秒」是别人的 key 时才有链接（这里没有别人叫柯秒）。
+    expect(rendered.find('a.nx-wikilink[data-entry="人物·柯秒"]').exists()).toBe(false)
+
+    await full.trigger('click')
+    await flushPromises()
+    const opened = tools.calls.filter((call) => call.tool === 'pinax_worldbook_read')
+    expect(opened.at(-1).args).toEqual({ path: '世界书/物品·怀表.md' })
+    expect(data.entry.name).toBe('物品·怀表')
+    wrapper.unmount()
+  })
+
+  it('反向链接只认「relations 提到」或「正文含全名」，排除自己；chip 点开跳过去', async () => {
+    const tools = fakeTools({ entries: wikiEntries })
+    const data = useBoardData(tools)
+    await data.loadEntries()
+    const wrapper = mount(CarrierPaneHost, { props: { pane: paneOf('worldbook.entries'), data } })
+    await flushPromises()
+    data.entry = { ...data.entries[0] }
+    await flushPromises()
+
+    const backlinks = wrapper.find('[data-test="entry-backlinks"]')
+    expect(backlinks.exists(), '有反向链接才出现这一行').toBe(true)
+    expect(backlinks.text()).toContain('物品·怀表')
+    // 随手记正文只有「设定碎句」，没提「人物·柯秒」全名——不进反向链接。
+    expect(backlinks.text()).not.toContain('随手记')
+
+    await backlinks.find('button.entry-backlink').trigger('click')
+    await flushPromises()
+    expect(data.entry.name).toBe('物品·怀表')
+    wrapper.unmount()
+  })
+})
+
+describe('项目事件消费端（批次39）', () => {
+  it('事件只刷已载入的树；编辑中／草稿开着时只重建树、不碰草稿', async () => {
+    const tools = fakeTools()
+    const data = useBoardData(tools)
+    // 一棵树都没取过数：事件不能替作者打开任何东西。
+    expect(await data.refreshFromProjectEvent('entries-changed')).toEqual([])
+    expect(tools.calls.filter((call) => call.tool === 'pinax_worldbook_list')).toHaveLength(0)
+
+    // 载入世界书 → 自动打开第一条；再进编辑态写一笔草稿。
+    await data.loadEntries()
+    const openedEntry = data.entry
+    data.editingEntry = true
+    data.entryDraft = '作者正在改，别覆盖'
+    await data.refreshFromProjectEvent('entries-changed')
+    expect(tools.calls.filter((call) => call.tool === 'pinax_worldbook_list')).toHaveLength(2)
+    expect(data.entry).toBe(openedEntry)
+    expect(data.entryDraft).toBe('作者正在改，别覆盖')
+
+    // 大纲草稿开着＝作者在改：outline-changed 不重读（树也不重建，免得冲掉整份草稿）。
+    await data.loadOutline()
+    data.outlineDraft = { nodes: [{ id: 'n1', title: '作者在改' }], edges: [] }
+    const outlineReads = tools.calls.filter((call) => call.tool === 'pinax_outline_read').length
+    await data.refreshFromProjectEvent('outline-changed')
+    expect(tools.calls.filter((call) => call.tool === 'pinax_outline_read')).toHaveLength(outlineReads)
+
+    // 正文只重建索引：作者正在写的正文草稿一个字不动（章节没有编辑态开关，不能重读当前章）。
+    await data.loadChapters()
+    data.draft = '正在写的这一章，别重读'
+    await data.refreshFromProjectEvent('manuscript-changed')
+    expect(tools.calls.filter((call) => call.tool === 'pinax_chapter_list').length).toBeGreaterThanOrEqual(2)
+    expect(data.draft).toBe('正在写的这一章，别重读')
+  })
+
+  it('AppNext 订阅 projectEvent：一拍内合并、只刷已载入的树、卸载退订', async () => {
+    const tools = fakeTools()
+    const handlers = new Map()
+    const bridge = {
+      request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)),
+      onEvent: (channel, handler) => {
+        handlers.set(channel, handler)
+        return () => handlers.delete(channel)
+      }
+    }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(handlers.has(IPC_EVENT.projectEvent), '外壳订阅了项目事件').toBe(true)
+
+    await openBoard(wrapper, '世界书')
+    tools.calls.length = 0
+    const emit = handlers.get(IPC_EVENT.projectEvent)
+    emit({ kind: 'entries-changed' })
+    emit({ kind: 'entries-changed' })
+    await new Promise((resolve) => setTimeout(resolve, 220))
+    await flushPromises()
+    // 两条同类事件合并成一次 list；正文树没载入过，manuscript 的事件在这里根本不存在。
+    expect(tools.calls.filter((call) => call.tool === 'pinax_worldbook_list')).toHaveLength(1)
+    expect(tools.calls.filter((call) => call.tool === 'pinax_chapter_list')).toHaveLength(0)
+
+    wrapper.unmount()
+    expect(handlers.has(IPC_EVENT.projectEvent), '卸载后退订').toBe(false)
   })
 })
 

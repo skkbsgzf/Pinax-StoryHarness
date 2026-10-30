@@ -460,12 +460,38 @@ test('外壳引旧轨叶子件只引这三个：一个都不许多', async () =>
 
 test('真模型这条链在主进程里接线：外壳必须注入进程内 advisor 运行器（否则「运行时能问」永远答不了）', async () => {
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
-  assert.match(mainSource, /createAdvisorRunner\(\)/, '外壳主进程必须装进程内 advisor 运行器')
+  // 批次37：运行器不再裸装——工具循环是它的可选接线，缺了这一句等于「有模型、不会用工具」。
+  assert.match(mainSource, /createAdvisorRunner\(\{\s*toolLoop:\s*createProjectToolLoop\(\)\s*\}\)/, '外壳主进程必须装进程内 advisor 运行器并接上工具循环')
   assert.match(mainSource, /runtimeOptions:\s*\{\s*runner:/, '运行器必须经 runtimeOptions 注入（测试与验收刻意不注入，好留住那条如实失败路径）')
 
   // 模型面端点必须可被 env 覆写：默认端点写死在 8451，装机到别的机器就只能得到那句「未检测到可用模型」。
   const gateway = await readFile(new URL('../../server/services/kitModelGateway.js', import.meta.url), 'utf-8')
   assert.match(gateway, /process\.env\.PINAX_ADAPTER_ENDPOINT\s*\|\|\s*KIT_TASK_PLANE_ENDPOINT/, '模型面端点必须允许 env 覆写')
+})
+
+test('批次37 主进程三件接线：单实例锁闸住装配、项目事件转 IPC 推送、工具循环带写策略与提案店', async () => {
+  const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
+
+  // 单实例锁（附条）：抢不到锁直接退出，且装配入口必须认这把锁——否则「退出」只关了个空壳。
+  assert.match(mainSource, /const singleInstanceLock = typeof app\.requestSingleInstanceLock === 'function'/, '锁的申请要有非 Electron 环境的兜底')
+  assert.match(mainSource, /if \(!singleInstanceLock\) app\.quit\(\)/, '抢不到锁必须 quit')
+  assert.match(mainSource, /app\.on\('second-instance'/, '第二实例要把已有窗口提到前台')
+  assert.match(mainSource, /if \(invokedDirectly && singleInstanceLock\)/, '装配/建窗必须被锁闸住')
+
+  // 项目事件：唯一的写盘钩子先发总线事件，再由历史是否就绪决定标脏；推送走 IPC_EVENT.projectEvent。
+  assert.match(mainSource, /fileService\.setOnWrite\(async \(\{ relativePath \}\) => \{\s*const kind = projectEventKindForPath\(relativePath\)/s, '写盘钩子必须先做路径→事件映射')
+  assert.match(mainSource, /if \(kind\) emitProjectEvent\(projectRoot, \{ kind \}\)/, '认得出的路径必须发事件')
+  assert.match(mainSource, /subscribeProjectEvents\(projectRoot, \(event\) => \{[\s\S]*?sendToRenderer\(IPC_EVENT\.projectEvent/, '当前项目根要有一份订阅并转成渲染层推送')
+  assert.match(mainSource, /onProjectClosed[\s\S]*?detachProjectEvents\(\)/, '关项目必须退订，旧根事件不得再推')
+
+  // 工具循环：模型面、工具面、策略、提案店四件都要真接上，缺一件就是「循环空转」。
+  assert.match(mainSource, /createToolLoop\(\{/, '主进程要真有工具循环工厂')
+  assert.match(mainSource, /createKitToolTurn\(\)/, '模型回合走 kit 任务面')
+  assert.match(mainSource, /selectTools\(/, '工具面按意图/技能/写模式筛选')
+  assert.match(mainSource, /createWritePolicy\(\{\s*mode: writeMode,/, '写模式来自会话真值，不写死')
+  assert.match(mainSource, /landing: \{ \.\.\.KERNEL_WRITE_CLASS, \.\.\.CARRIER_WRITE_CLASS \}/, '落点表必须是内核＋载体两份写类')
+  assert.match(mainSource, /createProposalStore\(\{\s*fileService:/, 'review 档的提案要落到当前项目的文件服务')
+  assert.match(mainSource, /stage === 'proposal-created'[\s\S]*?emitProjectEvent\([^)]*proposals-changed/, '生成提案也要推动提案列表刷新')
 })
 
 test('主题偏好字段（D2）：只认 light／dark／null；prefs:set 单写 theme 不重置其它偏好', async () => {

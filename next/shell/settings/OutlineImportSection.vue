@@ -1,16 +1,20 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { IPC_CHANNELS } from '../ipcContract.mjs'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { IPC_CHANNELS, IPC_EVENT } from '../ipcContract.mjs'
 
 /**
- * 大纲转换 Section（批次30 · 任务三）。
+ * 大纲转换 Section（批次30 · 任务三；批次37 接事件总线）。
  *
  * 作者真稿是 `大纲/001-004.md` 这种散文章节稿（一份文件里好几章），大纲载体的读工具只认
  * `outline.json`／`大纲.md` 两个名字——所以这里给一个「扫描 → 转换并导入」的入口：
  *   ① 打开本节自动扫描一次（dryRun=true，不写盘）：摊开「N 份 md · M 个章节标题」；
  *   ② 作者按下「转换并导入」才真的落盘（dryRun=false）：转换走主进程的 outline:import 通道
  *      （next/runtime/outlineImportService），现有节点一律不动、只追加缺的章节；
- *   ③ 成功后 emit('changed')，外壳走既有刷新路径，左树立刻长出节点（不做事件总线，M2.5-C 记账）。
+ *   ③ 成功后 emit('changed')，外壳走既有刷新路径，左树立刻长出节点。
+ *
+ * 批次37 起再多一条路：主进程的项目事件总线把 `outline-changed` 推到这里，本节自动重扫。
+ * 所以「别处改了大纲/」不必再手动点「重新扫描」；本节自己按下的转换也发同一条事件，
+ * 用 busy 与 1.5 秒窗口避开自我触发（否则刚摊开的结果行会被一次静默重扫冲掉）。
  *
  * 诚实边界：`### 小节` 不立节点；重复章节按 source 判同一节（重跑幂等）；冲突（STALE_REVISION）
  * 原样把 code + message 摊开，不重试、不覆盖。
@@ -29,6 +33,10 @@ const result = ref(null)
 const error = ref(null)
 /** '' | 'scan' | 'apply'——同一时刻只做一件事。 */
 const busy = ref('')
+/** 本项目最近一次成功转换的时刻：事件驱动的重扫要避开「自己刚发的」那一条。 */
+let lastAppliedAt = 0
+/** 项目事件退订函数（组件卸载时摘掉，不在弹窗关掉后继续收事件）。 */
+let offProjectEvent = null
 
 const projectName = computed(() => props.project?.name ?? null)
 const scanSummary = computed(() => (scan.value
@@ -74,14 +82,36 @@ async function apply() {
     return
   }
   result.value = applied.value
+  lastAppliedAt = Date.now()
   // scan 保留为「转换前那一眼」，扫描行改读结果；要再看一次现状按「重新扫描」。
   // 左树立刻长出节点：先重列大纲树（同项目不换根，外壳 refresh 的 projectRoot 监听不会触发），
-  // 再走既有 changed → AppNext.refresh 让视图（修订号等）重新读一遍。不加事件总线（M2.5-C 记账）。
+  // 再走既有 changed → AppNext.refresh 让视图（修订号等）重新读一遍。
   if (typeof props.reload === 'function') await props.reload()
   emit('changed')
 }
 
-onMounted(runScan)
+/** 事件驱动重扫：只认 outline-changed；自己正在转换／刚转换完的那一下跳过（见文件头注释）。 */
+function onProjectEvent(payload) {
+  if (payload?.kind !== 'outline-changed') return
+  if (busy.value) return
+  if (result.value && Date.now() - lastAppliedAt < 1500) return
+  result.value = null
+  void runScan()
+}
+
+onMounted(() => {
+  if (typeof props.bridge?.onEvent === 'function') {
+    offProjectEvent = props.bridge.onEvent(IPC_EVENT.projectEvent, onProjectEvent)
+  }
+  void runScan()
+})
+
+onUnmounted(() => {
+  if (offProjectEvent) {
+    offProjectEvent()
+    offProjectEvent = null
+  }
+})
 </script>
 
 <template>

@@ -18,6 +18,16 @@ import { createSettingBlocks } from './setting/context.mjs'
 import { REFERENCE_CARRIER, REFERENCE_CARRIER_ID } from './reference/manifest.mjs'
 import { REFERENCE_TOOL_NAMES, createReferenceTools } from './reference/tools.mjs'
 import { createReferenceBlocks } from './reference/context.mjs'
+import { MATERIAL_CARRIER, MATERIAL_CARRIER_ID } from './material/manifest.mjs'
+import { MATERIAL_TOOL_NAMES, createMaterialTools } from './material/tools.mjs'
+import { COMIC_CARRIER, COMIC_CARRIER_ID } from './comic/manifest.mjs'
+import { COMIC_TOOL_NAMES, createComicTools } from './comic/tools.mjs'
+import { VIDEO_CARRIER, VIDEO_CARRIER_ID } from './video/manifest.mjs'
+import { VIDEO_TOOL_NAMES, createVideoTools } from './video/tools.mjs'
+import { EXPERIENCE_CARRIER, EXPERIENCE_CARRIER_ID } from './experience/manifest.mjs'
+import { EXPERIENCE_TOOL_NAMES, createExperienceTools } from './experience/tools.mjs'
+import { ONLINE_CARRIER, ONLINE_CARRIER_ID } from './online/manifest.mjs'
+import { ONLINE_TOOL_NAMES, createOnlineTools } from './online/tools.mjs'
 
 /**
  * 随框架发布的载体清单（M2 起；协议 v1.1-A 起是六块）。
@@ -33,6 +43,8 @@ import { createReferenceBlocks } from './reference/context.mjs'
  *   setting    约束/（约束清单）
  *   reference  资料/（资料清单）
  * 竖条顺序即注册顺序（v1.1-A：v1 按注册顺序＝小说/大纲/构思/世界书/剧本/设定/资料）。
+ * 批次40 起再排五栏（M4／M5）：素材／漫画／视频／体验／联机——它们都是记录型载体
+ * （一份 `<目录>/<载体>.json` ＋ list/read/save/remove 四把工具），数据落点见 jsonRecords.mjs。
  * 每个包＝一份清单 ＋ 一个 impl，impl 只有两个可选工厂：
  *   impl.tools(projectCtx)   —— 进运行时工具面的工具（项目打开后调用，要的是这个项目的文件服务）；
  *   impl.blocks(projectCtx)  —— 运行时组上下文信封时的素材块构建器（{ kind: async (askCtx) => 素材包 }）。
@@ -46,6 +58,11 @@ export const WORLDBOOK_CARRIER_TRUST = 't1'
 export const SCRIPT_CARRIER_TRUST = 't1'
 export const SETTING_CARRIER_TRUST = 't1'
 export const REFERENCE_CARRIER_TRUST = 't1'
+export const MATERIAL_CARRIER_TRUST = 't1'
+export const COMIC_CARRIER_TRUST = 't1'
+export const VIDEO_CARRIER_TRUST = 't1'
+export const EXPERIENCE_CARRIER_TRUST = 't1'
+export const ONLINE_CARRIER_TRUST = 't1'
 
 export function novelCarrierPlugin() {
   return {
@@ -142,7 +159,39 @@ export function referenceCarrierPlugin() {
   }
 }
 
-/** 竖条顺序＝注册顺序（协议 v1.1-A；批次26 起剧本排在 worldbook 之后）。 */
+/** 记录型载体（M4／M5）：没有 blocks 工厂——清单里的 providers 是空数组，不谎报素材块。 */
+function recordsCarrierPlugin(manifest, createTools, trust, source) {
+  return {
+    manifest,
+    impl: {
+      source,
+      tools: (context = {}) => createTools({ ...context, pluginId: context.pluginId ?? manifest.id })
+    },
+    meta: { trust, source }
+  }
+}
+
+export function materialCarrierPlugin() {
+  return recordsCarrierPlugin(MATERIAL_CARRIER, createMaterialTools, MATERIAL_CARRIER_TRUST, 'next/carriers/material')
+}
+
+export function comicCarrierPlugin() {
+  return recordsCarrierPlugin(COMIC_CARRIER, createComicTools, COMIC_CARRIER_TRUST, 'next/carriers/comic')
+}
+
+export function videoCarrierPlugin() {
+  return recordsCarrierPlugin(VIDEO_CARRIER, createVideoTools, VIDEO_CARRIER_TRUST, 'next/carriers/video')
+}
+
+export function experienceCarrierPlugin() {
+  return recordsCarrierPlugin(EXPERIENCE_CARRIER, createExperienceTools, EXPERIENCE_CARRIER_TRUST, 'next/carriers/experience')
+}
+
+export function onlineCarrierPlugin() {
+  return recordsCarrierPlugin(ONLINE_CARRIER, createOnlineTools, ONLINE_CARRIER_TRUST, 'next/carriers/online')
+}
+
+/** 竖条顺序＝注册顺序（协议 v1.1-A；批次26 起剧本排在 worldbook 之后；批次40 起 M4／M5 五栏排在最后）。 */
 export const BUILT_IN_CARRIER_PLUGINS = Object.freeze([
   novelCarrierPlugin(),
   outlineCarrierPlugin(),
@@ -150,7 +199,12 @@ export const BUILT_IN_CARRIER_PLUGINS = Object.freeze([
   worldbookCarrierPlugin(),
   scriptCarrierPlugin(),
   settingCarrierPlugin(),
-  referenceCarrierPlugin()
+  referenceCarrierPlugin(),
+  materialCarrierPlugin(),
+  comicCarrierPlugin(),
+  videoCarrierPlugin(),
+  experienceCarrierPlugin(),
+  onlineCarrierPlugin()
 ])
 export const BUILT_IN_CARRIER_IDS = Object.freeze(BUILT_IN_CARRIER_PLUGINS.map((item) => item.manifest.id))
 
@@ -162,7 +216,12 @@ export const BUILT_IN_CLAIMED_TOOLS = Object.freeze([
   ...WORLDBOOK_TOOL_NAMES,
   ...SCRIPT_TOOL_NAMES,
   ...SETTING_TOOL_NAMES,
-  ...REFERENCE_TOOL_NAMES
+  ...REFERENCE_TOOL_NAMES,
+  ...MATERIAL_TOOL_NAMES,
+  ...COMIC_TOOL_NAMES,
+  ...VIDEO_TOOL_NAMES,
+  ...EXPERIENCE_TOOL_NAMES,
+  ...ONLINE_TOOL_NAMES
 ])
 
 export {
@@ -200,7 +259,27 @@ export {
   REFERENCE_CARRIER_ID,
   REFERENCE_TOOL_NAMES,
   createReferenceTools,
-  createReferenceBlocks
+  createReferenceBlocks,
+  MATERIAL_CARRIER,
+  MATERIAL_CARRIER_ID,
+  MATERIAL_TOOL_NAMES,
+  createMaterialTools,
+  COMIC_CARRIER,
+  COMIC_CARRIER_ID,
+  COMIC_TOOL_NAMES,
+  createComicTools,
+  VIDEO_CARRIER,
+  VIDEO_CARRIER_ID,
+  VIDEO_TOOL_NAMES,
+  createVideoTools,
+  EXPERIENCE_CARRIER,
+  EXPERIENCE_CARRIER_ID,
+  EXPERIENCE_TOOL_NAMES,
+  createExperienceTools,
+  ONLINE_CARRIER,
+  ONLINE_CARRIER_ID,
+  ONLINE_TOOL_NAMES,
+  createOnlineTools
 }
 
 /** 旧名字（next/index.mjs 再导出）：世界书取数口迁去 worldbook/context.mjs 后保持同名可用。 */

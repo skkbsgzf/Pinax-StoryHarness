@@ -1,6 +1,9 @@
 import { reactive } from 'vue'
 import { IPC_CHANNELS } from './ipcContract.mjs'
 import { canMoveNode, moveNode, outlineDepths, removeNode } from './outlineTree.mjs'
+import { refreshTargetsFor } from './projectEventRefresh.mjs'
+import { RECORD_CARRIERS, RECORD_CARRIER_KEYS, recordTreeKey } from './recordCarriers.mjs'
+import { applyWritingResult, normalizeSelection, writingActionOf } from './writingActions.mjs'
 
 /**
  * 板块数据（章节／大纲／构思／条目／约束／资料）的单一归属。
@@ -39,6 +42,16 @@ export function useBoardData(bridge) {
     chapterGroups: [],
     chapter: null,
     draft: '',
+    /** 光标／选区（批次41）：正文面每次 select/keyup 报一次，写作动作据此知道「给哪一段写」。
+     *  null ＝ 作者还没点进正文：续写就落在文末（与 normalizeSelection({}) 同一口径），
+     *  不能当成「选在了开头」——那会把新写的一段插到第一句前面。 */
+    draftSelection: null,
+    /** 写作动作（批次41）：续写／改写一次生成的中间态。
+     *  anchor 是按下动作那一刻的正文与选区——结果落位按「当时」的稿子算；
+     *  生成期间作者又改了字，就不许再自动插入（宁可不插，也不把新写的一段塞错地方）。 */
+    writingBusy: false,
+    writingError: null,
+    writingResult: null,
     /** 大纲（工单A3 只读树 → 工单B2 可编辑）：索引窗的第三棵树。
      *  草稿是整份文档的深拷贝（大纲保存＝整份覆盖）：改名/新增都先落在 outlineDraft 上，按保存才写盘。 */
     outline: [],
@@ -73,6 +86,14 @@ export function useBoardData(bridge) {
     scriptDraft: '',
     scriptsError: null,
     editingScript: false,
+    /** 记录型载体（批次40 · M4／M5）：素材／漫画／视频／体验／联机共用一套记录面。
+     *  recordSets 按载体 key 各存一棵树（列表、文档修订号、错误位、是否取过数）；
+     *  record 是当前打开的那一条（带 carrier，换载体时不会串），recordDraft 只装作者能改的字段。
+     *  meta 不上界面也不在保存时丢：保存一律把读到的 meta 原样带回。 */
+    recordSets: Object.fromEntries(RECORD_CARRIER_KEYS.map((key) => [key, { records: [], revision: 0, error: null, loaded: false }])),
+    record: null,
+    recordDraft: { title: '', type: '', status: '', body: '', tags: '', refs: '' },
+    editingRecord: false,
     /** 提案审阅（工单A）：.pinax/proposals/ 里的模型改稿。
      *  proposals＝列表摘要；proposal＝点开的那份整份 JSON；proposalChapter＝目标章此刻的正文（左右对照用）。
      *  采纳仍走载体 save（带当前修订号），外壳不自己拼一份「采纳后」的正文。 */
@@ -102,12 +123,25 @@ export function useBoardData(bridge) {
     /** 每棵树「取过数没有」（批次35）：悬浮卡挂载时据此决定要不要补一次 loadXxx——
      *  已经取过就不再打扰（重取会把作者手上的草稿冲掉，尤其大纲的 outlineDraft）。
      *  只由下面的 loadXxx 自己记；界面读，不写。 */
-    loadedTrees: { chapters: false, outline: false, notes: false, rules: false, entries: false, documents: false, scripts: false },
+    loadedTrees: {
+      chapters: false,
+      outline: false,
+      notes: false,
+      rules: false,
+      entries: false,
+      documents: false,
+      scripts: false,
+      ...Object.fromEntries(RECORD_CARRIER_KEYS.map((key) => [recordTreeKey(key), false]))
+    },
     selection: { type: null, item: null }
   })
 
   /** 资料板检索的请求序号：换板/清空后旧请求晚到的结果不再覆盖新状态。 */
   let knowledgeCallId = 0
+  /** 写作动作的请求序号（批次41）：切了章节之后，上一章那次生成的回答不能再落到这一章。 */
+  let writingCallId = 0
+  /** 批次39：同一时刻只跑一轮事件刷新（事件是旁路，宁可漏一轮也不并发重读）。 */
+  let refreshingFromEvents = false
 
   /** 只经一条通道：内核/载体返回的 {ok:false,code,message} 一律变成界面可见的话，不吞错。 */
   async function tool(name, args = {}) {
@@ -168,6 +202,12 @@ export function useBoardData(bridge) {
     }
     state.chapter = { ...item, revision: read.value.revision, totalChars: read.value.totalChars, truncated: read.value.truncated }
     state.draft = read.value.text ?? ''
+    // 换章＝换正文：上一章没落位的生成结果、报错与选区都收回，别把一段旧文字插到新章里。
+    writingCallId += 1
+    state.writingBusy = false
+    state.writingResult = null
+    state.writingError = null
+    state.draftSelection = null
     state.selection = { type: 'chapter', item: { ...item, revision: read.value.revision } }
   }
 
@@ -214,7 +254,7 @@ export function useBoardData(bridge) {
 
   /** 构思速记（工单B1）：列篇目。与章节同走 runtimeToolCall 一条通道（pinax_notes_list）；
    *  刻意不自动打开任何一篇——正文是核心区的主角，速记只在作者点索引窗那一行时进场。 */
-  async function loadNotes() {
+  async function loadNotes({ syncCurrent = true } = {}) {
     state.notesError = null
     const listed = await tool('pinax_notes_list', { limit: 500 })
     if (!listed.ok) {
@@ -225,6 +265,8 @@ export function useBoardData(bridge) {
     state.notes = listed.value.notes ?? []
     state.loadedTrees.notes = true
     // 换板后再回来：让打开着的那篇跟上最新修订号与正文，别摊着一份上一秒的草稿来源。
+    // 批次39：事件驱动刷新时 syncCurrent=false（或草稿脏时）只重建树，未保存的草稿一个字不动。
+    if (!syncCurrent) return
     const current = state.note ? state.notes.find((item) => item.file === state.note.file) : null
     if (current) {
       state.note = { ...current }
@@ -293,7 +335,7 @@ export function useBoardData(bridge) {
 
   /** 约束（工单E2）：列 约束/ 篇目。与构思速记同一个列法——pinax_rule_list 把全文随手带回，
    *  设定板换进来时与条目一起列；失败摊在索引窗自己的错误位。 */
-  async function loadRules() {
+  async function loadRules({ syncCurrent = true } = {}) {
     state.rulesError = null
     const listed = await tool('pinax_rule_list', { limit: 500 })
     if (!listed.ok) {
@@ -305,6 +347,8 @@ export function useBoardData(bridge) {
     // 悬浮卡/恢复路径据此判断「取过数没有」（批次35）：成功才记，失败下次挂载重试。
     state.loadedTrees.rules = true
     // 换板后再回来：让打开着的那份跟上最新修订号与正文，别摊着一份上一秒的草稿来源。
+    // 批次39：事件驱动刷新时只重建树（同 loadNotes）。
+    if (!syncCurrent) return
     const current = state.rule ? state.rules.find((item) => item.file === state.rule.file) : null
     if (current) {
       state.rule = { ...current }
@@ -377,7 +421,7 @@ export function useBoardData(bridge) {
    * 换板后再回来：打开着的那篇重读一次（pinax_document_read 取全文），
    * 不拿列表里那份截断文本去顶替作者手上的草稿。
    */
-  async function loadDocuments() {
+  async function loadDocuments({ syncCurrent = true } = {}) {
     state.documentsError = null
     const listed = await tool('pinax_document_list', { limit: 500 })
     if (!listed.ok) {
@@ -387,6 +431,7 @@ export function useBoardData(bridge) {
     }
     state.documents = listed.value.documents ?? []
     state.loadedTrees.documents = true
+    if (!syncCurrent) return
     const current = state.document ? state.documents.find((item) => item.file === state.document.file) : null
     if (current) await openDocument(current)
   }
@@ -486,7 +531,7 @@ export function useBoardData(bridge) {
    * 剧本（批次26）：列 剧本/ 篇目。与资料同一个列法——pinax_script_list 把正文随手带回
    * （前 20000 字，超出标注）；换板回来时打开着的那篇重读一次全文，不拿截断文本顶替草稿来源。
    */
-  async function loadScripts() {
+  async function loadScripts({ syncCurrent = true } = {}) {
     state.scriptsError = null
     const listed = await tool('pinax_script_list', { limit: 500 })
     if (!listed.ok) {
@@ -496,6 +541,7 @@ export function useBoardData(bridge) {
     }
     state.scripts = listed.value.scripts ?? []
     state.loadedTrees.scripts = true
+    if (!syncCurrent) return
     const current = state.script ? state.scripts.find((item) => item.file === state.script.file) : null
     if (current) await openScript(current)
   }
@@ -587,7 +633,184 @@ export function useBoardData(bridge) {
   }
 
   /**
-   * 提案（工单A）：列 .pinax/proposals/。
+   * 记录型载体（批次40 · M4／M5）：素材／漫画／视频／体验／联机共用这一套动作。
+   * 与章节／资料同一套纪律：列表只回摘要与文档修订号，点开时再按 id 读全文；
+   * 保存与删除都带文档修订号，冲突由文件服务拒（STALE），外壳不做静默合并。
+   */
+  function recordConfigOf(key) {
+    return RECORD_CARRIERS[String(key ?? '')] ?? null
+  }
+
+  /** 记录 → 编辑草稿：tags 用中文逗号拼成一行，refs 一行一条（与条目元数据的界面口径一致）。 */
+  function recordDraftOf(config, record = null) {
+    return {
+      title: typeof record?.title === 'string' ? record.title : '',
+      type: (record?.type || config?.defaultType) ?? '',
+      status: (record?.status || config?.defaultStatus) ?? '',
+      body: typeof record?.body === 'string' ? record.body : '',
+      tags: joinMetaList(record?.tags ?? []),
+      refs: (Array.isArray(record?.refs) ? record.refs : []).map((item) => String(item ?? '')).filter(Boolean).join('\n')
+    }
+  }
+
+  /** 列一棵记录树：只动这一个载体的 set，不碰别的栏。 */
+  async function loadRecords(key, { syncCurrent = true } = {}) {
+    const config = recordConfigOf(key)
+    const set = state.recordSets[key]
+    if (!config || !set) return
+    set.error = null
+    const listed = await tool(`${config.toolPrefix}_list`, { limit: 500 })
+    if (!listed.ok) {
+      set.records = []
+      set.error = listed.message
+      return
+    }
+    set.records = listed.value.records ?? []
+    set.revision = listed.value.revision ?? 0
+    set.loaded = true
+    state.loadedTrees[recordTreeKey(key)] = true
+    if (!syncCurrent) return
+    const current = state.record?.carrier === key ? set.records.find((item) => item.id === state.record.id) : null
+    if (current) await openRecord(key, current)
+  }
+
+  /** 点开一条记录：走 `<prefix>_read` 取全文与文档修订号。 */
+  async function openRecord(key, item) {
+    const config = recordConfigOf(key)
+    if (!config || !item) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    state.saveFeedback = null
+    const read = await tool(`${config.toolPrefix}_read`, { id: item.id })
+    state.busy = false
+    if (!read.ok) {
+      state.error = read.message
+      return
+    }
+    const record = read.value.record
+    state.record = { carrier: key, ...record, revision: read.value.revision }
+    state.recordDraft = recordDraftOf(config, record)
+    state.editingRecord = false
+    state.recordSets[key].revision = read.value.revision
+    state.selection = { type: 'record', item: { carrier: key, id: record.id } }
+  }
+
+  function editRecord() {
+    const config = recordConfigOf(state.record?.carrier)
+    if (!state.record || !config) return
+    state.recordDraft = recordDraftOf(config, state.record)
+    state.editingRecord = true
+    state.error = null
+  }
+
+  function cancelEditRecord() {
+    const config = recordConfigOf(state.record?.carrier)
+    state.recordDraft = recordDraftOf(config, state.record)
+    state.editingRecord = false
+    state.error = null
+  }
+
+  /** 记录草稿的单字段更新（标题／类型／状态／正文／标签／引用）。 */
+  function setRecordField(field, value) {
+    if (!Object.prototype.hasOwnProperty.call(state.recordDraft, field)) return
+    state.recordDraft[field] = value
+  }
+
+  /** 保存记录：meta 原样带回（界面不拆载体私有字段，也不因为没显示就丢掉）。 */
+  async function saveRecord() {
+    const config = recordConfigOf(state.record?.carrier)
+    if (!state.record || !config) return
+    const draft = state.recordDraft
+    const title = String(draft.title ?? '').trim()
+    if (!title) {
+      state.error = '记录标题不能为空'
+      return
+    }
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    beginSaveFeedback('record')
+    const saved = await tool(`${config.toolPrefix}_save`, {
+      id: state.record.id,
+      title,
+      type: draft.type,
+      status: draft.status,
+      body: draft.body,
+      tags: splitMetaList(draft.tags),
+      refs: splitRefs(draft.refs),
+      meta: state.record.meta ?? {},
+      expectedRevision: state.record.revision
+    })
+    if (!saved.ok) {
+      state.busy = false
+      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新载入这条记录后再改，外壳不做静默合并）' : ''}`
+      settleSaveFeedback('record', saved)
+      return
+    }
+    state.busy = false
+    state.editingRecord = false
+    state.record = { carrier: config.key, ...saved.value.record, revision: saved.value.revision }
+    state.recordDraft = recordDraftOf(config, saved.value.record)
+    state.recordSets[config.key].revision = saved.value.revision
+    settleSaveFeedback('record', saved)
+    await loadRecords(config.key, { syncCurrent: false })
+  }
+
+  /** 新建记录：先确保这棵树取过数（拿得到文档修订号），再按载体默认类型／状态落一条。 */
+  async function createRecord(key, title) {
+    const config = recordConfigOf(key)
+    const name = String(title ?? '').trim()
+    if (!config || !name) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    if (!state.recordSets[key].loaded) await loadRecords(key, { syncCurrent: false })
+    const saved = await tool(`${config.toolPrefix}_save`, {
+      title: name,
+      type: config.defaultType,
+      status: config.defaultStatus,
+      body: '',
+      tags: [],
+      refs: [],
+      expectedRevision: state.recordSets[key].revision
+    })
+    state.busy = false
+    if (!saved.ok) {
+      state.error = saved.message
+      return
+    }
+    state.notice = `已新建「${name}」`
+    await loadRecords(key, { syncCurrent: false })
+    const made = state.recordSets[key].records.find((item) => item.id === saved.value.record.id)
+    if (made) await openRecord(key, made)
+  }
+
+  /** 删除当前记录：只删记录，不删文件；成功后清空当前态并重列这棵树。 */
+  async function removeRecord() {
+    const config = recordConfigOf(state.record?.carrier)
+    if (!state.record || !config) return
+    const record = state.record
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const removed = await tool(`${config.toolPrefix}_remove`, { id: record.id, expectedRevision: record.revision })
+    state.busy = false
+    if (!removed.ok) {
+      state.error = removed.message
+      return
+    }
+    state.notice = `已删除「${record.title || record.id}」`
+    state.record = null
+    state.editingRecord = false
+    state.recordDraft = recordDraftOf(config)
+    state.selection = { type: null, item: null }
+    await loadRecords(config.key, { syncCurrent: false })
+  }
+
+
+  /**
+   * 读提案清单：只列 .pinax/proposals/ 下的篇目与状态，不带正文，也不自动合并进稿子。
    * 失败摊在索引窗自己的错误位（不发到文档级），提案是索引窗这一栏的东西；
    * 打开着的那份若已不在列表里（被外面删了），状态一并清掉，不留一份点不开的「当前提案」。
    */
@@ -731,7 +954,7 @@ export function useBoardData(bridge) {
     await loadProposals()
   }
 
-  async function loadEntries() {
+  async function loadEntries({ syncCurrent = true } = {}) {
     state.busy = true
     state.treeError = null
     // 大纲树不归世界书这一栏（协议 v1.1-A：一载体一棵本域内容树）：这一栏只管条目。
@@ -754,6 +977,8 @@ export function useBoardData(bridge) {
     // 这里用既有 read 工具按 path 补齐（不算新增工具调用）；读失败的条目按没有关系处理，
     // 失败数如实进 listWarnings——图谱上少一条边，作者在图例的「未落图」计数里看得到差多少。
     await enrichEntryRelations()
+    // 批次39：事件驱动刷新只重建树（不替作者打开任何一条，编辑中的草稿也不重读）。
+    if (!syncCurrent) return
     const current = state.entry ? state.entries.find((item) => item.path === state.entry.path) : null
     if (!state.entry && state.entries.length) await openEntry(state.entries[0])
     else if (current) await openEntry(current)
@@ -927,6 +1152,93 @@ export function useBoardData(bridge) {
 
   function setDraft(value) {
     state.draft = value
+  }
+
+  /** 正文面的选区上报（批次41）：只在切换章节时清零，打字过程中由界面持续报。
+   *  选区越界钳在正文长度内：正文刚被替换过、界面还没跟上时不该让整次写作出错。 */
+  function setDraftSelection(start, end) {
+    state.draftSelection = normalizeSelection({ start, end }, state.draft)
+  }
+
+  /**
+   * 发起一次写作动作（批次41）：续写／改写／扩写／压缩／润色。
+   *
+   * 三条纪律：
+   *   1) 只在有章节时可用——没有正文就没有可接的上文；
+   *   2) 结果不自动落进正文：先摆在编辑面下方，作者按「插入／替换」才动稿子；
+   *   3) 生成期间记下当时的正文与选区（anchor）。落位以 anchor 为准，而不是此刻的草稿。
+   * 模型面失败原样摊在 writingError，不回落成右栏提问，也不编一段字。
+   */
+  async function requestWriting(actionId, instruction = '') {
+    const action = writingActionOf(actionId)
+    if (!action || !state.chapter || state.writingBusy) return
+    if (!bridge?.request) {
+      state.writingError = '渲染层未接主进程桥（preload 的 pinaxNext 通道）。'
+      return
+    }
+    const selection = state.draftSelection
+      ? normalizeSelection(state.draftSelection, state.draft)
+      : normalizeSelection({}, state.draft)
+    if (action.needsSelection && selection.collapsed) {
+      state.writingError = `「${action.label}」要先选中一段文字`
+      return
+    }
+    const anchor = { text: state.draft, selection, revision: state.chapter.revision }
+    const seq = ++writingCallId
+    state.writingBusy = true
+    state.writingError = null
+    state.writingResult = null
+    const answered = await bridge.request(IPC_CHANNELS.runtimeComplete, {
+      action: action.id,
+      text: anchor.text,
+      selection: { start: selection.start, end: selection.end },
+      instruction: String(instruction ?? '')
+    })
+    // 这一问已经过期（切了章／又发起了一次）：回答只丢，不落到新状态上。
+    if (seq !== writingCallId) return
+    state.writingBusy = false
+    if (!answered?.ok) {
+      state.writingError = answered?.error?.message ?? '写作动作失败'
+      return
+    }
+    state.writingResult = {
+      action: action.id,
+      label: action.label,
+      target: answered.value?.target === 'replace' ? 'replace' : 'insert',
+      text: String(answered.value?.text ?? ''),
+      model: answered.value?.model ?? null,
+      anchor
+    }
+  }
+
+  /** 把生成结果落进草稿：替换选中段或插在光标后。正文在生成期间被改过就拒——位置已经对不上了。 */
+  function applyWriting() {
+    const result = state.writingResult
+    if (!result) return
+    if (state.draft !== result.anchor.text) {
+      state.writingError = '生成期间正文已经改过，这条结果的位置对不上了：复制走或丢弃后重来'
+      return
+    }
+    const applied = applyWritingResult({
+      text: result.anchor.text,
+      selection: result.anchor.selection,
+      action: writingActionOf(result.action),
+      result: result.text
+    })
+    if (!applied) {
+      state.writingError = '这次没有可落进正文的内容'
+      return
+    }
+    state.draft = applied.text
+    state.draftSelection = { start: applied.caret, end: applied.caret }
+    state.writingResult = null
+    state.writingError = null
+    state.notice = `已${applied.mode === 'replace' ? '替换' : '插入'}（${result.label}）· 记得保存这一版`
+  }
+
+  function discardWriting() {
+    state.writingResult = null
+    state.writingError = null
   }
   /** 大纲树（工单A3 只读 → 工单B2 起可编辑）：小说板块把 大纲/outline.json 的节点列进索引窗。
    *  大纲还没写（工具对「既没有 outline.json 也没有 大纲.md」回 INVALID_INPUT）是新建项目的常态：
@@ -1182,6 +1494,56 @@ export function useBoardData(bridge) {
     state.knowledgeError = null
   }
 
+  /* —— 项目事件驱动刷新（批次39）———————————————————————————————————— */
+
+  /** 草稿是否与读到的正文不同：不同就说明作者手上有未保存的字，后台事件不许覆盖它。 */
+  function draftDirty(draft, text) {
+    return String(draft ?? '') !== String(text ?? '')
+  }
+
+  /**
+   * 按事件 kind 重扫已经载入过的树（映射见 projectEventRefresh.mjs）。
+   * 三条纪律：①只碰 loadedTrees 里取过数的树——不替作者打开任何东西；
+   * ②草稿脏／编辑态只重建树，当前正文一个字不动；③同一时刻只跑一轮，busy 时直接跳过（事件是旁路）。
+   * 返回本轮实际刷新的树名（空数组＝没有可刷的）。
+   */
+  async function refreshFromProjectEvent(kind) {
+    if (refreshingFromEvents || state.busy) return []
+    const targets = refreshTargetsFor(kind, state.loadedTrees)
+    if (!targets.length) return []
+    refreshingFromEvents = true
+    try {
+      for (const target of targets) {
+        if (target === 'chapters') {
+          // 正文树只重建索引：章节没有「编辑态」开关，重读当前章会把作者正在写的草稿冲掉。
+          await loadChapters({ keep: false })
+        } else if (target === 'outline') {
+          // 大纲草稿是整份文档的深拷贝，开着就说明作者在改：等他自己保存／重开，事件不越权。
+          if (!state.outlineDraft) await loadOutline()
+        } else if (target === 'notes') {
+          await loadNotes({ syncCurrent: !draftDirty(state.noteDraft, state.note?.text) })
+        } else if (target === 'rules') {
+          await loadRules({ syncCurrent: !draftDirty(state.ruleDraft, state.rule?.text) })
+        } else if (target === 'documents') {
+          await loadDocuments({ syncCurrent: !state.editingDocument && !draftDirty(state.documentDraft, state.document?.text) })
+        } else if (target === 'scripts') {
+          await loadScripts({ syncCurrent: !state.editingScript && !draftDirty(state.scriptDraft, state.script?.text) })
+        } else if (target.startsWith('records:')) {
+          // 记录型载体：正在编辑这一栏的当前记录时只重建树，草稿不重读（事件不许覆盖作者手上的字）。
+          const key = target.slice('records:'.length)
+          const editingThis = state.record?.carrier === key && state.editingRecord
+          await loadRecords(key, { syncCurrent: !editingThis })
+        } else if (target === 'entries') {
+          // 编辑中的条目：树照刷（可能新增／删除了条目），当前那篇的草稿不重读。
+          await loadEntries({ syncCurrent: !state.editingEntry })
+        }
+      }
+    } finally {
+      refreshingFromEvents = false
+    }
+    return targets
+  }
+
   /** 换板时清瞬时提示：上一块板的提示、保存 chip 与检索结果不该出现在这一块板上（批次18 验收修 / 工单H1/H2）。
    *  协议 v1.1-A 起一载体一棵本域内容树：上一栏的树级错误（treeError）与世界书列举警告（listWarnings）
    *  也随换板收掉，否则「世界书/ 读失败」会挂到小说栏的正文树上。 */
@@ -1197,6 +1559,7 @@ export function useBoardData(bridge) {
   return Object.assign(state, {
     tool,
     clearTransient,
+    refreshFromProjectEvent,
     searchKnowledge,
     clearKnowledgeSearch,
     loadChapters,
@@ -1227,6 +1590,14 @@ export function useBoardData(bridge) {
     setScriptDraft,
     saveScript,
     createScript,
+    loadRecords,
+    openRecord,
+    editRecord,
+    cancelEditRecord,
+    setRecordField,
+    saveRecord,
+    createRecord,
+    removeRecord,
     loadProposals,
     openProposal,
     adoptProposal,
@@ -1253,7 +1624,11 @@ export function useBoardData(bridge) {
     moveOutlineNode,
     canMoveOutlineNode,
     saveOutline,
-    setDraft
+    setDraft,
+    setDraftSelection,
+    requestWriting,
+    applyWriting,
+    discardWriting
   })
 }
 
@@ -1344,6 +1719,14 @@ function joinMetaList(list) {
     .map((item) => String(item ?? '').trim())
     .filter(Boolean)
     .join('，')
+}
+
+/** 记录引用表（批次40）：界面里一行一条；空行丢弃，其余原样保留（相对路径与外链都收）。 */
+function splitRefs(text) {
+  return String(text ?? '')
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
 }
 
 /**

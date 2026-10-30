@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createToolLoop } from '../runtime/toolLoop.mjs'
+import { createWritePolicy } from '../runtime/writePolicy.mjs'
+import { CARRIER_WRITE_CLASS, KERNEL_WRITE_CLASS } from '../runtime/kernelWriteGuard.mjs'
 
 /**
  * 工具循环（M2.5-A · 任务四）。
@@ -142,4 +144,68 @@ test('turn 抛错：上抛（这是模型面故障，不是某次工具调用）
     callTool: async () => ({ ok: true })
   })
   await assert.rejects(() => loop.run({ question: '问一句', tools: TOOLS }), /模型面不可达/u)
+})
+
+/**
+ * 批次37 接线级：循环 ＋ 真写策略（不是桩策略）＋ 落点表。
+ * 同一把 pinax_chapter_save，会话写模式换一档就该换一种结果；模型在三种档位下都看得到结果，
+ * 且 review 档的提案会发 proposal-created（主进程据此推 proposals-changed）。
+ */
+test('接线级：review 转提案、auto 直写、blocked 被拒，模型都收到结果', async () => {
+  const PAUSE = [
+    { kind: 'tool_calls', calls: [{ id: 'c1', name: 'pinax_chapter_save', arguments: { file: '正文/雨夜.md', text: '新文', expectedRevision: 2 } }] },
+    { kind: 'final_ready', text: '收到。' }
+  ]
+  const LANDING = { ...KERNEL_WRITE_CLASS, ...CARRIER_WRITE_CLASS }
+  async function runMode(mode) {
+    const turn = scriptedTurn(PAUSE)
+    const writes = []
+    const proposals = []
+    const events = []
+    const loop = createToolLoop({
+      turn: turn.turn,
+      callTool: async (name, args) => {
+        writes.push({ name, args })
+        return { ok: true, value: { payload: { ok: true, revision: 3 } } }
+      },
+      policy: ({ writeMode }) => createWritePolicy({
+        mode: writeMode,
+        landing: LANDING,
+        createProposal: async (request) => {
+          proposals.push(request)
+          return { ok: true, value: { id: 'p-37', name: 'p-37.json' } }
+        }
+      }),
+      onEvent: (event) => events.push(event)
+    })
+    const result = await loop.run({
+      question: '把雨提前',
+      tools: [...TOOLS, { name: 'pinax_chapter_save', description: '保存章节', inputSchema: { type: 'object', properties: {} } }],
+      writeMode: mode
+    })
+    return { result, turn, writes, proposals, events }
+  }
+
+  const review = await runMode('review')
+  assert.equal(review.writes.length, 0, 'review 档不许直写盘')
+  assert.equal(review.proposals.length, 1)
+  assert.deepEqual(review.proposals[0].args, { file: '正文/雨夜.md', text: '新文', expectedRevision: 2 })
+  assert.equal(review.proposals[0].dir, '正文')
+  const reviewToolMessage = review.turn.seen[1].messages[2]
+  assert.equal(reviewToolMessage.parts[0].isError, false, '提案按成功回给模型，避免它原地重试')
+  assert.match(reviewToolMessage.content, /p-37/u)
+  assert.ok(review.events.some((event) => event.stage === 'proposal-created' && event.proposalId === 'p-37'))
+
+  const auto = await runMode('auto')
+  assert.equal(auto.writes.length, 1, 'auto 档直接写')
+  assert.equal(auto.proposals.length, 0)
+  assert.equal(auto.turn.seen[1].messages[2].content.includes('"revision":3'), true)
+
+  const blocked = await runMode('blocked')
+  assert.equal(blocked.writes.length, 0)
+  assert.equal(blocked.proposals.length, 0)
+  const blockedToolMessage = blocked.turn.seen[1].messages[2]
+  assert.equal(blockedToolMessage.parts[0].isError, true)
+  assert.match(blockedToolMessage.content, /WRITE_BLOCKED/u)
+  assert.equal(blocked.result.kind, 'final', '被拒也要让循环收尾，不挂死')
 })

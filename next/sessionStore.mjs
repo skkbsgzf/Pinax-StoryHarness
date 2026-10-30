@@ -2,6 +2,7 @@
 import { readdir, readFile, appendFile, mkdir, writeFile, rename as renameFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fail, ok } from './kernel/errors.mjs'
+import { emitProjectEvent } from './runtime/eventBus.mjs'
 import {
   DEFAULT_SESSION_TITLE,
   MAX_SESSION_EVENTS,
@@ -473,6 +474,9 @@ export function createFileSessionStore({ root, fs: fsImpl = null, now = Date.now
           reparented.push(...result.value.reparented)
         }
       }
+      // 批次37：快照真的写盘了才发 sessions-changed（内容未变时 rewriteSession 不重写，这里也照发——
+      // 订阅方只做「列表可能变了，重读一次」，重发一次比漏发便宜）。
+      emitProjectEvent(projectRoot, { kind: 'sessions-changed' })
       return ok({ saved: keep.size, tombstoned, reparented, activeId: cleanText(snapshot?.activeId, 80) })
     }
     const run = snapshotQueue.then(task, task)

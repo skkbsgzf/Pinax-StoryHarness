@@ -57,7 +57,10 @@ test('载体写工具落点表与载体 impl 的 annotations 对账：提示只�
     'pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read',
     'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_rule_list',
     'pinax_proposal_list', 'pinax_proposal_read',
-    'pinax_document_list', 'pinax_document_read', 'pinax_reference_search'
+    'pinax_document_list', 'pinax_document_read', 'pinax_reference_search',
+    'pinax_material_list', 'pinax_material_read', 'pinax_comic_list', 'pinax_comic_read',
+    'pinax_video_list', 'pinax_video_read', 'pinax_experience_list', 'pinax_experience_read',
+    'pinax_online_list', 'pinax_online_read'
   ]) {
     assert.equal(CARRIER_WRITE_CLASS[readOnly], undefined, `${readOnly} 是只读工具，不该被说成写入口`)
   }
@@ -65,8 +68,8 @@ test('载体写工具落点表与载体 impl 的 annotations 对账：提示只�
   assert.equal(CARRIER_WRITE_CLASS.pinax_proposal_discard.dir, null)
   assert.deepEqual(
     Object.keys(CARRIER_WRITE_CLASS).sort(),
-    ['pinax_chapter_save', 'pinax_document_save', 'pinax_notes_save', 'pinax_outline_save', 'pinax_proposal_discard', 'pinax_rule_save', 'pinax_script_save', 'pinax_worldbook_save'],
-    '载体自有写工具就这八把（批次26 加剧本的 pinax_script_save）；新增一把要在这里留名'
+    ['pinax_chapter_save', 'pinax_comic_remove', 'pinax_comic_save', 'pinax_document_save', 'pinax_experience_remove', 'pinax_experience_save', 'pinax_material_remove', 'pinax_material_save', 'pinax_notes_save', 'pinax_online_remove', 'pinax_online_save', 'pinax_outline_save', 'pinax_proposal_discard', 'pinax_rule_save', 'pinax_script_save', 'pinax_video_remove', 'pinax_video_save', 'pinax_worldbook_save'],
+    '载体自有写工具就这十八把（批次26 加剧本的 pinax_script_save；批次40 加五块记录载体的 save／remove）；新增一把要在这里留名'
   )
 })
 

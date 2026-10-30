@@ -3,7 +3,15 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import * as gitHistory from '../history/gitHistory.mjs'
 import { createNextSession } from '../index.mjs'
+import { fail } from '../kernel/errors.mjs'
 import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
+import { createToolLoop } from '../runtime/toolLoop.mjs'
+import { createKitToolTurn } from '../runtime/toolTurn.mjs'
+import { selectTools } from '../runtime/toolSelect.mjs'
+import { createWritePolicy } from '../runtime/writePolicy.mjs'
+import { createProposalStore } from '../runtime/proposalStore.mjs'
+import { CARRIER_WRITE_CLASS, KERNEL_WRITE_CLASS } from '../runtime/kernelWriteGuard.mjs'
+import { emitProjectEvent, projectEventKindForPath, subscribeProjectEvents } from '../runtime/eventBus.mjs'
 import { createAppPreferences } from '../runtime/appPreferences.mjs'
 import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
@@ -11,6 +19,7 @@ import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
 import { importOutlineChapters } from '../runtime/outlineImportService.mjs'
 import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
+import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
@@ -118,6 +127,31 @@ const pinnedAppData = process.env.PINAX_APP_DATA
 if (pinnedAppData) app.setPath('userData', pinnedAppData)
 
 /**
+ * 单实例锁（批次37 附条，作者在盘点讨论中同意并入本批）。
+ *
+ * 为什么必须在这一层：M2.5-C 已记账「两个应用实例同时写同一个项目的 .pinax/workspace.json
+ * 与 .pinax/sessions/*.jsonl，后写者赢」——那是界面层修不了的竞态面。成本最低的收口是
+ * 不让第二个实例起来：抢不到锁的进程不建窗、不装配会话，直接退出；已有窗口由 first-instance
+ * 的 second-instance 事件提到前台（最小化就还原），作者看到的是「窗口跳出来了」而不是两个一样的应用。
+ *
+ * 边界：这是**应用级**锁，不是项目级锁——两个实例开两个不同项目仍不被允许（单窗口外壳的既有形态）；
+ * 想并行开两个项目，先把「多窗口」做成真功能（M2.5-C 记账的未做项），而不是绕过锁。
+ * 测试/构建 import 本文件不会走到这里：requestSingleInstanceLock 只在 Electron 运行时存在。
+ */
+const singleInstanceLock = typeof app.requestSingleInstanceLock === 'function'
+  ? app.requestSingleInstanceLock()
+  : true
+if (!singleInstanceLock) app.quit()
+
+app.on('second-instance', () => {
+  const win = window_
+  if (!win || win.isDestroyed()) return
+  if (typeof win.isMinimized === 'function' && win.isMinimized()) win.restore()
+  win.show()
+  win.focus()
+})
+
+/**
  * 界面缩放：作者口径 0.85（1440×900 下三栏＋右栏的舒适档）。
  * 优先级：env PINAX_NEXT_ZOOM（批次7 的覆写口）＞偏好文件（批次8 偏好面，uiZoom）＞默认 0.85。
  * 缩放的唯一入口是偏好节（PrefsSection 的 uiZoom，保存即经 onPrefsApplied 改窗口）。
@@ -153,6 +187,11 @@ const EDIT_MENU_COMMANDS = Object.freeze({
 let session = null
 let dispatcher = null
 let window_ = null
+
+/** 项目事件总线订阅（批次37）：换项目/关项目时退订，跨项目不串台。 */
+let detachProjectEvents = null
+/** 历史仓库是否就绪：写入钩子同时服务总线与历史，只有就绪时才标脏（没仓时不刷错误日志）。 */
+let historyWired = false
 
 /** 历史定时调度（D1）：单例；项目打开后绑定，关窗前兜底提交。 */
 const historyScheduler = createHistoryScheduler()
@@ -225,6 +264,58 @@ async function loadRenderer(win, env) {
   await win.loadFile(join(currentDir, 'renderer-next', 'index.html'))
 }
 
+/**
+ * 进程内工具循环（批次37 · 任务二）：注入即上线，但**默认 review 档**。
+ *
+ * 与 M2.5-A 的设计逐条对齐：
+ *   - 模型回合走 createKitToolTurn（任务面 /v1/pinax/complete 的同一份请求体）；
+ *   - 披露按意图选 6 把（selectTools），不整张塞给模型；
+ *   - 写工具落不落由写策略按**会话真值**决定：review＝转提案、auto＝直写、blocked＝拒。
+ *     auto 的直写仍过写入钩子之外的三道闸（归属/scope/修订）与内核写族闸——循环不绕过任何安全层。
+ *
+ * callTool 与提案出口都按「此刻的会话」现取：工具循环在应用生命周期里只建一次，
+ * 而项目会被换掉（session.refresh 会重建 runtime），把 runtime/fileService 绑死在工厂里就会写错项目。
+ */
+function createProjectToolLoop() {
+  const proposals = createProposalStore({
+    fileService: {
+      async writeProposal(request) {
+        const fileService = session?.project?.value?.fileService ?? null
+        if (!fileService?.writeProposal) {
+          return fail('INVALID_INPUT', '提案目录不可写：项目还没完整打开（没有文件服务）')
+        }
+        return fileService.writeProposal(request)
+      }
+    }
+  })
+  return createToolLoop({
+    turn: createKitToolTurn(),
+    selectTools: ({ tools, intent, skill }) => selectTools({ tools, intent, skill }),
+    callTool: async (name, args) => {
+      if (!session?.runtime) return fail('INVALID_INPUT', '运行时尚未就绪：这一轮工具调用没有执行')
+      return session.runtime.callTool(name, args)
+    },
+    policy: ({ writeMode }) => createWritePolicy({
+      mode: writeMode,
+      // 落点事实源只有一个：内核写族 ＋ 载体写工具，不在这里复制第三张表。
+      landing: { ...KERNEL_WRITE_CLASS, ...CARRIER_WRITE_CLASS },
+      createProposal: async ({ tool, args = {}, dir }) => {
+        // baseRevision 取模型当次看到的修订号（写工具的 expectedRevision）：重放时按它判 STALE，
+        // 不静默合并。没有修订号的写工具不做这层判定（applyProposal 自会如实说明）。
+        const baseRevision = Number.isSafeInteger(args?.expectedRevision) ? args.expectedRevision : null
+        const label = String(args?.title ?? args?.file ?? args?.name ?? '').slice(0, 80)
+        return proposals.create({
+          tool,
+          args,
+          baseRevision,
+          summary: label ? `${tool}：${label}` : tool,
+          target: dir ? { dir, file: typeof args?.file === 'string' ? args.file : null } : null
+        })
+      }
+    })
+  })
+}
+
 export async function startNextShell({ root = null, env = process.env.NODE_ENV, preloadPath = null } = {}) {
   await app.whenReady()
   buildMenu()
@@ -240,20 +331,37 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   currentScheme = stored.theme === 'dark' ? 'dark' : 'light'
 
   /**
+   * 项目事件接线（批次37）：同一时刻只认当前项目根的一份订阅。
+   * 总线在进程内，渲染层看不到它——这里把每一次变更转成一条 IPC 推送（{ kind, at }），
+   * 设置页的大纲转换节与提案审阅节据此自动刷新。换项目先退旧订阅，跨项目不串台。
+   */
+  function bindProjectEvents({ root: projectRoot } = {}) {
+    if (detachProjectEvents) {
+      detachProjectEvents()
+      detachProjectEvents = null
+    }
+    historyWired = false
+    if (!projectRoot) return
+    detachProjectEvents = subscribeProjectEvents(projectRoot, (event) => {
+      sendToRenderer(IPC_EVENT.projectEvent, { kind: event.kind, at: event.at })
+    })
+  }
+
+  /**
    * 项目打开/刷新后的历史接线（D1）：建独立 git 仓库 → 给新 fileService 挂「写成功→标脏」→ 起定时器。
    * 任何一步失败都不拦住写作，只在日志留痕；历史面板经 history:probe 如实显示不可用（绝不静默假装可用）。
+   *
+   * 批次37 起同一个写入钩子还要发项目事件（fileService.notifyWrite 是唯一接入点）：
+   * 钩子只有一个槽位，所以「总线」与「历史标脏」必须合在一处——先发事件，再按历史仓库是否就绪决定标脏。
    */
   async function beginHistory({ root: projectRoot, fileService } = {}) {
     if (!projectRoot) return
-    const ensured = await gitHistory.ensureHistoryRepo({ root: projectRoot })
-    if (!ensured.ok) {
-      // eslint-disable-next-line no-console -- 主进程没有渲染层可报；历史不可用必须留痕
-      console.error('[pinax-next] 历史仓库不可用：', ensured.error?.message ?? ensured.error)
-      historyScheduler.stop()
-      return
-    }
+    bindProjectEvents({ root: projectRoot })
     if (fileService?.setOnWrite) {
       fileService.setOnWrite(async ({ relativePath }) => {
+        const kind = projectEventKindForPath(relativePath)
+        if (kind) emitProjectEvent(projectRoot, { kind })
+        if (!historyWired) return
         const marked = await gitHistory.markDirty({ root: projectRoot, paths: [relativePath] })
         if (!marked.ok) {
           // eslint-disable-next-line no-console -- 旁路失败不打断写作，但必须留痕
@@ -261,6 +369,14 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
         }
       })
     }
+    const ensured = await gitHistory.ensureHistoryRepo({ root: projectRoot })
+    if (!ensured.ok) {
+      // eslint-disable-next-line no-console -- 主进程没有渲染层可报；历史不可用必须留痕
+      console.error('[pinax-next] 历史仓库不可用：', ensured.error?.message ?? ensured.error)
+      historyScheduler.stop()
+      return
+    }
+    historyWired = true
     const storedNow = await prefs.read()
     const interval = storedNow.ok ? storedNow.value.historyIntervalMinutes : 5
     const started = await historyScheduler.start({ root: projectRoot, intervalMinutes: interval })
@@ -279,12 +395,18 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   })
   setSharedKnowledgeService(knowledgeService)
 
+  // 写作动作（批次41）：走同一个模型漏斗（writingComplete 内部默认 forwardComplete → 任务面 /v1/pinax/complete）。
+  // 90 秒超时：老前端续写也在这个量级，短了长段落会被腰斩；不可达时通道如实报错，不编字。
+  const writingComplete = createWritingComplete({ timeoutMs: 90_000 })
+
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
   session = await createNextSession({
     root: root || app.getPath('documents'),
     autoOpen: Boolean(root),
-    runtimeOptions: { runner: createAdvisorRunner() }
+    // 批次37：工具循环接上真链。默认档是会话的 writeMode（review 时写工具只转提案），
+    // 这一层不替作者猜档位——review/auto 的真值在会话 JSONL 与界面开关里。
+    runtimeOptions: { runner: createAdvisorRunner({ toolLoop: createProjectToolLoop() }) }
   })
   dispatcher = createIpcDispatcher({
     session,
@@ -325,9 +447,18 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     },
     // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
     knowledgeService,
+    writingComplete,
     // 运行过程事件（批次29）：runtimeAsk 期间把运行器的真实阶段推给渲染层。
     // 走既有推送机制（sendToRenderer → webContents.send），通道名在 ipcContract 里；窗口不在时静默丢弃。
-    emitRuntimeEvent: (payload) => sendToRenderer(IPC_PUSH.runtimeAskEvent, payload),
+    emitRuntimeEvent: (payload) => {
+      sendToRenderer(IPC_PUSH.runtimeAskEvent, payload)
+      // 批次37：工具循环写出提案那一刻，提案审阅节要能自动刷新。文件服务路径上的那一条
+      // （notifyWrite → proposals-changed）也发同一类事件；两次都只是「重读一次」，不合并也不去重——
+      // 少刷新一次比多刷新一次难查。
+      if (payload?.event?.stage === 'proposal-created' && session?.projectRoot) {
+        emitProjectEvent(session.projectRoot, { kind: 'proposals-changed' })
+      }
+    },
     // 收口包⑤：渲染层的 prefs:theme 通知——事件不是请求，只重设原生窗控浮层。
     onThemeChanged: async (theme) => {
       updateTitleBarOverlay({ theme, zoom: currentUiZoom })
@@ -341,7 +472,16 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     onProjectOpened: beginHistory,
     // 工单E3：关项目即停历史定时器。session.close 不清 projectRoot，停表只能在外壳这一层做；
     // 不重启窗口也能让「关掉项目后不再有新快照」成立。
-    onProjectClosed: async () => { historyScheduler.stop() },
+    // 批次37：同时退订项目事件并摘掉写入钩子（关项目后旧根的事件不该再推给渲染层）。
+    onProjectClosed: async () => {
+      historyScheduler.stop()
+      historyWired = false
+      if (detachProjectEvents) {
+        detachProjectEvents()
+        detachProjectEvents = null
+      }
+      session?.project?.value?.fileService?.setOnWrite?.(null)
+    },
     onPrefsApplied: async (value) => {
       // 保存即生效：端点改网关（null 回默认来源），缩放改当前窗口与原生窗控浮层（无需重开）。
       applyModelPlaneEndpoint(value.modelPlaneEndpoint ?? null)
@@ -412,7 +552,8 @@ app.on('before-quit', (event) => {
 
 // 只有作为 Forge/Node 的直接入口运行时才自启，单测与 bundle 构建 import 它不应拉起 Electron。
 const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-if (invokedDirectly) {
+// 抢不到单实例锁的进程已经在上面 app.quit()：不再装配会话、不再建窗（second-instance 负责提窗）。
+if (invokedDirectly && singleInstanceLock) {
   // 直开项目的两个入口（取先到）：位置参数（启动器传绝对路径，UTF-16 传递不吃编码）或
   // PINAX_NEXT_ROOT env。位置参数必须长得像绝对路径才认——argv 形态随打包方式变，宁缺毋滥。
   const cliRootArg = process.argv[2]

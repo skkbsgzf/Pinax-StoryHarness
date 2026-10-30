@@ -41,6 +41,9 @@ export const IPC_CHANNELS = Object.freeze({
   runtimeAsk: 'pinax:agent:runtime:ask',
   runtimeToolCall: 'pinax:agent:runtime:tool-call',
   runtimePropose: 'pinax:agent:runtime:propose',
+  // 批次41：正文写作动作（续写／改写／扩写／压缩／润色）。载荷是「动作＋正文＋选区＋额外要求」，
+  // 提示词在主进程由 writingActions 拼——不是一条通用模型管道。
+  runtimeComplete: 'pinax:agent:runtime:complete',
   // M2.5-B：会话落盘。load 读 JSONL，save 交整份快照，import 只给老浏览器缓存迁移用一次。
   sessionsLoad: 'pinax:agent:sessions:load',
   sessionsSave: 'pinax:agent:sessions:save',
@@ -77,7 +80,10 @@ export const IPC_CHANNELS = Object.freeze({
 export const IPC_EVENT = Object.freeze({
   viewChanged: 'pinax:agent:event:view-changed',
   runtimeProgress: 'pinax:agent:event:runtime-progress',
-  menuInvoked: 'pinax:agent:event:menu-invoked'
+  menuInvoked: 'pinax:agent:event:menu-invoked',
+  // 批次37：项目变更（进程内事件总线的渲染层出口）。payload `{ kind, at }`，只报「哪类数据变了」，
+  // 不带路径与正文——渲染层据此重读自己那一份，不在这里传数据。事件是通知，不是请求。
+  projectEvent: 'pinax:agent:event:project-changed'
 })
 
 export const IPC_EVENTS = Object.freeze(Object.values(IPC_EVENT))
@@ -250,8 +256,12 @@ export function shellView(session) {
  *   emitRuntimeEvent —— ({ askId, event }) => void：runtimeAsk 执行期间把运行器的真实阶段事件推给渲染层
  *                       （主进程：webContents.send(IPC_PUSH.runtimeAskEvent, payload)）。
  *                       不注入时只算 askId、不发事件（进程内单测与验收照旧，两参调用面不变）。
+ * deps 扩展（批次41 写作动作）：
+ *   writingComplete  —— next/runtime/writingComplete（createWritingComplete）。{ run } 收
+ *                       { action, text, selection, instruction }；动作闭集与提示词都在主进程侧。
+ *                       不注入时 runtime:complete 如实报缺，不回落成一次普通提问。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null, writingComplete = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
   // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
   // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
@@ -383,6 +393,18 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
       case IPC_CHANNELS.runtimePropose:
         return session.runtime ? session.runtime.propose({ name: input.name, text: input.text }) : fail('INVALID_INPUT', '运行时尚未就绪')
+      // 批次41：正文写作动作。只认闭集动作（writingActions 里的五个），正文与选区原样交给主进程校验，
+      // 提示词不进渲染层。动作没有注入就如实报缺——不在这里回落成一次普通提问。
+      case IPC_CHANNELS.runtimeComplete: {
+        if (!writingComplete?.run) return fail('INVALID_INPUT', '写作动作未接入（主进程未创建 writingComplete）：这条通道现在只报缺，不写任何字')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '写作动作需要先打开一个项目：它按当前项目的稿子来写')
+        return writingComplete.run({
+          action: input.action,
+          text: input.text,
+          selection: input.selection,
+          instruction: input.instruction
+        })
+      }
       // H2／工单B：知识服务 all-in-one。三条都只认当前项目根——渲染层传什么 root 都不采信。
       case IPC_CHANNELS.knowledgeSearch: {
         if (!knowledgeService?.search) return fail('INVALID_INPUT', '知识服务未接入（主进程未创建 knowledgeService）：这条通道现在只报缺，不检索任何资料')

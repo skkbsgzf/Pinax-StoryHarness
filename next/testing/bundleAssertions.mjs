@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { cp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { isBuiltin } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'vite'
+import { loadSkills } from '../skills/loadSkills.mjs'
+import { SKILL_READ_TOOL } from '../runtime/skillTools.mjs'
+import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
 
 /**
  * 打包侧门禁（M1 · WP6 断言 a/b/c/d）。依据 2026-10-27 的四个桩，改动前先跑 npm run verify:next。
@@ -22,6 +25,21 @@ const repoRoot = resolve(here, '..', '..')
 const CONFIG_PATH = join(repoRoot, 'next', 'vite.next.main.config.mjs')
 const BUNDLE_PATH = join(repoRoot, 'next', '.build', 'pinax-next-main.mjs')
 const ALLOWED_BARE = new Set(['electron', 'better-sqlite3', 'bindings', 'file-uri-to-path'])
+const SKILLS_SOURCE = join(repoRoot, 'next', 'skills')
+const SKILLS_TARGET = join(repoRoot, 'next', '.build', 'skills')
+
+/**
+ * 批次37：技能目录随产物走（SKILL.md 是运行时读的文件，不是 vite 资产）。
+ * 这里先拷一份，下面的 d2（主进程 bundle 里的运行时面）与本文件末尾的 needle 都按产物路径读；
+ * 真正的构建期拷贝在 vite.next.shell.config.mjs 的 closeBundle 里（打包走那条）。
+ */
+async function copySkillsToBuild() {
+  await rm(SKILLS_TARGET, { recursive: true, force: true })
+  await cp(SKILLS_SOURCE, SKILLS_TARGET, {
+    recursive: true,
+    filter: (source) => !source.endsWith('loadSkills.mjs')
+  })
+}
 
 /**
  * 外部说明符是否可接受：相对路径、Node 内建（含不带 node: 前缀的写法）、白名单里的运行时依赖。
@@ -47,6 +65,9 @@ const configSource = await readFile(CONFIG_PATH, 'utf-8')
 check('a1 构建参数：build.ssr 指向 next/mainEntry.mjs', /build:\s*\{[\s\S]*?ssr:\s*'next\/mainEntry\.mjs'/.test(configSource))
 check('a2 构建参数：ssr.noExternal:true', /ssr:\s*\{\s*noExternal:\s*true/.test(configSource))
 check('a3 构建参数：external 保住 electron 与原生模块', /external:\s*\[[^\]]*'electron'/.test(configSource))
+
+// 先拷技能，再建主进程 bundle：d2 会真起一次运行时面，它按产物路径读技能清单。
+await copySkillsToBuild()
 
 let captured = { imports: [], dynamicImports: [], modules: 0 }
 await build({
@@ -81,21 +102,25 @@ const info = await stat(BUNDLE_PATH)
 check('体积记账：主进程 bundle 未压缩 < 6 MB（按 R3 裁定：内置 git 库随包发布）', info.size < 6 * 1024 * 1024, `${(info.size / 1024).toFixed(1)} kB`)
 
 // d：把产物当真装机的模块跑一遍（桩 2d 的做法——只"编译通过"不算自足）。
+/** 末尾 m2 复用：bundle 产物的纯内核工具名。 */
+let kernelSurfaceNames = []
 try {
   const mod = await import(pathToFileURL(BUNDLE_PATH).href)
   const surface = mod.createMcpSurface()
   const link = await mod.connectInProcess(surface)
   const listed = await link.listTools()
+  kernelSurfaceNames = listed.map((tool) => tool.name)
   await link.close()
   // createMcpSurface 是「纯内核那一份」，19 把内核工具；技能读取是运行时自有工具，由 d2 核。
   check('d 产物自足可执行：import 产物后 in-process 列出内核 19 工具', listed.length === 19, `toolCount=${listed.length}`)
 
-  // d2：真实运行时面（内核 19 ＋ pinax_skill_read）。技能正文是否装得上看 skillCatalog；打包产物里
-  // next/skills/ 还没跟着走时，rejected 会如实记 SKILLS_DIR_UNREADABLE，但工具本身必须在面上。
+  // d2：真实运行时面（内核 19 ＋ pinax_skill_read）。批次37 起技能目录随产物走；
+  // 空框架（没有载体）时，声明了载体写工具的技能会如实拒装 SKILL_TOOLS_NOT_ON_SURFACE——
+  // 这不是失败，工具本身必须在面上；「技能能装载」由末尾 m2 按完整面核。
   const runtime = mod.createAgentRuntime({})
   await runtime.start()
   const names = runtime.listTools().map((tool) => tool.name)
-  const skillRejected = runtime.surfaceInfo().skills?.rejected?.map((item) => item.reason) ?? []
+  const skillRejected = runtime.surfaceInfo().skills?.rejected?.map((item) => item.code) ?? []
   await runtime.stop()
   check('d2 运行时面：内核 19 ＋ pinax_skill_read', names.length === 20 && names.includes('pinax_skill_read'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
   check('内核版本对外可见：KERNEL_INFO.contractVersion=1', mod.KERNEL_INFO?.contractVersion === '1', mod.NEXT_VERSION ?? '')
@@ -189,6 +214,42 @@ for (const rel of shellSourceFiles) {
 check('l 渲染层外壳源码不 import next/history/：git 历史引擎不得进渲染层',
   historyImportHits.length === 0,
   historyImportHits.join(', ') || `扫了 ${shellSourceFiles.length} 个渲染层源文件`)
+
+// 批次37：技能目录进产物（M2.5-B 记账的欠账）。
+// SKILL.md 是运行时读的文件，不是 vite 资产——构建期 copy 到 .build/skills/，loadSkills 按模块目录
+// 双落点解析（源码轨 next/skills/、装机轨 .build/skills/）。三条 needle 各管一段：
+//   m  文件真的在产物路径上（与源码目录逐一对应）；
+//   m2 在这个目录上真能装载出 5 个技能（按「项目打开、七块载体都在」的完整工具面校验）；
+//   m3 外壳 bundle 带着目录覆盖口与目录名，装机后不会退回「找不到技能目录」。
+const sourceSkillDirs = (await readdir(SKILLS_SOURCE, { withFileTypes: true }))
+  .filter((entry) => entry.isDirectory())
+  .map((entry) => entry.name)
+const missingSkillFiles = []
+for (const name of sourceSkillDirs) {
+  const exists = await stat(join(SKILLS_TARGET, name, 'SKILL.md')).then(() => true, () => false)
+  if (!exists) missingSkillFiles.push(name)
+}
+check('m 技能目录进产物：.build/skills/<技能>/SKILL.md 与源码逐一对应',
+  sourceSkillDirs.length > 0 && missingSkillFiles.length === 0,
+  missingSkillFiles.length ? `缺 ${missingSkillFiles.join(', ')}` : `${sourceSkillDirs.length} 个：${sourceSkillDirs.join(' / ')}`)
+
+// 工具面按「项目已打开、七块内置载体都在」取：技能声明的 savers 是载体自有工具，
+// 只有内核 19 把时四份技能本就该被如实拒装（空框架面），不能拿那个面来判装机轨。
+const carrierDeclaredTools = BUILT_IN_CARRIER_PLUGINS
+  .flatMap((plugin) => plugin?.manifest?.tools ?? [])
+const fullSurface = [...new Set([...kernelSurfaceNames, ...carrierDeclaredTools, SKILL_READ_TOOL])]
+const loadedFromBuild = await loadSkills({ dir: SKILLS_TARGET, availableTools: fullSurface })
+check('m2 装机轨技能可装载：loadSkills 在 .build/skills 按源码目录数装载且零拒装',
+  loadedFromBuild.skills.length === sourceSkillDirs.length && loadedFromBuild.rejected.length === 0,
+  loadedFromBuild.rejected.length
+    ? `拒装 ${loadedFromBuild.rejected.map((item) => `${item.dir}:${item.code}`).join(', ')}`
+    : `${loadedFromBuild.skills.length}/${sourceSkillDirs.length}：${loadedFromBuild.skills.map((skill) => skill.name).join(' / ')}`)
+
+// 只认覆盖口这一个标识符：目录名 "skills" 在压缩产物里可能被改写成单引号或拼接片段，
+// 按字面 needle 守会误伤构建器，守「双落点解析的入口存在」才是真正想守的东西。
+check('m3 外壳 bundle 的双落点解析在产物里：保留 PINAX_NEXT_SKILLS_DIR 覆盖口',
+  shellBundle.includes('PINAX_NEXT_SKILLS_DIR'),
+  shellBundle.includes('PINAX_NEXT_SKILLS_DIR') ? '覆盖口在' : '缺 PINAX_NEXT_SKILLS_DIR')
 
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
 // 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，

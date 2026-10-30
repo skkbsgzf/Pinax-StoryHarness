@@ -8,5 +8,9 @@ src/assets/fonts/OFL.txt -whitespace
 adapters/pinax-adapter/vendor/storyflow-kit/** whitespace=cr-at-eol
 adapters/pinax-adapter/vendor/storyflow-kit/**/*.md whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
 
+# next/ 源码在 Windows 工作副本里以 CRLF 入库（搬家期沿用既有字节）；CR 是换行的一部分，
+# 其余空白规则（行尾空格、段首制表符、EOF 空行）继续检查
+next/** whitespace=cr-at-eol
+
 # writing-skills 的 CRLF 夹具：CR 是测试内容本身，不做空白检查
 scripts/writing-skills/fixtures/positive-adjacent-repeat-crlf.txt -whitespace

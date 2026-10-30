@@ -62,11 +62,17 @@ export async function createRuntimeSurface({ registry, view, fileService, adviso
   const nativeMap = createSkillTools({ skills: loaded.skills })
   const guard = (tool, args) => guardKernelToolCall({ tool, args, root, registry })
   const aggregated = await createAggregatedMcpServer({ kernelServer, carrierMap: map, nativeMap, guard, name: SURFACE_NAME, version: SURFACE_VERSION })
+  // 批次37：清单声明了 subscriptions 的启用载体，宿主在激活时替它挂投递（M2.5-C 的承诺兑现）。
+  // 今天七块载体都声明了 project.changed，但 impl 还没有 onProjectEvent —— 投递路径是真实的、空的，
+  // surfaceInfo 会如实把这个名单摊出来，不假装事件已经被谁消费。
+  const subscribedCarriers = (Array.isArray(view?.enabled) ? view.enabled : [])
+    .filter((pluginId) => (registry?.get?.(pluginId)?.subscriptions ?? []).includes('project.changed'))
   return {
     server: aggregated.server,
     carrierCount: map.size,
     carrierToolNames: [...map.keys()],
     missingImplementations: missing,
+    subscribedCarriers,
     aggregated: map.size > 0,
     writeGuard: { tools: KERNEL_WRITE_TOOL_NAMES, projectRoot: root },
     skills: {

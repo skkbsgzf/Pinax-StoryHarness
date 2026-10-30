@@ -41,7 +41,13 @@ export const LEGACY_VIEW_BINDINGS = Object.freeze([
   { prefix: 'worldbook.', view: 'pinax.view.reader', kind: 'entry-detail' },
   { prefix: 'script.', view: 'pinax.view.editor', kind: 'script-editor' },
   { prefix: 'setting.', view: 'pinax.view.editor', kind: 'rule-editor' },
-  { prefix: 'reference.', view: 'pinax.view.reader', kind: 'document-detail' }
+  { prefix: 'reference.', view: 'pinax.view.reader', kind: 'document-detail' },
+  // 记录型载体（批次40 · M4／M5）：五栏共用一个记录详情面，载体 key 由 pane id 首段区分。
+  { prefix: 'material.', view: 'pinax.view.editor', kind: 'records-editor' },
+  { prefix: 'comic.', view: 'pinax.view.editor', kind: 'records-editor' },
+  { prefix: 'video.', view: 'pinax.view.editor', kind: 'records-editor' },
+  { prefix: 'experience.', view: 'pinax.view.editor', kind: 'records-editor' },
+  { prefix: 'online.', view: 'pinax.view.editor', kind: 'records-editor' }
 ])
 
 export function isViewType(value) {

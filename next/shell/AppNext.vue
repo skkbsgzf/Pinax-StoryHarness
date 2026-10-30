@@ -20,6 +20,8 @@ import ExportSection from './settings/ExportSection.vue'
 import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
+import { refreshTargetsFor } from './projectEventRefresh.mjs'
+import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
 import { IPC_CHANNELS, IPC_EVENT } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 import {
@@ -303,7 +305,8 @@ const settingsSections = computed(() => [
   { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
   // 工单B1（协议 v1.1-B）：提案审阅迁出小说板索引窗，收进统一二级页的「文档」组。
   // 数据走 useBoardData 的同一份（loadProposals → pinax_proposal_list），不另开取数路径。
-  { id: 'proposals', title: '提案审阅', group: '文档', keywords: ['提案', '模型改稿', '采纳', '弃用', 'proposals'], component: ProposalsSection, props: { data, open: openProposalFromSettings } },
+  // 批次37：多给一条 bridge——节自己订阅 proposals-changed 自动重列（数据仍走 data 那一份）。
+  { id: 'proposals', title: '提案审阅', group: '文档', keywords: ['提案', '模型改稿', '采纳', '弃用', 'proposals'], component: ProposalsSection, props: { data, open: openProposalFromSettings, bridge: props.bridge } },
   // 批次26（任务三）：导出当前打开的文档（txt／doc）。锚点与历史面板共用 data.selection。
   { id: 'export', title: '导出', group: '文档', keywords: ['导出', '另存为', 'txt', 'doc', 'word', '纯文本', '下载'], component: ExportSection, props: { bridge: props.bridge, document: exportDocumentTarget.value } },
   // 批次30：散文章节稿 → 大纲/outline.json。只追加缺的章节，现有节点不动（dryRun 扫描后才落盘）。
@@ -937,6 +940,10 @@ async function preparePaneData(paneId) {
   else if (id.startsWith('setting.')) await data.loadRules()
   else if (id.startsWith('reference.')) await data.loadDocuments()
   else if (id.startsWith('script.')) await data.loadScripts()
+  else {
+    const records = recordCarrierOfPaneId(id)
+    if (records) await data.loadRecords(records.key)
+  }
 }
 
 /** pane 前缀 → useBoardData 里那棵树的名字（只用于「取过数没有」这一格，取数入口仍是 preparePaneData）。 */
@@ -947,7 +954,8 @@ const PANE_TREE_KEYS = Object.freeze([
   ['worldbook.', 'entries'],
   ['setting.', 'rules'],
   ['reference.', 'documents'],
-  ['script.', 'scripts']
+  ['script.', 'scripts'],
+  ...RECORD_CARRIER_KEYS.map((key) => [`${key}.`, recordTreeKey(key)])
 ])
 
 function treeKeyForPane(paneId) {
@@ -1302,6 +1310,27 @@ function startDrag(target, event) {
   window.addEventListener('pointerup', up)
 }
 
+/* —— 项目事件 → 板块树自动刷新（批次39）————————————————————————————
+   主进程把 `{ kind, at }` 推过来；这里按 kind 合并到一拍再刷（一次保存往往连发两三条）。
+   真正的重扫在 useBoardData.refreshFromProjectEvent：只碰已经载入过的树，草稿脏就只重建树。
+   提案审阅节／大纲转换节各自订阅自己的 kind，这条订阅不替它们做事。 */
+let offProjectEvent = null
+let projectEventTimer = null
+const pendingProjectEventKinds = new Set()
+
+function onProjectEvent(payload) {
+  const kind = payload?.kind
+  if (!refreshTargetsFor(kind).length) return
+  pendingProjectEventKinds.add(kind)
+  if (projectEventTimer) clearTimeout(projectEventTimer)
+  projectEventTimer = setTimeout(() => {
+    projectEventTimer = null
+    const kinds = [...pendingProjectEventKinds]
+    pendingProjectEventKinds.clear()
+    for (const pending of kinds) void data.refreshFromProjectEvent(pending)
+  }, 150)
+}
+
 onMounted(() => {
   applyScheme(scheme.value)
   void syncThemeFromPrefs()
@@ -1314,6 +1343,10 @@ onMounted(() => {
   // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
   // 工单F：页内菜单行的点击也收敛到同一个 runMenuAction——两条入口，一份落点。
   props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => runMenuAction(payload?.id))
+  // 项目事件（批次39）：同一条桥，只接「有人消费」的 kind；退订在 onBeforeUnmount。
+  if (typeof props.bridge?.onEvent === 'function') {
+    offProjectEvent = props.bridge.onEvent(IPC_EVENT.projectEvent, onProjectEvent)
+  }
   // 页内菜单行的收起手势挂在 document 上：Esc 与点击菜单外都收（下拉不许一直挂着）。
   document.addEventListener('keydown', onTitlebarKeydown)
   document.addEventListener('pointerdown', onTitlebarPointerDown)
@@ -1323,6 +1356,15 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  if (offProjectEvent) {
+    offProjectEvent()
+    offProjectEvent = null
+  }
+  if (projectEventTimer) {
+    clearTimeout(projectEventTimer)
+    projectEventTimer = null
+  }
+  pendingProjectEventKinds.clear()
   document.removeEventListener('keydown', onTitlebarKeydown)
   document.removeEventListener('pointerdown', onTitlebarPointerDown)
   window.removeEventListener('keydown', onContextMenuKeydown, true)
@@ -1627,4 +1669,3 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
-
