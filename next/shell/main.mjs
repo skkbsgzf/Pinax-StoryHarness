@@ -24,6 +24,8 @@ import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
 import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
+import { buildSettingsSchema, createFileCarrierOverridesStore, readCarrierOverridesSync } from '../carrierOverridesStore.mjs'
+import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
@@ -40,6 +42,30 @@ import { createPluginFileHandler } from './pluginFileServer.mjs'
  * 窗口文件由打包侧注入：dev 走 vite dev server，prod 走打包后的 renderer html。
  */
 const currentDir = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * 离线诊断（批次54 · 任务⑤）：`--dump-settings-schema` 把「清单默认 → 工程覆盖」合并后的
+ * 设置项输出成 JSON Schema 到 stdout。不开窗、不建会话、不进运行时路径——纯读文件＋拼 schema。
+ * 项目根：`--root=<项目目录>` 优先，其次 PINAX_NEXT_ROOT；都不给就只输出清单默认。
+ */
+export function dumpSettingsSchema({ argv = process.argv } = {}) {
+  const rootArg = argv.find((arg) => typeof arg === 'string' && arg.startsWith('--root='))
+  const root = rootArg ? rootArg.slice('--root='.length).trim() : (process.env.PINAX_NEXT_ROOT || null)
+  const overrideState = readCarrierOverridesSync(root || null)
+  const schema = buildSettingsSchema(
+    BUILT_IN_CARRIER_PLUGINS.map((plugin) => plugin.manifest),
+    overrideState.overrides
+  )
+  if (overrideState.exists === false) schema['x-pinax-overrides'] = { exists: false }
+  if (overrideState.warnings.length) schema.warnings = [...(schema.warnings ?? []), ...overrideState.warnings]
+  return schema
+}
+
+const dumpSchemaRequested = process.argv.includes('--dump-settings-schema')
+if (dumpSchemaRequested) {
+  // 先写完 stdout 再退：pipe 下的写是异步的，直接 exit 会截断 JSON。
+  process.stdout.write(`${JSON.stringify(dumpSettingsSchema(), null, 2)}\n`, () => app.exit(0))
+}
 
 /**
  * 自绘标题栏（工单F · 作者反馈①②）：原生窗控浮层。
@@ -157,9 +183,12 @@ protocol.registerSchemesAsPrivileged([{
  * 想并行开两个项目，先把「多窗口」做成真功能（M2.5-C 记账的未做项），而不是绕过锁。
  * 测试/构建 import 本文件不会走到这里：requestSingleInstanceLock 只在 Electron 运行时存在。
  */
-const singleInstanceLock = typeof app.requestSingleInstanceLock === 'function'
-  ? app.requestSingleInstanceLock()
-  : true
+// 离线诊断（--dump-settings-schema）不抢单实例锁：它不建窗，也不该把已开的窗口提到前台。
+const singleInstanceLock = dumpSchemaRequested
+  ? true
+  : typeof app.requestSingleInstanceLock === 'function'
+    ? app.requestSingleInstanceLock()
+    : true
 if (!singleInstanceLock) app.quit()
 
 app.on('second-instance', () => {
@@ -563,6 +592,20 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     return settingsStore
   }
 
+  /**
+   * 工程级覆盖（批次54）：项目级 `.pinax/` 覆盖文件只读给渲染层。
+   * 写覆盖是作者改项目文件——GUI 这条通道只有 read，没有 set/remove。
+   * 与 settingsStore 同款缓存：根一变就重建，不跨项目复用 lastWritten。
+   */
+  let carrierOverridesStore = null
+  function carrierOverridesFor(projectRoot) {
+    if (!projectRoot) return null
+    if (!carrierOverridesStore || carrierOverridesStore.root !== String(projectRoot)) {
+      carrierOverridesStore = createFileCarrierOverridesStore({ root: projectRoot })
+    }
+    return carrierOverridesStore
+  }
+
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
   session = await createNextSession({
@@ -659,6 +702,7 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     knowledgeService,
     writingComplete,
     settingsStoreFor,
+    carrierOverridesFor,
     // 运行过程事件（批次29）：runtimeAsk 期间把运行器的真实阶段推给渲染层。
     // 走既有推送机制（sendToRenderer → webContents.send），通道名在 ipcContract 里；窗口不在时静默丢弃。
     emitRuntimeEvent: (payload) => {
@@ -773,7 +817,7 @@ const invokedDirectly = app.isPackaged === true || process.argv.slice(1).some((a
   }
 })
 // 抢不到单实例锁的进程已经在上面 app.quit()：不再装配会话、不再建窗（second-instance 负责提窗）。
-if (invokedDirectly && singleInstanceLock) {
+if (invokedDirectly && singleInstanceLock && !dumpSchemaRequested) {
   // 直开项目的两个入口（取先到）：位置参数（启动器传绝对路径，UTF-16 传递不吃编码）或
   // PINAX_NEXT_ROOT env。位置参数必须长得像绝对路径才认——argv 形态随打包方式变，宁缺毋滥。
   const cliRootArg = process.argv[2]

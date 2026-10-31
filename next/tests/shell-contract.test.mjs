@@ -476,10 +476,11 @@ test('批次37 主进程三件接线：单实例锁闸住装配、项目事件�
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
 
   // 单实例锁（附条）：抢不到锁直接退出，且装配入口必须认这把锁——否则「退出」只关了个空壳。
-  assert.match(mainSource, /const singleInstanceLock = typeof app\.requestSingleInstanceLock === 'function'/, '锁的申请要有非 Electron 环境的兜底')
+  // 批次54：--dump-settings-schema 是离线诊断，不抢锁也不建窗（否则会把已开的窗口提到前台）。
+  assert.match(mainSource, /const singleInstanceLock = dumpSchemaRequested\s*\?\s*true\s*:\s*typeof app\.requestSingleInstanceLock === 'function'/, '锁的申请要有非 Electron 环境的兜底，离线诊断走旁路')
   assert.match(mainSource, /if \(!singleInstanceLock\) app\.quit\(\)/, '抢不到锁必须 quit')
   assert.match(mainSource, /app\.on\('second-instance'/, '第二实例要把已有窗口提到前台')
-  assert.match(mainSource, /if \(invokedDirectly && singleInstanceLock\)/, '装配/建窗必须被锁闸住')
+  assert.match(mainSource, /if \(invokedDirectly && singleInstanceLock && !dumpSchemaRequested\)/, '装配/建窗必须被锁闸住，离线诊断不进装配')
 
   // 项目事件：唯一的写盘钩子先发总线事件，再由历史是否就绪决定标脏；推送走 IPC_EVENT.projectEvent。
   assert.match(mainSource, /fileService\.setOnWrite\(async \(\{ relativePath \}\) => \{\s*const kind = projectEventKindForPath\(relativePath\)/s, '写盘钩子必须先做路径→事件映射')

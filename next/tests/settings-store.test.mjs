@@ -10,6 +10,7 @@ import {
   SETTINGS_VERSION
 } from '../settingsStore.mjs'
 import { createIpcDispatcher, IPC_CHANNELS } from '../shell/ipcContract.mjs'
+import { createFileCarrierOverridesStore } from '../carrierOverridesStore.mjs'
 
 /**
  * 每插件配置命名空间（批次45 · 任务③）：`.pinax/settings.json` 的读、写闸与 IPC 接线。
@@ -19,10 +20,13 @@ import { createIpcDispatcher, IPC_CHANNELS } from '../shell/ipcContract.mjs'
 const DECLARATIONS = {
   'pinax.carrier.novel': [
     { id: 'group', title: '排版', type: 'section' },
-    { id: 'fontFamily', title: '字体', type: 'string', default: '霞鹜文楷' },
-    { id: 'fontSize', title: '字号', type: 'number', default: 17 },
-    { id: 'spellcheck', title: '拼写检查', type: 'boolean', default: true },
-    { id: 'density', title: '密度', type: 'enum', options: ['compact', 'comfortable'], default: 'comfortable' }
+    // 批次54：volatile 才允许 GUI 写；min/max/step 由主进程与界面共用同一套判据。
+    { id: 'fontFamily', title: '字体', type: 'string', default: '霞鹜文楷', volatile: true },
+    { id: 'fontSize', title: '字号', type: 'number', default: 17, min: 12, max: 24, step: 1, volatile: true },
+    { id: 'spellcheck', title: '拼写检查', type: 'boolean', default: true, volatile: true },
+    { id: 'density', title: '密度', type: 'enum', options: ['compact', 'comfortable'], default: 'comfortable', volatile: true },
+    // 没有 volatile：只读展示，要走工程覆盖改默认值。
+    { id: 'accent', title: '强调色', type: 'string', default: 'olive' }
   ],
   'pinax.carrier.outline': []
 }
@@ -211,6 +215,88 @@ test('IPC：settings:load 返全量 carriers，settings:save 经白名单闸落�
     const noProjectSave = await noProject.dispatch(IPC_CHANNELS.settingsSave, {})
     assert.equal(noProjectSave.ok, false)
     assert.match(noProjectSave.error.message, /项目/u)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('批次54：number 的 min/max/step 在主进程拦住越界与非步长值', async () => {
+  const root = await makeRoot()
+  try {
+    const store = createFileSettingsStore({ root, declarations: DECLARATIONS })
+    const tooSmall = await store.set('pinax.carrier.novel', 'fontSize', 8)
+    assert.equal(tooSmall.ok, false)
+    assert.equal(tooSmall.error.code, 'PINAX_SETTING_OUT_OF_RANGE')
+    const tooBig = await store.set('pinax.carrier.novel', 'fontSize', 30)
+    assert.equal(tooBig.ok, false)
+    assert.equal(tooBig.error.code, 'PINAX_SETTING_OUT_OF_RANGE')
+    // 步长以 min 为基点：12 + n×1，14.5 不在格上。
+    const offStep = await store.set('pinax.carrier.novel', 'fontSize', 14.5)
+    assert.equal(offStep.ok, false)
+    assert.equal(offStep.error.code, 'PINAX_SETTING_STEP_MISMATCH')
+    assert.deepEqual((await store.read()).value.carriers, {}, '越界值一个字节都不落盘')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('批次54：未标 volatile 的设置只读——set 拒且不落盘', async () => {
+  const root = await makeRoot()
+  try {
+    const store = createFileSettingsStore({ root, declarations: DECLARATIONS })
+    const denied = await store.set('pinax.carrier.novel', 'accent', 'rose')
+    assert.equal(denied.ok, false)
+    assert.equal(denied.error.code, 'PINAX_SETTING_NOT_VOLATILE')
+    assert.deepEqual((await store.read()).value.carriers, {})
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('批次54：read() 给出 effective 与来源层（项目设置 > 工程覆盖 > 清单默认）', async () => {
+  const root = await makeRoot()
+  try {
+    const overrides = createFileCarrierOverridesStore({ root })
+    assert.equal((await overrides.set('pinax.carrier.novel', 'fontSize', 14)).ok, true)
+
+    const store = createFileSettingsStore({ root, declarations: DECLARATIONS })
+    assert.equal((await store.set('pinax.carrier.novel', 'fontFamily', '思源宋体')).ok, true)
+
+    const read = await store.read()
+    assert.equal(read.ok, true)
+    assert.deepEqual(read.value.overrides['pinax.carrier.novel'], { fontSize: 14 })
+
+    const effective = read.value.effective['pinax.carrier.novel']
+    assert.deepEqual(effective.fontFamily, { value: '思源宋体', source: 'stored', label: '项目设置', volatile: true })
+    assert.deepEqual(effective.fontSize, { value: 14, source: 'override', label: '工程覆盖', volatile: true })
+    assert.deepEqual(effective.density, { value: 'comfortable', source: 'manifest', label: '清单默认', volatile: true })
+    assert.deepEqual(effective.accent, { value: 'olive', source: 'manifest', label: '清单默认', volatile: false })
+    assert.equal(effective.group, undefined, 'section 是分组标题，不进 effective')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('批次54：carrier:overrides 通道只读——有项目时读覆盖文件，未注入／无项目如实报缺', async () => {
+  const root = await makeRoot()
+  try {
+    const overrides = createFileCarrierOverridesStore({ root })
+    await overrides.set('pinax.carrier.comic', 'comic.canvas', 'http://127.0.0.1:8199/')
+
+    const dispatcher = createIpcDispatcher({ session: { projectRoot: root }, carrierOverridesFor: () => overrides })
+    const loaded = await dispatcher.dispatch(IPC_CHANNELS.carrierOverrides, {})
+    assert.equal(loaded.ok, true)
+    assert.equal(loaded.value.overrides['pinax.carrier.comic']['comic.canvas'], 'http://127.0.0.1:8199/')
+
+    const missing = createIpcDispatcher({ session: { projectRoot: root } })
+    const missingRead = await missing.dispatch(IPC_CHANNELS.carrierOverrides, {})
+    assert.equal(missingRead.ok, false)
+    assert.match(missingRead.error.message, /工程覆盖服务未接入/u)
+
+    const noProject = createIpcDispatcher({ session: { projectRoot: null }, carrierOverridesFor: () => overrides })
+    const noProjectRead = await noProject.dispatch(IPC_CHANNELS.carrierOverrides, {})
+    assert.equal(noProjectRead.ok, false)
+    assert.match(noProjectRead.error.message, /项目/u)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

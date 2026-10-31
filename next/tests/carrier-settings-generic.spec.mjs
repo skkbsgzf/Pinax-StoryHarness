@@ -69,7 +69,7 @@ describe('CarrierSettingsGeneric（批次45）', () => {
 
   it('改值写回：保存带 carrierId／settingId／value，chip 回「已保存」', async () => {
     const bridge = bridgeStub()
-    const wrapper = mountGeneric({ id: 'size', title: '字号', type: 'number', default: 16 }, { bridge })
+    const wrapper = mountGeneric({ id: 'size', title: '字号', type: 'number', default: 16, volatile: true }, { bridge })
     const input = wrapper.find('[data-test="generic-number-size"]')
     await input.setValue('20')
     await wrapper.find('[data-test="generic-save-size"]').trigger('click')
@@ -87,12 +87,76 @@ describe('CarrierSettingsGeneric（批次45）', () => {
     const bridge = bridgeStub({
       save: () => ({ ok: false, error: { code: 'PINAX_SETTING_NOT_DECLARED', message: '载体没有声明设置 size：不写盘' } })
     })
-    const wrapper = mountGeneric({ id: 'size', title: '字号', type: 'number', default: 16 }, { bridge })
+    const wrapper = mountGeneric({ id: 'size', title: '字号', type: 'number', default: 16, volatile: true }, { bridge })
     await wrapper.find('[data-test="generic-save-size"]').trigger('click')
     await flushPromises()
     const chip = wrapper.find('[data-test="generic-save-chip-size"]')
     expect(chip.classes()).toContain('is-error')
     expect(chip.text()).toContain('没有声明设置')
+  })
+
+  it('批次54：effective 带来源层——overlay 值回填、显示「工程覆盖」、volatile 决定可写', async () => {
+    const bridge = bridgeStub({
+      load: {
+        ok: true,
+        value: {
+          version: 1,
+          carriers: {},
+          effective: {
+            'fixture.outline': {
+              density: { value: 'compact', source: 'override', label: '工程覆盖', volatile: true }
+            }
+          }
+        }
+      }
+    })
+    const wrapper = mountGeneric({ id: 'density', title: '密度', type: 'enum', options: ['compact', 'comfortable'], default: 'comfortable' }, { bridge })
+    await flushPromises()
+    expect(wrapper.find('[data-test="generic-enum-density"]').element.value).toBe('compact')
+    expect(wrapper.find('[data-test="generic-source-density"]').text()).toBe('工程覆盖')
+    expect(wrapper.find('[data-test="generic-save-density"]').exists()).toBe(true)
+  })
+
+  it('批次54：未标 volatile 只读——控件禁用、不出保存按钮', async () => {
+    const bridge = bridgeStub({
+      load: {
+        ok: true,
+        value: {
+          version: 1,
+          carriers: {},
+          effective: {
+            'fixture.outline': {
+              accent: { value: 'olive', source: 'manifest', label: '清单默认', volatile: false }
+            }
+          }
+        }
+      }
+    })
+    const wrapper = mountGeneric({ id: 'accent', title: '强调色', type: 'string', default: 'olive' }, { bridge })
+    await flushPromises()
+    expect(wrapper.find('[data-test="generic-string-accent"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="generic-save-accent"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="generic-readonly-accent"]').text()).toContain('只读')
+    expect(wrapper.find('[data-test="generic-source-accent"]').text()).toBe('清单默认')
+  })
+
+  it('批次54：number 越界／非步长在界面先挡，不发 settings:save', async () => {
+    const bridge = bridgeStub()
+    const wrapper = mountGeneric(
+      { id: 'size', title: '字号', type: 'number', default: 16, min: 12, max: 24, step: 2, volatile: true },
+      { bridge }
+    )
+    await wrapper.find('[data-test="generic-number-size"]').setValue('30')
+    await wrapper.find('[data-test="generic-save-size"]').trigger('click')
+    await flushPromises()
+    expect(bridge.calls.some((call) => call.channel === IPC_CHANNELS.settingsSave)).toBe(false)
+    expect(wrapper.find('[data-test="generic-save-chip-size"]').text()).toContain('不能大于 24')
+
+    await wrapper.find('[data-test="generic-number-size"]').setValue('15')
+    await wrapper.find('[data-test="generic-save-size"]').trigger('click')
+    await flushPromises()
+    expect(bridge.calls.some((call) => call.channel === IPC_CHANNELS.settingsSave)).toBe(false)
+    expect(wrapper.find('[data-test="generic-save-chip-size"]').text()).toContain('步长')
   })
 
   it('section：只出分组标题，不出保存按钮', () => {

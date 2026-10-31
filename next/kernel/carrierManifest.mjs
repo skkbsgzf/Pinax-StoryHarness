@@ -71,6 +71,8 @@ export const V4_ONLY_FIELDS = Object.freeze([
 export const V4_ONLY_TOP_FIELDS = Object.freeze(['maxKernel', 'license', 'preview'])
 /** @4 的 service 字段：老版本写了即拒（adopt 只探活不 spawn）。 */
 export const V4_ONLY_SERVICE_FIELDS = Object.freeze(['adopt'])
+/** @4 的 settings 字段（批次54）：老版本写了即拒；volatile 决定设置页是否可写。 */
+export const V4_ONLY_SETTING_FIELDS = Object.freeze(['volatile', 'min', 'max', 'step'])
 export { KERNEL_CONTRACT_VERSION }
 
 /** pane.kind：内容面词表（与 next/shell/viewRegistry.mjs 的宿主视图分工一一对应，测试会核）。 */
@@ -258,7 +260,7 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (normalizedPermissions?.ok === false) return normalizedPermissions
   const scopes = validateScopes(normalizedPermissions, dataDirs.value, m.id)
   if (!scopes.ok) return scopes
-  const settings = validateSettings(contributes.value.settings ?? m.settings, m.id)
+  const settings = validateSettings(contributes.value.settings ?? m.settings, m.id, { v4: m.spec === CARRIER_SPEC_V4 })
   if (!settings.ok) return settings
   const subscriptions = validateSubscriptions(m.subscriptions, m.id)
   if (!subscriptions.ok) return subscriptions
@@ -318,6 +320,15 @@ function firstV4Field(manifest) {
       for (const field of V4_ONLY_SERVICE_FIELDS) {
         if (service[field] !== undefined) return { field, where: `service:${String(service.id ?? '?')}` }
       }
+    }
+  }
+  const settings = Array.isArray(manifest.contributes?.settings)
+    ? manifest.contributes.settings
+    : Array.isArray(manifest.settings) ? manifest.settings : []
+  for (const setting of settings) {
+    if (!isPlainObject(setting)) continue
+    for (const field of V4_ONLY_SETTING_FIELDS) {
+      if (setting[field] !== undefined) return { field, where: `setting:${String(setting.id ?? '?')}` }
     }
   }
   return null
@@ -992,18 +1003,28 @@ function validateContext(value, pluginId) {
  *   string / number / boolean  → default 必须同型
  *   enum                       → options 为非空去重标量表，default 必须是其中一项
  *   section                    → 不带 default/options（带了就是「声明了却不生效」，拒装）
+ * @4（批次54）再补四个字段，且只对 number／非 section 生效：
+ *   volatile  boolean → 设置页可写；未标即只读展示（工程覆盖与清单默认仍可改值）
+ *   min/max   number  → 值域；default 也必须在域内
+ *   step      number  → 步长（>0）；default 与 min 对齐
  * id 在该载体自己的命名空间里唯一；分组由设置页固定归「载体」，多写字段直接拒装。
  */
-function validateSettings(value, pluginId) {
+function validateSettings(value, pluginId, { v4 = false } = {}) {
   if (value === undefined || value === null) return ok([])
   if (!Array.isArray(value)) return fail('INVALID_INPUT', `${pluginId} 的 settings 必须是数组（可空，但声明了就得是数组）`)
   const seen = new Set()
   const out = []
   for (const item of value) {
     if (!isPlainObject(item)) return fail('INVALID_INPUT', `${pluginId} 的 settings 项必须是对象`)
+    const allowedKeys = v4
+      ? ['id', 'title', 'type', 'default', 'options', ...V4_ONLY_SETTING_FIELDS]
+      : ['id', 'title', 'type', 'default', 'options']
     for (const key of Object.keys(item)) {
-      if (!['id', 'title', 'type', 'default', 'options'].includes(key)) {
-        return fail('INVALID_INPUT', `${pluginId} 的 settings 项含未知字段 "${key}"：可声明 id / title / type / default / options（分组由设置页固定为「载体」）`, { pluginId, key })
+      if (!v4 && V4_ONLY_SETTING_FIELDS.includes(key)) {
+        return fail('INVALID_MANIFEST', `${pluginId} 的 settings(${String(item.id ?? '?')}) 声明了 ${key}：这是 ${CARRIER_SPEC_V4} 的字段，请把 spec 与 manifestVersion 一并升级到 4`, { pluginId, field: key })
+      }
+      if (!allowedKeys.includes(key)) {
+        return fail('INVALID_INPUT', `${pluginId} 的 settings 项含未知字段 "${key}"：可声明 ${allowedKeys.join(' / ')}（分组由设置页固定为「载体」）`, { pluginId, key })
       }
     }
     if (typeof item.id !== 'string' || !SETTING_ID_PATTERN.test(item.id)) {
@@ -1019,13 +1040,29 @@ function validateSettings(value, pluginId) {
     if (!SETTING_TYPES.includes(type)) {
       return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) type 须是 ${SETTING_TYPES.join(' / ')}，收到 ${String(item.type)}`, { pluginId, id: item.id })
     }
+    if (item.volatile !== undefined && typeof item.volatile !== 'boolean') {
+      return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) volatile 须是布尔`, { pluginId, id: item.id })
+    }
     const normalized = { id: item.id, title, type }
     if (type === 'section') {
       if (item.default !== undefined || item.options !== undefined) {
         return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) 是 section：不带 default / options`, { pluginId, id: item.id })
       }
+      for (const field of V4_ONLY_SETTING_FIELDS) {
+        if (item[field] !== undefined) {
+          return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) 是 section：不带 ${field}`, { pluginId, id: item.id, field })
+        }
+      }
       out.push(normalized)
       continue
+    }
+    if (item.volatile !== undefined) normalized.volatile = item.volatile
+    if (type !== 'number') {
+      for (const field of ['min', 'max', 'step']) {
+        if (item[field] !== undefined) {
+          return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) 不是 number：不带 ${field}`, { pluginId, id: item.id, field })
+        }
+      }
     }
     if (type === 'enum') {
       const options = Array.isArray(item.options) ? item.options : null
@@ -1060,6 +1097,32 @@ function validateSettings(value, pluginId) {
     }
     if (type === 'number' && !Number.isFinite(normalized.default)) {
       return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) default 须是有限数字`, { pluginId, id: item.id })
+    }
+    if (type === 'number') {
+      for (const field of ['min', 'max', 'step']) {
+        if (item[field] !== undefined && (typeof item[field] !== 'number' || !Number.isFinite(item[field]))) {
+          return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) ${field} 须是有限数字`, { pluginId, id: item.id, field })
+        }
+        if (item[field] !== undefined) normalized[field] = item[field]
+      }
+      if (normalized.min !== undefined && normalized.max !== undefined && normalized.min > normalized.max) {
+        return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) min 不能大于 max`, { pluginId, id: item.id })
+      }
+      if (normalized.step !== undefined && normalized.step <= 0) {
+        return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) step 须大于 0`, { pluginId, id: item.id })
+      }
+      const min = normalized.min ?? null
+      const max = normalized.max ?? null
+      if ((min !== null && normalized.default < min) || (max !== null && normalized.default > max)) {
+        return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) default 不在 min/max 内`, { pluginId, id: item.id, default: normalized.default })
+      }
+      if (normalized.step !== undefined) {
+        const base = min ?? 0
+        const ratio = (normalized.default - base) / normalized.step
+        if (Math.abs(ratio - Math.round(ratio)) > 1e-9) {
+          return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) default 未对齐 step（以 min 为基点）`, { pluginId, id: item.id, default: normalized.default })
+        }
+      }
     }
     if (item.options !== undefined) {
       return fail('INVALID_INPUT', `${pluginId} 的 settings(${item.id}) 不是 enum：不带 options`, { pluginId, id: item.id })

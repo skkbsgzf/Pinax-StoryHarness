@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
-import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { EventEmitter } from 'node:events'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { validateCarrierManifest } from '../kernel/carrierManifest.mjs'
 import { createServiceSupervisor } from '../runtime/serviceSupervisor.mjs'
+import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
+import { carrierOverridesPath, createFileCarrierOverridesStore } from '../carrierOverridesStore.mjs'
+import { createFileSettingsStore } from '../settingsStore.mjs'
+import { diagnoseCarrier, loadHostDescriptor } from '../doctor.mjs'
+import { COMIC_CARRIER } from '../carriers/comic/manifest.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
 import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { createProject, initBareProject } from '../project/createProject.mjs'
@@ -42,6 +48,23 @@ function freePort() {
       server.close(() => resolvePromise(port))
     })
   })
+}
+
+/** 批次54：假子进程只满足监督器握手面（stdout/stderr/on/kill），不真起服务。 */
+function fakeServiceChild() {
+  const child = new EventEmitter()
+  child.pid = 4321
+  child.stdout = new EventEmitter()
+  child.stdout.setEncoding = () => {}
+  child.stderr = new EventEmitter()
+  child.stderr.setEncoding = () => {}
+  child.kill = (signal) => {
+    child.exitCode = 0
+    child.signalCode = signal ?? null
+    setImmediate(() => child.emit('exit', 0, signal ?? null))
+    return true
+  }
+  return child
 }
 
 try {
@@ -356,6 +379,111 @@ try {
     adoptStarted.value.started.includes('external-v4')
       && adoptStatus.adopt === true && adoptStatus.pid === null && adoptSpawnCalls === 0,
     `started=${adoptStarted.value.started.join(',')} spawn=${adoptSpawnCalls}`)
+
+  // ── 批次54：工程覆盖（两层：清单默认 → 工程覆盖）与易变设置 ─────────────────────
+  // 覆盖只改值，不改声明：端口换一个不用动插件文件，但 adopt／command／env 仍只归清单。
+  const overrideRoot = join(workspace, 'projects', '覆盖项目')
+  await mkdir(join(overrideRoot, '.pinax'), { recursive: true })
+  await writeFile(carrierOverridesPath(overrideRoot), JSON.stringify({
+    version: 1,
+    overrides: {
+      [COMIC_CARRIER_ID]: { 'comic-preview': { port: 8201 } },
+      'fixture.layer': { fontSize: 20 }
+    }
+  }, null, 2), 'utf-8')
+
+  const overridesStore = createFileCarrierOverridesStore({ root: overrideRoot })
+  const overridesRead = await overridesStore.read()
+  record('批次54 工程覆盖文件：读回 .pinax/ 下的覆盖档（version:1，按插件→服务/设置分栏）',
+    overridesRead.ok === true
+      && overridesRead.value.version === 1
+      && overridesRead.value.overrides?.[COMIC_CARRIER_ID]?.['comic-preview']?.port === 8201,
+    `warnings=${overridesRead.value.warnings.join(',') || '无'}`)
+
+  // 消费点①：监督器按 projectRoot 自读覆盖文件（不靠调用方再传一遍），端口以覆盖后的值为准；
+  // 状态面标 portSource=override，日志池留一条 info（作者在设置页看得到「为什么是 8201」）。
+  const overridePool = createServiceLogPool()
+  const overrideSupervisor = createServiceSupervisor({
+    projectRoot: overrideRoot,
+    services: [{ ...COMIC_CARRIER.services[0], pluginId: COMIC_CARRIER_ID, autostart: true }],
+    logPool: overridePool,
+    spawnImpl: () => fakeServiceChild(),
+    probeHealth: async () => ({ ok: true, statusCode: 200 }),
+    healthTimeoutMs: 500,
+    healthIntervalMs: 50
+  })
+  const overrideStarted = await overrideSupervisor.start()
+  const overrideStatus = overrideSupervisor.status()[0]
+  overridePool.setDeclarations([{
+    kind: 'service',
+    id: overrideStatus.id,
+    carrierId: COMIC_CARRIER_ID,
+    title: '漫画预览',
+    port: COMIC_CARRIER.services[0].port
+  }])
+  overridePool.setServiceStatuses([overrideStatus])
+  const overrideItem = overridePool.statusByCarrier()[0]?.items?.[0]
+  const overrideNote = overridePool.list({ source: { kind: 'service', carrierId: COMIC_CARRIER_ID } })
+    .find((entry) => entry.message.includes('被工程覆盖改成了 8201'))
+  await overrideSupervisor.stop()
+  record('批次54 服务端口覆盖：状态面 port=8201／portSource=override，状态池给出覆盖端口并记一条 info',
+    overrideStarted.value.started.includes('comic-preview')
+      && overrideStatus.port === 8201 && overrideStatus.portSource === 'override'
+      && overrideStatus.overrideFields.includes('port')
+      && overrideItem?.port === 8201 && overrideItem?.portSource === 'override'
+      && overrideNote?.level === 'info',
+    `port=${overrideStatus.port}/${overrideStatus.portSource} note=${overrideNote?.message ?? '缺'}`)
+
+  // 消费点②：设置有效值三层（项目设置 > 工程覆盖 > 清单默认）与 volatile 写闸。
+  const layerRoot = join(workspace, 'projects', '设置层项目')
+  await mkdir(join(layerRoot, '.pinax'), { recursive: true })
+  await writeFile(carrierOverridesPath(layerRoot), JSON.stringify({
+    version: 1,
+    overrides: { 'fixture.layer': { fontSize: 20, theme: 'dark' } }
+  }, null, 2), 'utf-8')
+  const layerDeclarations = {
+    'fixture.layer': [
+      { id: 'fontSize', title: '字号', type: 'number', default: 16, min: 12, max: 24, step: 1, volatile: true },
+      { id: 'theme', title: '主题', type: 'string', default: 'light' }
+    ]
+  }
+  const layerStore = createFileSettingsStore({ root: layerRoot, declarations: layerDeclarations })
+  const layerRead = await layerStore.read()
+  const layerRow = layerRead.value.effective?.['fixture.layer'] ?? {}
+  record('批次54 设置覆盖层：未存过设置时工程覆盖生效（fontSize=20，来源「工程覆盖」）',
+    layerRead.ok === true && layerRow.fontSize?.value === 20
+      && layerRow.fontSize?.source === 'override' && layerRow.fontSize?.label === '工程覆盖'
+      && layerRow.theme?.source === 'override',
+    `fontSize=${layerRow.fontSize?.value}/${layerRow.fontSize?.source}`)
+
+  const storedWrite = await layerStore.set('fixture.layer', 'fontSize', 18)
+  const storedRead = await layerStore.read()
+  const storedRow = storedRead.value.effective?.['fixture.layer']?.fontSize
+  record('批次54 volatile 可经 GUI 写：.pinax/settings.json 盖过工程覆盖（stored > override）',
+    storedWrite.ok === true && storedRow?.value === 18 && storedRow?.source === 'stored',
+    `value=${storedRow?.value}/${storedRow?.source}`)
+
+  const nonVolatileWrite = await layerStore.set('fixture.layer', 'theme', 'light')
+  const outOfRange = await layerStore.set('fixture.layer', 'fontSize', 99)
+  const stepMismatch = await layerStore.set('fixture.layer', 'fontSize', 18.5)
+  record('批次54 设置写闸：非 volatile 拒写，min/max 与 step 越界拒（PINAX_SETTING_NOT_VOLATILE／OUT_OF_RANGE／STEP_MISMATCH）',
+    nonVolatileWrite.ok === false && nonVolatileWrite.error.code === 'PINAX_SETTING_NOT_VOLATILE'
+      && outOfRange.ok === false && outOfRange.error.code === 'PINAX_SETTING_OUT_OF_RANGE'
+      && stepMismatch.ok === false && stepMismatch.error.code === 'PINAX_SETTING_STEP_MISMATCH',
+    `${nonVolatileWrite.error?.code}/${outOfRange.error?.code}/${stepMismatch.error?.code}`)
+
+  // 消费点③：doctor 把来源层讲清楚（端口来自工程覆盖，不是清单默认）。
+  const hostDescriptor = loadHostDescriptor()
+  const doctorReport = diagnoseCarrier(COMIC_CARRIER, {
+    descriptor: hostDescriptor.value,
+    overrides: overridesRead.value.overrides
+  })
+  const portSourceCheck = doctorReport.checks.find((check) => check.name === 'service-port-source')
+  record('批次54 doctor 来源层：漫画预览端口 8201 标 portSource=override',
+    hostDescriptor.ok === true
+      && portSourceCheck?.services?.[0]?.port === 8201
+      && portSourceCheck?.services?.[0]?.portSource === 'override',
+    `state=${doctorReport.state} port=${portSourceCheck?.services?.[0]?.port}/${portSourceCheck?.services?.[0]?.portSource}`)
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

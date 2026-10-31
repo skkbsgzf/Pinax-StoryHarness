@@ -9,6 +9,7 @@ import {
   validateCarrierManifest
 } from './kernel/carrierManifest.mjs'
 import { kernelRangeAllows, parseKernelVersion } from './kernel/carrierManifest.contract.mjs'
+import { applyServiceOverride, buildEffectiveSettings } from './carrierOverridesStore.mjs'
 
 /**
  * 宿主描述符 + 载体体检（工单 C4）。
@@ -61,7 +62,16 @@ export function loadHostDescriptor(file = HOST_DESCRIPTOR_FILE) {
 }
 
 /** 诊断一次：返回 { state, manifestId, message, fix, checks }。state 不在六态里就是 doctor 自身的 bug。 */
-export function diagnoseCarrier(manifestInput, { descriptor, installed = [], kinds = null, workspace = null } = {}) {
+export function diagnoseCarrier(manifestInput, {
+  descriptor,
+  installed = [],
+  kinds = null,
+  workspace = null,
+  // 批次54：来源层诊断。overrides 是工程覆盖映射，storedSettings 是 `.pinax/settings.json` 的 carriers；
+  // 两者都由调用方给（doctor 自己不读项目文件），缺省就当没有覆盖、没有项目设置。
+  overrides = {},
+  settings: storedSettings = {}
+} = {}) {
   const host = descriptor ?? loadHostDescriptor()
   if (host?.ok === false) {
     return result('needs-host-upgrade', manifestInput, '宿主描述符不可读，无法判定兼容性', `先修好 ${HOST_DESCRIPTOR_FILE}（${host.error.message}）`, [])
@@ -140,6 +150,19 @@ export function diagnoseCarrier(manifestInput, { descriptor, installed = [], kin
   if (normalized.license) {
     checks.push({ name: 'license', state: 'ok', mode: normalized.license.mode, agreement: normalized.license.agreement })
   }
+
+  // 批次54：来源层摊开——服务端口与设置值分别来自清单默认还是工程覆盖。
+  // 覆盖只改值、不改声明；这里读的就是运行时合并后的那一份（与 supervisor／settingsStore 同一套 helper）。
+  checks.push({
+    name: 'service-port-source',
+    state: 'ok',
+    services: serviceSourceSummary(normalized.services, overrides, manifestId)
+  })
+  checks.push({
+    name: 'settings-source',
+    state: 'ok',
+    settings: settingsSourceSummary(normalized.settings, storedSettings, overrides, manifestId)
+  })
 
   // adopt：合法清单，但服务由外部进程自管——宿主只探活与池记账，不 spawn。
   const adopted = normalized.services.filter((service) => service.adopt === true)
@@ -245,6 +268,44 @@ function claimSummary(panes) {
       canOpen: pane.canOpen ?? null,
       takes: pane.takes ?? null
     }))
+}
+
+/**
+ * 服务端口来源（批次54）：每颗服务一行 { id, port, portSource, overrideFields, warnings }。
+ * portSource=override 表示这一项被工程覆盖改过；清单默认是 manifest。
+ */
+function serviceSourceSummary(services, overrides, pluginId) {
+  const entries = overrides && typeof overrides === 'object' ? overrides[pluginId] ?? {} : {}
+  return (Array.isArray(services) ? services : []).map((service) => {
+    const applied = applyServiceOverride({ ...service, pluginId }, entries?.[String(service?.id ?? '')])
+    return {
+      id: service?.id ?? null,
+      port: Number.isSafeInteger(applied.spec.port) ? applied.spec.port : null,
+      portSource: applied.hits.some((hit) => hit.field === 'port') ? 'override' : 'manifest',
+      overrideFields: applied.hits.map((hit) => hit.field),
+      warnings: applied.warnings
+    }
+  })
+}
+
+/**
+ * 设置来源（批次54）：沿用 effective 的解析（stored > override > manifest），每项带来源标签与 volatile。
+ * section 是分组标题，不出现在这里。
+ */
+function settingsSourceSummary(declarations, storedSettings, overrides, pluginId) {
+  const list = Array.isArray(declarations) ? declarations : []
+  const resolved = buildEffectiveSettings({ [pluginId]: list }, storedSettings, overrides)
+  const row = resolved.effective?.[pluginId] ?? {}
+  return {
+    settings: Object.entries(row).map(([id, item]) => ({
+      id,
+      value: item.value,
+      source: item.source,
+      label: item.label,
+      volatile: item.volatile
+    })),
+    warnings: resolved.warnings
+  }
 }
 
 function checkPermissions(manifest, desc) {

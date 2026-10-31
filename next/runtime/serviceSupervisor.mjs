@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import http from 'node:http'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { fail, ok } from '../kernel/errors.mjs'
+import { applyServiceOverride, readCarrierOverridesSync, serviceOverrideFor } from '../carrierOverridesStore.mjs'
 
 /**
  * 服务监督器（协议 v3 的 `services` 声明面）。
@@ -46,6 +47,9 @@ function publicStatus(entry) {
     error: entry.error,
     health: entry.health ? { ...entry.health } : null,
     startedAt: entry.startedAt,
+    // 批次54：端口来自清单还是工程覆盖，状态行要能说清（竖条与诊断都读这一份）。
+    portSource: entry.portSource ?? 'manifest',
+    overrideFields: [...(entry.overrideFields ?? [])],
     logs: entry.logs.slice(-20)
   }
 }
@@ -88,6 +92,14 @@ export function createServiceSupervisor(options = {}) {
   const logLimit = Number.isSafeInteger(options.logLimit) ? options.logLimit : DEFAULT_LOG_LIMIT
   const baseEnv = options.baseEnv ?? process.env
   const probe = typeof options.probeHealth === 'function' ? options.probeHealth : defaultProbeHealth
+  /**
+   * 工程覆盖（批次54）：合并序＝清单默认→覆盖（只有两级）。
+   * 测试可直接注入 overrides；主进程不注入，按项目根读 `.pinax/` 下那份覆盖文件。
+   * 只 merger port／healthPath／args——adopt／command／env／restart 永远由清单说了算。
+   */
+  const overrideState = options.overrides !== undefined
+    ? { overrides: options.overrides ?? {}, warnings: [] }
+    : readCarrierOverridesSync(options.projectRoot ?? baseEnv?.PINAX_PROJECT_ROOT ?? null)
 
   const entries = new Map()
   let stopping = false
@@ -112,6 +124,44 @@ export function createServiceSupervisor(options = {}) {
       onEvent({ type, service: publicStatus(entry) })
     } catch {
       // 状态订阅方坏掉不影响被监督的服务本身。
+    }
+  }
+
+  /**
+   * 覆盖命中的记账（批次54）：每命中一个字段记一条 info，来源层写明「工程覆盖」。
+   * 手改覆盖文件写坏了字段也留一条 warn——不静默吞掉作者以为生效了的改动。
+   */
+  function appendOverrideNote(entry, applied) {
+    if (!logPool) return
+    const source = { kind: 'service', id: entry.id, carrierId: entry.pluginId }
+    for (const hit of applied.hits) {
+      const message = hit.field === 'port'
+        ? `端口 ${hit.from ?? '(未声明)'} 被工程覆盖改成了 ${hit.to}`
+        : hit.field === 'healthPath'
+          ? `健康路径 ${hit.from ?? '(未声明)'} 被工程覆盖改成了 ${hit.to}`
+          : `启动参数被工程覆盖改成了 ${JSON.stringify(hit.to)}`
+      try {
+        logPool.append({
+          source,
+          level: 'info',
+          message,
+          data: { field: hit.field, from: hit.from, to: hit.to, layer: 'override' }
+        })
+      } catch {
+        // 记账坏掉不影响服务本身。
+      }
+    }
+    for (const warning of applied.warnings) {
+      try {
+        logPool.append({
+          source,
+          level: 'warn',
+          message: `工程覆盖未生效：${warning}`,
+          data: { layer: 'override', warning }
+        })
+      } catch {
+        // 同上。
+      }
     }
   }
 
@@ -305,21 +355,26 @@ export function createServiceSupervisor(options = {}) {
   for (const spec of specs) {
     const id = String(spec?.id ?? spec?.pluginId ?? 'service')
     if (entries.has(id)) continue
-    const adopt = spec?.adopt === true
-    entries.set(id, {
+    // 合并序＝清单默认→覆盖；只改值，不碰 adopt／command／env／restart 这些结构字段。
+    const applied = applyServiceOverride(spec, serviceOverrideFor(overrideState.overrides, String(spec?.pluginId ?? ''), id))
+    const resolved = applied.spec
+    const adopt = resolved?.adopt === true
+    const entry = {
       id,
-      pluginId: String(spec?.pluginId ?? ''),
+      pluginId: String(resolved?.pluginId ?? ''),
       adopt,
-      command: adopt ? null : String(spec?.command ?? ''),
-      args: adopt || !Array.isArray(spec?.args) ? [] : spec.args.map(String),
-      env: adopt || !spec?.env || typeof spec.env !== 'object' ? {} : { ...spec.env },
-      cwd: adopt || !spec?.cwd ? null : String(spec.cwd),
-      dir: spec?.dir ? String(spec.dir) : null,
-      port: Number.isSafeInteger(spec?.port) ? spec.port : null,
-      healthPath: spec?.healthPath ? String(spec.healthPath) : null,
+      command: adopt ? null : String(resolved?.command ?? ''),
+      args: adopt || !Array.isArray(resolved?.args) ? [] : resolved.args.map(String),
+      env: adopt || !resolved?.env || typeof resolved.env !== 'object' ? {} : { ...resolved.env },
+      cwd: adopt || !resolved?.cwd ? null : String(resolved.cwd),
+      dir: resolved?.dir ? String(resolved.dir) : null,
+      port: Number.isSafeInteger(resolved?.port) ? resolved.port : null,
+      healthPath: resolved?.healthPath ? String(resolved.healthPath) : null,
+      portSource: applied.hits.some((hit) => hit.field === 'port') ? 'override' : 'manifest',
+      overrideFields: applied.hits.map((hit) => hit.field),
       // adopt 的进程不在宿主手里：没有可重启的东西，重试只会白白探一个外部端口。
-      restart: adopt || spec?.restart === 'never' ? 'never' : 'on-failure',
-      autostart: spec?.autostart !== false,
+      restart: adopt || resolved?.restart === 'never' ? 'never' : 'on-failure',
+      autostart: resolved?.autostart !== false,
       status: SERVICE_STATUS.STOPPED,
       pid: null,
       restarts: 0,
@@ -331,7 +386,9 @@ export function createServiceSupervisor(options = {}) {
       logs: [],
       child: null,
       timer: null
-    })
+    }
+    entries.set(id, entry)
+    appendOverrideNote(entry, applied)
   }
 
   return {

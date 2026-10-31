@@ -30,7 +30,8 @@ const DESCRIPTOR = {
   slots: ['left-dock', 'center', 'overlay'],
   reservedSlots: ['right', 'top-menu'],
   forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'],
-  views: ['pinax.view.tree', 'pinax.view.list', 'pinax.view.editor', 'pinax.view.reader', 'pinax.view.diff', 'pinax.view.graph', 'pinax.view.custom'],
+  // 批次58：画布用 pinax.view.app（真实描述符里也有这一项）；批次54 的来源层用例要能诊断漫画。
+  views: ['pinax.view.tree', 'pinax.view.list', 'pinax.view.editor', 'pinax.view.reader', 'pinax.view.diff', 'pinax.view.graph', 'pinax.view.app', 'pinax.view.custom'],
   uiLayers: ['shell-chrome', 'pane-content', 'floating-overlay'],
   supportsPopout: false,
   platforms: ['electron']
@@ -171,6 +172,58 @@ test('incompatible-form：未知形态 / 未知视图类型', () => {
   assert.ok(DOCTOR_STATES.includes(brokenReport.state), brokenReport.state)
   assert.notEqual(brokenReport.state, 'ok')
   assert.ok(brokenReport.fix.length > 0, '每种状态都要给一句修复')
+})
+
+test('批次54：来源层摊开——服务端口与设置值各自标明清单默认/工程覆盖', () => {
+  // 服务：漫画预览端口被工程覆盖改过，诊断要给出合并后的端口与来源层。
+  const comic = clone(COMIC_CARRIER)
+  const comicReport = diagnoseCarrier(comic, {
+    descriptor: DESCRIPTOR,
+    overrides: { 'pinax.carrier.comic': { 'comic-preview': { port: 8200 } } }
+  })
+  assert.equal(comicReport.state, 'ok', comicReport.message)
+  const serviceCheck = comicReport.checks.find((check) => check.name === 'service-port-source')
+  assert.ok(serviceCheck, '服务端口来源层要有读取点')
+  assert.equal(serviceCheck.services[0].id, 'comic-preview')
+  assert.equal(serviceCheck.services[0].port, 8200)
+  assert.equal(serviceCheck.services[0].portSource, 'override')
+  assert.deepEqual(serviceCheck.services[0].overrideFields, ['port'])
+
+  // 设置：novel 补一条可写声明（@4），覆盖值进 effective，来源标「工程覆盖」。
+  const novel = clone(NOVEL_CARRIER)
+  novel.contributes.settings.push({ id: 'novel.font', title: '字号', type: 'number', default: 17, min: 12, max: 24, step: 1, volatile: true })
+  const novelReport = diagnoseCarrier(novel, {
+    descriptor: DESCRIPTOR,
+    overrides: { 'pinax.carrier.novel': { 'novel.font': 14 } },
+    settings: {}
+  })
+  assert.equal(novelReport.state, 'ok', novelReport.message)
+  const settingsCheck = novelReport.checks.find((check) => check.name === 'settings-source')
+  assert.ok(settingsCheck, '设置值来源层要有读取点')
+  const row = settingsCheck.settings.settings.find((item) => item.id === 'novel.font')
+  assert.deepEqual(row, { id: 'novel.font', value: 14, source: 'override', label: '工程覆盖', volatile: true })
+
+  // 项目设置优先于覆盖：stored 写了值就以 stored 为来源。
+  const storedReport = diagnoseCarrier(novel, {
+    descriptor: DESCRIPTOR,
+    overrides: { 'pinax.carrier.novel': { 'novel.font': 14 } },
+    settings: { 'pinax.carrier.novel': { 'novel.font': 16 } }
+  })
+  const storedRow = storedReport.checks
+    .find((check) => check.name === 'settings-source')
+    .settings.settings.find((item) => item.id === 'novel.font')
+  assert.equal(storedRow.value, 16)
+  assert.equal(storedRow.source, 'stored')
+  assert.equal(storedRow.label, '项目设置')
+
+  // 越界覆盖不生效：回清单默认，并在诊断里留一条警告。
+  const badReport = diagnoseCarrier(novel, {
+    descriptor: DESCRIPTOR,
+    overrides: { 'pinax.carrier.novel': { 'novel.font': 99 } }
+  })
+  const badCheck = badReport.checks.find((check) => check.name === 'settings-source').settings
+  assert.equal(badCheck.settings.find((item) => item.id === 'novel.font').value, 17)
+  assert.ok(badCheck.warnings.includes('SETTING_OUT_OF_RANGE:novel.font:pinax.carrier.novel/novel.font'))
 })
 
 test('diagnoseAll：按输入顺序逐份出报告，installed 缺省即这批清单自己', () => {

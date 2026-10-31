@@ -68,6 +68,9 @@ export const IPC_CHANNELS = Object.freeze({
   // save 是按载体声明白名单校验过的单值写入，未声明／类型不符由主进程拒绝。
   settingsLoad: 'pinax:agent:settings:load',
   settingsSave: 'pinax:agent:settings:save',
+  // 批次54：工程级覆盖（.pinax/ 下的覆盖文件）只读给渲染层——应用面据此换 url，
+  // 设置界面据此显示「工程覆盖」来源。写覆盖是作者改项目文件，不开 GUI 写口。
+  carrierOverrides: 'pinax:agent:carrier:overrides',
   // H2 知识服务：进程内 knowledgeService（createKnowledgeRuntime），不走 HTTP。
   // entry 恒传当前项目根；不开全局知识面。
   knowledgeSearch: 'pinax:agent:knowledge:search',
@@ -304,8 +307,10 @@ export function shellView(session) {
  *   settingsStoreFor —— (root) => settingsStore（next/settingsStore）：按当前项目根取那份
  *                       `.pinax/settings.json` 的读写器；声明白名单随注册表现取。
  *                       不注入时 settings:* 两条通道如实报缺。
+ *   carrierOverridesFor —— (root) => carrierOverridesStore（next/carrierOverridesStore）：
+ *                       批次54 的工程覆盖只读口（应用面 url／来源层展示）。不注入时如实报缺。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, serviceLogPool = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
   // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
   // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
@@ -449,6 +454,14 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         const store = settingsStoreFor(session.projectRoot)
         if (!store) return fail('INVALID_INPUT', '配置存储不可用：拿不到当前项目的 .pinax/settings.json')
         return store.set(input.carrierId, input.settingId, input.value)
+      }
+      // 批次54：工程覆盖只读。应用面（外部应用 url）与设置页（来源层）读同一份；
+      // 写覆盖是作者改项目文件，这条通道不开写口——没有 set/remove。
+      case IPC_CHANNELS.carrierOverrides: {
+        if (typeof carrierOverridesFor !== 'function') return fail('INVALID_INPUT', '工程覆盖服务未接入（主进程未创建 carrierOverridesStore）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '工程覆盖读取需要先打开一个项目')
+        const store = carrierOverridesFor(session.projectRoot)
+        return store ? store.read() : fail('INVALID_INPUT', '工程覆盖存储不可用：拿不到当前项目的覆盖文件')
       }
       case IPC_CHANNELS.runtimeToolCall:
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')

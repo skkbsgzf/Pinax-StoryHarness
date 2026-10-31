@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import AppNext from '../shell/AppNext.vue'
 import CarrierPaneHost from '../shell/CarrierPaneHost.vue'
+import ExternalAppHost from '../shell/ExternalAppHost.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
 import { useBoardData } from '../shell/useBoardData.mjs'
@@ -2105,6 +2106,60 @@ describe('应用面（批次44）：外部端口上的网页由内嵌浏览器�
     } finally {
       vi.unstubAllGlobals()
       wrapper.unmount()
+    }
+  })
+
+  it('批次54：工程覆盖可改应用面地址，来源标「工程覆盖」', async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      value: { overrides: { 'pinax.carrier.comic': { 'comic.canvas': 'http://127.0.0.1:8199/' } } }
+    })
+    vi.stubGlobal('pinaxNext', { request, channels: IPC_CHANNELS })
+    try {
+      const pane = {
+        slot: 'center',
+        id: 'comic.canvas',
+        pluginId: 'pinax.carrier.comic',
+        title: '画布',
+        view: 'pinax.view.app',
+        kind: 'external-app',
+        app: { url: 'http://127.0.0.1:3010' }
+      }
+      const wrapper = mount(ExternalAppHost, { props: { pane } })
+      await flushPromises()
+      expect(request).toHaveBeenCalledWith(IPC_CHANNELS.carrierOverrides, {})
+      expect(wrapper.find('[data-test="external-app-frame"]').attributes('src')).toBe('http://127.0.0.1:8199/')
+      expect(wrapper.find('.nx-external-app-url').text()).toBe('http://127.0.0.1:8199/')
+      expect(wrapper.find('[data-test="external-app-source"]').text()).toBe('工程覆盖')
+      wrapper.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('批次54：覆盖值不是本机回环地址时按清单声明走，不猜 url', async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: true,
+      value: { overrides: { 'pinax.carrier.comic': { 'comic.canvas': 'https://example.com/' } } }
+    })
+    vi.stubGlobal('pinaxNext', { request, channels: IPC_CHANNELS })
+    try {
+      const pane = {
+        slot: 'center',
+        id: 'comic.canvas',
+        pluginId: 'pinax.carrier.comic',
+        title: '画布',
+        view: 'pinax.view.app',
+        kind: 'external-app',
+        app: { url: 'http://127.0.0.1:3010' }
+      }
+      const wrapper = mount(ExternalAppHost, { props: { pane } })
+      await flushPromises()
+      expect(wrapper.find('[data-test="external-app-frame"]').attributes('src')).toBe('http://127.0.0.1:3010')
+      expect(wrapper.find('[data-test="external-app-source"]').exists()).toBe(false)
+      wrapper.unmount()
+    } finally {
+      vi.unstubAllGlobals()
     }
   })
 

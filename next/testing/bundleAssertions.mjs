@@ -536,6 +536,17 @@ check('l4 原生工具在册：pinax_service_log_list 由 serviceLogTools 登记
   serviceLogToolsSource.includes("'pinax_service_log_list'") && serviceLogToolsSource.includes("'kernel.runtime.services'"),
   serviceLogToolsSource ? 'registry ok' : '(文件缺失)')
 
+// 批次54：两层覆盖必须真的随产物走——
+//   合并序「清单默认→工程覆盖」写在组装点（只有两级，结构字段不覆盖）；
+//   运行期状态面要能说出端口来自哪一层（portSource／「工程覆盖」来源标签）；
+//   离线诊断入口 --dump-settings-schema 必须进外壳主进程产物（不进运行时路径，但装机后要能跑）。
+const mergeOrderMarked = supervisorSource.includes('默认→覆盖')
+const overrideMarkers = ['portSource', '工程覆盖']
+const missingOverrideMarkers = overrideMarkers.filter((marker) => !bundle.includes(marker))
+check('t 批次54 两层覆盖进产物：组装点标「默认→覆盖」，主进程 bundle 带 portSource／工程覆盖，外壳带 --dump-settings-schema',
+  mergeOrderMarked && missingOverrideMarkers.length === 0 && shellBundle.includes('--dump-settings-schema'),
+  `mergeOrder=${mergeOrderMarked} main=${missingOverrideMarkers.join(',') || '齐'} dump=${shellBundle.includes('--dump-settings-schema')}`)
+
 if (failures.length) {
   console.log(`\n打包门禁：${failures.length} 项不合格 → ${failures.join(' / ')}`)
   process.exitCode = 1

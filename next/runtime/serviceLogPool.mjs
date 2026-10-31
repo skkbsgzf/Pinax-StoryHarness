@@ -230,11 +230,16 @@ export function createServiceLogPool(options = {}) {
           ? MCP_STATUS_TEXT[String(live?.status ?? 'closed')] ?? '未知'
           : SERVICE_STATUS_TEXT[String(live?.status ?? 'stopped')] ?? '未知'
         const logs = logsFor(declaration.kind, carrierId, declaration.id)
+        // 批次54：端口以实时状态为准（工程覆盖改过就是改后的值），来源一并给出；
+        // 声明里的 port 只是清单默认，状态还没同步时才回落读它。
+        const livePort = Number.isSafeInteger(live?.port) ? live.port : null
         return {
           kind: declaration.kind,
           id: declaration.id,
           title: declaration.title ?? declaration.id,
-          port: Number.isSafeInteger(declaration.port) ? declaration.port : null,
+          port: livePort ?? (Number.isSafeInteger(declaration.port) ? declaration.port : null),
+          portSource: declaration.kind === 'service' ? (live?.portSource ?? 'manifest') : null,
+          overrideFields: Array.isArray(live?.overrideFields) ? [...live.overrideFields] : [],
           transport: declaration.transport ?? null,
           status: live?.status ?? null,
           statusText,

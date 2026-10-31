@@ -1,6 +1,7 @@
 import { readFile, writeFile, mkdir, rename as renameFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ok } from './kernel/errors.mjs'
+import { buildEffectiveSettings, readCarrierOverridesSync, validateDeclaredValue } from './carrierOverridesStore.mjs'
 
 /**
  * 每插件配置命名空间（批次45 · 任务③）：项目级 `.pinax/settings.json`。
@@ -71,34 +72,30 @@ function parseStored(raw) {
   return { version: SETTINGS_VERSION, carriers, warnings, exists: true }
 }
 
-/** 声明值域校验：只做「声明说什么就收什么」，不替作者猜单位或取整。 */
+/**
+ * 声明值域校验：只做「声明说什么就收什么」，不替作者猜单位或取整。
+ * 批次54：number 的 min/max/step 在这里真正拦住——界面只是提前挡，主进程这道闸才是准。
+ */
 function validateValue(declaration, value) {
-  const type = declaration?.type ?? 'section'
-  if (type === 'section') {
-    return settingsFail('SETTING_SECTION_NO_VALUE', `设置「${String(declaration?.id ?? '')}」是分组节，不直接存值`)
+  const problem = validateDeclaredValue(declaration, value)
+  if (!problem) return ok(value)
+  const id = String(declaration?.id ?? '')
+  if (problem === 'SETTING_SECTION_NO_VALUE') {
+    return settingsFail('SETTING_SECTION_NO_VALUE', `设置「${id}」是分组节，不直接存值`)
   }
-  if (type === 'boolean') {
-    if (typeof value !== 'boolean') return settingsFail('SETTING_TYPE_MISMATCH', `设置「${declaration.id}」需要布尔值`)
-    return ok(value)
+  if (problem === 'SETTING_OUT_OF_RANGE') {
+    const min = Number.isFinite(declaration?.min) ? declaration.min : '-∞'
+    const max = Number.isFinite(declaration?.max) ? declaration.max : '+∞'
+    return settingsFail('SETTING_OUT_OF_RANGE', `设置「${id}」须在 ${min}–${max} 之间`, { value })
   }
-  if (type === 'number') {
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-      return settingsFail('SETTING_TYPE_MISMATCH', `设置「${declaration.id}」需要有限数字`)
-    }
-    return ok(value)
+  if (problem === 'SETTING_STEP_MISMATCH') {
+    return settingsFail('SETTING_STEP_MISMATCH', `设置「${id}」的值未对齐步长 ${declaration?.step}`, { value })
   }
-  if (type === 'string') {
-    if (typeof value !== 'string') return settingsFail('SETTING_TYPE_MISMATCH', `设置「${declaration.id}」需要字符串`)
-    return ok(value)
+  if (problem === 'SETTING_TYPE_UNSUPPORTED') {
+    return settingsFail('SETTING_TYPE_UNSUPPORTED', `设置「${id}」的声明类型不受支持：${String(declaration?.type)}`)
   }
-  if (type === 'enum') {
-    const options = Array.isArray(declaration.options) ? declaration.options : []
-    if (!options.includes(value)) {
-      return settingsFail('SETTING_TYPE_MISMATCH', `设置「${declaration.id}」的值不在声明的 options 里`, { value })
-    }
-    return ok(value)
-  }
-  return settingsFail('SETTING_TYPE_UNSUPPORTED', `设置「${String(declaration?.id ?? '')}」的声明类型不受支持：${String(type)}`)
+  const expected = declaration?.type === 'number' ? '有限数字' : declaration?.type === 'boolean' ? '布尔值' : declaration?.type === 'string' ? '字符串' : '声明的 options 里的值'
+  return settingsFail('SETTING_TYPE_MISMATCH', `设置「${id}」需要${expected}`, { value })
 }
 
 export function createFileSettingsStore({ root, declarations = {} } = {}) {
@@ -108,24 +105,41 @@ export function createFileSettingsStore({ root, declarations = {} } = {}) {
   let queue = Promise.resolve()
   let lastWritten = null
 
+  function declarationTable() {
+    return typeof declarations === 'function' ? declarations() : declarations
+  }
+
   function declarationFor(carrierId, settingId) {
-    const table = typeof declarations === 'function' ? declarations() : declarations
-    const list = table?.[String(carrierId ?? '')]
+    const list = declarationTable()?.[String(carrierId ?? '')]
     if (!Array.isArray(list)) return null
     return list.find((item) => item?.id === settingId) ?? null
   }
 
+  /**
+   * 读全量：carriers 仍是 `.pinax/settings.json` 的原文（写闸与迁移都以它为准），
+   * 另附 effective＝「项目设置 → 工程覆盖 → 清单默认」的有效值与来源层（批次54）。
+   * 覆盖文件的坏档记账一起并进 warnings，界面与 doctor 都能解释值是从哪一层来的。
+   */
   async function read() {
+    let value
     try {
       const raw = await readFile(file, 'utf-8')
-      const value = parseStored(raw)
+      value = parseStored(raw)
       // 与写盘用同一份序列化（含缩进），否则 read 之后「内容没变不写」永远不会命。
       lastWritten = JSON.stringify({ version: value.version, carriers: value.carriers }, null, 2)
-      return ok(value)
     } catch (error) {
-      if (error?.code === 'ENOENT') return ok(emptyValue(false))
-      return ok({ ...emptyValue(false), warnings: [`SETTINGS_READ_FAILED_${String(error?.code ?? 'UNKNOWN')}`] })
+      value = error?.code === 'ENOENT'
+        ? emptyValue(false)
+        : { ...emptyValue(false), warnings: [`SETTINGS_READ_FAILED_${String(error?.code ?? 'UNKNOWN')}`] }
     }
+    const overrideState = readCarrierOverridesSync(root)
+    const effectiveState = buildEffectiveSettings(declarationTable(), value.carriers, overrideState.overrides)
+    return ok({
+      ...value,
+      overrides: overrideState.overrides,
+      effective: effectiveState.effective,
+      warnings: [...value.warnings, ...overrideState.warnings, ...effectiveState.warnings]
+    })
   }
 
   /** 真正落盘的那一步：只由 set 在队列内调用（不要自己再排一次队，会自锁）。 */
@@ -157,6 +171,14 @@ export function createFileSettingsStore({ root, declarations = {} } = {}) {
     }
     const validated = validateValue(declaration, value)
     if (!validated.ok) return validated
+    // 批次54：只有声明了 volatile 的字段才允许 GUI 写；其余的只读展示，
+    // 要改默认值请走工程覆盖（那份文件改的是「默认值」，不是第二条设置库）。
+    if (declaration.volatile !== true) {
+      return settingsFail('SETTING_NOT_VOLATILE', `设置「${setting}」只读：清单未标 volatile（要改默认值请用工程覆盖）`, {
+        carrierId: carrier,
+        settingId: setting
+      })
+    }
 
     const task = queue.then(async () => {
       const current = await read()
