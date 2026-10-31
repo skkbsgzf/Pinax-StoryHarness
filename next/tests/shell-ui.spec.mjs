@@ -6,6 +6,7 @@ import RuntimeDock from '../shell/RuntimeDock.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
 import { hostWorkspace, resetWorkspace } from '../shell/workspace.mjs'
+import { CUSTOM_VIEW_TYPE, hostViewRegistry } from '../shell/viewRegistry.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 
 /**
@@ -2362,7 +2363,8 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
   const NOVEL_PANES = [
     { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', forms: ['dock'] },
     // split:'main' 是协议 P11 的主栏声明——分屏时由它当主 pane。
-    { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', split: 'main', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+    // 批次45：正文 pane 额外声明 immersive，右键菜单据此多一项「沉浸」。
+    { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', split: 'main', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
   ]
 
   /** carrierView 上补两块带 forms 声明的载体：小说（左树/正文）与大纲（左树/编辑/悬浮窗）。 */
@@ -2508,7 +2510,7 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     await flushPromises()
     const rowMenu = wrapper.find('.nx-context-menu')
     expect(rowMenu.exists()).toBe(true)
-    expect(rowMenu.findAll('[data-form]').map((node) => node.attributes('data-form'))).toEqual(['dock', 'split', 'overlay', 'fullscreen'])
+    expect(rowMenu.findAll('[data-form]').map((node) => node.attributes('data-form'))).toEqual(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
     expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
@@ -2538,6 +2540,107 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(menu.find('.nx-context-empty').text()).toBe('该载体未声明打开形态')
     expect(menu.text()).toContain('在新窗口打开')
     wrapper.unmount()
+  })
+
+  it('沉浸态（批次45）：只有声明 immersive 的 pane 出菜单项；进入后活动栏与右栏收起，Esc／顶栏／菜单三条出口都还原', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+    await flushPromises()
+
+    // 大纲 pane 没声明 immersive：它的菜单仍是四档（未声明的形态不出现）。
+    const outlineRail = railByName(wrapper, '大纲')
+    outlineRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    await flushPromises()
+    expect(wrapper.find('.nx-context-menu').findAll('[data-form]').map((node) => node.attributes('data-form'))).toEqual(['dock', 'split', 'overlay', 'fullscreen'])
+    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await flushPromises()
+
+    // 正文 pane 声明了 immersive：进入沉浸。
+    const novelRail = railByName(wrapper, '小说（夹具）')
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    await flushPromises()
+    const menu = wrapper.find('.nx-context-menu')
+    expect(menu.findAll('[data-form]').map((node) => node.attributes('data-form'))).toEqual(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
+    await menu.find('[data-form="immersive"]').trigger('click')
+    await flushPromises()
+
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('immersive')
+    expect(workspace.entries['novel.editor#1'].placement).toBe('immersive')
+    expect(hostWorkspace.get('novel.editor#1').restore).toBe('dock', '进入前的位置记在 restore')
+    expect(wrapper.find('.nx-form-bar[data-form="immersive"]').exists()).toBe(true)
+    expect(wrapper.find('.col-center [data-pane-id="novel.editor"]').exists()).toBe(true)
+    // v-show 收起：活动栏与右栏都还在 DOM 里（运行坞状态不丢），只是 display:none。
+    expect(wrapper.find('.nx-ribbon').attributes('style') ?? '').toMatch(/display:\s*none/u)
+    expect(wrapper.find('.col-dock').attributes('style') ?? '').toMatch(/display:\s*none/u)
+    expect(wrapper.find('[data-test="immersive-exit"]').exists()).toBe(true)
+
+    // 出口一：Esc（没有浮窗时）退出并还原到 dock。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('dock')
+    expect(wrapper.find('.nx-form-bar[data-form="immersive"]').exists()).toBe(false)
+    expect(wrapper.find('.nx-ribbon').attributes('style') ?? '').not.toMatch(/display:\s*none/u)
+    expect(wrapper.find('.col-dock').attributes('style') ?? '').not.toMatch(/display:\s*none/u)
+
+    // 出口二：再点菜单时同一项变成「退出沉浸」。
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    await flushPromises()
+    await wrapper.find('.nx-context-menu [data-form="immersive"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('immersive')
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    await flushPromises()
+    const activeMenu = wrapper.find('.nx-context-menu')
+    expect(activeMenu.find('[data-form="immersive"]').text()).toContain('退出沉浸')
+    await activeMenu.find('[data-form="immersive"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('dock')
+
+    // 出口三：顶栏固定按钮。
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    await flushPromises()
+    await wrapper.find('.nx-context-menu [data-form="immersive"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('immersive')
+    await wrapper.find('[data-test="immersive-exit"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('dock')
+    wrapper.unmount()
+    globalThis.localStorage?.clear()
+  })
+
+  it('沉浸态 Esc 优先级（批次45）：活动浮窗先收起，浮窗不在场时才退出沉浸', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    const workspace = { version: 1, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineWidget(wrapper)
+    expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
+
+    // 浮窗开着时进入沉浸：两块整窗面互斥，但 overlay 浮窗不属于整窗，照常留着。
+    const novelRail = railByName(wrapper, '小说（夹具）')
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    await flushPromises()
+    await wrapper.find('.nx-context-menu [data-form="immersive"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('immersive')
+    expect(hostWorkspace.get('outline.widget#1').placement).toBe('overlay')
+
+    // 第一次 Esc：浮窗收起成侧缘标签，沉浸态不动。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(hostWorkspace.get('outline.widget#1').minimized).toBe('collapsed')
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('immersive')
+
+    // 第二次 Esc：没有活动浮窗了，才退出沉浸。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1').placement).toBe('dock')
+    wrapper.unmount()
+    globalThis.localStorage?.clear()
   })
 
   it('浮窗吸附：拖到左缘吸附成半屏 dock，再拖离恢复浮动态', async () => {
@@ -2747,6 +2850,109 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(rows.length).toBeGreaterThan(0)
     expect(rows[0].text()).toContain('开场：雨夜进城')
     wrapper.unmount()
+  })
+
+  it('停用载体＝解注册：视图释放、该载体全部 pane 实例清出工作区；再启用从干净工作区重开', async () => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+    // 存档里大纲以浮窗开着一份、又开了第二份，编辑面在副栏；小说正处在沉浸态（不该被动）。
+    const workspace = {
+      version: 1,
+      entries: {
+        'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', placement: 'immersive', minimized: 'none' },
+        'outline.editor#1': { instance: 'outline.editor#1', pane: 'outline.editor', placement: 'split', minimized: 'none' },
+        'outline.widget#1': {
+          instance: 'outline.widget#1',
+          pane: 'outline.widget',
+          placement: 'overlay',
+          minimized: 'collapsed',
+          geometry: { x: 40, y: 60, w: 320, h: 300, snap: null },
+          z: 2,
+          pinned: true
+        },
+        'outline.widget#2': {
+          instance: 'outline.widget#2',
+          pane: 'outline.widget',
+          placement: 'overlay',
+          minimized: 'none',
+          geometry: { x: 200, y: 90, w: 320, h: 300, snap: null },
+          z: 3
+        }
+      }
+    }
+
+    // 第三方视图（协议 v2 只收 custom）注册到被停用载体的 owner：验证 disposeOwner 真接到禁用链上。
+    // hostViewRegistry 是模块单例，测完把宿主的 custom 注册补回去。
+    const hostCustom = hostViewRegistry.resolve(CUSTOM_VIEW_TYPE)
+    try {
+      hostViewRegistry.unregister(CUSTOM_VIEW_TYPE)
+      expect(hostViewRegistry.registerView(CUSTOM_VIEW_TYPE, () => ({ kind: 'custom-panel' }), { owner: 'pinax.carrier.outline' }).ok).toBe(true)
+
+      const base = multiFormBridge({ workspace })
+      const handlers = new Map()
+      const setEnabled = vi.fn(async () => ({ ok: true, value: {} }))
+      const request = vi.fn(async (channel, payload) => (channel === IPC_CHANNELS.carrierSetEnabled
+        ? setEnabled(payload)
+        : base.request(channel, payload)))
+      const bridge = {
+        request,
+        onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) },
+        channels: IPC_CHANNELS
+      }
+
+      const wrapper = mount(AppNext, { props: { bridge } })
+      await flushPromises()
+      expect(hostWorkspace.get('outline.widget#1').placement).toBe('overlay')
+      expect(hostWorkspace.get('outline.widget#2').placement).toBe('overlay')
+
+      handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
+      await flushPromises()
+      const outlineRow = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
+        .find((row) => row.text().includes('大纲'))
+      expect(outlineRow, '载体管理里应有非主载体大纲').toBeTruthy()
+      await outlineRow.find('.carriers-toggle').trigger('click')
+      await flushPromises()
+
+      expect(setEnabled).toHaveBeenCalledWith({ pluginId: 'pinax.carrier.outline', enabled: false, expectedRevision: 1 })
+      // 1) 视图解注册：该 owner 的视图被释放，宿主内置视图不受影响。
+      expect(hostViewRegistry.resolve(CUSTOM_VIEW_TYPE)).toBe(null)
+      expect(hostViewRegistry.resolve('pinax.view.editor').builtin).toBe(true)
+      // 2) 工作区：该载体的 #1 与多开的 #n 全部清掉；别的载体（小说沉浸态）原样。
+      expect(hostWorkspace.list().filter((entry) => entry.pane.startsWith('outline.'))).toEqual([])
+      expect(workspace.entries['outline.widget#1']).toBeUndefined()
+      expect(workspace.entries['outline.widget#2']).toBeUndefined()
+      expect(workspace.entries['outline.editor#1']).toBeUndefined()
+      expect(workspace.entries['novel.editor#1'].placement).toBe('immersive')
+      // 缺省实例回到 dock：重新打开不会带着旧位置／钉住。
+      const defaultInstance = hostWorkspace.get('outline.widget#1')
+      expect(defaultInstance.placement).toBe('dock')
+      expect(defaultInstance.geometry).toBe(null)
+      expect(defaultInstance.pinned).toBe(false)
+      // 3) 事件照常：项目事件订阅仍在，已知 kind 进来不炸（刷新链继续跑）。
+      expect(typeof handlers.get(IPC_EVENT.projectEvent)).toBe('function')
+      expect(() => handlers.get(IPC_EVENT.projectEvent)({ kind: 'chapter-saved', at: 1 })).not.toThrow()
+      await flushPromises()
+      expect(request).toHaveBeenCalledWith(IPC_CHANNELS.view, {})
+      wrapper.unmount()
+
+      // 4) 再启用：同一份存档里没有 outline.* 残留，重新打开浮窗从干净状态建记录。
+      resetWorkspace()
+      const remount = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+      await flushPromises()
+      expect(Object.keys(workspace.entries).some((key) => key.startsWith('outline.'))).toBe(false)
+      await openOutlineWidget(remount)
+      expect(hostWorkspace.get('outline.widget#1').placement).toBe('overlay')
+      expect(hostWorkspace.get('outline.widget#1').geometry).toBe(null)
+      expect(hostWorkspace.get('outline.widget#1').pinned).toBe(false)
+      expect(workspace.entries['outline.widget#1'].placement).toBe('overlay')
+      remount.unmount()
+    } finally {
+      hostViewRegistry.disposeOwner('pinax.carrier.outline')
+      if (hostCustom) {
+        hostViewRegistry.registerView(hostCustom.type, hostCustom.factory, { owner: hostCustom.owner, builtin: hostCustom.builtin })
+      }
+      globalThis.localStorage?.clear()
+    }
   })
 })
 

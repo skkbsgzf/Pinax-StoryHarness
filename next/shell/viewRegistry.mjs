@@ -93,7 +93,7 @@ export function hostViewFactory({ pane, data } = {}) {
  *   resolve(type) → { type, factory, owner, builtin } | null
  *   bind(pane, data) → { view, factory, result } | null   （解析 + 算内容面一步到位）
  *   unregister(type) → boolean
- *   disposeOwner(owner) → number   （插件卸载：把它注册的视图一并释放）
+ *   disposeOwner(owner) → number   （载体停用：外壳先释放它注册的视图，再清工作区实例、交内核重建）
  *   list() → [{ type, owner, builtin }]
  */
 export function createViewRegistry() {

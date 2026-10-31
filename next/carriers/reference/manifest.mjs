@@ -39,8 +39,8 @@ export const REFERENCE_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources', view: 'pinax.view.list', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources', view: 'pinax.view.list', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14 载体设置注册（工单A 第二步）：本载体暂无设置项——空数组＝设置页不出这一格。
     settings: []

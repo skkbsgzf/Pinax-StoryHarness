@@ -57,6 +57,10 @@ export const IPC_CHANNELS = Object.freeze({
   // M2.5-C：工作区四轴状态（.pinax/workspace.json）。渲染层整份读、整份写，形状净化在渲染层。
   workspaceLoad: 'pinax:agent:workspace:load',
   workspaceSave: 'pinax:agent:workspace:save',
+  // 批次45：每插件配置命名空间（.pinax/settings.json）。load 读全量 carriers 映射；
+  // save 是按载体声明白名单校验过的单值写入，未声明／类型不符由主进程拒绝。
+  settingsLoad: 'pinax:agent:settings:load',
+  settingsSave: 'pinax:agent:settings:save',
   // H2 知识服务：进程内 knowledgeService（createKnowledgeRuntime），不走 HTTP。
   // entry 恒传当前项目根；不开全局知识面。
   knowledgeSearch: 'pinax:agent:knowledge:search',
@@ -218,6 +222,9 @@ export function shellView(session) {
     skeletonDirs: view?.dirs?.skeleton ?? [],
     ownedDirs: view?.dirs?.owned ?? [],
     rejected: registry?.rejected ?? [],
+    // 运行时自身不可停用（disableable 恒 false，一级公民）；载体停用不是「拔掉一块 UI」——
+    // 走重建＋pane 关闭＋工作区清理（批次45）：服务／MCP／工具面随 session.refresh 收掉，
+    // 外壳先 disposeOwner 并把该载体全部 pane 实例状态从工作区清掉。
     runtime: {
       title: RUNTIME_CONTRACT.title,
       builtIn: RUNTIME_CONTRACT.builtIn,
@@ -274,8 +281,12 @@ export function shellView(session) {
  *   writingComplete  —— next/runtime/writingComplete（createWritingComplete）。{ run } 收
  *                       { action, text, selection, instruction }；动作闭集与提示词都在主进程侧。
  *                       不注入时 runtime:complete 如实报缺，不回落成一次普通提问。
+ * deps 扩展（批次45 每插件配置）：
+ *   settingsStoreFor —— (root) => settingsStore（next/settingsStore）：按当前项目根取那份
+ *                       `.pinax/settings.json` 的读写器；声明白名单随注册表现取。
+ *                       不注入时 settings:* 两条通道如实报缺。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null, writingComplete = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
   // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
   // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
@@ -352,6 +363,8 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return closed
       }
       case IPC_CHANNELS.carrierSetEnabled: {
+        // 批次45：停用＝重建＋pane 关闭＋工作区清理。重建（session.setEnabled → refresh）收掉
+        // 服务／MCP／工具面；pane 实例与工作区状态由外壳调用侧在发起前清（渲染层持有工作区单例）。
         const result = await session.setEnabled(input.pluginId, input.enabled, input.expectedRevision)
         // 启停会重建 fileService（session.refresh）：新实例必须重新挂上标脏钩子，否则之后的写入不进历史。
         if (result.ok) await notifyProjectOpened(result)
@@ -402,6 +415,21 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         if (typeof session.saveWorkspace !== 'function') return fail('INVALID_INPUT', '工作区服务未接入（主进程未创建 workspaceStore）：这条通道现在只报缺')
         if (!session.projectRoot) return fail('INVALID_INPUT', '工作区落盘需要先打开一个项目')
         return session.saveWorkspace(input.snapshot)
+      }
+      // 批次45：每插件配置。读的是当前项目 `.pinax/settings.json` 的全量 carriers 映射；
+      // 写只走 store.set 的白名单闸（未声明／类型不符／section 一律拒，不落盘）。
+      case IPC_CHANNELS.settingsLoad: {
+        if (typeof settingsStoreFor !== 'function') return fail('INVALID_INPUT', '配置服务未接入（主进程未创建 settingsStore）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '配置读取需要先打开一个项目')
+        const store = settingsStoreFor(session.projectRoot)
+        return store ? store.read() : fail('INVALID_INPUT', '配置存储不可用：拿不到当前项目的 .pinax/settings.json')
+      }
+      case IPC_CHANNELS.settingsSave: {
+        if (typeof settingsStoreFor !== 'function') return fail('INVALID_INPUT', '配置服务未接入（主进程未创建 settingsStore）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '配置落盘需要先打开一个项目')
+        const store = settingsStoreFor(session.projectRoot)
+        if (!store) return fail('INVALID_INPUT', '配置存储不可用：拿不到当前项目的 .pinax/settings.json')
+        return store.set(input.carrierId, input.settingId, input.value)
       }
       case IPC_CHANNELS.runtimeToolCall:
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')

@@ -88,7 +88,7 @@ export const KERNEL_CONTRACT_VERSION = '1'
 export const CARRIER_SUBSCRIPTIONS = Object.freeze(['project.changed'])
 
 /** 宿主打开位置词表（与 next/shell/paneForms.mjs 的 PANE_FORMS 逐项相等，doctor 会核）。 */
-export const PANE_FORM_WORDS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen'])
+export const PANE_FORM_WORDS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
 
 /** 设置控件的声明类型（v1 的 { id, title } 读成 section＝只出目录项、不带控件）。 */
 export const SETTING_TYPES = Object.freeze(['section', 'string', 'number', 'boolean', 'enum'])
@@ -539,10 +539,10 @@ function validatePanes(value, pluginId, { requireKind = false } = {}) {
       if (!app.ok) return app
       normalized.app = app.value
     }
-    // forms：这块 pane 允许被摆到哪些位置（可空＝宿主四轴全开）。
+    // forms：这块 pane 允许被摆到哪些位置（可空＝宿主打开位置全开）。
     if (pane.forms !== undefined) {
       if (!Array.isArray(pane.forms) || pane.forms.length === 0) {
-        return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」forms 必须是非空数组（不声明＝四轴全开）`, { pluginId, paneId: pane.id })
+        return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」forms 必须是非空数组（不声明＝全部位置开放）`, { pluginId, paneId: pane.id })
       }
       const forms = []
       for (const form of pane.forms) {

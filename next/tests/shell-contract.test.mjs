@@ -273,6 +273,8 @@ test('空框架：不装任何插件，外壳可进入、可打开项目、可�
     assert.deepEqual(view.value.left, [], '空框架左竖条没有载体条目')
     assert.deepEqual(view.value.center, [])
     assert.equal(view.value.runtime.builtIn, true)
+    // 批次45：运行时自身仍不可停用（disableable=false）；载体停用走重建＋pane 关闭＋工作区清理。
+    // 这条断言守的是「运行时与载体启停是两回事」，不是「载体不能禁用」。
     assert.equal(view.value.runtime.disableable, false)
     assert.equal(view.value.runtime.ownsSlot, 'right')
     assert.equal(view.value.runtime.tools.length, 20, '运行时工具面不依附于任何插件（内核 19 ＋ 技能读取 1）')

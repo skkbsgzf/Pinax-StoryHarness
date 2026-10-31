@@ -22,13 +22,15 @@ import {
  * 这里核的是两句合同——词表与打开的落点一致、词表外形态不出现。
  */
 
-test('P18 形态词表：四档固定，与 workspace 的 PLACEMENTS 逐项相等', () => {
-  assert.deepEqual(PANE_FORMS, ['dock', 'split', 'overlay', 'fullscreen'])
+test('P18 形态词表：五档（批次45 加沉浸），与 workspace 的 PLACEMENTS 逐项相等', () => {
+  // 批次45：PANE_FORMS 与 PLACEMENTS 必须继续同一份真相——第五档 immersive 两边一起加。
+  assert.deepEqual(PANE_FORMS, ['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
   assert.deepEqual([...PLACEMENTS], [...PANE_FORMS], '词表与状态机的打开位置必须同一份（改一边就是两套真相）')
   assert.equal(DEFAULT_PANE_FORM, DEFAULT_PLACEMENT)
   assert.equal(DEFAULT_PANE_FORM, 'dock')
   assert.equal(DEFAULT_MINIMIZED, 'none')
   assert.deepEqual(Object.keys(PANE_FORM_LABELS), [...PANE_FORMS])
+  assert.equal(PANE_FORM_LABELS.immersive, '沉浸')
   assert.equal(PANE_FORM_STORAGE_PREFIX, 'paneForm.')
   assert.equal(paneFormStorageKey('novel.editor'), 'paneForm.novel.editor')
 

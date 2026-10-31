@@ -25,12 +25,13 @@ function stdioSpec(overrides = {}) {
   }
 }
 
-test('stdio：连上夹具、列举三把、调 echo 回显、close 后状态为 closed', async () => {
+test('stdio：连上夹具、列举四把、调 echo 回显、close 后状态为 closed', async () => {
   const client = await connectMcpServer(stdioSpec(), { timeoutMs: 10_000 })
   try {
     assert.equal(client.status(), 'ready', JSON.stringify(client.info()))
     const names = client.listTools().map((tool) => tool.name).sort()
-    assert.deepEqual(names, ['add', 'echo', 'ignored_tool'])
+    // 批次45：夹具新增 echo_save（写口命名靶子），列举面从三把变四把。
+    assert.deepEqual(names, ['add', 'echo', 'echo_save', 'ignored_tool'])
 
     const echoed = await client.callTool('echo', { text: '柯秒' })
     assert.equal(echoed.ok, true)
@@ -85,6 +86,7 @@ test('聚合面：外部工具以 <prefix>.<name> 进面，调用经 MCP 链路�
     const names = (await link.listTools()).map((tool) => tool.name)
     assert.ok(names.includes('fixture.echo'), '外部工具要进聚合面')
     assert.ok(names.includes('fixture.add'))
+    assert.ok(names.includes('fixture.echo_save'), '写口命名的远端工具同样进面（策略层才拦）')
     const called = await link.callTool('fixture.echo', { text: '大梦' })
     assert.equal(called.ok, true)
     assert.deepEqual(called.payload, { ok: true, text: '大梦' })

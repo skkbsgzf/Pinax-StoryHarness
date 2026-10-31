@@ -12,6 +12,7 @@ import {
   WORKSPACE_VERSION,
   createWorkspaceStore,
   instanceIdFor,
+  normalizeEntry,
   normalizeGeometry,
   normalizeWorkspace,
   parseInstanceId
@@ -191,6 +192,30 @@ test('多实例：同一 pane 开两份，状态互不串；dockPane 收回全�
   assert.equal(store.get('outline.tree#2').minimized, 'none')
 })
 
+test('解注册清理（批次45）：removePanes 删除该 pane 的全部实例（含 #n），别的 pane 原样', () => {
+  const store = createWorkspaceStore()
+  store.place('outline.tree#1', 'overlay')
+  store.openInstance('outline.tree', { placement: 'overlay' })
+  store.setPinned('outline.tree#1', true)
+  store.place('outline.widget#1', 'overlay')
+  store.setGeometry('outline.widget#1', { x: 40, y: 80, w: 300, h: 400, snap: null })
+  store.place('novel.editor#1', 'immersive')
+
+  const removed = store.removePanes(['outline.tree', 'outline.widget'])
+  assert.equal(removed.changed, true)
+  assert.deepEqual(removed.instances.sort(), ['outline.tree#1', 'outline.tree#2', 'outline.widget#1'])
+  assert.equal(store.list().some((entry) => entry.pane.startsWith('outline.')), false, '整族实例记录都应清掉')
+  // 缺省实例回到 dock／无几何／未钉住：重启用从干净状态开始。
+  const clean = store.get('outline.widget#1')
+  assert.equal(clean.placement, DEFAULT_PLACEMENT)
+  assert.equal(clean.geometry, null)
+  assert.equal(clean.pinned, false)
+  assert.equal(store.get('novel.editor#1').placement, 'immersive', '别的载体一个字节都不动')
+
+  const again = store.removePanes(['outline.tree'])
+  assert.equal(again.changed, false, '重复清理不改任何东西')
+})
+
 test('几何净化：越界钳回值域，形状不对返回 null', () => {
   assert.deepEqual(normalizeGeometry({ x: -20, y: 12, w: 5, h: 99999, snap: 'middle' }), {
     x: 0, y: 12, w: GEOMETRY_MIN_W, h: 2000, snap: null
@@ -218,13 +243,48 @@ test('坏档回落：不是对象／版本不对／脏条目逐条丢弃并记�
   assert.equal(mixed.entries['outline.tree#1'].restore, DEFAULT_PLACEMENT)
 })
 
-test('词表：placement 四档、minimized 三档；非法值不进门', () => {
-  assert.deepEqual([...PLACEMENTS], ['dock', 'split', 'overlay', 'fullscreen'])
+test('词表：placement 五档（批次45 加沉浸）、minimized 三档；非法值不进门', () => {
+  // 批次45：沉浸态是第五档位置（整窗几何同 fullscreen，外壳额外收起活动栏与右栏）。
+  assert.deepEqual([...PLACEMENTS], ['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
   assert.deepEqual([...MINIMIZED_MODES], ['none', 'bubble', 'collapsed'])
   const store = createWorkspaceStore()
   assert.equal(store.place('a.b#1', 'window').error.code, 'UNKNOWN_PLACEMENT')
   assert.equal(store.minimize('a.b#1', 'hidden').error.code, 'UNKNOWN_MINIMIZED')
   assert.equal(store.place('NotAPane', 'overlay').error.code, 'INVALID_INSTANCE')
+})
+
+test('沉浸态：整窗几何复用全屏的 restore 记忆，退出回到进来之前那一轴', () => {
+  const store = createWorkspaceStore()
+  store.place('novel.editor#1', 'split')
+  const entered = store.place('novel.editor#1', 'immersive')
+  assert.equal(entered.ok, true)
+  assert.equal(entered.placement, 'immersive')
+  assert.equal(store.get('novel.editor#1').restore, 'split', '进入沉浸前记住来源')
+
+  // 整窗→整窗不冲掉来源（与 fullscreen 同一套记忆逻辑）。
+  store.place('novel.editor#1', 'fullscreen')
+  assert.equal(store.get('novel.editor#1').restore, 'split')
+  store.place('novel.editor#1', 'immersive')
+  assert.equal(store.get('novel.editor#1').restore, 'split')
+
+  const restored = store.restorePlacement('novel.editor#1')
+  assert.equal(restored.ok, true)
+  assert.equal(store.get('novel.editor#1').placement, 'split', '退出沉浸回到进入前的位置')
+
+  // 坏存档里 restore=immersive 不采信（整窗不能当还原目标），回落 dock。
+  const normalized = normalizeEntry({ instance: 'novel.editor#1', pane: 'novel.editor', placement: 'immersive', restore: 'immersive' })
+  assert.equal(normalized.placement, 'immersive')
+  assert.equal(normalized.restore, 'dock')
+  const store2 = createWorkspaceStore({ initial: { version: 1, entries: { 'novel.editor#1': { pane: 'novel.editor', placement: 'immersive', restore: 'immersive' } } } })
+  assert.equal(store2.restorePlacement('novel.editor#1').ok, true)
+  assert.equal(store2.get('novel.editor#1').placement, 'dock')
+})
+
+test('未声明的 immersive 老存档：老 workspace.json 没有它，读侧照常', () => {
+  // 批次45 兼容：老存档只有四档，没有 immersive 字段；normalizeWorkspace 不因此记警告。
+  const old = normalizeWorkspace({ version: 1, entries: { 'outline.tree#1': { pane: 'outline.tree', placement: 'dock', minimized: 'none', restore: 'dock' } } })
+  assert.deepEqual(old.warnings, [])
+  assert.equal(old.entries['outline.tree#1'].placement, 'dock')
 })
 
 test('持久化：attachPersistence 收到整份快照；save 抛错只记 degraded，不拦状态机', () => {

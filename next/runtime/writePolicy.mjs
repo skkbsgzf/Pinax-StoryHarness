@@ -14,8 +14,16 @@
  *   1) 落点事实源只有一个：调用方把 { ...KERNEL_WRITE_CLASS, ...CARRIER_WRITE_CLASS }
  *      传进来，本模块不复制那张表；
  *   2) structural（建项目/整目录导入）与 derived（索引 sync）不算「改某块目录」，不拦；
- *   3) 未知名字一律 allow——读工具不在表里，误拦会把整条链堵死。
+ *   3) 读工具一律 allow——不在落点表、名字也不像写口的，误拦会把整条链堵死。
+ *
+ * 批次45：写族判定补上第三支——外部 MCP 工具（协议 v3）的写盘口。
+ * 外部工具名不受本仓落点表约束（表是静态的、也不该为每台外部服务端长一份），
+ * 于是用后缀启发式（EXTERNAL_WRITE_HINT）把它们送进同一条策略：
+ * review → 仍出 tool-call 提案（提案按工具名原样重放，前缀路由已支持）；
+ * auto → 直写；blocked → 拒并如实说明。落点表结构与提案 schema 一个字不动。
  */
+import { isExternalWriteToolName } from './kernelWriteGuard.mjs'
+
 export const WRITE_MODES = Object.freeze(['review', 'auto', 'blocked'])
 
 /** 未知值一律回落 review：宁可多一步确认，不可因为拼错一个词直写原稿。 */
@@ -34,11 +42,20 @@ export function writersForDir(dir, landing = {}) {
 function blockedMessage(name, klass, landing) {
   const dir = klass?.dir
   if (!dir) {
-    return `「${name}」此刻不允许落盘：当前写入策略是只读。请让作者在设置里切回审阅或自动。`
+    const external = klass?.external ? '（外部 MCP 写工具）' : ''
+    return `「${name}」${external}此刻不允许落盘：当前写入策略是只读。请让作者在设置里切回审阅或自动。`
   }
   const writers = writersForDir(dir, landing)
   const tail = writers.length ? `写「${dir}/」只有 ${writers.join(' / ')}。` : ''
   return `「${dir}/」当前为只读：${tail}请让作者在设置里把写入策略切回审阅或自动。`
+}
+
+/** 写族判定三支：内建落点表 ∪ 外部 MCP 写口后缀。表外且不像写口的名字返回 null（读工具）。 */
+function classifyWrite(name, landing) {
+  const klass = landing?.[name]
+  if (klass) return klass
+  if (isExternalWriteToolName(name)) return { dir: null, external: true }
+  return null
 }
 
 /**
@@ -55,7 +72,7 @@ export function createWritePolicy({ mode = 'review', landing = {}, createProposa
     async beforeTool(call = {}) {
       const name = String(call.name ?? '')
       const args = call.arguments && typeof call.arguments === 'object' ? call.arguments : {}
-      const klass = landing[name] ?? null
+      const klass = classifyWrite(name, landing)
       if (!klass || klass.structural || klass.derived) return { kind: 'allow', args }
       if (resolved === 'blocked') {
         return { kind: 'deny', code: 'WRITE_BLOCKED', message: blockedMessage(name, klass, landing) }

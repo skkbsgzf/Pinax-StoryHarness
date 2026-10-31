@@ -34,8 +34,8 @@ export const OUTLINE_CARRIER = Object.freeze({
   // 工单 C2：pane 自声明 view（大纲树／编辑器），宿主不再按 id 前缀猜。
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
       // 协议 v1.1-C：悬浮小工具窗（作者点名「大纲变成微型悬浮窗，悬浮在小说正文的某个位置」）。
       // 载体只声明意图与宽度；定位、拖动、收起/展开、位置记忆全归宿主 next/shell/FloatingWidget.vue。
       { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, view: 'pinax.view.tree', kind: 'outline-editor' }

@@ -7,8 +7,8 @@
  * PLACEMENTS 必须逐项相等（workspace.test.mjs 有一条断言钉住这件事）。
  */
 
-/** 宿主支持的打开位置（P18 词表）。顺序即右键菜单的展示顺序。 */
-export const PANE_FORMS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen'])
+/** 宿主支持的打开位置（P18 词表 ＋ 批次45 沉浸态）。顺序即右键菜单的展示顺序。 */
+export const PANE_FORMS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
 
 /** 缺省位置：左键点竖条格＝回到停靠栏（P19「左键默认行为＝defaultForm，缺省 dock」）。 */
 export const DEFAULT_PANE_FORM = 'dock'
@@ -18,7 +18,8 @@ export const PANE_FORM_LABELS = Object.freeze({
   dock: '停靠栏',
   split: '在分屏中打开',
   overlay: '在浮窗中打开',
-  fullscreen: '全屏'
+  fullscreen: '全屏',
+  immersive: '沉浸'
 })
 
 /** 老键前缀：迁移只用一次（next/shell/workspaceMigration.mjs 读，成功后删）。 */

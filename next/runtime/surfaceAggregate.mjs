@@ -1,6 +1,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js'
 import { tools as kernelTools } from '../../server/mcp/createMcpServer.js'
+import { isExternalWriteToolName } from './kernelWriteGuard.mjs'
 import { connectInProcess } from './transportInProcess.mjs'
 
 /**
@@ -17,6 +18,39 @@ import { connectInProcess } from './transportInProcess.mjs'
  * 全程 in-process，不开端口。
  */
 const KERNEL_TOOL_NAMES = new Set(kernelTools.map((tool) => tool.name))
+
+/**
+ * 写族调用审计环（批次45）：最近 50 条写类调用，只在内存里、只记账。
+ *   不拦调用、不改返回、不做裁决——裁决归 writePolicy 与 kernelWriteGuard。
+ * owner 的取法与 agentRuntime.ownerOf 同源：外部按 prefix 找声明它的插件，载体按 map 里的 pluginId，
+ * 缺省 kernel。argsSummary 是一段截断 JSON，避免把整篇正文留在内存账本里。
+ */
+const WRITE_AUDIT_LIMIT = 50
+const writeAudit = []
+
+export function recentWriteCalls() {
+  return writeAudit.map((entry) => ({ ...entry }))
+}
+
+function summarizeArgs(args) {
+  try {
+    const text = JSON.stringify(args ?? {})
+    return text.length > 240 ? `${text.slice(0, 240)}…` : text
+  } catch {
+    return String(args)
+  }
+}
+
+function recordWriteCall(tool, owner, args) {
+  writeAudit.push({ at: Date.now(), tool, owner, argsSummary: summarizeArgs(args) })
+  while (writeAudit.length > WRITE_AUDIT_LIMIT) writeAudit.shift()
+}
+
+/** 写族判定：外部 MCP 走命名启发式；载体/原生以 impl 的 annotations 为准（内建写口同源）。 */
+function isWriteToolCall(name, tool) {
+  if (isExternalWriteToolName(name)) return true
+  return tool?.annotations?.readOnlyHint === false
+}
 
 /** 从启用集合里收载体工具。view 为空（项目没打开）→ 空面，只剩内核 19 工具。 */
 export function collectCarrierTools({ registry, view, fileService } = {}) {
@@ -92,12 +126,15 @@ export async function createAggregatedMcpServer({
     const external = externalClients.find((client) => toolName.startsWith(`${client.prefix}.`))
     if (external) {
       const remote = toolName.slice(external.prefix.length + 1)
+      const remoteTool = external.listTools?.().find((tool) => tool.name === remote)
+      if (isWriteToolCall(remote, remoteTool)) recordWriteCall(toolName, external.pluginId ?? 'kernel', request.params?.arguments ?? {})
       const result = await external.callTool(remote, request.params?.arguments ?? {})
       if (result?.raw) return result.raw
       return textResult(result?.payload ?? { ok: false, message: '外部 MCP 无返回' }, result?.ok === false)
     }
     const entry = carrierMap.get(toolName) ?? nativeMap.get(toolName)
     if (entry) {
+      if (isWriteToolCall(toolName, entry.tool)) recordWriteCall(toolName, entry.pluginId ?? 'kernel', request.params?.arguments ?? {})
       const result = await entry.tool.run(request.params?.arguments ?? {}, { pluginId: entry.pluginId, advisorBaseUrl })
       return toMcpResult(result)
     }

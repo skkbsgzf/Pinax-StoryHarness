@@ -660,8 +660,8 @@ test('协议 v1.2 P18–P21 → M2.5-C：形态词表归宿主，状态在 works
   const formsPath = join(shellDir, 'paneForms.mjs')
   assert.equal(await exists(formsPath), true, 'next/shell/paneForms.mjs 必须存在（宿主形态词表）')
   const forms = await readFile(formsPath, 'utf-8')
-  assert.match(forms, /PANE_FORMS = Object\.freeze\(\['dock', 'split', 'overlay', 'fullscreen'\]\)/u,
-    'P18 词表必须是 dock/split/overlay/fullscreen')
+  assert.match(forms, /PANE_FORMS = Object\.freeze\(\['dock', 'split', 'overlay', 'fullscreen', 'immersive'\]\)/u,
+    'P18 词表是 dock/split/overlay/fullscreen；批次45 加 immersive（与 PLACEMENTS 同一份）')
   assert.match(forms, /PANE_FORM_STORAGE_PREFIX = 'paneForm\.'/u, '老键前缀 paneForm.（迁移只用一次）')
   assert.doesNotMatch(forms, /\.localStorage/u, '形态记忆归 workspace（主进程通道），词表模块不碰浏览器缓存')
 
@@ -669,7 +669,7 @@ test('协议 v1.2 P18–P21 → M2.5-C：形态词表归宿主，状态在 works
   // 批次35 起另有加法轴 pinned（钉住）：setPinned 是唯一写口。
   const workspace = await readFile(join(shellDir, 'workspace.mjs'), 'utf-8')
   for (const needle of [
-    "PLACEMENTS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen'])",
+    "PLACEMENTS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])",
     "MINIMIZED_MODES = Object.freeze(['none', 'bubble', 'collapsed'])",
     'export function createWorkspaceStore',
     'export function instanceIdFor',

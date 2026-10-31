@@ -33,8 +33,8 @@ export const SETTING_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'setting.board', title: '设定板', icon: 'library', view: 'pinax.view.tree', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'setting.rules', title: '约束', icon: 'list', view: 'pinax.view.editor', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'setting.board', title: '设定板', icon: 'library', view: 'pinax.view.tree', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'center', id: 'setting.rules', title: '约束', icon: 'list', view: 'pinax.view.editor', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14 载体设置注册：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

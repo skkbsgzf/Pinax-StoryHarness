@@ -38,8 +38,8 @@ export const WORLDBOOK_CARRIER = Object.freeze({
       // 非常别扭，更合理的一个情况是，上面放图表列，下面放详情信息」）：
       // 窄栏退成**类别导航树**（只管按类别找条目），核心区做成**看板区**（上图表列、下详情）。
       // 两块 pane 的形态因此不再是「文档面」：窄栏是树、核心区是看板——形态三分类见 formTaxonomy.mjs。
-      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', kind: 'entries-categories', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', kind: 'entries-categories', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

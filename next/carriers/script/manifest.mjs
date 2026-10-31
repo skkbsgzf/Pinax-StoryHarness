@@ -42,8 +42,8 @@ export const SCRIPT_CARRIER = Object.freeze({
   contributes: Object.freeze({
     panes: [
       // 竖条图标用 film（老前端图标表里的片子那一枚）；中栏是剧本正文。
-      { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film', view: 'pinax.view.list', kind: 'script-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor', kind: 'script-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film', view: 'pinax.view.list', kind: 'script-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor', kind: 'script-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

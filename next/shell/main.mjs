@@ -20,6 +20,7 @@ import { importOutlineChapters } from '../runtime/outlineImportService.mjs'
 import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
 import { createWritingComplete } from '../runtime/writingComplete.mjs'
+import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
@@ -437,6 +438,23 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   // 90 秒超时：老前端续写也在这个量级，短了长段落会被腰斩；不可达时通道如实报错，不编字。
   const writingComplete = createWritingComplete({ timeoutMs: 90_000 })
 
+  /**
+   * 每插件配置（批次45）：项目级 `.pinax/settings.json`，换项目就换一份。
+   * 声明白名单用 getter 从注册表现取——装配期之后再加的插件也不会被写闸漏掉。
+   * 缓存实例只为「内容没变不写盘」的 lastWritten 记账；根一变就重建。
+   */
+  let settingsStore = null
+  function settingsStoreFor(projectRoot) {
+    if (!projectRoot) return null
+    if (!settingsStore || settingsStore.root !== String(projectRoot)) {
+      settingsStore = createFileSettingsStore({
+        root: projectRoot,
+        declarations: () => collectSettingDeclarations(session?.registry)
+      })
+    }
+    return settingsStore
+  }
+
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
   session = await createNextSession({
@@ -490,6 +508,7 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
     knowledgeService,
     writingComplete,
+    settingsStoreFor,
     // 运行过程事件（批次29）：runtimeAsk 期间把运行器的真实阶段推给渲染层。
     // 走既有推送机制（sendToRenderer → webContents.send），通道名在 ipcContract 里；窗口不在时静默丢弃。
     emitRuntimeEvent: (payload) => {

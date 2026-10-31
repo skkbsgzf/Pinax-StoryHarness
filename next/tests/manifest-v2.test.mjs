@@ -149,7 +149,7 @@ test('subscriptions：只认 project.changed', () => {
   assert.equal(validateCarrierManifest(bad).error.code, 'PINAX_UNKNOWN_SUBSCRIPTION')
 })
 
-test('pane.view／forms：view 须是 pinax.view.*，forms 只认四轴词表', () => {
+test('pane.view／forms：view 须是 pinax.view.*，forms 只认宿主位置词表', () => {
   const badView = withMutation(V2_MINIMAL, (m) => { m.contributes.panes[0].view = 'tree' })
   assert.equal(validateCarrierManifest(badView).error.code, 'PINAX_INVALID_MANIFEST')
 

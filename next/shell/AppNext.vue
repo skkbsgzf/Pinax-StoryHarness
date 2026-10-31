@@ -32,10 +32,12 @@ import {
 import {
   hostWorkspace,
   instanceIdFor,
+  isFullWindowPlacement,
   isPlacement,
   subscribeWorkspace
 } from './workspace.mjs'
 import { legacyLocalStorage, migrateLegacyWorkspace } from './workspaceMigration.mjs'
+import { hostViewRegistry } from './viewRegistry.mjs'
 import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs'
 
 /**
@@ -836,6 +838,20 @@ const fullscreenTarget = computed(() => {
 })
 
 /**
+ * 沉浸形态（批次45）：与全屏同一套整窗几何，外壳额外收起活动栏与右栏运行坞。
+ * 两块整窗面互斥（applyPaneForm 进入时把另一块收回 dock），所以至多一块。
+ */
+const immersiveTarget = computed(() => {
+  for (const { pane } of centerPaneRecords.value) {
+    if (paneFormOf(pane.id) === 'immersive') return pane
+  }
+  for (const pane of overlayPanes.value) {
+    if (paneFormOf(pane.paneId) === 'immersive') return { id: pane.paneId, title: pane.title, slot: 'overlay' }
+  }
+  return null
+})
+
+/**
  * 分屏副栏（P11/P21）：formMap 里第一块 split 的 pane。
  * P11 的 split:'side' 声明优先当副栏；主 pane 仍是当前板，副栏只挂这一块（v1 单副栏，多副栏记账）。
  */
@@ -899,15 +915,18 @@ function startSplitDrag(event) {
   event.preventDefault?.()
 }
 
-/** 形态切换的唯一外壳入口：单副栏／单全屏的清理在这里做，右键菜单与浮窗按钮都走它。 */
+/** 形态切换的唯一外壳入口：单副栏／单整窗的清理在这里做，右键菜单与浮窗按钮都走它。 */
 function applyPaneForm(paneId, form) {
-  if (form === 'split' || form === 'fullscreen') {
+  if (form === 'split' || isFullWindowPlacement(form)) {
     for (const entry of Object.values(workspaceSnapshot.value.entries)) {
       if (entry.pane === paneId) continue
-      // 单副栏：第二块 split 收回 dock。
-      if (entry.placement === form) hostWorkspace.dockPane(entry.pane)
-      // 全屏占满中栏时会盖住分屏：选分屏＝明确要看见副栏，先把全屏收回 dock。
-      else if (form === 'split' && entry.placement === 'fullscreen') hostWorkspace.dockPane(entry.pane)
+      if (form === 'split') {
+        // 单副栏：第二块 split 收回 dock；全屏／沉浸占满整窗时会盖住分屏，选分屏＝明确要看见副栏。
+        if (entry.placement === 'split' || isFullWindowPlacement(entry.placement)) hostWorkspace.dockPane(entry.pane)
+      } else if (isFullWindowPlacement(entry.placement)) {
+        // 全屏与沉浸互斥：一次只留一块整窗面（另一块的来源记在它自己的 restore 里，不丢）。
+        hostWorkspace.dockPane(entry.pane)
+      }
     }
   }
   const result = setPaneForm(paneId, form)
@@ -924,7 +943,7 @@ function enterFullscreen(paneId) {
 
 function restoreFormFor(paneId) {
   const previous = paneState(paneInstance(paneId))?.restore
-  if (isPlacement(previous) && previous !== 'fullscreen') return previous
+  if (isPlacement(previous) && !isFullWindowPlacement(previous)) return previous
   return overlayPaneIds.value.includes(paneId) ? 'overlay' : 'dock'
 }
 
@@ -936,6 +955,21 @@ function restoreFromFullscreen() {
   const pane = fullscreenTarget.value
   if (!pane) return
   applyPaneForm(pane.id, restoreFormFor(pane.id))
+}
+
+/**
+ * 沉浸态（批次45）：整窗几何与全屏同一条（workspace 的 place 记 restore），
+ * 外壳只是把活动栏与右栏让出来；退出＝回到进来之前那一轴（与全屏的还原同源）。
+ */
+function enterImmersive(paneId) {
+  if (!paneId) return hostWorkspace.place('', 'immersive')
+  return applyPaneForm(paneId, 'immersive')
+}
+
+function exitImmersive() {
+  const pane = immersiveTarget.value
+  if (!pane) return null
+  return applyPaneForm(pane.id, restoreFormFor(pane.id))
 }
 
 /** 换形态后把对应载体的内容取回来（浮窗／分屏／全屏都可能打开一块不在当前板的树）。 */
@@ -1134,10 +1168,20 @@ function choosePaneForm(entry) {
     hostWorkspace.dockPane(entry.paneId)
   } else if (entry.form === 'fullscreen') {
     enterFullscreen(entry.paneId)
+  } else if (entry.form === 'immersive') {
+    // 已在沉浸态时再点同一项＝退出（菜单文案同步成「退出沉浸」）。
+    if (paneFormOf(entry.paneId) === 'immersive') exitImmersive()
+    else enterImmersive(entry.paneId)
   } else {
     applyPaneForm(entry.paneId, entry.form)
   }
   closeContextMenu()
+}
+
+/** 右键菜单项文案：沉浸态的同一项承担「退出沉浸」，其余按宿主词表。 */
+function formEntryLabel(entry) {
+  if (entry.form === 'immersive' && paneFormOf(entry.paneId) === 'immersive') return '退出沉浸'
+  return entry.label
 }
 
 /** Esc 先关菜单（window 捕获，先于 FloatingWidget/标题栏的 document 监听）；点菜单外也收起。 */
@@ -1152,6 +1196,31 @@ function onContextMenuPointerDown(event) {
   if (!contextMenu.value) return
   if (contextMenuRoot.value?.contains?.(event.target)) return
   closeContextMenu()
+}
+
+/** 有没有一块展开中的浮窗（overlay 实例或中栏 pane 被摆成浮窗）。 */
+function hasOpenFloatingWidget() {
+  for (const pane of overlayPanes.value) {
+    for (const instance of overlayInstances(pane.paneId)) {
+      const state = paneState(instance)
+      if (state?.placement === 'overlay' && state.minimized === 'none') return true
+    }
+  }
+  return floatingCenterPanes.value.some((pane) => minimizedOf(pane.id) === 'none')
+}
+
+/**
+ * 沉浸态的 Esc（批次45）：优先级＝活动浮窗先收（FloatingWidget 自己的 document 监听接这一下），
+ * 没有浮窗、也没有菜单／设置层时才退出沉浸。
+ * 挂在 window 捕获阶段：先于浮窗的 document 处理看到按键，判的是「按下前」的状态；
+ * 浮窗在场时直接放行事件，不 preventDefault，让浮窗照常收起。
+ */
+function onImmersiveKeydown(event) {
+  if (event.key !== 'Escape' || !immersiveTarget.value) return
+  if (settingsOpen.value || contextMenu.value || openMenuLabel.value) return
+  if (hasOpenFloatingWidget()) return
+  event.preventDefault()
+  exitImmersive()
 }
 
 /** 只申请只读作用域的板块适合默认随行：它贡献上下文块，不跟主载体抢写盘。 */
@@ -1195,14 +1264,33 @@ async function pickPrimary(pluginId) {
   await refresh()
 }
 
+/**
+ * 停用＝解注册（批次45）：先把这块载体注册的视图与它全部已开的 pane 实例收掉，再交内核重建。
+ * 「已开」覆盖 #1 与多开的 #n（含 overlay 浮窗）：删除工作区记录即同时清掉
+ * placement／geometry／minimized／pinned，浮窗层按缺省 dock 自动消失。
+ * 换来源的 pane id 以清单声明为准，再用视图里的 pluginId 兜一层——两边哪边更全都能认出来。
+ */
+function releaseCarrierPanes(carrier) {
+  const views = hostViewRegistry.disposeOwner(carrier.id)
+  const paneIds = new Set((carrier?.panes ?? []).map((pane) => pane?.id).filter(Boolean))
+  for (const pane of [...leftItems.value, ...centerPanes.value]) {
+    if (pane.pluginId === carrier.id && pane.id) paneIds.add(pane.id)
+  }
+  const removed = hostWorkspace.removePanes([...paneIds])
+  return { views, instances: removed.instances }
+}
+
 /** 启用／停用一个载体：翻转 enabled；主载体行不可停用自己（按钮已禁用，函数再闸一道）。
- *  revision 用当前 view 的值——陈旧写入内核会以 STALE_REVISION 拒掉，refresh 后如实呈现。 */
+ *  revision 用当前 view 的值——陈旧写入内核会以 STALE_REVISION 拒掉，refresh 后如实呈现。
+ *  停用先走解注册清理再交重建：服务／MCP／工具面在 session.refresh 里收，pane 与工作区在外壳侧收。 */
 async function setCarrierEnabled(carrier) {
   if (!props.bridge?.request || carrier.isPrimary) return
+  const enabling = !carrier.isEnabled
+  if (!enabling) releaseCarrierPanes(carrier)
   const revision = project.value?.revision ?? 0
   await props.bridge.request(IPC_CHANNELS.carrierSetEnabled, {
     pluginId: carrier.id,
-    enabled: !carrier.isEnabled,
+    enabled: enabling,
     expectedRevision: revision
   })
   await refresh()
@@ -1362,6 +1450,8 @@ onMounted(() => {
   // 右键「打开方式」菜单：window 捕获阶段先收菜单（Esc 不再传给悬浮窗/标题栏）。
   window.addEventListener('keydown', onContextMenuKeydown, true)
   window.addEventListener('pointerdown', onContextMenuPointerDown, true)
+  // 沉浸态 Esc（批次45）：捕获阶段判「按下前」状态，浮窗在场时让位给浮窗自己的收起。
+  window.addEventListener('keydown', onImmersiveKeydown, true)
 })
 
 onBeforeUnmount(() => {
@@ -1380,6 +1470,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onTitlebarPointerDown)
   window.removeEventListener('keydown', onContextMenuKeydown, true)
   window.removeEventListener('pointerdown', onContextMenuPointerDown, true)
+  window.removeEventListener('keydown', onImmersiveKeydown, true)
   unsubscribeWorkspace()
   hostWorkspace.attachPersistence(null)
 })
@@ -1437,13 +1528,25 @@ onBeforeUnmount(() => {
         data-test="titlebar-project-chip"
       >{{ projectChip }}</span>
 
+      <!-- 沉浸态的三条出口之一（批次45）：固定顶栏按钮，不必回到核心区的形态条。 -->
+      <button
+        v-if="immersiveTarget"
+        type="button"
+        class="control-quiet nx-titlebar-immersive-exit"
+        data-test="immersive-exit"
+        @click="exitImmersive"
+      >退出沉浸</button>
+
       <span class="nx-titlebar-drag" aria-hidden="true"></span>
       <!-- 原生窗控浮层占位：主进程 titleBarOverlay 盖在这块约 138px 上，页面上不放可点元素。 -->
       <span class="nx-titlebar-window-controls" aria-hidden="true"></span>
     </header>
 
-    <div class="next-shell app-shell" :data-dragging="dragging">
+    <div class="next-shell app-shell" :data-dragging="dragging" :data-immersive="immersiveTarget ? 'true' : null">
+      <!-- 沉浸态收起活动栏与右栏运行坞（批次45）：用 v-show 不用 v-if——运行坞里挂着会话与
+           输入草稿，v-if 会卸载重挂（丢 transient 状态、重订阅）；活动栏跟着同一口径。 -->
       <ActivityRail
+        v-show="!immersiveTarget"
         :boards="boards"
         :carriers="carriers"
         :project="project"
@@ -1484,6 +1587,21 @@ onBeforeUnmount(() => {
              这里不再内嵌任何配置 section。 -->
 
         <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
+
+        <!-- 批次45 沉浸态：整窗几何与全屏同一套（workspace 的 restore 记忆），外壳只额外
+             收起活动栏与右栏；核心区里同样只多一条「退出沉浸」形态条，内容渲染不变（P12）。 -->
+        <template v-else-if="immersiveTarget">
+          <div class="nx-form-bar" data-form="immersive">
+            <span class="nx-form-bar-label">沉浸 · {{ immersiveTarget.title }}</span>
+            <button type="button" class="control-quiet nx-form-bar-action" data-test="immersive-bar-exit" @click="exitImmersive">退出沉浸</button>
+          </div>
+          <CenterSlotHost
+            :active-pane="immersiveTarget"
+            :data="data"
+            :project-root="project?.root ?? ''"
+            @history="openHistoryFor"
+          />
+        </template>
 
         <!-- 协议 v1.2 P20/P21：全屏形态占满中栏。宿主只多一条「还原」形态条，
              载体内容仍由 CenterSlotHost 原样渲染（P12：内容渲染不随形态变）。 -->
@@ -1538,9 +1656,16 @@ onBeforeUnmount(() => {
         />
       </div>
 
-      <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('right', $event)" />
+      <!-- 右栏与它的分界在沉浸态一起让位（分界属于右栏的边界，不单独留下一条 5px 的缝）。 -->
+      <div
+        v-show="!immersiveTarget"
+        class="resizer"
+        role="separator"
+        aria-orientation="vertical"
+        @pointerdown="startDrag('right', $event)"
+      />
 
-      <div class="col-dock" :style="{ width: dockWidth + 'px' }">
+      <div v-show="!immersiveTarget" class="col-dock" :style="{ width: dockWidth + 'px' }">
         <!-- 批次27：会话按项目根隔离（换项目＝另一份会话）；@ 引用清单与 Esc 让位也在这里接线。 -->
         <RuntimeDock
           :runtime="runtime"
@@ -1561,6 +1686,7 @@ onBeforeUnmount(() => {
         :sections="settingsSections"
         :carriers="carriers"
         :carrier-section-components="carrierSectionComponents"
+        :bridge="props.bridge"
         @close="closeSettings"
         @changed="refresh"
         @theme="applyThemeChoice"
@@ -1677,7 +1803,7 @@ onBeforeUnmount(() => {
             :data-form="entry.form"
             @click="choosePaneForm(entry)"
           >
-            <span>{{ entry.label }}</span>
+            <span>{{ formEntryLabel(entry) }}</span>
             <span v-if="paneFormOf(entry.paneId) === entry.form" class="nx-context-mark" aria-hidden="true">✓</span>
           </button>
         </template>

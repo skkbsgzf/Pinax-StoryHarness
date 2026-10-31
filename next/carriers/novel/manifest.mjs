@@ -41,8 +41,8 @@ export const NOVEL_CARRIER = Object.freeze({
       // 竖条图标对齐老版「书稿」那一格用的就是 outline（WorkspaceContentGroups.vue:23），
       // 见 next-shell-alignment-inventory-20261028.md 差异表 #3（B 类）。
       // view（工单 C2）：pane 自己声明视图类型，宿主不再按 id 前缀猜。
-      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14 → v2：v1 的 { id, title } 读成 section；「写作偏好」仍是目录项＋空态。
     settings: [{ id: 'novel.writing', title: '写作偏好', type: 'section' }]

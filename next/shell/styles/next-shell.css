@@ -162,6 +162,11 @@ body {
 .nx-titlebar-chip.is-empty {
   border-style: dashed;
 }
+/* 沉浸态顶栏退出钮（批次45）：尺寸沿用 .control-quiet，这里只把命中区从拖拽区里摘出来。 */
+.nx-titlebar-immersive-exit {
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
 .nx-titlebar-drag {
   flex: 1 1 auto;
   align-self: stretch;

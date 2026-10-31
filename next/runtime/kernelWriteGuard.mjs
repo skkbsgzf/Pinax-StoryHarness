@@ -36,6 +36,21 @@ export const KERNEL_WRITE_TOOL_NAMES = Object.freeze(
 
 const KERNEL_NAME_SET = new Set(kernelTools.map((tool) => tool.name))
 
+/**
+ * 外部 MCP 工具的写族启发式（批次45）。
+ *
+ * 外部服务端的工具名不受本仓清单约束，annotations 也可能缺省；但写盘口有稳定命名习惯
+ * （`*_save` / `*_write` / `*_import` / `*_delete` / `*_create` / `*_update`）。
+ * 这条启发式只用于「要不要把这次调用送进审阅策略」，不是权限裁决——真正的权限仍在各自的
+ * 服务端与 scope 上；内建写族（KERNEL_WRITE_CLASS／CARRIER_WRITE_CLASS）仍以落点表为准。
+ * 名字带前缀（`<prefix>.<name>`）也照后缀匹配。
+ */
+export const EXTERNAL_WRITE_HINT = /_(save|write|import|delete|create|update)$/u
+
+export function isExternalWriteToolName(name) {
+  return EXTERNAL_WRITE_HINT.test(String(name ?? '').trim())
+}
+
 /** 每把写工具的落点定性：dir＝受「一目录一主人」约束，structural＝结构动作，derived＝只出产物的只读盘点族。 */
 export const KERNEL_WRITE_CLASS = Object.freeze({
   pinax_chapter_write: Object.freeze({ dir: '正文' }),

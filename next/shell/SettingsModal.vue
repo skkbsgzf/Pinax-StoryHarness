@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, ref } from 'vue'
 import WorkbenchModal from './WorkbenchModal.vue'
+import CarrierSettingsGeneric from './settings/CarrierSettingsGeneric.vue'
 
 /**
  * SettingsModal（工单C0 · U13 作者裁定）：统一的二级页面。
@@ -45,7 +46,9 @@ const props = defineProps({
   /** 载体声明节的内容组件表（P14 第三步）：{ [声明 id]: { component, props } }。 */
   carrierSectionComponents: { type: Object, default: () => ({}) },
   /** 视图里的载体清单：[{ id, title, dataDirs?, settings? }]——settings 是清单里真声明的设置节（P14）。 */
-  carriers: { type: Array, default: () => [] }
+  carriers: { type: Array, default: () => [] },
+  /** IPC 桥：通用渲染器要经 settings:load／settings:save 读写项目级配置。 */
+  bridge: { type: Object, default: null }
 })
 const emit = defineEmits(['close', 'changed', 'theme', 'set-enabled', 'set-primary', 'toggle-companion', 'writing-prefs', 'update:activeSection'])
 
@@ -59,7 +62,13 @@ const searchQuery = ref('')
  * 拼上载体前缀才能当全局目录键（DOM id／activeSection／搜索命中都用这一份）。
  * 内容组件按「声明 id」查 props.carrierSectionComponents（工单B：novel.writing → WritingPrefsSection）：
  * 查到就是 kind:'carrier-settings-content'（右栏渲染真内容），查不到仍是空态（不伪造设置项）。
+ *
+ * 批次45：没有专属组件、但声明了受支持类型的（section／string／number／boolean／enum），
+ * 走通用渲染器 CarrierSettingsGeneric，值读写当前项目的 .pinax/settings.json；
+ * 连类型都没声明的（老测试里的裸 { id, title }）仍是空态——注册制不为它编造控件。
  */
+const GENERIC_SETTING_TYPES = new Set(['section', 'string', 'number', 'boolean', 'enum'])
+
 const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
   if (!carrier?.id || !carrier?.title) return []
   const declared = Array.isArray(carrier.settings) ? carrier.settings : []
@@ -67,11 +76,12 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
     .filter((setting) => setting?.id && setting?.title)
     .map((setting) => {
       const mapped = props.carrierSectionComponents?.[setting.id] ?? null
+      const generic = !mapped?.component && GENERIC_SETTING_TYPES.has(setting.type)
       const section = {
         id: `carrier:${carrier.id}:${setting.id}`,
         title: setting.title,
         group: '载体',
-        kind: mapped?.component ? 'carrier-settings-content' : 'carrier-settings',
+        kind: mapped?.component || generic ? 'carrier-settings-content' : 'carrier-settings',
         carrierId: carrier.id,
         settingId: setting.id,
         // 浅匹配只用已知字段：载体标题／声明标题／「设置」／它认领的数据目录名；不做渲染文本深搜。
@@ -80,6 +90,9 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
       if (mapped?.component) {
         section.component = mapped.component
         section.props = mapped.props ?? {}
+      } else if (generic) {
+        section.component = CarrierSettingsGeneric
+        section.props = { bridge: props.bridge, carrierId: carrier.id, carrierTitle: carrier.title, setting }
       }
       return section
     })

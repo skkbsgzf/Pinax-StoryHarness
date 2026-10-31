@@ -6,10 +6,10 @@
  * 把气泡塞进 placement 词表，就会出现「气泡态里怎么全屏」这种没有答案的组合。
  * 所以状态是四个正交轴 + 一个还原记忆：
  *
- *   placement ∈ dock|split|overlay|fullscreen   放在哪一栏
+ *   placement ∈ dock|split|overlay|fullscreen|immersive   放在哪一栏
  *   minimized ∈ none|bubble|collapsed            在那一栏里收成什么样子
  *   geometry  { x, y, w, h, snap }               像素与吸附边（只对 overlay 有意义）
- *   restore    上一次非全屏的 placement           全屏「还原」回到哪
+ *   restore    上一次非全窗的 placement           全窗「还原」回到哪
  *   z          浮层叠序（越大越靠前）
  *   pinned     钉住（批次35）：位置锁定（禁拖）＋进存档；再点解除
  *
@@ -27,14 +27,24 @@
 export const WORKSPACE_VERSION = 1
 export const WORKSPACE_FILE = '.pinax/workspace.json'
 
-/** 打开位置（协议 v1.2 P21 的四档，一个不增一个不减）。 */
-export const PLACEMENTS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen'])
+/**
+ * 打开位置（协议 v1.2 P21 的四档 ＋ 批次45 的沉浸态）。
+ * `immersive` 与 `fullscreen` 同属「整窗」：面板占满窗体、z 提到最前、进入前记住来源。
+ * 两者的差别只在外壳怎么让位（沉浸态连活动栏与运行坞一起收起），状态机里没有第二套几何。
+ */
+export const PLACEMENTS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
+/** 整窗位置：进入前记 restore、退出后按 restore 还原（fullscreen 与 immersive 共用一套记忆）。 */
+export const FULL_WINDOW_PLACEMENTS = Object.freeze(['fullscreen', 'immersive'])
 /** 最小化状态：none＝正常展开；bubble＝气泡球；collapsed＝侧缘小标签。 */
 export const MINIMIZED_MODES = Object.freeze(['none', 'bubble', 'collapsed'])
 export const SNAP_EDGES = Object.freeze(['left', 'right'])
 
 export const DEFAULT_PLACEMENT = 'dock'
 export const DEFAULT_MINIMIZED = 'none'
+
+export function isFullWindowPlacement(value) {
+  return FULL_WINDOW_PLACEMENTS.includes(value)
+}
 
 /** 几何的合同值域：宽度沿用 overlay 合同的 200–600（宿主只做少量放宽给中栏浮窗），高度同理。 */
 export const GEOMETRY_MIN_W = 200
@@ -118,7 +128,7 @@ export function normalizeEntry(value, fallbackInstance = '') {
   const paneId = isPaneId(value.pane) && value.pane === parsed.pane ? value.pane : parsed.pane
   const placement = isPlacement(value.placement) ? value.placement : DEFAULT_PLACEMENT
   const minimized = isMinimized(value.minimized) ? value.minimized : DEFAULT_MINIMIZED
-  const restore = isPlacement(value.restore) && value.restore !== 'fullscreen' ? value.restore : DEFAULT_PLACEMENT
+  const restore = isPlacement(value.restore) && !isFullWindowPlacement(value.restore) ? value.restore : DEFAULT_PLACEMENT
   return {
     instance: parsed.id,
     pane: paneId,
@@ -287,8 +297,8 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
   }
 
   /**
-   * 换位置。进全屏时把来源记进 restore（已经全屏就不再记，避免「全屏→全屏」把来源冲掉）；
-   * 从全屏出来（还原）由 restorePlacement 负责。
+   * 换位置。进整窗（全屏／沉浸）时把来源记进 restore（已经在整窗就不再记，避免
+   * 「整窗→整窗」把来源冲掉）；从整窗出来（还原）由 restorePlacement 负责。
    */
   function place(instance, placement, options = {}) {
     if (!isPlacement(placement)) {
@@ -297,27 +307,27 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     const entry = ensure(instance)
     if (!entry) return { ok: false, error: { code: 'INVALID_INSTANCE', message: '位置切换需要 <paneId>#<n> 形式的实例 id' } }
     const previous = { placement: entry.placement, minimized: entry.minimized }
-    if (placement === 'fullscreen') {
-      // 进全屏：把「从哪来」记进 restore（已经全屏就不再记，免得把来源冲成全屏）。
-      if (entry.placement !== 'fullscreen') entry.restore = entry.placement
+    if (isFullWindowPlacement(placement)) {
+      // 进整窗：把「从哪来」记进 restore（已经在整窗就不再记，免得把来源冲成整窗）。
+      if (!isFullWindowPlacement(entry.placement)) entry.restore = entry.placement
     } else {
-      // 非全屏位置本身就是下一次全屏的还原目标（显式指定优先）。
-      entry.restore = isPlacement(options.restore) && options.restore !== 'fullscreen' ? options.restore : placement
+      // 非整窗位置本身就是下一次整窗的还原目标（显式指定优先）。
+      entry.restore = isPlacement(options.restore) && !isFullWindowPlacement(options.restore) ? options.restore : placement
     }
     entry.placement = placement
     // 气泡只属于 overlay 一轴：换到别的位置就退出最小化。
     if (placement !== 'overlay') entry.minimized = 'none'
-    if (placement === 'overlay' || placement === 'fullscreen') entry.z = nextZ()
+    if (placement === 'overlay' || isFullWindowPlacement(placement)) entry.z = nextZ()
     const changed = previous.placement !== entry.placement || previous.minimized !== entry.minimized
     if (changed) commit()
     return { ok: true, changed, instance: entry.instance, placement: entry.placement, previous }
   }
 
-  /** 还原到全屏之前那一轴；没有记忆时回 dock。 */
+  /** 还原到整窗之前那一轴；没有记忆时回 dock。 */
   function restorePlacement(instance) {
     const entry = entries[parseInstanceId(instance)?.id ?? '']
     if (!entry) return { ok: false, error: { code: 'UNKNOWN_INSTANCE', message: '这条实例还没有状态记录' } }
-    const target = isPlacement(entry.restore) && entry.restore !== 'fullscreen' ? entry.restore : 'dock'
+    const target = isPlacement(entry.restore) && !isFullWindowPlacement(entry.restore) ? entry.restore : 'dock'
     return place(instance, target)
   }
 
@@ -424,6 +434,23 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
   }
 
   /**
+   * 解注册清理（批次45）：载体被禁用、它的 pane 从视图注册表里消失后，
+   * 工作区里属于这些 pane 的每条实例记录都要一并清掉（位置／几何／最小化／钉住全清）。
+   * 只删记录、不碰别的 pane；返回被删的实例 id，界面据此同步关闭已开的浮窗。
+   */
+  function removePanes(paneIds) {
+    const ids = new Set((Array.isArray(paneIds) ? paneIds : [paneIds]).map((id) => String(id ?? '').trim()).filter(isPaneId))
+    const removed = []
+    for (const [key, entry] of Object.entries(entries)) {
+      if (!ids.has(entry.pane)) continue
+      delete entries[key]
+      removed.push(key)
+    }
+    if (removed.length) commit()
+    return { ok: true, changed: removed.length > 0, instances: removed }
+  }
+
+  /**
    * 老键迁移：paneForm.<paneId> 的形态 + overlay.<paneId> 的位置搬进 #1 实例。
    * 已有记录的不覆盖（新真相优先），只把缺的几何补上。
    */
@@ -436,7 +463,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     let migrated = false
     if (!existed && isPlacement(form)) {
       entry.placement = form
-      entry.restore = form === 'fullscreen' ? 'dock' : form
+      entry.restore = isFullWindowPlacement(form) ? 'dock' : form
       if (form !== 'overlay') entry.minimized = 'none'
       migrated = true
     }
@@ -448,7 +475,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
       }
     }
     if (migrated) {
-      if (entry.placement === 'overlay' || entry.placement === 'fullscreen') entry.z = nextZ()
+      if (entry.placement === 'overlay' || isFullWindowPlacement(entry.placement)) entry.z = nextZ()
       commit()
     }
     return { ok: true, migrated, instance }
@@ -491,6 +518,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     closeInstance,
     bringToFront,
     dockPane,
+    removePanes,
     adoptLegacy,
     load,
     attachPersistence,
