@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
 import { resolvePaneView } from './viewRegistry.mjs'
 import { recordCarrierOfPaneId } from './recordCarriers.mjs'
-import { availableWritingActions } from './writingActions.mjs'
+import { availableWritingActions, referenceLabel } from './writingActions.mjs'
 import PluginPanelHost from './PluginPanelHost.vue'
 import EntryDetailPanel from './EntryDetailPanel.vue'
 import EntriesBoard from './EntriesBoard.vue'
@@ -153,6 +153,7 @@ const instructionFocused = ref(false)
 const writingBarVisible = computed(() => editorFocused.value || instructionFocused.value
   || Boolean(props.data.writingBusy || props.data.writingResult || props.data.writingError))
 const writingBusy = computed(() => Boolean(props.data.writingBusy))
+const reviewBusy = computed(() => Boolean(props.data.reviewBusy))
 const chapterArea = ref(null)
 
 /** 选区上报：正文面每次 select／keyup／mouseup 报一次，动作带据此决定出哪几个按钮。 */
@@ -166,6 +167,44 @@ function startWriting(actionId) {
   if (!actionId) return
   instructionFocused.value = false
   props.data.requestWriting(actionId, writingInstruction.value)
+}
+
+/** 审查本章（批次46A）：走 authoring.review.chapter 只读轨，一句固定问句，结果落成下面的卡片。 */
+function startReview() {
+  instructionFocused.value = false
+  props.data.reviewChapter()
+}
+
+/** 「转改写」：把这条意见的描述预填进五动作的额外要求，再按改写发出（选区不动）。 */
+function reviewIssueToRewrite(issue) {
+  const description = String(issue?.message ?? '').trim()
+  if (!description) return
+  writingInstruction.value = description
+  props.data.requestWriting('rewrite', description)
+}
+
+function severityLabel(severity) {
+  if (severity === 'high') return '高'
+  if (severity === 'low') return '低'
+  return '中'
+}
+
+/**
+ * 提示词预览（批次46A）：折叠层按需读主进程留存的最近一次请求。
+ * 换了一条结果（落位／丢弃／重新生成）就自动收起——预览永远对着上面那张结果卡。
+ */
+const writingPreviewOpen = ref(false)
+const writingReferenceText = computed(() => (Array.isArray(props.data.writingResult?.references)
+  ? props.data.writingResult.references
+    .map((item) => `${referenceLabel(item.kind)} ${item.chars} 字`)
+    .join(' · ')
+  : ''))
+watch(() => props.data.writingResult, (value) => {
+  if (!value) writingPreviewOpen.value = false
+})
+async function toggleWritingPreview() {
+  writingPreviewOpen.value = !writingPreviewOpen.value
+  if (writingPreviewOpen.value) await props.data.loadWritingPreview()
 }
 
 /** 落位后把光标放回正文（caret 由 applyWritingResult 算好）：作者接着往下写，不用再点一下。 */
@@ -473,6 +512,15 @@ function actOnSaveChip() {
               @click="startWriting(action.id)"
             >{{ action.label }}</button>
           </span>
+          <!-- 审查本章（批次46A）：同一排动作里的只读项——它不改正文，只把意见摆出来。 -->
+          <button
+            type="button"
+            class="control-quiet nx-writing-review"
+            data-test="writing-review"
+            :disabled="writingBusy || reviewBusy"
+            @mousedown.prevent
+            @click="startReview"
+          >审查本章</button>
           <input
             v-model="writingInstruction"
             class="nx-writing-ask"
@@ -513,8 +561,57 @@ function actOnSaveChip() {
             </span>
           </div>
           <div class="nx-writing-text">{{ data.writingResult.text }}</div>
+          <!-- 参考块清单（批次46A）：这次用的是哪几块、各多少字；参考缺席时把原因照原话摊开。 -->
+          <p
+            v-if="writingReferenceText || data.writingResult.referenceNote"
+            class="nx-writing-refs"
+            data-test="writing-references"
+          >{{ writingReferenceText || data.writingResult.referenceNote }}</p>
+          <!-- 提示词预览（批次46A）：只读展示主进程留存的那一份，不实时、不跨项目。 -->
+          <div class="nx-writing-preview">
+            <button
+              type="button"
+              class="control-quiet nx-writing-preview-toggle"
+              data-test="writing-preview-toggle"
+              @mousedown.prevent
+              @click="toggleWritingPreview"
+            >{{ writingPreviewOpen ? '收起提示词' : '查看提示词' }}</button>
+            <div v-if="writingPreviewOpen" class="nx-writing-preview-body" data-test="writing-preview">
+              <p v-if="data.writingPreviewError" class="nx-writing-error nx-writing-preview-error" data-test="writing-preview-error">{{ data.writingPreviewError }}</p>
+              <template v-else-if="data.writingPreview">
+                <div class="nx-writing-preview-label">系统提示词</div>
+                <pre class="nx-writing-preview-text" data-test="writing-preview-system">{{ data.writingPreview.systemPrompt }}</pre>
+                <div class="nx-writing-preview-label">用户提示词</div>
+                <pre class="nx-writing-preview-text" data-test="writing-preview-user">{{ data.writingPreview.userPrompt }}</pre>
+              </template>
+              <p v-else class="nx-writing-preview-wait">正在读取最近一次请求…</p>
+            </div>
+          </div>
         </div>
         <p v-if="data.writingError" class="nx-writing-error" data-test="writing-error">{{ data.writingError }}</p>
+        <!-- 审查本章（批次46A）：摘要／问题／动作三层，问题可「转改写」；
+             结果不落正文、不进会话存储——这一栏收起就没了。 -->
+        <div v-if="reviewBusy || data.reviewResult || data.reviewError" class="nx-review" data-test="review-panel">
+          <div v-if="reviewBusy" class="nx-review-busy" role="status" data-test="review-busy">正在审查本章…</div>
+          <template v-else-if="data.reviewResult">
+            <div class="nx-review-head">
+              <span class="nx-review-label">本章审查</span>
+              <button type="button" class="control-quiet nx-review-close" data-test="review-discard" @mousedown.prevent @click="data.discardReview()">收起</button>
+            </div>
+            <p v-if="data.reviewResult.summary" class="nx-review-summary" data-test="review-summary">{{ data.reviewResult.summary }}</p>
+            <ol v-if="data.reviewResult.issues.length" class="nx-review-issues">
+              <li v-for="(issue, index) in data.reviewResult.issues" :key="`${issue.message}-${index}`" class="nx-review-issue" data-test="review-issue">
+                <span class="nx-review-severity" :class="`is-${issue.severity}`">{{ severityLabel(issue.severity) }}</span>
+                <span class="nx-review-issue-text">{{ issue.message }}</span>
+                <button type="button" class="control-quiet nx-review-rewrite" data-test="review-issue-rewrite" @mousedown.prevent @click="reviewIssueToRewrite(issue)">转改写</button>
+              </li>
+            </ol>
+            <ul v-if="data.reviewResult.actions.length" class="nx-review-actions">
+              <li v-for="(action, index) in data.reviewResult.actions" :key="`${action}-${index}`" data-test="review-action">{{ action }}</li>
+            </ul>
+          </template>
+          <p v-if="data.reviewError" class="nx-writing-error nx-review-error" data-test="review-error">{{ data.reviewError }}</p>
+        </div>
         <!-- 底部只留作者用得上的信息（批次43）：有没有没落盘的改动、是不是只载入了前段。
              路径 · 第 N 版 · N 字 这些是开发者信息，作者看不见也不需要（作者 2026-10-31）。 -->
         <p v-if="chapterPending || data.chapter.truncated" class="doc-meta-hint">

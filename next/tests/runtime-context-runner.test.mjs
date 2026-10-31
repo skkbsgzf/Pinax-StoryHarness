@@ -13,6 +13,7 @@ import { AGENT_CONTEXT_PROFILES } from '../../shared/agentContextProfiles.js'
 import { validateAgentContextEnvelope } from '../../shared/agentContextContract.js'
 import { buildRuntimeEnvelope, readOnlyProfiles, readOnlyTaskForProfile } from '../runtime/contextProfiles.mjs'
 import { createAdvisorRunner, ADVISOR_RUNNER_SOURCE } from '../runtime/runnerAdvisor.mjs'
+import { CHAPTER_REVIEW_QUESTION } from '../shell/useBoardData.mjs'
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**
@@ -126,6 +127,27 @@ test('信封由载体块拼成：五块齐、优先级按档案顺序、过的�
     assert.ok(refs.some((ref) => ref.startsWith('worldbook:世界书/')))
     assert.ok(refs.some((ref) => ref.startsWith('novel-chapter:正文/')))
     assert.ok(refs.some((ref) => ref.startsWith('outline:大纲/')))
+  } finally {
+    await target.workspace.cleanup()
+  }
+})
+
+test('审查本章的固定问句走同一份 writing-chapter 信封：正文/约束/文风/大纲/世界书都在，任务号仍是 authoring.review.chapter', async () => {
+  const target = await materialProject('ctx-review-question')
+  try {
+    const built = await buildRuntimeEnvelope({
+      registry: target.registry,
+      view: target.view,
+      fileService: target.fileService,
+      question: CHAPTER_REVIEW_QUESTION
+    })
+    assert.equal(built.ok, true, JSON.stringify(built.error ?? {}))
+    assert.equal(built.value.taskType, 'authoring.review.chapter', '审查本章不另造任务号')
+    const kinds = built.value.envelope.blocks.map((block) => block.kind)
+    for (const kind of ['selection', 'rules', 'style', 'outline', 'worldbook']) {
+      assert.ok(kinds.includes(kind), `审查信封里应有「${kind}」块：${kinds.join('/')}`)
+    }
+    assert.ok(built.value.envelope.blocks.some((block) => block.kind === 'selection' && block.sourceRefs?.some((ref) => ref.startsWith('novel-chapter:正文/'))), '审查看的就是正文那一份字节')
   } finally {
     await target.workspace.cleanup()
   }

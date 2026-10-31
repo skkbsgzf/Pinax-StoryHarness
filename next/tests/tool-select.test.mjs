@@ -14,6 +14,8 @@ const NAMES = [
   'pinax_outline_save',
   'pinax_chapter_read',
   'pinax_chapter_save',
+  'pinax_chapter_delete',
+  'pinax_chapter_rename',
   'pinax_worldbook_read',
   'pinax_worldbook_save',
   'pinax_rule_save',
@@ -42,13 +44,22 @@ test('写意图 + 大纲域：只披露大纲的写工具，其余给读工具',
   const result = selectTools({ tools: TOOLS, intent: '把大纲第二卷的支线合并一下' })
   assert.ok(result.names.includes('pinax_outline_save'))
   assert.ok(result.names.includes('pinax_outline_read'))
-  assert.ok(result.names.filter((name) => /_save$|_write$|_import$/u.test(name)).length <= 2)
+  assert.ok(result.names.filter((name) => /_(save|write|import|delete|rename)$/u.test(name)).length <= 2)
   assert.ok(result.names.length <= TOOL_SELECT_LIMIT)
 })
 
 test('没有写意图：一把写工具都不披露', () => {
   const result = selectTools({ tools: TOOLS, intent: '大纲现在长什么样' })
-  assert.equal(result.names.filter((name) => /_save$|_write$|_import$/u.test(name)).length, 0)
+  assert.equal(result.names.filter((name) => /_(save|write|import|delete|rename)$/u.test(name)).length, 0)
+})
+
+test('删章／改名也是写工具（批次46A）：写意图落在章节域时一并披露，不再被当成读工具', () => {
+  const result = selectTools({
+    tools: [{ name: 'pinax_chapter_read' }, { name: 'pinax_chapter_delete' }, { name: 'pinax_chapter_rename' }],
+    intent: '删掉这一章，再给下一章改个名'
+  })
+  assert.ok(result.names.includes('pinax_chapter_delete'), JSON.stringify(result.names))
+  assert.ok(result.names.includes('pinax_chapter_rename'), JSON.stringify(result.names))
 })
 
 test('上限硬封顶，多出来的记 limit', () => {

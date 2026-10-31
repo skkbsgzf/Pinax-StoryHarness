@@ -1,10 +1,11 @@
-import { mkdir, readFile, readdir, stat, unlink } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, stat, unlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { fail, ok } from '../kernel/errors.mjs'
 import { canPerform } from '../kernel/scopeGrant.mjs'
 import { recoverInterruptedWrites, TMP_PREFIX, writeFileAtomic } from './atomicWrite.mjs'
 import { assertNoSymlinkEscape, joinContained } from './projectPath.mjs'
+import { snapshotBeforeDestructive } from '../history/gitHistory.mjs'
 
 /**
  * 唯一写盘出口（WP2）。所有插件的文件操作都必须过这三道闸：
@@ -25,7 +26,7 @@ const PROPOSALS_DIR = join('.pinax', 'proposals')
 /** 提案状态只认这三档：运行时写出来的是 proposed，采纳与弃用各占一档。 */
 const PROPOSAL_STATUSES = Object.freeze(['proposed', 'adopted', 'discarded'])
 
-export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
+export function createFileService({ root, registry, fsImpl, onWrite, snapshot = snapshotBeforeDestructive } = {}) {
   const projectRoot = resolve(String(root || '.'))
   const io = {
     readFile: fsImpl?.readFile || readFile,
@@ -33,6 +34,7 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
     stat: fsImpl?.stat || stat,
     readdir: fsImpl?.readdir || readdir,
     unlink: fsImpl?.unlink || unlink,
+    rename: fsImpl?.rename || rename,
     atomicWrite: fsImpl?.writeFileAtomic || writeFileAtomic,
     recover: fsImpl?.recover || recoverInterruptedWrites,
     realpath: fsImpl?.realpath,
@@ -140,6 +142,93 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
         if (!persisted.ok) return persisted
         await notifyWrite({ relativePath: located.value.relativePath, revision })
         return ok({ relativePath: located.value.relativePath, revision, sha256: sha256(text), bytes: Buffer.byteLength(text, 'utf-8') })
+      })
+    },
+
+    /**
+     * 受控删除（批次46A）：归属闸／作用域闸照旧，多一道「删前强制快照」。
+     * 不做回收站：历史快照就是安全网，快照失败即中止，磁盘一个字节不动。
+     * 有未审提案（status:'proposed'）指向这一章时拒删，提示里点名提案文件名。
+     */
+    async deleteFile({ pluginId, dir, file } = {}) {
+      const located = await locate({ pluginId, dir, file })
+      if (!located.ok) return located
+      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir: located.value.ownerDir, mode: 'write' })
+      if (!grant.ok) return grant
+      const relativePath = located.value.relativePath
+
+      return service.enqueue(async () => {
+        const exists = await io.stat(located.value.targetFile).then((info) => info.isFile(), () => false)
+        if (!exists) return fail('INVALID_INPUT', `文件不存在：${relativePath}`, { path: relativePath })
+        const blocked = await pendingProposalsFor(relativePath)
+        if (!blocked.ok) return blocked
+        if (blocked.value.length) return proposalBlocked(relativePath, blocked.value, '删除')
+        const taken = await takeSnapshot(relativePath, '删除')
+        if (!taken.ok) return taken
+        try {
+          await io.unlink(located.value.targetFile)
+        } catch (error) {
+          if (error?.code === 'ENOENT') return fail('INVALID_INPUT', `文件不存在：${relativePath}`, { path: relativePath })
+          return fail('IO_FAILED', `删除失败：${relativePath}`, { cause: String(error?.message || error) })
+        }
+        revisions.delete(relativePath)
+        const persisted = await saveRevisions()
+        if (!persisted.ok) return persisted
+        await notifyWrite({ relativePath, revision: 0, deleted: true })
+        return ok({ relativePath, deleted: true })
+      })
+    },
+
+    /**
+     * 受控改名（批次46A）：只改同一目录下的文件名（含 001- 前缀的调整），
+     * 跨目录移动／拖拽排序本批不做——新名字带路径分隔符一律拒，不猜作者想搬到哪。
+     * 与删除同一套安全网：有未审提案指向旧路径即拒；快照失败即中止；
+     * 修订号账本按「盘为准」迁到新路径（新文件从旧路径那一版接着记）。
+     */
+    async renameFile({ pluginId, dir, file, nextFile } = {}) {
+      const located = await locate({ pluginId, dir, file })
+      if (!located.ok) return located
+      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir: located.value.ownerDir, mode: 'write' })
+      if (!grant.ok) return grant
+      const relativePath = located.value.relativePath
+      const name = String(nextFile ?? '').trim()
+      const checked = checkRenameName(name)
+      if (!checked.ok) return checked
+      const parent = dirname(relativePath).replaceAll('\\', '/')
+      if (!parent || parent === '.' || parent === '..') {
+        return fail('INVALID_INPUT', `不能改项目根上的文件：${relativePath}`, { path: relativePath })
+      }
+      const nextLocated = await locate({ pluginId, dir: parent, file: name })
+      if (!nextLocated.ok) return nextLocated
+      const nextPath = nextLocated.value.relativePath
+      if (nextPath === relativePath) return fail('INVALID_INPUT', `新旧文件名相同：${relativePath}`, { path: relativePath })
+
+      return service.enqueue(async () => {
+        const exists = await io.stat(located.value.targetFile).then((info) => info.isFile(), () => false)
+        if (!exists) return fail('INVALID_INPUT', `文件不存在：${relativePath}`, { path: relativePath })
+        const occupied = await io.stat(nextLocated.value.targetFile).then(() => true, () => false)
+        if (occupied) {
+          return fail('INVALID_INPUT', `目标文件名已存在：${nextPath}`, { path: relativePath, nextPath })
+        }
+        const blocked = await pendingProposalsFor(relativePath)
+        if (!blocked.ok) return blocked
+        if (blocked.value.length) return proposalBlocked(relativePath, blocked.value, '改名')
+        const revision = await adoptRevision(relativePath)
+        const taken = await takeSnapshot(relativePath, '改名')
+        if (!taken.ok) return taken
+        try {
+          await io.rename(located.value.targetFile, nextLocated.value.targetFile)
+        } catch (error) {
+          if (error?.code === 'ENOENT') return fail('INVALID_INPUT', `文件不存在：${relativePath}`, { path: relativePath })
+          return fail('IO_FAILED', `改名失败：${relativePath} → ${nextPath}`, { cause: String(error?.message || error) })
+        }
+        revisions.delete(relativePath)
+        if (revision > 0) revisions.set(nextPath, revision)
+        const persisted = await saveRevisions()
+        if (!persisted.ok) return persisted
+        await notifyWrite({ relativePath, revision: 0, deleted: true })
+        await notifyWrite({ relativePath: nextPath, revision })
+        return ok({ relativePath: nextPath, previousPath: relativePath, revision, renamed: true })
       })
     },
 
@@ -465,11 +554,91 @@ export function createFileService({ root, registry, fsImpl, onWrite } = {}) {
     return 1
   }
 
+  /**
+   * 待审提案保护（批次46A）：两轨通拦——MCP 内容提案（status:'proposed'）与 agent
+   * 工具调用提案（writePolicy review 档经 proposalStore 落盘，status:'pending'），
+   * 只要还没变成已采纳／已弃用的留痕就拦。路径 MCP 轨在 target.file，agent 轨在
+   * args.file（原始参数不补默认值）。坏 JSON 与纯文本提案跳过：它们本来就不能被
+   * 采纳，不构成本章的未决改动。
+   */
+  async function pendingProposalsFor(relativePath) {
+    const dir = join(projectRoot, PROPOSALS_DIR)
+    let entries
+    try {
+      entries = await io.readdir(dir, { withFileTypes: true })
+    } catch (error) {
+      if (error?.code === 'ENOENT') return ok([])
+      return fail('IO_FAILED', '读取提案目录失败：.pinax/proposals', { cause: String(error?.message || error) })
+    }
+    const names = []
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name.startsWith(TMP_PREFIX) || !/\.json$/iu.test(entry.name)) continue
+      let parsed
+      try {
+        parsed = JSON.parse(await io.readFile(join(dir, entry.name), 'utf-8'))
+      } catch {
+        continue
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+      const status = String(parsed.status ?? '')
+      if (status === 'adopted' || status === 'discarded') continue
+      const targets = [parsed.target?.file, parsed.args?.file]
+      const hit = targets.some((value) => String(value ?? '').replaceAll('\\', '/') === relativePath)
+      if (!hit) continue
+      names.push(entry.name)
+    }
+    names.sort()
+    return ok(names)
+  }
+
+  /** 破坏性操作前的强制快照：调用方注入的快照器失败（含历史仓库不可用）即中止。 */
+  async function takeSnapshot(relativePath, verb) {
+    let result
+    try {
+      result = await snapshot({ root: projectRoot, paths: [relativePath] })
+    } catch (error) {
+      return fail('IO_FAILED', `「${relativePath}」${verb}前的快照失败，已中止：${String(error?.message || error)}`, { path: relativePath })
+    }
+    if (!result?.ok) {
+      const reason = result?.error?.message ?? '历史快照不可用'
+      return fail('IO_FAILED', `「${relativePath}」${verb}前的快照失败，已中止：${reason}`, {
+        path: relativePath,
+        cause: result?.error ?? null
+      })
+    }
+    return ok({ committed: Boolean(result.value?.committed), oid: result.value?.oid ?? null })
+  }
+
   return service
 }
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf-8').digest('hex')
+}
+
+/** 待审提案拦下删除/改名时的统一失败载荷（点名提案文件名，作者知道该先处理哪几份）。 */
+function proposalBlocked(relativePath, names, verb) {
+  return fail('INVALID_INPUT', `「${relativePath}」还有 ${names.length} 份未审提案（${names.join(' / ')}）：先采纳或弃用，再${verb}`, {
+    path: relativePath,
+    proposals: names
+  })
+}
+
+/**
+ * 改名的新文件名形状：本批只做「同目录换名」，所以拒一切路径分隔符与目录穿越。
+ * 允许中文、空格、连字符与 001- 前缀调整；隐藏文件名（点开头）与超长名拒。
+ */
+function checkRenameName(name) {
+  if (!name) return fail('INVALID_INPUT', '改名要给新文件名')
+  if (name.length > 200) return fail('INVALID_INPUT', '新文件名过长', { length: name.length })
+  if (name.includes('/') || name.includes('\\')) {
+    return fail('INVALID_INPUT', `本批只支持同目录改名：新文件名不许带路径分隔符（${name}）`, { name })
+  }
+  if (name === '.' || name === '..' || name.startsWith('.')) {
+    return fail('INVALID_INPUT', `新文件名不合法：${name}`, { name })
+  }
+  if (/\p{Cc}/u.test(name)) return fail('INVALID_INPUT', '新文件名含控制字符', { name })
+  return ok(name)
 }
 
 /**

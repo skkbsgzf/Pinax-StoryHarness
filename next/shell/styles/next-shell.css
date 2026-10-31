@@ -1138,6 +1138,13 @@ input.doc-title {
   opacity: 0.55;
   cursor: not-allowed;
 }
+/* 章节菜单两步删除的说明（批次46A）：与菜单同皮，讲清「删了从哪找回」。 */
+.nx-context-hint {
+  margin: 2px 8px 4px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
 .nx-context-mark {
   color: var(--accent);
 }
@@ -1312,3 +1319,97 @@ input.doc-title {
   line-height: 1.7;
   color: var(--signal-warm);
 }
+/* 参考块清单与提示词预览（批次46A）：都用淡痕级字号——它们是这一问的旁注，不是第二份正文。 */
+.nx-writing-refs {
+  margin: 6px 0 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.nx-writing-preview { margin: 4px 0 0; }
+.nx-writing-preview-toggle {
+  padding: 2px 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-preview-toggle:hover { color: var(--archive-ink); }
+.nx-writing-preview-body {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+}
+.nx-writing-preview-label {
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-preview-text {
+  margin: 2px 0 8px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--archive-ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.nx-writing-preview-text:last-child { margin-bottom: 0; }
+.nx-writing-preview-error { margin: 0; }
+.nx-writing-preview-wait {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-review {
+  padding: 3px 8px;
+  color: var(--text-secondary);
+}
+.nx-writing-review:hover:not(:disabled) { color: var(--archive-ink); }
+/* 审查卡片（批次46A）：与写作结果同一档「面板」——一条上细线，正文仍是这页纸的主角。 */
+.nx-review {
+  margin: 4px 20px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.nx-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.nx-review-label { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.nx-review-busy { font-size: var(--nx-fs-2xs); color: var(--accent); }
+.nx-review-summary {
+  margin: 6px 0 0;
+  font-size: var(--nx-fs-md);
+  line-height: 1.8;
+  color: var(--archive-ink-soft);
+}
+.nx-review-issues,
+.nx-review-actions {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+.nx-review-issue {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 2px;
+}
+.nx-review-issue-text { flex: 1 1 auto; min-width: 0; }
+.nx-review-severity {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: var(--radius-control);
+  background: var(--hairline-soft);
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-review-severity.is-high { color: var(--signal-warm); }
+.nx-review-rewrite { flex: 0 0 auto; padding: 0 6px; color: var(--text-secondary); }
+.nx-review-rewrite:hover { color: var(--archive-ink); }
+.nx-review-error { margin-left: 0; }

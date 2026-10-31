@@ -80,16 +80,64 @@ npm run verify:next        # 五段全绿；acceptance 计数同步后 39/24
 ## §7 执行方回填（执行完成后填写）
 
 ### 交付清单
-（改了什么文件、每项任务落点、新增测试清单）
+
+**任务① 章节管理**
+
+- `next/fs/fileService.mjs`：新增受控 `deleteFile({pluginId, dir, file})`／`renameFile({pluginId, dir, file, nextFile})`。归属闸（DIR_CONFLICT）与 `canPerform(..., {type:'file', dir, mode:'write'})` 照旧；操作前经注入的 `snapshotBeforeDestructive` 落一次历史快照，失败即中止（`PINAX_IO_FAILED`，正文与修订账一个字节不动）；`.pinax/proposals/` 里 status=proposed 且 target.file 指向目标章时拒删／拒改名，错误 details 带提案文件名；修订账删除即移除、改名即迁移到新路径；rename 只收同目录文件名（跨目录拒），空名／`.`／`..`／隐藏名／同名／已存在都拒。
+- `next/history/gitHistory.mjs`：只把既有 `snapshotBeforeDestructive` 作为 fileService 的默认快照口（提交语义未改；删除／改名后由下一次定时提交自然记账）。
+- `next/carriers/novel/manifest.mjs`＋`next/carriers/novel/tools.mjs`：新增 `pinax_chapter_delete`（args: file）与 `pinax_chapter_rename`（args: file, title｜nextFile）。title 不带排序前缀，工具按原文件 `NNN-` 前缀生成新名；显式带 `001-` 这类前缀的 title 如实拒绝。`readOnlyHint:false`，走 fileService 同一套闸。
+- `next/runtime/kernelWriteGuard.mjs`：`CARRIER_WRITE_CLASS` 加两行（dir: '正文'）。
+- `next/runtime/toolSelect.mjs`：写工具披露正则扩为 `/(_save|_write|_import|_delete|_rename)$/`，删／改名不再被当成读工具。
+- `next/shell/IndexWindow.vue`：章节行右键菜单四项——删除（两步确认，历史快照即安全网）、重命名（行内输入，Enter 提交／Esc 取消／失焦取消，照批次33）、上移、下移（相邻两章交换 NNN- 前缀＝两次 renameFile；同号冲突原样报错）。边界项置灰。
+- `next/shell/useBoardData.mjs`：`deleteChapter`／`renameChapter`／`moveChapter` 接上述工具；删当前章前先收自动保存，删／改名后重读章节树。
+- `next/testing/acceptance.mjs`：M2 工具面计数 37→39、carrierTools 22→24，名字枚举与理由随批次46A 更新。
+- 测试：`next/tests/file-service.test.mjs`（快照前置／失败中止／未审提案拒／修订账清理与迁移／跨目录与非法名）、`next/tests/carrier-novel.test.mjs`（两把工具形状、前缀保留、带前缀拒、nextFile 换名、跨目录拒、删前快照、提案保护）、`next/tests/tool-select.test.mjs`（删／改名按写工具披露）、`next/tests/chapter-menu.spec.mjs`（四项菜单、两步删除、行内重命名、边界置灰与换前缀调用）、`next/tests/runtime-inprocess.test.mjs`＋`next/tests/skeleton-contract.test.mjs`（载体自有工具名单同步两把）。
+
+**任务② 审查本章**
+
+- `next/shell/useBoardData.mjs`：新增固定问句 `CHAPTER_REVIEW_QUESTION` 与 `reviewChapter()`／`discardReview()`。审查前先把未落盘改动送下去；本章只载入前段且未保存时拒审（不拿旧稿充数）；结果只存本栏内存（summary／issues／actions），不进会话存储、不动正文；换章／删章／过期回答用请求序号丢弃。
+- `next/shell/CarrierPaneHost.vue`：动作带加「审查本章」；结果卡渲染摘要、问题列表（高／中／低标签）与动作列表；每条问题「转改写」＝预填五动作的改写并带该问题描述为额外要求（选区保持现状，取不到就由作者手选）。
+- `next/shell/styles/next-shell.css`：审查卡与写作结果同档面板样式（上细线，无新配色）。
+- 测试：`next/tests/review-chapter.spec.mjs`（按钮走 runtimeAsk 固定问句、无 sessions 通道、卡片三层、转改写预填、收起不丢草稿）、`next/tests/runtime-context-runner.test.mjs`（固定问句走 writing-chapter 信封，带 rules/style/selection/outline/worldbook 块）。
+
+**任务③ 五动作信封升级＋提示词预览口**
+
+- `next/shell/writingActions.mjs`：参考块 kind→中文标签表（`REFERENCE_KIND_LABELS`／`referenceLabel`）与 `buildReferenceSection`；`buildWritingRequest` 增加可选 `references`，在【任务】之前并入【本书参考】段。五个动作的语义与提示词其余部分逐字不变。
+- `next/runtime/writingComplete.mjs`：请求时经注入的 `contextSources` 调 `buildRuntimeEnvelope`（与 ask 链同一组装口径），信封裁剪后的块按 kind 标注并入用户提示词；失败／缺项／零块时降级为批次41 的裸补全，结果返回 `degraded:true` 与 `referenceNote`（以「参考块缺席」开头），不硬失败；返回 `references:[{kind,chars}]` 与 `missingKinds`；留存最近一次请求的 system＋user，新增 `preview({root})` 只读口，跨项目拒给。
+- `next/shell/ipcContract.mjs`：新增只读通道 `writingPreview = 'pinax:agent:writing:last-preview'`；`runtimeComplete` 把当前项目根一并交给服务；预览通道只认当前项目根，未接入／未开项目如实报缺。
+- `next/shell/main.mjs`：`writingComplete` 注入 `contextSources`（取自 `session.runtime.contextSources()` 的 registry／view／fileService）。
+- `next/shell/useBoardData.mjs`：结果携带 `references`／`referenceNote`；新增 `writingPreview`／`writingPreviewError` 与按需 `loadWritingPreview()`；换章／重新发起／落位／丢弃时收回，过期回答丢弃。
+- `next/shell/CarrierPaneHost.vue`＋`next/shell/styles/next-shell.css`：结果卡显示参考块清单（kind＋字数）或缺席原话，并加「查看提示词」折叠层（系统提示词／用户提示词两段只读展示）。
+- 测试：`next/tests/writing-actions.test.mjs`（信封块并入形状与排序、references 清单、降级路径、预览服务与 IPC 通道三态）、`next/tests/writing-preview.spec.mjs`（参考清单、「查看提示词」按需拉取与收起、缺席原话、预览失败不白屏）。
 
 ### 门禁自报
-（build 体积、verify:next 五段计数）
+
+```
+npm run next:build:main && npm run next:build:shell
+- 主进程 bundle：1,711.12 kB；外壳 bundle：1,932.40 kB；preload：4.61 kB
+
+npm run verify:next
+- acceptance：20/20 通过；M2 聚合工具面 toolCount=39 carrierTools=24（5 接管＋19 自有）
+- node --test next/tests/*.test.mjs：529 测试，529 通过，0 失败
+- vitest next shell：10 个文件、168 测试全过
+- lint:next：0 error / 0 warning
+- bundleAssertions：全部通过（主进程 1,729.6 kB < 6 MB；外壳 1,962.6 kB < 2.5 MB；渲染层 js 989.2 kB）
+```
 
 ### 偏离
-（与工单不一致处，逐条给理由；没写＝无偏离）
+
+1. `pinax_chapter_rename` 在工单的 `title` 之外多收一个 `nextFile`（整名形式，与 title 二选一）。原因：上移／下移的本意是「交换相邻两章的 NNN- 前缀」，若只让界面拼 title，工具会按各自原前缀生成同名／错名；由界面传完整新文件名最不容易错。`nextFile` 只收同目录文件名、模型侧描述里明确标为界面排序专用，删除／改名其余闸不变。
+2. 审查卡的动作列表把 `review-suggestions.v1` 的 `typedActions` 与 `action` 合并去重后展示（各取最多 8 条），只做展示层归一，不改合同与任务号。
+3. 五动作参考块的检索问句用「作者额外要求＋选中段／光标附近 400 字」，上限 2000 字；这是块提供者打分用的问句，不进最终提示词的【任务】段。
+4. 提示词预览通道名取 `pinax:agent:writing:last-preview`（工单示例为 `writing:last-preview`），归入既有 `pinax:agent:*` 命名空间。
 
 ### limitations
-（没做的、没验证的，如实列）
+
+- 未做真模型调用：本机无模型面凭据，审查本章与五动作的真实模型输出未跑；已覆盖信封组装、失败／降级路径与界面契约。真数据端到端按工单 §8 由调度方接管。
+- 未启动 electron 窗口（工单禁止），IPC 与折叠层只在 dispatcher 单测与 jsdom 组件测试里验证，未做真机窗口端到端。
+- 上移／下移只换相邻两章的 NNN 前缀；两章同号或无前缀时改名冲突会如实报错，不自动寻找空号。
+- 提示词预览只留最近一次请求，不做历史列表，也不实时刷新（与老线 PromptPreviewPanel 的「作者可见」语义一致）。
+- 审查结果不落会话存储；关闭／收起后无法回看，只能重跑（工单口径）。
 
 ## §8 调度方验收（Zcode 填，执行方不要动本节）
 

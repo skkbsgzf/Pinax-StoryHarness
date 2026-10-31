@@ -127,6 +127,23 @@ export async function commitSnapshot({ root, message } = {}) {
   return withRootLock(rootPath, () => commitLocked(rootPath, message))
 }
 
+/**
+ * 删除／改名前的强制快照（批次46A）：先把目标标脏，再走 commit-now 同一条提交路径。
+ * 为什么必须先标脏：commitSnapshot 只在脏清单非空时提交；不标脏就可能返回
+ * `{committed:false, reason:'clean'}`，等于「以为存了、其实没存」。
+ *
+ * 这不是新的一套快照语义——提交内容仍由 commitLocked 按允许前缀整树决定，
+ * 这里只把「删／改之前先把当前内容落一版」做成一次明确的调用。
+ * 仓库不可用／提交失败时返回 ok:false，调用方（fileService）据此中止破坏性操作。
+ */
+export async function snapshotBeforeDestructive({ root, paths = [], message = '删除／改名前快照' } = {}) {
+  if (Array.isArray(paths) && paths.some((item) => typeof item === 'string' && item.trim())) {
+    const marked = await markDirty({ root, paths })
+    if (!marked.ok) return marked
+  }
+  return commitSnapshot({ root, message })
+}
+
 /** 列某文件的提交历史（新→旧）。未纳入版本化的路径返回空数组，由调用方显示「无历史」。 */
 export async function listFileHistory({ root, path, limit } = {}) {
   const resolved = await resolveProjectRoot(root)

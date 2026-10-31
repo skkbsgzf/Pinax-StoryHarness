@@ -2495,8 +2495,8 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     const dragWidth = Number(/width:\s*(\d+)px/u.exec(wrapper.find('.nx-split-side').attributes('style') ?? '')?.[1] ?? 0)
     expect(dragWidth).toBe(sideWidth + 100)
 
-    // 索引窗树行右键：同一枚宿主菜单（切回小说板，树里才有章节行）。
-    // 批次31 起大纲行例外——它先开「节点」菜单（见大纲那一条用例），打开方式在竖条右键照旧可达。
+    // 索引窗章节行右键（批次46A）：先开章节菜单（删除／重命名／上移／下移），不再走打开方式。
+    // 打开方式仍从竖条右键进——同一枚宿主菜单的形态列表照旧。
     const novelRail = railByName(wrapper, '小说（夹具）')
     expect(novelRail, '竖条应有小说栏').toBeTruthy()
     // 先切到大纲板（索引窗此刻是开着的），再切回小说板——这样点的是「换板」不是「收起索引窗」。
@@ -2508,6 +2508,18 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(row.exists()).toBe(true)
     row.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
     await flushPromises()
+    const chapterMenu = wrapper.find('.nx-chapter-menu')
+    expect(chapterMenu.exists()).toBe(true)
+    expect(chapterMenu.findAll('[data-form]')).toHaveLength(0)
+    expect(chapterMenu.text()).toContain('删除')
+    expect(chapterMenu.text()).toContain('重命名')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.nx-chapter-menu').exists()).toBe(false)
+
+    // 打开方式菜单仍从竖条右键进（同一枚宿主菜单的形态列表）。
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
+    await flushPromises()
     const rowMenu = wrapper.find('.nx-context-menu')
     expect(rowMenu.exists()).toBe(true)
     expect(rowMenu.findAll('[data-form]').map((node) => node.attributes('data-form'))).toEqual(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
@@ -2516,7 +2528,7 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
 
     // 点菜单外也收起（同一枚宿主菜单的手势纪律）。
-    row.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
+    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
     await flushPromises()
     expect(wrapper.find('.nx-context-menu').exists()).toBe(true)
     document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))

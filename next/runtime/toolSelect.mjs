@@ -30,7 +30,9 @@ const DOMAINS = Object.freeze([
   { id: 'reference', intent: /资料|素材|归档/iu, tool: /document|reference|knowledge/iu }
 ])
 
-const WRITE_TOOL = /(_save|_write|_import)$/u
+// 写工具披露（批次46A 扩）：保存／写入／导入之外，删章与改名也是写盘动作——
+// 不披露它们，模型在「删掉这一章」这类请求里会拿到读工具而没法落地写策略。
+const WRITE_TOOL = /(_save|_write|_import|_delete|_rename)$/u
 const READ_TOOL = /(_read|_list|_search|_status|_context)$/u
 
 function clampLimit(limit) {

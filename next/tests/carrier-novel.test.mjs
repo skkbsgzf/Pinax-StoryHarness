@@ -10,6 +10,7 @@ import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { setCarrierEnabled } from '../project/carriers.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
+import { ensureHistoryRepo } from '../history/gitHistory.mjs'
 import { kernelToolNames, toolOwnershipReport } from '../runtime/mcpSurface.mjs'
 import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER, NOVEL_CARRIER_ID } from '../carriers/index.mjs'
 import { NOVEL_TOOL_NAMES } from '../carriers/novel/tools.mjs'
@@ -56,12 +57,12 @@ test('真清单过内核校验：小说只认领 正文/，认领的都是内核
   assert.deepEqual(NOVEL_CARRIER.contributes.panes.map((pane) => pane.id), ['novel.shelf', 'novel.editor'])
 })
 
-test('工具面聚合：启用小说后面是 23 个工具，两个只读名归属载体，声明无实现的绝不虚列', async () => {
+test('工具面聚合：启用小说后面是 25 个工具，两个只读名归属载体，声明无实现的绝不虚列', async () => {
   const { workspace, registry, runtime } = await novelProject('carrier-surface')
   try {
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 24, '19 内核 ＋ 技能读取一把 ＋ 载体自有四把（正文 pinax_chapter_save 与提案三把）；两个认领名不虚增面')
+    assert.equal(started.value.toolCount, 26, '19 内核 ＋ 技能读取一把 ＋ 载体自有六把（正文 save／delete／rename 与提案三把）；两个认领名不虚增面')
     assert.equal(started.value.aggregatedSurface, true)
     assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...NOVEL_TOOL_NAMES].sort())
 
@@ -79,7 +80,7 @@ test('工具面聚合：启用小说后面是 23 个工具，两个只读名归�
     const report = toolOwnershipReport(registry)
     assert.equal(report.claimed.length, 5, '小说 2 把只读 ＋ 大纲 1 把只读 ＋ 世界书 2 把只读（认领面按已安装的清单算，不看启用开关）')
     assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须往下走')
-    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search', 'pinax_material_list', 'pinax_material_read', 'pinax_material_save', 'pinax_material_remove', 'pinax_comic_list', 'pinax_comic_read', 'pinax_comic_save', 'pinax_comic_remove', 'pinax_video_list', 'pinax_video_read', 'pinax_video_save', 'pinax_video_remove', 'pinax_experience_list', 'pinax_experience_read', 'pinax_experience_save', 'pinax_experience_remove', 'pinax_online_list', 'pinax_online_read', 'pinax_online_save', 'pinax_online_remove'], '十二载体自有名字：正文写口＋提案三把（小说）、大纲写半边、构思这对、世界书写口、剧本三条（批次26）、约束这对、资料三把＋检索、M4/M5 五块记录载体各四把（断言同步）')
+    assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search', 'pinax_material_list', 'pinax_material_read', 'pinax_material_save', 'pinax_material_remove', 'pinax_comic_list', 'pinax_comic_read', 'pinax_comic_save', 'pinax_comic_remove', 'pinax_video_list', 'pinax_video_read', 'pinax_video_save', 'pinax_video_remove', 'pinax_experience_list', 'pinax_experience_read', 'pinax_experience_save', 'pinax_experience_remove', 'pinax_online_list', 'pinax_online_read', 'pinax_online_save', 'pinax_online_remove'], '十二载体自有名字：正文写口＋删／改两把＋提案三把（小说，批次46A）、大纲写半边、构思这对、世界书写口、剧本三条（批次26）、约束这对、资料三把＋检索、M4/M5 五块记录载体各四把（断言同步）')
     assert.deepEqual(report.withoutImplementation, [], '小说声明的名字都得有实现')
   } finally {
     await runtime.stop()
@@ -339,7 +340,7 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
   })
   try {
     await runtime.start()
-    assert.equal(runtime.listTools().length, 24, '19 内核 ＋ 技能读取 1 ＋ 小说自有 4（停用后回落内核：只剩内核＋技能读取）')
+    assert.equal(runtime.listTools().length, 26, '19 内核 ＋ 技能读取 1 ＋ 小说自有 6（停用后回落内核：只剩内核＋技能读取）')
     assert.ok(opened.value.view.enabled.includes(NOVEL_CARRIER_ID))
 
     const disabled = await setCarrierEnabled({ root, registry, pluginId: NOVEL_CARRIER_ID, enabled: false, expectedRevision: opened.value.document.carriers.revision })
@@ -374,6 +375,102 @@ test('没有项目（view 为空）时面就是内核 19 工具＋技能读取�
   assert.equal(started.value.aggregatedSurface, false)
   assert.deepEqual(runtime.surfaceInfo().carrierToolNames, [])
   await runtime.stop()
+})
+
+test('章节改名（批次46A）：title 保留原前缀；带前缀的 title 拒；nextFile 供排序换名，跨目录拒', async () => {
+  const { workspace, root, runtime } = await novelProject('carrier-rename')
+  try {
+    await ensureHistoryRepo({ root })
+    await runtime.start()
+    const created = await runtime.callTool('pinax_chapter_save', { title: '第001章-入场', text: '入场。', expectedRevision: 0 })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+
+    const renamed = await runtime.callTool('pinax_chapter_rename', { file: '正文/第001章-入场.md', title: '入场·修订' })
+    assert.equal(renamed.value.payload.ok, true, JSON.stringify(renamed.value.payload))
+    // 「第001章-入场」不是 003- 那类排序前缀：tool 不凭空加前缀，新名字就是标题本身。
+    assert.equal(renamed.value.payload.file, '正文/入场·修订.md')
+    assert.equal(renamed.value.payload.previousFile, '正文/第001章-入场.md')
+    assert.equal(renamed.value.payload.revision, 1)
+    assert.equal(await readFile(join(root, '正文', '入场·修订.md'), 'utf-8'), '入场。')
+
+    // 已有 NNN- 前缀的章节：改名保留原前缀（序号不归改名管）。
+    await runtime.callTool('pinax_chapter_save', { file: '正文/007-倒带.md', text: '倒带。', expectedRevision: 0 })
+    const keptPrefix = await runtime.callTool('pinax_chapter_rename', { file: '正文/007-倒带.md', title: '倒带·改' })
+    assert.equal(keptPrefix.value.payload.ok, true, JSON.stringify(keptPrefix.value.payload))
+    assert.equal(keptPrefix.value.payload.file, '正文/007-倒带·改.md')
+
+    // 读回：新名字就是唯一的定位，旧名字找不到。
+    const read = await runtime.callTool('pinax_chapter_read', { file: '正文/入场·修订.md' })
+    assert.equal(read.value.payload.revision, 1)
+    assert.equal((await runtime.callTool('pinax_chapter_read', { file: '正文/第001章-入场.md' })).value.payload.ok, false)
+
+    // 显式带 001- 前缀的 title 一律拒（序号调整走界面上的上移／下移）。
+    const prefixed = await runtime.callTool('pinax_chapter_rename', { file: '正文/入场·修订.md', title: '001-偷偷换号' })
+    assert.equal(prefixed.value.payload.ok, false)
+    assert.equal(prefixed.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.match(prefixed.value.payload.message, /不要带排序前缀/)
+
+    // nextFile：界面排序用的整名形式，只收同目录文件名。
+    const swapped = await runtime.callTool('pinax_chapter_rename', { file: '正文/入场·修订.md', nextFile: '003-入场·修订.md' })
+    assert.equal(swapped.value.payload.ok, true, JSON.stringify(swapped.value.payload))
+    assert.equal(swapped.value.payload.file, '正文/003-入场·修订.md')
+
+    const crossDir = await runtime.callTool('pinax_chapter_rename', { file: '正文/003-入场·修订.md', nextFile: '第一卷/003-入场·修订.md' })
+    assert.equal(crossDir.value.payload.ok, false)
+    assert.equal(crossDir.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    const both = await runtime.callTool('pinax_chapter_rename', { file: '正文/003-入场·修订.md', title: '甲', nextFile: '004-甲.md' })
+    assert.equal(both.value.payload.ok, false, 'title 与 nextFile 二选一')
+    const neither = await runtime.callTool('pinax_chapter_rename', { file: '正文/003-入场·修订.md' })
+    assert.equal(neither.value.payload.ok, false)
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
+})
+
+test('章节删除（批次46A）：删前快照成功才删；有未审提案指向本章时拒删并点名', async () => {
+  const { workspace, root, runtime, opened } = await novelProject('carrier-delete')
+  try {
+    await ensureHistoryRepo({ root })
+    await runtime.start()
+    const created = await runtime.callTool('pinax_chapter_save', { title: '第001章-入场', text: '入场。', expectedRevision: 0 })
+    assert.equal(created.value.payload.ok, true, JSON.stringify(created.value.payload))
+
+    const deleted = await runtime.callTool('pinax_chapter_delete', { file: '正文/第001章-入场.md' })
+    assert.equal(deleted.value.payload.ok, true, JSON.stringify(deleted.value.payload))
+    assert.equal(deleted.value.payload.deleted, true)
+    assert.equal(await readFile(join(root, '正文', '第001章-入场.md'), 'utf-8').then(() => true, () => false), false)
+    assert.equal((await runtime.callTool('pinax_chapter_list', {})).value.payload.total, 0)
+    assert.equal((await runtime.callTool('pinax_chapter_delete', { file: '正文/第001章-入场.md' })).value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+
+    // 未审提案：拒删并在提示里点名提案文件；采纳之后同一删除放行。
+    await runtime.callTool('pinax_chapter_save', { file: '正文/第002章-雪夜.md', text: '雪夜。', expectedRevision: 0 })
+    const proposal = {
+      schema: 'pinax-proposal@1',
+      id: 'p-2',
+      status: 'proposed',
+      target: { index: 0, title: '第002章', file: '正文/第002章-雪夜.md' },
+      content: '雪夜，停了。',
+      contentChars: 5,
+      createdAt: '2026-10-31T00:00:00.000Z'
+    }
+    const seeded = await opened.value.fileService.writeProposal({ name: '待审-雪夜.json', text: JSON.stringify(proposal, null, 2) })
+    assert.equal(seeded.ok, true, JSON.stringify(seeded.error ?? {}))
+    const refused = await runtime.callTool('pinax_chapter_delete', { file: '正文/第002章-雪夜.md' })
+    assert.equal(refused.value.payload.ok, false)
+    assert.equal(refused.value.payload.code, NEXT_ERROR_CODES.INVALID_INPUT)
+    assert.deepEqual(refused.value.payload.details.proposals, ['待审-雪夜.json'])
+    assert.match(refused.value.payload.message, /待审-雪夜\.json/)
+    assert.equal(await readFile(join(root, '正文', '第002章-雪夜.md'), 'utf-8'), '雪夜。', '拒删后正文不动')
+
+    await opened.value.fileService.markProposalStatus({ name: '待审-雪夜.json', status: 'adopted' })
+    const allowed = await runtime.callTool('pinax_chapter_delete', { file: '正文/第002章-雪夜.md' })
+    assert.equal(allowed.value.payload.ok, true, JSON.stringify(allowed.value.payload))
+  } finally {
+    await runtime.stop()
+    await workspace.cleanup()
+  }
 })
 
 test('章节标题剥排序前缀（批次34）：003-倒带 → 倒带，file 与排序仍按原名', async () => {

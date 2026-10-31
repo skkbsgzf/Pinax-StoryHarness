@@ -208,6 +208,82 @@ export function createNovelTools(context = {}) {
       }
     },
     {
+      name: 'pinax_chapter_delete',
+      title: '删除章节（小说载体）',
+      description: '删除一章正文：归属＋file:正文:rw 照旧；删前强制提交一版历史快照（快照失败即中止，磁盘不动）；有 status:"proposed" 的提案指向这一章时拒删并在提示里点名提案文件名。不做回收站——历史快照就是安全网；删除成功后清掉该章的修订号账。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['file'],
+        properties: {
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '要删除的章相对路径，如「正文/第001章-入场.md」（也接受章节标题）。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (typeof args.file !== 'string' || !args.file.trim()) return fail('INVALID_INPUT', 'file 必填：要删除的章相对路径')
+        const relative = toDirRelative(NOVEL_DIRS.manuscript, args.file.trim())
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '要删除的必须是 .md 章节', { file: args.file })
+        const deleted = await fileService.deleteFile({ pluginId, dir: NOVEL_DIRS.manuscript, file: relative })
+        if (!deleted.ok) return deleted
+        return ok({ file: deleted.value.relativePath, title: chapterTitle(deleted.value.relativePath), deleted: true })
+      }
+    },
+    {
+      name: 'pinax_chapter_rename',
+      title: '重命名章节（小说载体）',
+      description: '只改同一目录下的章文件名：title 是去掉排序前缀的新标题（如「入场」「雨夜·修订」），工具保留原文件已有的 NNN- 前缀；显式带 001- 这类前缀的 title 一律拒。nextFile 是界面上移／下移专用的整名形式（与 title 二选一）：它要求完整的「前缀-标题.md」文件名，供交换相邻章的前缀；模型侧不用它。不跨目录移动；有未审提案或快照失败即中止。修订号账迁到新文件名。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['file'],
+        properties: {
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '要改名的章相对路径，如「正文/第001章-入场.md」。' },
+          title: { type: 'string', minLength: 1, maxLength: 120, description: '新标题（不带排序前缀；文件名由工具按原前缀规则生成）。与 nextFile 二选一。' },
+          nextFile: { type: 'string', minLength: 1, maxLength: 240, description: '整名形式（界面排序专用）：完整的「NNN-标题.md」新文件名，同目录。与 title 二选一。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (typeof args.file !== 'string' || !args.file.trim()) return fail('INVALID_INPUT', 'file 必填：要改名的章相对路径')
+        const title = typeof args.title === 'string' ? args.title.trim() : ''
+        const nextFile = typeof args.nextFile === 'string' ? args.nextFile.trim() : ''
+        if (title && nextFile) return fail('INVALID_INPUT', 'title 与 nextFile 二选一：前者只给标题，后者给完整文件名')
+        if (!title && !nextFile) return fail('INVALID_INPUT', '要给 title（只写标题）或 nextFile（完整文件名）')
+        if (title && /^\d{1,3}-/u.test(title)) {
+          return fail('INVALID_INPUT', 'title 不要带排序前缀（001-）：序号调整请用上移／下移，这里只换标题', { title })
+        }
+        const relative = toDirRelative(NOVEL_DIRS.manuscript, args.file.trim())
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '要改名的必须是 .md 章节', { file: args.file })
+        let target = nextFile
+        if (!target) {
+          const name = chapterFileNameFromTitle(title)
+          if (!name) return fail('INVALID_INPUT', 'title 清洗后为空，给一个能当文件名的标题', { title })
+          const prefix = /^(\d{1,3})-/u.exec(chapterStem(relative))
+          target = prefix ? `${prefix[1]}-${name}` : name
+        } else {
+          // 整名形式只收同一层的一枚 .md 文件名；路径分隔符与穿越一律拒（本批不做跨目录移动）。
+          if (target.includes('/') || target.includes('\\')) {
+            return fail('INVALID_INPUT', 'nextFile 只收同目录的文件名，不带路径分隔符', { nextFile: target })
+          }
+          if (!/\.md$/iu.test(target)) return fail('INVALID_INPUT', 'nextFile 必须以 .md 结尾', { nextFile: target })
+        }
+        const renamed = await fileService.renameFile({ pluginId, dir: NOVEL_DIRS.manuscript, file: relative, nextFile: target })
+        if (!renamed.ok) return renamed
+        return ok({
+          file: renamed.value.relativePath,
+          previousFile: renamed.value.previousPath,
+          title: chapterTitle(renamed.value.relativePath),
+          revision: renamed.value.revision,
+          renamed: true
+        })
+      }
+    },
+    {
       name: 'pinax_proposal_list',
       title: '列出提案（小说载体）',
       description: '列出 .pinax/proposals/ 里的审阅提案：JSON 提案给出 id／status／目标章／字数／createdAt／note，按 createdAt 降序；坏 JSON 跳过并记进 warnings；运行时轨写下的纯文本散件以 kind:"raw" 只列名字与大小。只读，不改正文。',
@@ -264,8 +340,8 @@ export function createNovelTools(context = {}) {
   ]
 }
 
-/** 载体已认领（读）与自有（写/审阅）的工具名，供门禁核「认领面只增不减」；提案三把是自有名字。 */
-export const NOVEL_TOOL_NAMES = Object.freeze(['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'])
+/** 载体已认领（读）与自有（写/审阅/章节管理）的工具名，供门禁核「认领面只增不减」；提案三把是自有名字。 */
+export const NOVEL_TOOL_NAMES = Object.freeze(['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'])
 
 /**
  * 卷名排序（工单B）：中文数字（第一卷／第二卷…）按数值排，阿拉伯数字同理，

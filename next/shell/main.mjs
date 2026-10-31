@@ -436,7 +436,14 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
 
   // 写作动作（批次41）：走同一个模型漏斗（writingComplete 内部默认 forwardComplete → 任务面 /v1/pinax/complete）。
   // 90 秒超时：老前端续写也在这个量级，短了长段落会被腰斩；不可达时通道如实报错，不编字。
-  const writingComplete = createWritingComplete({ timeoutMs: 90_000 })
+  // 批次46A：参考块与 ask 链同一套取数面（registry／view／fileService），运行时没打开项目就降级裸补全。
+  const writingComplete = createWritingComplete({
+    timeoutMs: 90_000,
+    contextSources: () => {
+      const sources = session?.runtime?.contextSources?.() ?? {}
+      return { registry: sources.registry, view: sources.view, fileService: sources.fileService }
+    }
+  })
 
   /**
    * 每插件配置（批次45）：项目级 `.pinax/settings.json`，换项目就换一份。

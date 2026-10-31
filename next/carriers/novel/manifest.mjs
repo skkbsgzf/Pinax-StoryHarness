@@ -12,6 +12,9 @@
  * 小说栏只留 正文/——大纲拆去 pinax.carrier.outline、构思拆去 pinax.carrier.notes、
  * 世界书拆去 pinax.carrier.worldbook（设定栏只剩 约束/）。提案仍随小说：它的目标是正文，
  * 工具归属与审阅面都在这一栏（协议 v1.1-B 的「文档」组新节留待后续批）。
+ *
+ * 批次46A：正文的章节管理（删除／重命名）也归小说——两把写工具走文件服务的受控破坏性出口，
+ * 删／改之前强制历史快照；上移／下移是界面层对相邻两章前缀的两次 rename，不另开工具。
  */
 export const NOVEL_CARRIER_ID = 'pinax.carrier.novel'
 
@@ -51,7 +54,7 @@ export const NOVEL_CARRIER = Object.freeze({
   provides: ['text.chapters'],
   requires: [],
 
-  tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'],
+  tools: ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'],
 
   context: {
     // providers 写的是「上下文块的种类名」（与 shared/agentContextProfiles.js 的 blocks 对齐），

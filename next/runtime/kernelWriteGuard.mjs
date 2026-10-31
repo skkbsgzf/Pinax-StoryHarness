@@ -80,6 +80,9 @@ export const KERNEL_WRITE_CLASS = Object.freeze({
  */
 export const CARRIER_WRITE_CLASS = Object.freeze({
   pinax_chapter_save: Object.freeze({ dir: '正文' }),
+  // 批次46A：章节管理（删／改名）也是写「正文/」——拒绝提示要把这两把一并点名。
+  pinax_chapter_delete: Object.freeze({ dir: '正文' }),
+  pinax_chapter_rename: Object.freeze({ dir: '正文' }),
   pinax_outline_save: Object.freeze({ dir: '大纲' }),
   pinax_notes_save: Object.freeze({ dir: '构思' }),
   pinax_worldbook_save: Object.freeze({ dir: '世界书' }),

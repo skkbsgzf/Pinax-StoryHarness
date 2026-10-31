@@ -118,6 +118,111 @@ test('主进程写作服务：拿到正文就回 ok，上游抛错／空补全�
   assert.match(blank.error.message, /没有返回正文/u)
 })
 
+test('五动作信封升级（批次46A）：参考块按 kind 标注并入【本书参考】，排在任务之前；返回 references 清单', async () => {
+  const seen = []
+  const outline = '第一幕：雨夜有人敲门'
+  const setting = '守夜人只在子时巡街'
+  const service = createWritingComplete({
+    complete: async (payload) => {
+      seen.push(payload)
+      return { ok: true, content: '门外有人叫他。' }
+    },
+    contextSources: () => ({ registry: {}, view: {}, fileService: {} }),
+    buildEnvelope: async ({ question }) => {
+      assert.match(question, /他推开门/u, '检索问句带上了光标附近的正文')
+      return {
+        ok: true,
+        value: {
+          envelope: { blocks: [{ kind: 'outline', content: outline }, { kind: 'worldbook', content: setting }] },
+          missingKinds: ['style']
+        }
+      }
+    }
+  })
+  const answered = await service.run({ action: 'continue', text: TEXT, selection: { start: TEXT.length, end: TEXT.length } })
+  assert.equal(answered.ok, true)
+  const user = seen[0].messages[0].content
+  assert.match(user, /【本书参考】/u)
+  assert.match(user, new RegExp(`【大纲】\\n${outline}`, 'u'))
+  assert.match(user, new RegExp(`【世界书·设定】\\n${setting}`, 'u'))
+  assert.ok(user.indexOf('【本书参考】') < user.indexOf('【任务】'), '参考段必须在任务之前')
+  assert.deepEqual(answered.value.references, [
+    { kind: 'outline', chars: outline.length },
+    { kind: 'worldbook', chars: setting.length }
+  ])
+  assert.equal(answered.value.degraded, false)
+  assert.equal(answered.value.referenceNote, null)
+  assert.deepEqual(answered.value.missingKinds, ['style'])
+})
+
+test('参考块缺席时降级为裸补全：提示词回到批次41 的形状，结果如实标注原因', async () => {
+  const seen = []
+  const service = createWritingComplete({
+    complete: async (payload) => {
+      seen.push(payload)
+      return { ok: true, content: '门外有人叫他。' }
+    },
+    contextSources: () => ({ registry: {}, view: {}, fileService: {} }),
+    buildEnvelope: async () => ({ ok: false, error: { code: 'PINAX_DEPENDENCY_UNMET', message: '本次提问组装不出任何上下文块' } })
+  })
+  const answered = await service.run({ action: 'continue', text: TEXT })
+  assert.equal(answered.ok, true)
+  assert.equal(answered.value.text, '门外有人叫他。')
+  assert.equal(answered.value.degraded, true)
+  assert.match(answered.value.referenceNote, /参考块缺席/u)
+  assert.deepEqual(answered.value.references, [])
+  assert.doesNotMatch(seen[0].messages[0].content, /【本书参考】/u)
+
+  // 没接运行时取数面（单测／项目没打开）也走同一条降级：不抛、不硬失败。
+  const bare = createWritingComplete({ complete: async () => ({ ok: true, content: '好' }) })
+  const plain = await bare.run({ action: 'continue', text: TEXT })
+  assert.equal(plain.ok, true)
+  assert.equal(plain.value.degraded, true)
+  assert.match(plain.value.referenceNote, /参考块缺席/u)
+})
+
+test('提示词预览：只读返回最近一次请求的 system＋user，不跨项目；通道未接入／没开项目如实报缺', async () => {
+  const service = createWritingComplete({ complete: async () => ({ ok: true, content: '好' }) })
+  assert.equal(service.preview().ok, false, '还没发起过请求就没有预览')
+
+  await service.run({ action: 'continue', text: TEXT, root: '/tmp/book' })
+  const preview = service.preview({ root: '/tmp/book' })
+  assert.equal(preview.ok, true)
+  assert.match(preview.value.systemPrompt, /中文小说写作助手/u)
+  assert.match(preview.value.userPrompt, /【上文】/u)
+  assert.equal(preview.value.action, 'continue')
+  assert.equal(preview.value.projectRoot, '/tmp/book')
+  // 换项目不跨项目给预览。
+  const other = service.preview({ root: '/tmp/other' })
+  assert.equal(other.ok, false)
+  assert.match(other.error.message, /另一个项目/u)
+
+  const bare = createIpcDispatcher({ session: { projectRoot: '/tmp/book' } })
+  const unwired = await bare.dispatch(IPC_CHANNELS.writingPreview, {})
+  assert.equal(unwired.ok, false)
+  assert.match(unwired.error.message, /提示词预览未接入/u)
+
+  const noProject = createIpcDispatcher({
+    session: { projectRoot: '' },
+    writingComplete: { run: async () => ({ ok: true }), preview: () => ({ ok: true, value: {} }) }
+  })
+  const closed = await noProject.dispatch(IPC_CHANNELS.writingPreview, {})
+  assert.equal(closed.ok, false)
+  assert.match(closed.error.message, /先打开一个项目/u)
+
+  let askedRoot = null
+  const wired = createIpcDispatcher({
+    session: { projectRoot: '/tmp/book' },
+    writingComplete: {
+      run: async () => ({ ok: true }),
+      preview: (input) => { askedRoot = input?.root ?? null; return { ok: true, value: { userPrompt: 'U' } } }
+    }
+  })
+  const read = await wired.dispatch(IPC_CHANNELS.writingPreview, {})
+  assert.equal(read.ok, true)
+  assert.equal(askedRoot, '/tmp/book', '预览只认当前项目根')
+})
+
 test('通道：没注入写作服务／没打开项目都如实报缺，注入了才走服务', async () => {
   const bare = createIpcDispatcher({ session: { projectRoot: '/tmp/book' } })
   const missing = await bare.dispatch(IPC_CHANNELS.runtimeComplete, { action: 'continue', text: TEXT })

@@ -20,6 +20,41 @@ export const WRITING_MAX_TEXT_CHARS = 200_000
 export const WRITING_MAX_INSTRUCTION_CHARS = 500
 
 /**
+ * 参考块来源标签（批次46A）：信封块 kind → 作者认得的名字。
+ * 未登记的 kind 不省略，直接标原 kind——账要对得上，不能悄悄当成同一种参考。
+ */
+export const REFERENCE_KIND_LABELS = Object.freeze({
+  rules: '写作规则',
+  style: '文风',
+  selection: '当前段落',
+  outline: '大纲',
+  worldbook: '世界书·设定',
+  scene: '场景',
+  character: '人物',
+  location: '地点',
+  history: '历史',
+  memory: '记忆',
+  references: '资料',
+  'agent-md': '作者须知'
+})
+
+export function referenceLabel(kind) {
+  const key = String(kind ?? '').trim()
+  return REFERENCE_KIND_LABELS[key] ?? (key ? `参考·${key}` : '参考资料')
+}
+
+/**
+ * 参考块合成一段【本书参考】。块内容与顺序全信信封的 clip——这里不再二次截断，
+ * 否则同一份预算会被裁两遍，作者看到的上下文与账本对不上。
+ */
+export function buildReferenceSection(references) {
+  const blocks = (Array.isArray(references) ? references : [])
+    .filter((block) => block && typeof block.content === 'string' && block.content.trim())
+  if (!blocks.length) return ''
+  return ['【本书参考】', ...blocks.map((block) => `【${referenceLabel(block.kind)}】\n${block.content.trim()}`)].join('\n\n')
+}
+
+/**
  * 动作表。`target` 决定结果怎么落：
  *   insert  —— 落在光标处，不动原文（续写）；
  *   replace —— 替换选中段（改写类）。
@@ -120,8 +155,11 @@ function head(text, max) {
 /**
  * 组装一次补全请求。主进程与测试都用这一份，界面不碰提示词。
  * 输出形状对齐 forwardComplete 的入参：{ systemPrompt, messages, maxTokens }。
+ *
+ * 批次46A：references 是信封裁剪好的参考块（{kind, content}），合成【本书参考】段放在
+ * 任务之前——模型先看本书的口径，再读这一次要干什么。没有参考块时用户提示词与批次41 逐字相同。
  */
-export function buildWritingRequest(validated) {
+export function buildWritingRequest(validated, { references = [] } = {}) {
   const { action, text, selection, instruction } = validated
   const systemPrompt = [
     '你是中文小说写作助手，替作者在现有稿子上动笔。',
@@ -146,6 +184,8 @@ export function buildWritingRequest(validated) {
   if (before) parts.push(`【上文】\n${before}`)
   if (action.needsSelection) parts.push(`【要处理的段落】\n${focus}`)
   if (after) parts.push(`【后文（续写时不要与之矛盾）】\n${after}`)
+  const referenceSection = buildReferenceSection(references)
+  if (referenceSection) parts.push(referenceSection)
   parts.push(`【任务】${action.brief}。`)
   if (instruction) parts.push(`【额外要求】${instruction}`)
   if (action.target === 'insert') parts.push('【输出】只写接下来的一段，不要重复上文最后一句话。')

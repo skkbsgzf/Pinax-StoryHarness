@@ -50,6 +50,9 @@ export const IPC_CHANNELS = Object.freeze({
   // 批次41：正文写作动作（续写／改写／扩写／压缩／润色）。载荷是「动作＋正文＋选区＋额外要求」，
   // 提示词在主进程由 writingActions 拼——不是一条通用模型管道。
   runtimeComplete: 'pinax:agent:runtime:complete',
+  // 批次46A：最近一次写作请求的完整提示词（只读）。主进程留存 system＋user，渲染层只读展示；
+  // 不做实时预览，也不跨项目给——预览口只回当前项目最近那一次。
+  writingPreview: 'pinax:agent:writing:last-preview',
   // M2.5-B：会话落盘。load 读 JSONL，save 交整份快照，import 只给老浏览器缓存迁移用一次。
   sessionsLoad: 'pinax:agent:sessions:load',
   sessionsSave: 'pinax:agent:sessions:save',
@@ -281,6 +284,8 @@ export function shellView(session) {
  *   writingComplete  —— next/runtime/writingComplete（createWritingComplete）。{ run } 收
  *                       { action, text, selection, instruction }；动作闭集与提示词都在主进程侧。
  *                       不注入时 runtime:complete 如实报缺，不回落成一次普通提问。
+ *                       批次46A 起还有 { preview({root}) }：只读返回当前项目最近一次写作请求的
+ *                       system＋user，不注入时 writing:last-preview 同样如实报缺。
  * deps 扩展（批次45 每插件配置）：
  *   settingsStoreFor —— (root) => settingsStore（next/settingsStore）：按当前项目根取那份
  *                       `.pinax/settings.json` 的读写器；声明白名单随注册表现取。
@@ -470,8 +475,17 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
           action: input.action,
           text: input.text,
           selection: input.selection,
-          instruction: input.instruction
+          instruction: input.instruction,
+          // 预览口按项目根核对：主进程留存的那一份属于哪个项目，就在这里钉进请求。
+          root: session.projectRoot
         })
+      }
+      // 批次46A：提示词预览（只读）。最近一次写作请求的完整 system＋user 留在主进程，
+      // 渲染层只读展示；换成另一个项目后旧预览不跨项目给。
+      case IPC_CHANNELS.writingPreview: {
+        if (!writingComplete?.preview) return fail('INVALID_INPUT', '提示词预览未接入（主进程未创建 writingComplete）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '提示词预览需要先打开一个项目：它只展示当前项目最近一次写作请求')
+        return writingComplete.preview({ root: session.projectRoot })
       }
       // H2／工单B：知识服务 all-in-one。三条都只认当前项目根——渲染层传什么 root 都不采信。
       case IPC_CHANNELS.knowledgeSearch: {

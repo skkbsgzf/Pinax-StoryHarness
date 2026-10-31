@@ -93,18 +93,105 @@ function runNodeAction(action, payload) {
   else if (action === 'add') props.data.addOutlineNode(payload)
 }
 
+/**
+ * 章节行右键菜单（批次46A）：删除／重命名／上移／下移。
+ * 删除照既有确认风格走两步（第一下只把文案换成「确认删除」，再点一下才真的删，
+ * 与记录型载体那枚 records-remove 同一套措辞）；重命名在行内换成临时输入
+ * （Enter 确认、Esc／失焦取消，与批次33 的新建临时输入同一套约定）；
+ * 上移／下移只在同卷内换相邻两章的 NNN- 前缀，边界项置灰而不是点了报错。
+ * 样式与 Esc／点外收起照大纲节点菜单：同一套 .nx-context-* 词汇，不另起一套菜单皮。
+ */
+const chapterMenu = ref(null)
+const chapterMenuRoot = ref(null)
+const renameTarget = ref(null)
+const renameDraft = ref('')
+const renameInput = ref(null)
+
+const chapterMenuStyle = computed(() => {
+  const menu = chapterMenu.value
+  if (!menu) return {}
+  const viewportWidth = Number(globalThis.innerWidth) || 0
+  const viewportHeight = Number(globalThis.innerHeight) || 0
+  const menuHeight = 30 + 5 * NODE_MENU_ITEM_HEIGHT + 30
+  const left = Math.max(8, Math.min(menu.x, Math.max(8, viewportWidth - NODE_MENU_WIDTH - 8)))
+  const top = Math.max(8, Math.min(menu.y, Math.max(8, viewportHeight - menuHeight - 8)))
+  return { left: `${left}px`, top: `${top}px` }
+})
+
+function openChapterMenu(event, item, groupIndex, itemIndex) {
+  closeNodeMenu()
+  cancelRename()
+  chapterMenu.value = { x: event.clientX, y: event.clientY, item, groupIndex, itemIndex, armed: false }
+}
+
+function closeChapterMenu() {
+  chapterMenu.value = null
+}
+
+function chapterCanMove(delta) {
+  const menu = chapterMenu.value
+  if (!menu) return false
+  const group = chapterGroups.value[menu.groupIndex]
+  if (!group) return false
+  const target = menu.itemIndex + delta
+  return target >= 0 && target < group.chapters.length
+}
+
+function runChapterAction(action) {
+  const menu = chapterMenu.value
+  if (!menu) return
+  if (action === 'remove') {
+    if (!menu.armed) {
+      chapterMenu.value = { ...menu, armed: true }
+      return
+    }
+    closeChapterMenu()
+    void props.data.deleteChapter(menu.item)
+    return
+  }
+  closeChapterMenu()
+  if (action === 'rename') startRename(menu.item)
+  else if (action === 'move-up') void props.data.moveChapter(menu.item, -1)
+  else if (action === 'move-down') void props.data.moveChapter(menu.item, 1)
+}
+
+function startRename(item) {
+  renameTarget.value = item
+  renameDraft.value = item.title
+  void nextTick(() => {
+    renameInput.value?.focus?.()
+    renameInput.value?.select?.()
+  })
+}
+
+function cancelRename() {
+  renameTarget.value = null
+  renameDraft.value = ''
+}
+
+async function submitRename() {
+  const target = renameTarget.value
+  if (!target) return
+  const title = renameDraft.value.trim()
+  cancelRename()
+  if (!title) return
+  await props.data.renameChapter(target, title)
+}
+
 /** Esc 先关菜单；点菜单外也收起（捕获阶段，先于行自己的 click）。 */
 function onNodeMenuKeydown(event) {
-  if (!nodeMenu.value || event.key !== 'Escape') return
+  if (!nodeMenu.value && !chapterMenu.value) return
+  if (event.key !== 'Escape') return
   event.preventDefault()
   closeNodeMenu()
+  closeChapterMenu()
 }
 
 function onNodeMenuPointerDown(event) {
-  if (!nodeMenu.value) return
-  if (nodeMenuRoot.value?.contains?.(event.target)) return
-  closeNodeMenu()
+  if (nodeMenu.value && !nodeMenuRoot.value?.contains?.(event.target)) closeNodeMenu()
+  if (chapterMenu.value && !chapterMenuRoot.value?.contains?.(event.target)) closeChapterMenu()
 }
+
 
 onMounted(() => {
   globalThis.addEventListener?.('keydown', onNodeMenuKeydown, true)
@@ -351,15 +438,27 @@ watch(() => props.board?.id, () => {
         <template v-for="(group, groupIndex) in chapterGroups" :key="group.name || `flat-${groupIndex}`">
           <p v-if="group.name" class="workspace-nav-section nx-volume" data-test="chapter-volume">{{ group.name }}</p>
           <ul class="nx-tree">
-            <li v-for="item in group.chapters" :key="item.file" class="nx-tree-line">
+            <li v-for="(item, itemIndex) in group.chapters" :key="item.file" class="nx-tree-line">
+              <input
+                v-if="renameTarget?.file === item.file"
+                ref="renameInput"
+                v-model="renameDraft"
+                class="nx-field is-tiny nx-index-rename-input"
+                data-test="chapter-rename-input"
+                aria-label="章节新标题"
+                @keydown.enter.prevent="submitRename"
+                @keydown.esc.prevent="cancelRename"
+                @blur="cancelRename"
+              >
               <button
+                v-else
                 type="button"
                 class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
                 :class="{ 'is-active': isChapterOpen(item) }"
                 :aria-current="isChapterOpen(item) ? 'page' : null"
                 :title="rowHint(item)"
                 @click="data.openChapter(item)"
-                @contextmenu.prevent.stop="onRowContextMenu"
+                @contextmenu.prevent.stop="openChapterMenu($event, item, groupIndex, itemIndex)"
               >
                 <span class="workspace-nav-label">{{ item.title }}</span>
               </button>
@@ -808,6 +907,51 @@ watch(() => props.board?.id, () => {
         @click="runNodeAction('add', 'child')"
       >加子节点</button>
     </div>
+
+    <!-- 章节菜单（批次46A）：删除两步确认（照记录型载体 records-remove 的措辞），
+         重命名走行内临时输入，上移／下移只在同卷相邻两章之间换前缀。 -->
+    <div
+      v-if="chapterMenu"
+      ref="chapterMenuRoot"
+      class="nx-context-menu nx-chapter-menu"
+      role="menu"
+      aria-label="章节操作"
+      :style="chapterMenuStyle"
+      @contextmenu.prevent
+    >
+      <p class="nx-context-group">章节</p>
+      <button
+        type="button"
+        class="control-quiet nx-context-item chapter-menu-delete"
+        role="menuitem"
+        data-test="chapter-menu-delete"
+        @click="runChapterAction('remove')"
+      >{{ chapterMenu.armed ? '确认删除' : '删除' }}</button>
+      <button
+        type="button"
+        class="control-quiet nx-context-item chapter-menu-rename"
+        role="menuitem"
+        data-test="chapter-menu-rename"
+        @click="runChapterAction('rename')"
+      >重命名</button>
+      <button
+        type="button"
+        class="control-quiet nx-context-item chapter-menu-move-up"
+        role="menuitem"
+        data-test="chapter-menu-move-up"
+        :disabled="!chapterCanMove(-1)"
+        @click="runChapterAction('move-up')"
+      >上移</button>
+      <button
+        type="button"
+        class="control-quiet nx-context-item chapter-menu-move-down"
+        role="menuitem"
+        data-test="chapter-menu-move-down"
+        :disabled="!chapterCanMove(1)"
+        @click="runChapterAction('move-down')"
+      >下移</button>
+      <p v-if="chapterMenu.armed" class="nx-context-hint">删除后只能从历史里找回：再点「确认删除」。</p>
+    </div>
   </aside>
 </template>
 
@@ -821,6 +965,11 @@ watch(() => props.board?.id, () => {
   min-width: 0;
 }
 .nx-tree-line > .nx-tree-item {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* 行内改名（批次46A）：沿用批次33 临时输入的外观，只在章节行原位出现。 */
+.nx-index-rename-input {
   flex: 1 1 auto;
   min-width: 0;
 }

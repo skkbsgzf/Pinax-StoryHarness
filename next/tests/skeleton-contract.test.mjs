@@ -54,7 +54,8 @@ test('C2 路径规则：中文目录正常，越界与 .pinax 直写全拒', () 
  *   4) 每块板块的 dataDirs 与 scopes 必须一一对应——声明了目录却没申请权限，或反过来，都算清单说谎。
  */
 const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze([
-  'pinax_chapter_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save',
+  'pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename',
+  'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save',
   'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save',
   'pinax_script_list', 'pinax_script_read', 'pinax_script_save',
   'pinax_rule_list', 'pinax_rule_save',
@@ -119,7 +120,7 @@ test('M2 口径：next/carriers 发布十二块载体，目录不重叠且落在
   // 自有工具（内核没有的新名字）逐条点名：新增必须在这里留名，防止有人偷偷扩面。
   // 协议 v1.1-A 拆栏不新增工具名，只是把它们分给不同的主人。
   const own = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
-  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：十栏旧工具＋批次40 五块记录载体的二十把（列／读／写／删）')
+  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：十栏旧工具＋批次46A 删／改名两把＋批次40 五块记录载体的二十把（列／读／写／删）')
 })
 
 test('能力词表非空且每条有中文名，闭包才算得动', () => {

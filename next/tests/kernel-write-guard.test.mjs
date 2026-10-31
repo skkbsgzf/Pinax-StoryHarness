@@ -68,8 +68,8 @@ test('载体写工具落点表与载体 impl 的 annotations 对账：提示只�
   assert.equal(CARRIER_WRITE_CLASS.pinax_proposal_discard.dir, null)
   assert.deepEqual(
     Object.keys(CARRIER_WRITE_CLASS).sort(),
-    ['pinax_chapter_save', 'pinax_comic_remove', 'pinax_comic_save', 'pinax_document_save', 'pinax_experience_remove', 'pinax_experience_save', 'pinax_material_remove', 'pinax_material_save', 'pinax_notes_save', 'pinax_online_remove', 'pinax_online_save', 'pinax_outline_save', 'pinax_proposal_discard', 'pinax_rule_save', 'pinax_script_save', 'pinax_video_remove', 'pinax_video_save', 'pinax_worldbook_save'],
-    '载体自有写工具就这十八把（批次26 加剧本的 pinax_script_save；批次40 加五块记录载体的 save／remove）；新增一把要在这里留名'
+    ['pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_chapter_save', 'pinax_comic_remove', 'pinax_comic_save', 'pinax_document_save', 'pinax_experience_remove', 'pinax_experience_save', 'pinax_material_remove', 'pinax_material_save', 'pinax_notes_save', 'pinax_online_remove', 'pinax_online_save', 'pinax_outline_save', 'pinax_proposal_discard', 'pinax_rule_save', 'pinax_script_save', 'pinax_video_remove', 'pinax_video_save', 'pinax_worldbook_save'],
+    '载体自有写工具就这二十把（批次26 加剧本的 pinax_script_save；批次40 加五块记录载体的 save／remove；批次46A 加章节删除／重命名）；新增一把要在这里留名'
   )
 })
 
@@ -189,7 +189,7 @@ test('真运行时里闸是生效的：内核写族被拒，带修订号的载�
   const started = await runtime.start()
   assert.equal(started.ok, true)
   try {
-    assert.equal(started.value.toolCount, 34, '闸不改面的形状：内核 19 ∪ 技能读取 1 ∪ 六载体自有 14（小说 4：正文写口＋提案三把；大纲 1；构思 2；世界书 1；约束 2；资料 4；断言同步）')
+    assert.equal(started.value.toolCount, 36, '闸不改面的形状：内核 19 ∪ 技能读取 1 ∪ 六载体自有 16（小说 6：正文写口＋删／改两把＋提案三把；大纲 1；构思 2；世界书 1；约束 2；资料 4；断言同步）')
     const guard = runtime.surfaceInfo().writeGuard
     assert.deepEqual([...guard.tools].sort(), [...WRITE_FAMILY].sort(), '右栏要能读出此刻受约束的是哪几把')
     assert.equal(guard.projectRoot, opened.value.fileService.root)

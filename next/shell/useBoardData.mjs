@@ -14,6 +14,14 @@ import { applyWritingResult, normalizeSelection, writingActionOf } from './writi
  * 取数只有一条路：runtimeToolCall。渲染层拿不到文件服务，也拿不到载体实现，
  * 因此每一次读盘都必然过载体自己的 scope 与修订号并发闸（不存在「界面绕过合同写文件」这条路）。
  */
+
+/**
+ * 审查本章的固定问句（批次46A）。
+ * 任务号不在这里指定：信封按主载体的档案（writing-chapter）映射到 authoring.review.chapter，
+ * 外壳只发这一句，不另造任务、不建会话存储。
+ */
+export const CHAPTER_REVIEW_QUESTION = '审查当前章节：检查结构、节奏、前后连贯与设定一致性，按「摘要／问题／动作」给出可以执行的意见。'
+
 export function useBoardData(bridge) {
   const state = reactive({
     busy: false,
@@ -57,6 +65,15 @@ export function useBoardData(bridge) {
     writingBusy: false,
     writingError: null,
     writingResult: null,
+    /** 提示词预览（批次46A）：主进程留存最近一次写作请求的 system＋user，这里只读摊开。
+     *  折叠层按需拉取；换章／重新发起写作时收回，避免把上一问的提示词挂在这一问下面。 */
+    writingPreview: null,
+    writingPreviewError: null,
+    /** 审查本章（批次46A）：骑 authoring.review.chapter 只读轨，一次问句一份结构化意见。
+     *  结果只活在这一栏的内存里——不写会话存储，也不因此多出一个任务号。 */
+    reviewBusy: false,
+    reviewError: null,
+    reviewResult: null,
     /** 大纲（工单A3 只读树 → 工单B2 可编辑）：索引窗的第三棵树。
      *  草稿是整份文档的深拷贝（大纲保存＝整份覆盖）：改名/新增都先落在 outlineDraft 上，按保存才写盘。 */
     outline: [],
@@ -148,6 +165,8 @@ export function useBoardData(bridge) {
   let knowledgeCallId = 0
   /** 写作动作的请求序号（批次41）：切了章节之后，上一章那次生成的回答不能再落到这一章。 */
   let writingCallId = 0
+  /** 审查本章的请求序号（批次46A）：换章之后，上一章晚到的审查意见不许挂到这一章。 */
+  let reviewCallId = 0
   /** 批次39：同一时刻只跑一轮事件刷新（事件是旁路，宁可漏一轮也不并发重读）。 */
   let refreshingFromEvents = false
 
@@ -299,7 +318,14 @@ export function useBoardData(bridge) {
     state.writingBusy = false
     state.writingResult = null
     state.writingError = null
+    state.writingPreview = null
+    state.writingPreviewError = null
     state.draftSelection = null
+    // 换章＝换审查对象：上一章的意见卡片不能跟着标题留在这一章下面。
+    reviewCallId += 1
+    state.reviewBusy = false
+    state.reviewError = null
+    state.reviewResult = null
     state.selection = { type: 'chapter', item: { ...item, revision: read.value.revision } }
   }
 
@@ -352,6 +378,150 @@ export function useBoardData(bridge) {
     await loadChapters({ keep: false })
     const made = state.chapters.find((item) => item.file === saved.value.file)
     if (made) await openChapter(made)
+  }
+
+  /**
+   * 章节管理（批次46A）：删除／重命名／上移／下移。
+   * 都是「先收摊再动盘」：要动的章正是打开中的那一章且有未落盘的改动时，先走一次自动保存，
+   * 否则自动保存会在删／改之后把旧路径又写回来。保存失败（修订号冲突）就停手，把冲突原样摊给作者。
+   * 删除不做回收站——历史里能找回；菜单的二次确认在 IndexWindow 那侧。
+   */
+  function isOpenChapter(file) {
+    return Boolean(file && state.chapter?.file === file)
+  }
+
+  async function settleChapterBeforeMutation(item) {
+    if (!isOpenChapter(item?.file)) return true
+    if (!state.pendingSave.chapter) return true
+    cancelAutosave('chapter')
+    if (state.chapter.truncated) return true
+    await save({ auto: true })
+    return !state.pendingSave.chapter
+  }
+
+  function applyRenamedChapter(oldFile, value) {
+    if (!value?.file) return
+    if (isOpenChapter(oldFile)) {
+      state.chapter = {
+        ...state.chapter,
+        file: value.file,
+        title: value.title ?? state.chapter.title,
+        revision: Number.isSafeInteger(value.revision) ? value.revision : state.chapter.revision
+      }
+    }
+    if (state.selection?.type === 'chapter' && state.selection.item?.file === oldFile) {
+      state.selection = {
+        ...state.selection,
+        item: { ...state.selection.item, file: value.file, title: value.title ?? state.selection.item.title }
+      }
+    }
+  }
+
+  async function deleteChapter(item) {
+    if (!item?.file) return
+    if (!(await settleChapterBeforeMutation(item))) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const removed = await tool('pinax_chapter_delete', { file: item.file })
+    state.busy = false
+    if (!removed.ok) {
+      state.error = removed.message
+      return
+    }
+    if (isOpenChapter(item.file)) {
+      cancelAutosave('chapter')
+      state.pendingSave.chapter = false
+      writingCallId += 1
+      state.writingBusy = false
+      state.writingResult = null
+      state.writingError = null
+      state.writingPreview = null
+      state.writingPreviewError = null
+      reviewCallId += 1
+      state.reviewBusy = false
+      state.reviewError = null
+      state.reviewResult = null
+      state.chapter = null
+      state.draft = ''
+      state.draftSelection = null
+      if (state.selection?.type === 'chapter') state.selection = null
+    }
+    state.notice = `已删除「${removed.value?.title ?? item.title}」（历史里可找回）`
+    await loadChapters({ keep: false })
+  }
+
+  async function renameChapter(item, title) {
+    const next = String(title ?? '').trim()
+    if (!item?.file || !next || next === item.title) return
+    if (!(await settleChapterBeforeMutation(item))) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const renamed = await tool('pinax_chapter_rename', { file: item.file, title: next })
+    state.busy = false
+    if (!renamed.ok) {
+      state.error = renamed.message
+      return
+    }
+    applyRenamedChapter(item.file, renamed.value)
+    state.notice = `已重命名为「${renamed.value.title}」`
+    await loadChapters({ keep: true })
+  }
+
+  /** 文件名里的排序前缀（001-）：上移／下移只换前缀，内容与标题跟着文件走。 */
+  function chapterPrefixParts(file) {
+    const name = String(file ?? '').replaceAll('\\', '/').split('/').pop()
+    const match = /^(\d{1,3})-(.+)\.md$/iu.exec(name)
+    if (!match) return null
+    return { prefix: match[1], stem: match[2] }
+  }
+
+  /**
+   * 上移／下移（delta＝-1／+1）：与同卷相邻那一章交换 NNN 前缀——两次改名，不是搬目录。
+   * 同号冲突（两章标题碰巧相同）由文件服务第二笔改名如实拒，提示原样摊出来。
+   */
+  async function moveChapter(item, delta) {
+    if (!item?.file || (delta !== -1 && delta !== 1)) return
+    const group = state.chapterGroups.find((candidate) => candidate.chapters.some((entry) => entry.file === item.file))
+    if (!group) return
+    const index = group.chapters.findIndex((entry) => entry.file === item.file)
+    const neighbor = group.chapters[index + delta]
+    if (!neighbor) return
+    const self = chapterPrefixParts(item.file)
+    const other = chapterPrefixParts(neighbor.file)
+    if (!self || !other) {
+      state.error = '这两章缺少 001- 排序前缀：先把文件名改成带序号的名字，再上移／下移'
+      return
+    }
+    if (!(await settleChapterBeforeMutation(item))) return
+    if (!(await settleChapterBeforeMutation(neighbor))) return
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const first = await tool('pinax_chapter_rename', {
+      file: item.file,
+      nextFile: `${other.prefix}-${self.stem}.md`
+    })
+    if (!first.ok) {
+      state.busy = false
+      state.error = first.message
+      return
+    }
+    const second = await tool('pinax_chapter_rename', {
+      file: neighbor.file,
+      nextFile: `${self.prefix}-${other.stem}.md`
+    })
+    state.busy = false
+    applyRenamedChapter(item.file, first.value)
+    if (!second.ok) {
+      state.error = `「${item.title}」已改名，但相邻那一章的第二笔改名失败：${second.message}`
+      await loadChapters({ keep: true })
+      return
+    }
+    applyRenamedChapter(neighbor.file, second.value)
+    state.notice = `已${delta < 0 ? '上移' : '下移'}「${first.value.title}」`
+    await loadChapters({ keep: true })
   }
 
   /** 构思速记（工单B1）：列篇目。与章节同走 runtimeToolCall 一条通道（pinax_notes_list）；
@@ -1317,6 +1487,8 @@ export function useBoardData(bridge) {
     state.writingBusy = true
     state.writingError = null
     state.writingResult = null
+    state.writingPreview = null
+    state.writingPreviewError = null
     const answered = await bridge.request(IPC_CHANNELS.runtimeComplete, {
       action: action.id,
       text: anchor.text,
@@ -1336,6 +1508,9 @@ export function useBoardData(bridge) {
       target: answered.value?.target === 'replace' ? 'replace' : 'insert',
       text: String(answered.value?.text ?? ''),
       model: answered.value?.model ?? null,
+      // 批次46A：这次用上了哪些参考块（kind／chars），以及参考缺席时的原话。
+      references: Array.isArray(answered.value?.references) ? answered.value.references : [],
+      referenceNote: typeof answered.value?.referenceNote === 'string' ? answered.value.referenceNote : null,
       anchor
     }
   }
@@ -1362,6 +1537,8 @@ export function useBoardData(bridge) {
     state.draftSelection = { start: applied.caret, end: applied.caret }
     state.writingResult = null
     state.writingError = null
+    state.writingPreview = null
+    state.writingPreviewError = null
     // 生成结果落进正文＝正文改过了：置脏，让自动保存把它落盘（作者不用再按一次 Ctrl+S）。
     markDirty('chapter')
     state.notice = `已${applied.mode === 'replace' ? '替换' : '插入'}（${result.label}）`
@@ -1370,6 +1547,95 @@ export function useBoardData(bridge) {
   function discardWriting() {
     state.writingResult = null
     state.writingError = null
+    state.writingPreview = null
+    state.writingPreviewError = null
+  }
+
+  /**
+   * 提示词预览（批次46A）：只读拉一次主进程留存的最近一次写作请求。
+   * 预览属于「这一问的结果卡」，所以结果已经收起／换章后晚到的回答只丢，不挂到别处。
+   */
+  async function loadWritingPreview() {
+    if (!bridge?.request) {
+      state.writingPreviewError = '渲染层未接主进程桥（preload 的 pinaxNext 通道）。'
+      return
+    }
+    const seq = writingCallId
+    state.writingPreviewError = null
+    const answered = await bridge.request(IPC_CHANNELS.writingPreview, {})
+    if (seq !== writingCallId || !state.writingResult) return
+    if (!answered?.ok) {
+      state.writingPreview = null
+      state.writingPreviewError = answered?.error?.message ?? '提示词预览读取失败'
+      return
+    }
+    const value = answered.value ?? {}
+    state.writingPreview = {
+      action: value.action ?? null,
+      at: value.at ?? null,
+      systemPrompt: String(value.systemPrompt ?? ''),
+      userPrompt: String(value.userPrompt ?? ''),
+      references: Array.isArray(value.references) ? value.references : [],
+      referenceNote: typeof value.referenceNote === 'string' ? value.referenceNote : null
+    }
+  }
+
+  /**
+   * 审查本章（批次46A）：骑现有的 authoring.review.chapter 只读轨问一句固定的话。
+   * 结果只摆在这一栏：summary／issues／actions 是给作者看的卡片，不写会话存储，
+   * 也不动正文——要不要按「转改写」由作者自己决定（那条走批次41 的五动作改写）。
+   * 审查读的是盘上的那一份，所以先把没落盘的改动送下去；送不下去就直说，不拿旧稿充数。
+   */
+  async function reviewChapter() {
+    if (!state.chapter || state.reviewBusy) return
+    if (!bridge?.request) {
+      state.reviewError = '渲染层未接主进程桥（preload 的 pinaxNext 通道）。'
+      return
+    }
+    if (state.pendingSave.chapter) {
+      if (state.chapter.truncated) {
+        state.reviewError = '这一章只载入了前段，没落盘的改动没有写进正文：先保存整章，再审查。'
+        return
+      }
+      await save({ auto: true })
+      if (state.pendingSave.chapter) {
+        state.reviewError = '本章还有没落盘的改动，审查读到的会是旧稿：先解决保存问题再试。'
+        return
+      }
+    }
+    const file = state.chapter.file
+    const seq = ++reviewCallId
+    state.reviewBusy = true
+    state.reviewError = null
+    state.reviewResult = null
+    const answered = await bridge.request(IPC_CHANNELS.runtimeAsk, { question: CHAPTER_REVIEW_QUESTION })
+    // 换过章（或又发起了一次审查）：这一问的结果只丢，不挂到别的正文下面。
+    if (seq !== reviewCallId || state.chapter?.file !== file) return
+    state.reviewBusy = false
+    if (!answered?.ok) {
+      state.reviewError = answered?.error?.message ?? '审查本章失败'
+      return
+    }
+    const value = answered.value ?? {}
+    const result = value.result && typeof value.result === 'object' ? value.result : null
+    const summary = String(result?.summary ?? value.text ?? '').trim()
+    const issues = normalizeReviewIssues(result?.issues)
+    const actions = normalizeReviewActions(result)
+    if (!summary && !issues.length && !actions.length) {
+      state.reviewError = '这次没有形成可读的审查意见（模型没有按摘要／问题／动作给出内容）。'
+      return
+    }
+    state.reviewResult = {
+      summary,
+      issues,
+      actions,
+      source: typeof value.source === 'string' ? value.source : null
+    }
+  }
+
+  function discardReview() {
+    state.reviewResult = null
+    state.reviewError = null
   }
   /** 大纲树（工单A3 只读 → 工单B2 起可编辑）：小说板块把 大纲/outline.json 的节点列进索引窗。
    *  大纲还没写（工具对「既没有 outline.json 也没有 大纲.md」回 INVALID_INPUT）是新建项目的常态：
@@ -1721,6 +1987,9 @@ export function useBoardData(bridge) {
     openChapter,
     save,
     createChapter,
+    deleteChapter,
+    renameChapter,
+    moveChapter,
     loadNotes,
     openNote,
     setNoteDraft,
@@ -1784,7 +2053,10 @@ export function useBoardData(bridge) {
     setDraftSelection,
     requestWriting,
     applyWriting,
-    discardWriting
+    discardWriting,
+    loadWritingPreview,
+    reviewChapter,
+    discardReview
   })
 }
 
@@ -1934,4 +2206,43 @@ function entryFileNameFromTitle(title) {
     .replace(/^\.+/u, '')
     .replace(/\.md$/iu, '')
     .slice(0, 120)
+}
+
+/**
+ * 审查意见卡（批次46A）：只收「人读得懂」的那几列。
+ * issues 可能是字符串或 { message, severity, type }（runner 的 parseSectionedAdvice 与模型 JSON 两条来源），
+ * 这里统一成 { message, severity, kind } 并去重；空条目丢掉，不拿占位行充数。
+ */
+function normalizeReviewIssues(raw) {
+  const list = Array.isArray(raw) ? raw : []
+  const seen = new Set()
+  const out = []
+  for (const item of list) {
+    const message = (typeof item === 'string' ? item : String(item?.message ?? item?.text ?? '')).trim()
+    if (!message || seen.has(message)) continue
+    seen.add(message)
+    const severity = String(item?.severity ?? '').toLowerCase()
+    out.push({
+      message,
+      severity: severity === 'low' || severity === 'high' ? severity : 'medium',
+      kind: String(item?.issueType ?? item?.type ?? item?.kind ?? 'review').trim() || 'review'
+    })
+    if (out.length >= 12) break
+  }
+  return out
+}
+
+/** 审查意见的动作：typedActions（对象）先给标签，action（字符串）补在后面，去重。 */
+function normalizeReviewActions(result) {
+  const out = []
+  const push = (value) => {
+    const label = String(value ?? '').trim()
+    if (label && !out.includes(label)) out.push(label)
+  }
+  for (const item of Array.isArray(result?.typedActions) ? result.typedActions : []) {
+    if (typeof item === 'string') push(item)
+    else if (item && typeof item === 'object') push(item.label ?? item.title ?? item.action ?? item.description)
+  }
+  for (const item of Array.isArray(result?.action) ? result.action : []) push(item)
+  return out.slice(0, 8)
 }
