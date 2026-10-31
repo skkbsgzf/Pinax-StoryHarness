@@ -25,7 +25,12 @@ const props = defineProps({
   /** 已打开的项目；null／缺省＝无项目形态（载体格禁用 + 打开／新建动作）。 */
   project: { type: Object, default: null },
   /** registry.list() 的载体清单：无项目时也照常给（不依赖 view）。 */
-  carriers: { type: Array, default: () => [] }
+  carriers: { type: Array, default: () => [] },
+  /**
+   * 载体 id → { color, unackedNotices }（批次49，服务与通知池的行色）。
+   * 没声明的载体不在表里——没有服务／MCP 的板不画点。
+   */
+  serviceStatus: { type: Object, default: () => ({}) }
 })
 const emit = defineEmits(['select', 'toggle-theme', 'open-project', 'new-project', 'context-menu'])
 
@@ -66,6 +71,14 @@ function carrierIcon(carrier) {
         @contextmenu.prevent.stop="onContextMenu($event, board)"
       >
         <WorkbenchIcon :name="board.icon" :size="22" />
+        <!-- 服务状态点（批次49）：只在载体声明了服务／外部 MCP 时出现；颜色语义见 serviceLogPool 头注释。 -->
+        <span
+          v-if="serviceStatus[board.id]?.color"
+          class="nx-rail-status-dot"
+          :class="`is-${serviceStatus[board.id].color}`"
+          :data-status="serviceStatus[board.id].color"
+          aria-hidden="true"
+        />
       </button>
     </template>
 

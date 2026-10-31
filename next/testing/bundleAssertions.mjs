@@ -114,18 +114,19 @@ try {
   // createMcpSurface 是「纯内核那一份」，19 把内核工具；技能读取是运行时自有工具，由 d2 核。
   check('d 产物自足可执行：import 产物后 in-process 列出内核 19 工具', listed.length === 19, `toolCount=${listed.length}`)
 
-  // d2：真实运行时面（内核 19 ＋ pinax_skill_read）。批次37 起技能目录随产物走；
-  // 空框架（没有载体）时，声明了载体写工具的技能会如实拒装 SKILL_TOOLS_NOT_ON_SURFACE——
-  // 这不是失败，工具本身必须在面上；「技能能装载」由末尾 m2 按完整面核。
+  // d2：真实运行时面（内核 19 ＋ pinax_skill_read ＋ pinax_service_log_list）。批次37 起技能目录随产物走；
+  // 批次49 起服务日志读取也是原生工具（没有服务时如实回空数组）。空框架（没有载体）时，
+  // 声明了载体写工具的技能会如实拒装 SKILL_TOOLS_NOT_ON_SURFACE——这不是失败，工具本身必须在面上；
+  // 「技能能装载」由末尾 m2 按完整面核。
   const runtime = mod.createAgentRuntime({})
   await runtime.start()
   const names = runtime.listTools().map((tool) => tool.name)
   const skillRejected = runtime.surfaceInfo().skills?.rejected?.map((item) => item.code) ?? []
   await runtime.stop()
-  check('d2 运行时面：内核 19 ＋ pinax_skill_read', names.length === 20 && names.includes('pinax_skill_read'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
+  check('d2 运行时面：内核 19 ＋ pinax_skill_read ＋ pinax_service_log_list（21）', names.length === 21 && names.includes('pinax_skill_read') && names.includes('pinax_service_log_list'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
   check('内核版本对外可见：KERNEL_INFO.contractVersion=1', mod.KERNEL_INFO?.contractVersion === '1', mod.NEXT_VERSION ?? '')
 } catch (error) {
-  check('d 产物自足可执行：import 产物后 in-process 列出 20 工具（内核 19 ＋ 技能读取）', false, String(error?.message || error).slice(0, 120))
+  check('d 产物自足可执行：import 产物后 in-process 列出 21 工具（内核 19 ＋ 技能读取＋服务日志读取）', false, String(error?.message || error).slice(0, 120))
 }
 
 console.log(`ℹ 原生模块：bundle 文本引用 better-sqlite3 ＝ ${/better-sqlite3/.test(bundle) ? '是' : '否'}；换档脚本在 win32 直接 return，Electron ABI 档要在出包后单独核`)
@@ -388,6 +389,29 @@ async function collectSourceFiles(directory, prefix = '') {
   }
   return found
 }
+
+// 批次49：服务与通知公共池必须真的接进两条写口，且状态点样式与原生工具都在产物里。
+const serviceLogPoolSource = await readFile(join(repoRoot, 'next', 'runtime', 'serviceLogPool.mjs'), 'utf-8').catch(() => '')
+check('l 公共池存在：next/runtime/serviceLogPool.mjs 导出 createServiceLogPool 且写清四色语义',
+  serviceLogPoolSource.includes('export function createServiceLogPool')
+    && ['green', 'orange', 'red', 'gray'].every((color) => serviceLogPoolSource.includes(`'${color}'`)),
+  serviceLogPoolSource ? `${(serviceLogPoolSource.length / 1024).toFixed(1)} kB` : '(文件缺失)')
+
+const supervisorSource = await readFile(join(repoRoot, 'next', 'runtime', 'serviceSupervisor.mjs'), 'utf-8')
+const mcpClientSource = await readFile(join(repoRoot, 'next', 'runtime', 'mcpClient.mjs'), 'utf-8')
+check('l2 池接两条写口：监督器与外部 MCP 客户端都往 logPool.append 记账（原有 onEvent／状态快照保留）',
+  supervisorSource.includes('logPool.append') && mcpClientSource.includes('logPool.append'),
+  `supervisor=${supervisorSource.includes('logPool.append')} mcpClient=${mcpClientSource.includes('logPool.append')}`)
+
+check('l3 竖条状态点进产物：渲染层 CSS 带 .nx-rail-status-dot 与四色修饰类',
+  rendererCss.includes('.nx-rail-status-dot')
+    && ['is-green', 'is-orange', 'is-red', 'is-gray'].every((name) => rendererCss.includes(`.nx-rail-status-dot.${name}`)),
+  rendererCss.includes('.nx-rail-status-dot') ? '四色齐' : '缺 .nx-rail-status-dot')
+
+const serviceLogToolsSource = await readFile(join(repoRoot, 'next', 'runtime', 'serviceLogTools.mjs'), 'utf-8').catch(() => '')
+check('l4 原生工具在册：pinax_service_log_list 由 serviceLogTools 登记，归属 kernel.runtime.services',
+  serviceLogToolsSource.includes("'pinax_service_log_list'") && serviceLogToolsSource.includes("'kernel.runtime.services'"),
+  serviceLogToolsSource ? 'registry ok' : '(文件缺失)')
 
 if (failures.length) {
   console.log(`\n打包门禁：${failures.length} 项不合格 → ${failures.join(' / ')}`)

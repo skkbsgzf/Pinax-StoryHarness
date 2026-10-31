@@ -45,6 +45,9 @@ export const IPC_CHANNELS = Object.freeze({
   // 协议 v3 的 services 面：看服务状态／重启一颗服务。渲染层只读状态，重启要走主进程。
   runtimeServices: 'pinax:agent:runtime:services',
   runtimeServiceRestart: 'pinax:agent:runtime:service-restart',
+  // 批次49：服务与通知的公共池。快照读取＋「知道了」确认；确认只落应用级偏好，不写项目 .pinax/。
+  runtimeServiceLog: 'pinax:agent:runtime:service-log',
+  runtimeServiceLogAck: 'pinax:agent:runtime:service-log-ack',
   // 协议 v3 的 entry 面：面板页要调工具走这一条。主进程只放只读工具，
   // 且只放「这块板自己那本工具」与内核只读工具——别的板的工具不开放。
   pluginToolCall: 'pinax:agent:plugin:tool-call',
@@ -118,7 +121,11 @@ export const IPC_EVENTS = Object.freeze(Object.values(IPC_EVENT))
 export const IPC_PUSH = Object.freeze({
   runtimeAskEvent: 'pinax:agent:runtime:ask-event',
   // 协议 v3 的 services 面：服务起停／崩溃／就绪都推给渲染层，右栏不用轮询。
-  runtimeServiceEvent: 'pinax:agent:runtime:service-event'
+  runtimeServiceEvent: 'pinax:agent:runtime:service-event',
+  // 批次49：公共池快照变化（起停、日志、确认）。与 runtimeServiceEvent 分开两条：
+  // 后者是「单个服务的一次事件」旧形状，消费方是右栏；这一条是含服务＋外部 MCP＋未确认
+  // 通知的全量快照，消费方是竖条状态点与设置页「服务与通知」——混用会让两边互相误解载荷。
+  runtimeServiceLogChanged: 'pinax:agent:runtime:service-log-changed'
 })
 
 export const IPC_PUSH_EVENTS = Object.freeze(Object.values(IPC_PUSH))
@@ -298,7 +305,7 @@ export function shellView(session) {
  *                       `.pinax/settings.json` 的读写器；声明白名单随注册表现取。
  *                       不注入时 settings:* 两条通道如实报缺。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, serviceLogPool = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
   // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
   // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
@@ -453,6 +460,18 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
       case IPC_CHANNELS.runtimeServiceRestart:
         if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')
         return session.runtime.restartService(input.id)
+      // 批次49：公共池。读是整份快照（服务＋MCP＋未确认通知），确认只动应用级时间戳。
+      case IPC_CHANNELS.runtimeServiceLog:
+        return ok({
+          log: serviceLogPool?.snapshot?.() ?? { at: new Date().toISOString(), ackedAt: null, carriers: [], entries: [] }
+        })
+      case IPC_CHANNELS.runtimeServiceLogAck: {
+        if (!serviceLogPool?.acknowledge) {
+          return fail('INVALID_INPUT', '服务通知池未接入（主进程未创建 serviceLogPool）：这条通道现在只报缺')
+        }
+        const acknowledged = serviceLogPool.acknowledge(input?.upToAt ?? new Date().toISOString())
+        return ok({ ackedAt: acknowledged?.value?.ackedAt ?? null, log: serviceLogPool.snapshot() })
+      }
       // 协议 v3 的 entry 面：面板页调工具。三道闸都在这一道通道里：
       //   1) 工具得在面上（认不出＝不存在，不猜）；
       //   2) 必须是只读工具（readOnlyHint === false 一律拒——面板没有写盘的口子）；
@@ -532,6 +551,8 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         if ('writingTextIndent' in input) patch.writingTextIndent = input.writingTextIndent
         if ('writingTypewriter' in input) patch.writingTypewriter = input.writingTypewriter
         if ('writingFocusMode' in input) patch.writingFocusMode = input.writingFocusMode
+        // 批次49：「服务与通知」的确认时间（应用级，不进项目）。只在显示确认时由设置页写。
+        if ('serviceNoticesAckedAt' in input) patch.serviceNoticesAckedAt = input.serviceNoticesAckedAt
         if ('theme' in input) patch.theme = input.theme
         const written = await prefs.write(patch)
         if (!written.ok) return written

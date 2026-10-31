@@ -48,10 +48,38 @@ function publicStatus(entry) {
   }
 }
 
+const SERVICE_EVENT_LEVEL = Object.freeze({
+  'service-starting': 'info',
+  'service-ready': 'info',
+  'service-unhealthy': 'warn',
+  'service-crashed': 'warn',
+  'service-failed': 'error',
+  'service-error': 'error',
+  'service-stopping': 'info',
+  'service-stopped': 'info'
+})
+
+function serviceEventMessage(type, entry) {
+  const name = `服务「${entry.id}」`
+  switch (type) {
+    case 'service-starting': return `${name}启动中`
+    case 'service-ready': return entry.port ? `${name}就绪（端口 ${entry.port}）` : `${name}就绪`
+    case 'service-unhealthy': return `${name}健康检查未通过：${entry.error ?? '未知原因'}`
+    case 'service-crashed': return `${name}进程崩溃：${entry.error ?? '未知原因'}`
+    case 'service-failed': return `${name}失败：${entry.error ?? '未知原因'}`
+    case 'service-error': return `${name}错误：${entry.error ?? '未知原因'}`
+    case 'service-stopping': return `${name}停止中`
+    case 'service-stopped': return `${name}已停止`
+    default: return `${name}${type}`
+  }
+}
+
 export function createServiceSupervisor(options = {}) {
   const specs = Array.isArray(options.services) ? options.services : []
   const pluginDirs = options.pluginDirs ?? {}
   const onEvent = typeof options.onEvent === 'function' ? options.onEvent : null
+  /** 公共池（批次49）：事件照旧推 onEvent，同时记一份进池——池是读数的唯一权威视图。 */
+  const logPool = options.logPool && typeof options.logPool.append === 'function' ? options.logPool : null
   const spawnImpl = typeof options.spawnImpl === 'function' ? options.spawnImpl : spawn
   const healthTimeoutMs = Number.isSafeInteger(options.healthTimeoutMs) ? options.healthTimeoutMs : DEFAULT_HEALTH_TIMEOUT_MS
   const healthIntervalMs = Number.isSafeInteger(options.healthIntervalMs) ? options.healthIntervalMs : DEFAULT_HEALTH_INTERVAL_MS
@@ -63,6 +91,20 @@ export function createServiceSupervisor(options = {}) {
   let stopping = false
 
   function emit(type, entry) {
+    if (logPool) {
+      try {
+        logPool.append({
+          source: { kind: 'service', id: entry.id, carrierId: entry.pluginId },
+          level: SERVICE_EVENT_LEVEL[type] ?? 'info',
+          message: serviceEventMessage(type, entry),
+          data: { port: entry.port ?? null, restarts: entry.restarts ?? 0 },
+          // 失败与健康检查反复失败需要作者确认（设置页「知道了」）。
+          confirm: type === 'service-failed' || type === 'service-unhealthy'
+        })
+      } catch {
+        // 记账坏掉不影响被监督的服务本身。
+      }
+    }
     if (!onEvent) return
     try {
       onEvent({ type, service: publicStatus(entry) })

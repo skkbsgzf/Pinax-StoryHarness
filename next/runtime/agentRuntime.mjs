@@ -21,6 +21,8 @@ export function createAgentRuntime(options = {}) {
   const fileService = options.fileService ?? null
   const runner = options.runner ?? null
   const grants = buildGrantTable(RUNTIME_CONTRACT.scopes)
+  /** 公共池（批次49）：应用级一份，随运行时装配同步声明与实时状态；读写都归这一处。 */
+  const serviceLogPool = options.serviceLogPool ?? null
   let link = null
   let toolCache = null
   let surfaceState = null
@@ -29,6 +31,8 @@ export function createAgentRuntime(options = {}) {
   /** 载体声明的服务（协议 v3 的 services 面）：运行时起它、探它、收它。 */
   let supervisor = null
   let serviceFailures = []
+  /** 外部 MCP 的实时状态（按 id 收）；池的每载体行用它判断红／橙／灰。 */
+  let mcpLive = new Map()
 
   /**
    * 把一次项目变更交给每个订阅载体的 impl.onProjectEvent（批次37，M2.5-C 承诺的兑现）。
@@ -65,6 +69,43 @@ export function createAgentRuntime(options = {}) {
     return fileService?.root ?? options.view?.root ?? null
   }
 
+  /**
+   * 池的声明面：载体清单里声明的 services／mcp 逐条摊出来（载体标题从注册表现取）。
+   * 没声明的载体不进池——竖条据此不给 novel／outline 画灰点。
+   */
+  function buildServiceDeclarations() {
+    const view = options.view ?? {}
+    const titleOf = (pluginId) => registry?.get?.(pluginId)?.title ?? pluginId
+    const declarations = []
+    for (const spec of Array.isArray(view.services) ? view.services : []) {
+      const carrierId = String(spec?.pluginId ?? '')
+      const id = String(spec?.id ?? carrierId)
+      if (!carrierId || !id) continue
+      declarations.push({
+        carrierId,
+        carrierTitle: titleOf(carrierId),
+        kind: 'service',
+        id,
+        port: Number.isSafeInteger(spec?.port) ? spec.port : null,
+        title: id
+      })
+    }
+    for (const spec of Array.isArray(view.mcp) ? view.mcp : []) {
+      const carrierId = String(spec?.pluginId ?? '')
+      const id = String(spec?.id ?? spec?.prefix ?? carrierId)
+      if (!carrierId || !id) continue
+      declarations.push({
+        carrierId,
+        carrierTitle: titleOf(carrierId),
+        kind: 'mcp',
+        id,
+        transport: spec?.transport ? String(spec.transport) : null,
+        title: id
+      })
+    }
+    return declarations
+  }
+
   const runtime = {
     contract: RUNTIME_CONTRACT,
     grantTable: grants,
@@ -72,23 +113,52 @@ export function createAgentRuntime(options = {}) {
     /** 工具面在 start() 里现取：项目打开与否、启用了哪些载体，都只在这一刻决定面的形状。 */
     async start() {
       if (link) return ok({ already: true, toolCount: toolCache?.length ?? 0 })
+      // 池先认声明：状态点／设置页在服务起来之前也知道「这个载体声明了什么」，只是先灰着。
+      if (serviceLogPool?.setDeclarations) serviceLogPool.setDeclarations(buildServiceDeclarations())
       // 服务先起：载体的外部 MCP／面板可能指着自己起的本地服务，顺序反了就是连不上。
       const serviceSpecs = Array.isArray(options.view?.services) ? options.view.services : []
+      const eventSink = typeof options.onServiceEvent === 'function' ? options.onServiceEvent : null
       if (serviceSpecs.length) {
         supervisor = createServiceSupervisor({
           services: serviceSpecs,
           pluginDirs: buildPluginDirs(),
           // 项目根摆进环境：服务不猜路径，用不用它自己决定。
           baseEnv: { ...process.env, ...(projectRootOf() ? { PINAX_PROJECT_ROOT: String(projectRootOf()) } : {}) },
-          onEvent: typeof options.onServiceEvent === 'function' ? options.onServiceEvent : null
+          logPool: serviceLogPool,
+          // 每次状态变化都把全量状态同步进池（池行色的数据源），再照旧推给外壳。
+          onEvent: (payload) => {
+            if (serviceLogPool?.setServiceStatuses && supervisor) serviceLogPool.setServiceStatuses(supervisor.status())
+            if (eventSink) eventSink(payload)
+          }
         })
         const startedServices = await supervisor.start()
         serviceFailures = startedServices.value?.failed ?? []
+        if (serviceLogPool?.setServiceStatuses) serviceLogPool.setServiceStatuses(supervisor.status())
       }
+      mcpLive = new Map()
       const surface = options.surface
         ? { server: options.surface, carrierCount: 0, carrierToolNames: [], missingImplementations: [], aggregated: false, subscribedCarriers: [] }
-        : await createRuntimeSurface({ registry, view: options.view, fileService, advisorBaseUrl: options.advisorBaseUrl, skillsDir: options.skillsDir, pluginDirs: buildPluginDirs() })
+        : await createRuntimeSurface({
+          registry,
+          view: options.view,
+          fileService,
+          advisorBaseUrl: options.advisorBaseUrl,
+          skillsDir: options.skillsDir,
+          pluginDirs: buildPluginDirs(),
+          serviceLogPool,
+          // 外部 MCP：连接事件同时进池，并把每台的最新快照合进池的全量状态。
+          mcpOptions: {
+            logPool: serviceLogPool,
+            onEvent: (snapshot) => {
+              if (!snapshot?.id) return
+              mcpLive.set(String(snapshot.id), snapshot)
+              if (serviceLogPool?.setMcpStatuses) serviceLogPool.setMcpStatuses([...mcpLive.values()])
+            }
+          }
+        })
       surfaceState = surface
+      for (const server of surface.external?.servers ?? []) mcpLive.set(String(server.id), server)
+      if (serviceLogPool?.setMcpStatuses) serviceLogPool.setMcpStatuses([...mcpLive.values()])
       link = await connectInProcess(surface.server, { clientName: options.clientName ?? 'pinax-next-shell' })
       toolCache = await link.listTools()
       // 宿主替声明了 project.changed 的启用载体挂投递：只认当前项目根，换项目＝换运行时＝新订阅。
@@ -132,6 +202,11 @@ export function createAgentRuntime(options = {}) {
         supervisor = null
         serviceFailures = []
       }
+      // 关项目／换项目：状态与声明一起清（没项目就没有点），确认时间归应用级偏好，不动。
+      if (serviceLogPool?.setServiceStatuses) serviceLogPool.setServiceStatuses([])
+      mcpLive = new Map()
+      if (serviceLogPool?.setMcpStatuses) serviceLogPool.setMcpStatuses([])
+      if (serviceLogPool?.setDeclarations) serviceLogPool.setDeclarations([])
       if (!link) return ok({ stopped: false })
       await link.close()
       // 外部 MCP 的子进程／长连接不归聚合面收：它由这里逐一关闭。

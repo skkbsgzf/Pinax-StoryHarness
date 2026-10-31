@@ -277,7 +277,7 @@ test('空框架：不装任何插件，外壳可进入、可打开项目、可�
     // 这条断言守的是「运行时与载体启停是两回事」，不是「载体不能禁用」。
     assert.equal(view.value.runtime.disableable, false)
     assert.equal(view.value.runtime.ownsSlot, 'right')
-    assert.equal(view.value.runtime.tools.length, 20, '运行时工具面不依附于任何插件（内核 19 ＋ 技能读取 1）')
+    assert.equal(view.value.runtime.tools.length, 21, '运行时工具面不依附于任何插件（内核 19 ＋ 技能读取 1 ＋ 服务日志读取 1）')
     assert.equal(view.value.runtime.started, true, '项目没打开成功时运行时也必须活着')
 
     // 「问一句话」在 M1 的如实形态：通道通、预算通，但没有模型运行器 → 明确报缺，不编回答。
@@ -639,7 +639,8 @@ test('主进程把偏好真正接到网关与窗口：端点 setter、启动即�
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
   assert.match(mainSource, /createAppPreferences\(/, '主进程必须创建偏好存储')
   assert.match(mainSource, /applyModelPlaneEndpoint\(stored\.modelPlaneEndpoint\)/, '启动时必须应用已存端点')
-  assert.match(mainSource, /prefs,\s*\n\s*probeModelPlane/, '分发器必须注入偏好与探测')
+  // 批次49：服务日志池也在这里注入（分发器读快照／确认都靠它）。
+  assert.match(mainSource, /prefs,\s*\n\s*serviceLogPool,\s*\n\s*probeModelPlane/, '分发器必须注入偏好、服务日志池与探测')
   assert.match(mainSource, /onPrefsApplied/, '保存后的生效钩子必须接上')
   assert.match(mainSource, /showOpenDialog/, '选目录必须走系统对话框（批次9：新项目落点）')
   assert.doesNotMatch(mainSource, /\.\.\/\.\.\/server\//, '外壳不得直接 import server/——端点收在 runtime 层（modelPlaneProbe）')

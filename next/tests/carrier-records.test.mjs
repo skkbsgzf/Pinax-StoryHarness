@@ -209,7 +209,7 @@ test('记录底座真链路：空文档起步、带修订号写入、未传字�
     const surface = runtime.surfaceInfo()
     const expectedNames = [...MATERIAL_TOOL_NAMES, ...COMIC_TOOL_NAMES, ...VIDEO_TOOL_NAMES, ...EXPERIENCE_TOOL_NAMES, ...ONLINE_TOOL_NAMES, ...SCRIPT_TOOL_NAMES].sort()
     assert.deepEqual([...surface.carrierToolNames].sort(), expectedNames, '五块记录载体各四把＋依赖闭包带进来的剧本三把')
-    assert.equal(runtime.listTools().length, 19 + 1 + 23 + 3, '19 内核 ＋ 技能读取 1 ＋ 载体自有 23 ＋ 漫画 comfy 桥三把')
+    assert.equal(runtime.listTools().length, 19 + 1 + 1 + 23 + 3, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 载体自有 23 ＋ 漫画 comfy 桥三把')
     assert.equal(runtime.ownerOf('pinax_material_list'), MATERIAL_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_online_remove'), ONLINE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_script_list'), SCRIPT_CARRIER_ID, '闭包装进来的剧本工具确实在面上')

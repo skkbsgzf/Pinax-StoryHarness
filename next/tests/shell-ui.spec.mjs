@@ -108,8 +108,9 @@ describe('空框架外壳', () => {
 
     // 渲染层的外呼只有这几条：view（读视图）、偏好（D2 主题迁移/持久化）、
     // 以及 M2.5-C 的工作区四轴（workspaceLoad／workspaceSave 是唯一落盘点，坐标与形态都走它）。
+    // 批次49 起挂载时多一次服务日志池快照读（只读，竖条状态点与设置页共用）。
     // 它拿不到内核实现，也就没有旁路写盘的可能。
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave]
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -1353,8 +1354,9 @@ describe('载体管理面板（工单A1）', () => {
     await flushPromises()
     // 没有 project 就没有面板：carrierSetEnabled/carrierSetPrimary 在通道层同样要求先有项目。
     expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
-    // 工作区通道（M2.5-C）随挂载就会走一次读：那是宿主状态，不是项目写入。
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave]
+    // 工作区通道（M2.5-C）随挂载就会走一次读：那是宿主状态，不是项目写入；
+    // 服务日志池快照（批次49）同理，只读不写。
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -1979,9 +1981,9 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     const labels = wrapper.findAll('.settings-group-label').map((node) => node.text())
     expect(labels.slice(0, 3)).toEqual(['应用', '项目', '文档'])
 
-    // 静态七节按组序排列：应用（偏好与模型/备份与恢复）→ 项目（载体管理/导入既有稿/新建项目/主载体选择）→ 文档（文档历史）。
+    // 静态八节按组序排列：应用（偏好与模型/备份与恢复/服务与通知）→ 项目（载体管理/导入既有稿/新建项目/主载体选择）→ 文档（文档历史）。
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
-    expect(tabs.slice(0, 7)).toEqual(['偏好与模型', '备份与恢复', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
+    expect(tabs.slice(0, 8)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
     wrapper.unmount()
   })
 
@@ -2014,11 +2016,11 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     expect(wrapper.findAll('.settings-navigation .settings-tab')).toHaveLength(0)
     expect(wrapper.find('[data-test="settings-empty"]').text()).toBe('无匹配设置')
 
-    // 清空：目录恢复（静态七节在前，载体占位节在后）。
+    // 清空：目录恢复（静态八节在前，载体占位节在后）。
     await search.setValue('')
     await flushPromises()
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
-    expect(tabs.slice(0, 7)).toEqual(['偏好与模型', '备份与恢复', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
+    expect(tabs.slice(0, 8)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
     wrapper.unmount()
   })
 

@@ -88,7 +88,7 @@ test('工具面：大纲载体启用后两把工具进面、归属它，内核�
   try {
     assert.equal(opened.value.view.projectKind, 'generic', '大纲可以是泛型项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...OUTLINE_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 21, '19 内核 ＋ 技能读取 1 ＋ 大纲自有 1 个新名字（outline_save）；outline_read 是认领名不虚增')
+    assert.equal(runtime.listTools().length, 22, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 大纲自有 1 个新名字（outline_save）；outline_read 是认领名不虚增')
     assert.equal(runtime.ownerOf('pinax_outline_read'), OUTLINE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_outline_save'), OUTLINE_CARRIER_ID)
     const tools = new Map(runtime.listTools().map((tool) => [tool.name, tool]))

@@ -70,7 +70,7 @@ test('工具面：构思载体启用后两把工具进面、归属它', async ()
   try {
     assert.equal(opened.value.view.projectKind, 'generic', '构思可以是泛型项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...NOTES_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 22, '19 内核 ＋ 技能读取 1 ＋ 构思自有 2')
+    assert.equal(runtime.listTools().length, 23, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 构思自有 2')
     assert.equal(runtime.ownerOf('pinax_notes_list'), NOTES_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_notes_save'), NOTES_CARRIER_ID)
   } finally {

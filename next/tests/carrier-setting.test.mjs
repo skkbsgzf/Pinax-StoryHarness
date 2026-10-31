@@ -74,7 +74,7 @@ test('工具面：设定载体启用后两把工具进面、归属它，内核 p
   const { workspace, runtime } = await settingProject('setting-surface')
   try {
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...SETTING_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 22, '19 内核 ＋ 技能读取 1 ＋ 设定自有 2')
+    assert.equal(runtime.listTools().length, 23, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 设定自有 2')
     assert.equal(runtime.ownerOf('pinax_rule_list'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_rule_save'), SETTING_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_rule_write'), 'kernel', '内核那把写工具照旧不认领，写族闸点名走自有 save')

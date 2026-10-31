@@ -8,7 +8,7 @@ import { createAppPreferences, normalizePrefs, PREFS_DEFAULTS } from '../runtime
 /**
  * 应用级偏好存储（批次8①＋D1 历史间隔＋工单B 写作偏好）。三条合同：
  *   1) 字段只认 modelPlaneEndpoint / uiZoom / historyIntervalMinutes / writingFontSize / writingLineHeight /
- *      writingParagraphSpacing / writingTextIndent / writingTypewriter / writingFocusMode，
+ *      writingParagraphSpacing / writingTextIndent / writingTypewriter / writingFocusMode / serviceNoticesAckedAt，
  *      值域在校验层挡住（写坏文件＝外壳起不来的事不能发生）；
  *   2) 文件损坏/缺失按默认值继续，不崩；
  *   3) 写入是原子的（复用 fs/atomicWrite），落盘内容可被下一次 read 读回。
@@ -45,7 +45,9 @@ test('写入往返：合法端点与缩放落盘并可读回；尾部斜杠归�
     writingParagraphSpacing: 0.8,
     writingTextIndent: 2,
     writingTypewriter: false,
-    writingFocusMode: false
+    writingFocusMode: false,
+    // 批次49：「服务与通知」确认水位（应用级；没确认过＝null）。
+    serviceNoticesAckedAt: null
   })
   const onDisk = JSON.parse(await readFile(file, 'utf-8'))
   assert.equal(onDisk.modelPlaneEndpoint, 'http://127.0.0.1:8461')

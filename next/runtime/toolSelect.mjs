@@ -16,6 +16,9 @@
  */
 export const TOOL_SELECT_LIMIT = 6
 
+/** 服务面意图词（批次49）：问服务／端口／日志／通知／状态时，先给读服务日志的那一把。 */
+const SERVICE_INTENT = /(服务|端口|日志|通知|状态)/u
+
 /** 写意图词。只做粗判：真正的安全边界在写策略层，不在选工具层。 */
 const WRITE_INTENT = /(改|重写|改写|更新|保存|重构|调整|合并|拆分|新增|删除|落盘|润色|扩写|精简)/u
 
@@ -86,6 +89,8 @@ export function selectTools({ tools = [], intent = '', skill = null, limit = TOO
   }
 
   take('pinax_project_context')
+  // 服务面：意图里提到服务／端口／日志／通知／状态，就把只读日志工具带进读槽。
+  if (SERVICE_INTENT.test(text)) take('pinax_service_log_list')
 
   const domain = DOMAINS.find((item) => item.intent.test(text)) ?? null
   const writes = domain

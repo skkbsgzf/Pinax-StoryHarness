@@ -72,6 +72,8 @@ export async function connectMcpServer(spec = {}, options = {}) {
   const emit = typeof options.onEvent === 'function' ? options.onEvent : null
   const reconnect = options.reconnect !== false
   const baseEnv = options.env ?? process.env
+  /** 公共池（批次49）：连接／断线／调用失败除原有状态快照外，同时记一份进池。 */
+  const logPool = options.logPool && typeof options.logPool.append === 'function' ? options.logPool : null
 
   const prefix = String(spec.prefix ?? spec.id ?? '')
   const state = {
@@ -94,6 +96,21 @@ export async function connectMcpServer(spec = {}, options = {}) {
   let closing = false
   let reconnectTimer = null
   let generation = 0
+
+  function record(level, message, extra = {}) {
+    if (!logPool) return
+    try {
+      logPool.append({
+        source: { kind: 'mcp', id: state.id, carrierId: state.pluginId ?? '' },
+        level,
+        message,
+        ...(extra.data ? { data: { ...extra.data } } : {}),
+        ...(extra.confirm ? { confirm: true } : {})
+      })
+    } catch {
+      // 记账坏掉不影响连接链路本身。
+    }
+  }
 
   function snapshot() {
     return {
@@ -152,6 +169,7 @@ export async function connectMcpServer(spec = {}, options = {}) {
     const delay = Math.min(MAX_BACKOFF_MS, 1000 * 2 ** Math.min(attempt, 5))
     state.reconnects += 1
     state.status = 'reconnecting'
+    record('warn', `外部 MCP「${state.id}」断线，${Math.round(delay / 1000)} 秒后第 ${state.reconnects} 次重连`)
     publish()
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
@@ -171,6 +189,7 @@ export async function connectMcpServer(spec = {}, options = {}) {
     nextTransport.onclose = () => {
       if (closing || mine !== generation) return
       state.status = 'closed'
+      record('warn', `外部 MCP「${state.id}」连接断开`)
       publish()
       scheduleReconnect()
     }
@@ -208,6 +227,7 @@ export async function connectMcpServer(spec = {}, options = {}) {
       state.status = 'ready'
       state.connectedAt = new Date().toISOString()
       state.pid = typeof nextTransport.pid === 'number' ? nextTransport.pid : null
+      record('info', `外部 MCP「${state.id}」已连接（${tools.length} 个工具）`)
       publish()
     } catch (error) {
       // 连不上的传输自己也要收尸：SSE 的 EventSource 自带重试，放着不管会一直攥着定时器与套接字，
@@ -215,6 +235,7 @@ export async function connectMcpServer(spec = {}, options = {}) {
       await nextTransport.close().catch(() => {})
       state.status = 'failed'
       state.error = String(error?.message ?? error)
+      record('error', `外部 MCP「${state.id}」连接失败：${state.error}`, { confirm: true })
       publish()
       scheduleReconnect()
       throw error
@@ -235,6 +256,7 @@ export async function connectMcpServer(spec = {}, options = {}) {
     },
     async callTool(remoteName, args = {}) {
       if (state.status !== 'ready' || !client) {
+        record('error', `外部 MCP「${state.id}」当前不可用（${state.status}）：调用 ${remoteName} 被拒`)
         return fail('IO_FAILED', `外部 MCP「${state.id}」当前不可用（${state.status}）`, {
           service: state.id, status: state.status, error: state.error
         })
@@ -243,7 +265,9 @@ export async function connectMcpServer(spec = {}, options = {}) {
         const response = await client.callTool({ name: String(remoteName), arguments: args }, undefined, { timeout: timeoutMs })
         return normalizeToolResult(response)
       } catch (error) {
-        return fail('IO_FAILED', `外部 MCP「${state.id}」调用 ${remoteName} 失败：${String(error?.message ?? error)}`, {
+        const message = `外部 MCP「${state.id}」调用 ${remoteName} 失败：${String(error?.message ?? error)}`
+        record('error', message)
+        return fail('IO_FAILED', message, {
           service: state.id, tool: remoteName
         })
       }
@@ -255,8 +279,10 @@ export async function connectMcpServer(spec = {}, options = {}) {
         clearTimeout(reconnectTimer)
         reconnectTimer = null
       }
+      const wasClosed = state.closed
       state.status = 'closed'
       state.closed = true
+      if (!wasClosed) record('info', `外部 MCP「${state.id}」已关闭`)
       publish()
       const target = client
       const staleTransport = transport

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CenterSlotHost from './CenterSlotHost.vue'
@@ -18,11 +18,12 @@ import HistorySection from './settings/HistorySection.vue'
 import ProposalsSection from './settings/ProposalsSection.vue'
 import ExportSection from './settings/ExportSection.vue'
 import WritingPrefsSection from './settings/WritingPrefsSection.vue'
+import ServicesSection from './settings/ServicesSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
-import { IPC_CHANNELS, IPC_EVENT } from './ipcContract.mjs'
+import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 import {
   PANE_FORMS,
@@ -280,6 +281,37 @@ const settingsOpen = ref(false)
 const activeSection = ref('prefs')
 
 /**
+ * 服务与通知（批次49）：公共池的唯一读数口。
+ * 启动时取一份快照，之后只跟池的推送增量刷新——竖条状态点与设置页「服务与通知」共用这一份，不轮询。
+ * 快照经 provide 交给 CarrierPaneHost（漫画「预览」钮按声明里的端口拼地址，不在这里猜）。
+ */
+const EMPTY_SERVICE_LOG = Object.freeze({ at: null, ackedAt: null, carriers: [], entries: [] })
+const serviceSnapshot = ref({ ...EMPTY_SERVICE_LOG })
+let offServiceLog = null
+
+async function loadServiceSnapshot() {
+  if (typeof props.bridge?.request !== 'function') return
+  try {
+    const result = await props.bridge.request(IPC_CHANNELS.runtimeServiceLog, {})
+    if (result?.ok) serviceSnapshot.value = result.value?.log ?? { ...EMPTY_SERVICE_LOG }
+  } catch {
+    // 状态点是旁路：读不到就保持上一份，不拦外壳。
+  }
+}
+
+/** 载体 id → 四色状态（只给声明了服务／外部 MCP 的载体；没声明的板不画点）。 */
+const serviceStatus = computed(() => {
+  const map = {}
+  for (const carrier of serviceSnapshot.value?.carriers ?? []) {
+    if (!carrier?.carrierId || !carrier?.color) continue
+    map[carrier.carrierId] = { color: carrier.color, unackedNotices: carrier.unackedNotices ?? 0 }
+  }
+  return map
+})
+
+provide('pinaxServiceSnapshot', serviceSnapshot)
+
+/**
  * 载体声明节的内容组件表（工单B · P14 第三步）：键是「声明 id」（不是载体 id）。
  * 第一个真内容＝novel.writing → WritingPrefsSection；props 里是当前偏好值。
  * 合并（声明 → 目录项 → 组件）在 SettingsModal.carrierSections 里做：没有映射的声明仍出空态。
@@ -311,6 +343,8 @@ const settingsSections = computed(() => [
   { id: 'prefs', title: '偏好与模型', group: '应用', keywords: ['外观主题', '模型面端点', '界面缩放', '应用级偏好', '明暗'], component: PrefsSection, props: { bridge: props.bridge, scheme: scheme.value } },
   // 工单G2：备份与恢复（整目录复制，零新依赖）。导出/恢复都是主进程的结构动作，与导入同级。
   { id: 'backup', title: '备份与恢复', group: '应用', keywords: ['导出备份', '从备份恢复', '历史仓', '复制'], component: BackupSection, props: { bridge: props.bridge, project: project.value } },
+  // 批次49：服务与通知（公共池）。一行一个声明的服务／外部 MCP：状态、日志尾巴、重启与确认。
+  { id: 'services', title: '服务与通知', group: '应用', keywords: ['服务', '外部 MCP', '端口', '日志', '通知', '重启', '状态', 'comfy'], component: ServicesSection, props: { bridge: props.bridge, snapshot: serviceSnapshot.value, reload: loadServiceSnapshot } },
   // 项目
   { id: 'carriers', title: '载体管理', group: '项目', keywords: ['板块', '载体', '启用', '停用', '主载体', '权限', '数据目录'], component: CarriersSection, props: { carriers: carriers.value } },
   // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
@@ -1464,6 +1498,7 @@ onMounted(() => {
   applyScheme(scheme.value)
   void syncThemeFromPrefs()
   void loadWritingPrefs()
+  void loadServiceSnapshot()
   void refresh()
   // 视口跨过 860px：窄屏收起索引窗（它会盖住正文），宽屏展开（桌面形态）。
   narrowQuery?.addEventListener?.('change', (event) => {
@@ -1475,6 +1510,10 @@ onMounted(() => {
   // 项目事件（批次39）：同一条桥，只接「有人消费」的 kind；退订在 onBeforeUnmount。
   if (typeof props.bridge?.onEvent === 'function') {
     offProjectEvent = props.bridge.onEvent(IPC_EVENT.projectEvent, onProjectEvent)
+    // 服务与通知池：主进程每次变化推一份全量快照，这里只替换引用（不轮询）。
+    offServiceLog = props.bridge.onEvent(IPC_PUSH.runtimeServiceLogChanged, (payload) => {
+      serviceSnapshot.value = payload && Array.isArray(payload.carriers) ? payload : { ...EMPTY_SERVICE_LOG }
+    })
   }
   // 页内菜单行的收起手势挂在 document 上：Esc 与点击菜单外都收（下拉不许一直挂着）。
   document.addEventListener('keydown', onTitlebarKeydown)
@@ -1492,6 +1531,10 @@ onBeforeUnmount(() => {
   if (offProjectEvent) {
     offProjectEvent()
     offProjectEvent = null
+  }
+  if (offServiceLog) {
+    offServiceLog()
+    offServiceLog = null
   }
   if (projectEventTimer) {
     clearTimeout(projectEventTimer)
@@ -1585,6 +1628,7 @@ onBeforeUnmount(() => {
         :active-id="activeBoardId"
         :open-id="indexOpen ? activeBoardId : null"
         :scheme="scheme"
+        :service-status="serviceStatus"
         @select="selectBoard"
         @toggle-theme="toggleTheme"
         @open-project="openProjectFolder"

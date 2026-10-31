@@ -14,6 +14,7 @@ import { createProposalStore } from '../runtime/proposalStore.mjs'
 import { CARRIER_WRITE_CLASS, KERNEL_WRITE_CLASS } from '../runtime/kernelWriteGuard.mjs'
 import { emitProjectEvent, projectEventKindForPath, subscribeProjectEvents } from '../runtime/eventBus.mjs'
 import { createAppPreferences } from '../runtime/appPreferences.mjs'
+import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
 import { planImport, runImport } from '../runtime/projectImportAdapter.mjs'
@@ -366,6 +367,15 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   const stored = storedPrefs.ok ? storedPrefs.value : { modelPlaneEndpoint: null, uiZoom: null, historyIntervalMinutes: 5 }
   if (stored.modelPlaneEndpoint) applyModelPlaneEndpoint(stored.modelPlaneEndpoint)
   const uiZoom = resolveUiZoom({ storedZoom: stored.uiZoom })
+  // 服务与外部 MCP 的公共池（批次49）：应用级一份，跨项目共用；确认水位随偏好落盘。
+  // 每次池变化推一份全量快照（服务＋MCP＋未确认通知），竖条与设置页据此刷新，不轮询。
+  const serviceLogPool = createServiceLogPool({
+    ackAt: stored.serviceNoticesAckedAt ?? null,
+    onAckPersist: async (at) => {
+      await prefs.write({ serviceNoticesAckedAt: at })
+    },
+    onChange: (snapshot) => sendToRenderer(IPC_PUSH.runtimeServiceLogChanged, snapshot)
+  })
   // 收口包⑤：窗控浮层的启动态＝已存主题（未迁移过就按渲染层同一个默认值 light）＋实际缩放。
   currentUiZoom = uiZoom
   currentScheme = stored.theme === 'dark' ? 'dark' : 'light'
@@ -473,12 +483,15 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     runtimeOptions: {
       runner: createAdvisorRunner({ toolLoop: createProjectToolLoop() }),
       // 协议 v3 的 services 面：服务状态变化推给渲染层（起停／崩溃／就绪），右栏不必轮询。
-      onServiceEvent: (payload) => sendToRenderer(IPC_PUSH.runtimeServiceEvent, payload)
+      onServiceEvent: (payload) => sendToRenderer(IPC_PUSH.runtimeServiceEvent, payload),
+      // 批次49：同一个池交给运行时——声明与实时状态由它同步，日志由监督器／MCP 客户端写入。
+      serviceLogPool
     }
   })
   dispatcher = createIpcDispatcher({
     session,
     prefs,
+    serviceLogPool,
     probeModelPlane: () => probeModelPlane(),
     pickProjectDir: async (input = {}) => {
       // 新项目落点（批次9）：createProject 只吃空目录，Documents 这种会话根永远非空——

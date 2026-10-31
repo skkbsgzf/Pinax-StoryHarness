@@ -62,7 +62,7 @@ test('工具面聚合：启用小说后面是 25 个工具，两个只读名归�
   try {
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 26, '19 内核 ＋ 技能读取一把 ＋ 载体自有六把（正文 save／delete／rename 与提案三把）；两个认领名不虚增面')
+    assert.equal(started.value.toolCount, 27, '19 内核 ＋ 技能读取一把 ＋ 服务日志读取一把 ＋ 载体自有六把（正文 save／delete／rename 与提案三把）；两个认领名不虚增面')
     assert.equal(started.value.aggregatedSurface, true)
     assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...NOVEL_TOOL_NAMES].sort())
 
@@ -340,7 +340,7 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
   })
   try {
     await runtime.start()
-    assert.equal(runtime.listTools().length, 26, '19 内核 ＋ 技能读取 1 ＋ 小说自有 6（停用后回落内核：只剩内核＋技能读取）')
+    assert.equal(runtime.listTools().length, 27, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 小说自有 6（停用后回落内核：只剩内核＋技能读取）')
     assert.ok(opened.value.view.enabled.includes(NOVEL_CARRIER_ID))
 
     const disabled = await setCarrierEnabled({ root, registry, pluginId: NOVEL_CARRIER_ID, enabled: false, expectedRevision: opened.value.document.carriers.revision })
@@ -352,7 +352,7 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
     const runtimeAfter = createAgentRuntime({ registry, fileService: reopened.value.fileService, view: reopened.value.view })
     await runtimeAfter.start()
     const names = runtimeAfter.listTools().map((tool) => tool.name)
-    assert.equal(names.length, 20, '载体工具从面上下掉，内核 19 工具＋技能读取一个不少')
+    assert.equal(names.length, 21, '载体工具从面上下掉，内核 19 工具＋技能读取＋服务日志读取一个不少')
     assert.equal(names.includes('pinax_chapter_save'), false)
     assert.equal(runtimeAfter.ownerOf('pinax_chapter_list'), 'kernel', '停用＝回落内核，不拿停用者的 scope 卡人')
 
@@ -371,7 +371,7 @@ test('没有项目（view 为空）时面就是内核 19 工具＋技能读取�
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry.install(plugin.manifest, plugin.impl, plugin.meta)
   const runtime = createAgentRuntime({ registry })
   const started = await runtime.start()
-  assert.equal(started.value.toolCount, 20)
+  assert.equal(started.value.toolCount, 21)
   assert.equal(started.value.aggregatedSurface, false)
   assert.deepEqual(runtime.surfaceInfo().carrierToolNames, [])
   await runtime.stop()

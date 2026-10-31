@@ -92,7 +92,7 @@ test('工具面：世界书载体启用后三把工具进面、归属它；内�
   const { workspace, runtime } = await worldbookProject('worldbook-surface')
   try {
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...WORLDBOOK_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 21, '19 内核 ＋ 技能读取 1 ＋ 世界书自有 1 个新名字（worldbook_save）；list/read 是认领名不虚增')
+    assert.equal(runtime.listTools().length, 22, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 世界书自有 1 个新名字（worldbook_save）；list/read 是认领名不虚增')
     assert.equal(runtime.ownerOf('pinax_worldbook_list'), WORLDBOOK_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_save'), WORLDBOOK_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_worldbook_write'), 'kernel', '内核那份写工具照旧不认领，写族闸点名走自有 save')

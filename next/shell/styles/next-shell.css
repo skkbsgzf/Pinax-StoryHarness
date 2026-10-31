@@ -301,6 +301,25 @@ body {
   background: transparent;
   color: var(--text-muted);
 }
+/* 服务状态点（批次49）：8px 圆点，贴竖条格右上角；颜色语义见 next/runtime/serviceLogPool.mjs 头注释。
+   四色只走 token（--success／--signal-warm／--control-danger／--text-muted）；
+   灰点用描边不填充，免得在 chrome 底上跟图标糊成一片。没声明服务／MCP 的载体不出点。 */
+.nx-rail-status-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.nx-rail-status-dot.is-green { background: var(--success); }
+.nx-rail-status-dot.is-orange { background: var(--signal-warm); }
+.nx-rail-status-dot.is-red { background: var(--control-danger); }
+.nx-rail-status-dot.is-gray {
+  background: transparent;
+  border: 1px solid var(--text-muted);
+}
 
 /* —— 索引窗 ————————————————————————————————————————————————
    行本身用老版的 .workspace-nav-item / --tree 词汇

@@ -5,6 +5,7 @@ import { collectPluginDirs } from './pluginDirs.mjs'
 import { KERNEL_WRITE_TOOL_NAMES, guardKernelToolCall } from './kernelWriteGuard.mjs'
 import { loadSkills } from '../skills/loadSkills.mjs'
 import { createSkillTools, SKILL_READ_TOOL } from './skillTools.mjs'
+import { createServiceLogTools, SERVICE_LOG_LIST_TOOL } from './serviceLogTools.mjs'
 
 /**
  * 运行时的工具面（WP3 → M2 · WP6）。
@@ -54,14 +55,17 @@ export function createMcpSurface(options = {}) {
  * 否则「运行时不改原稿」就只在装了板块的项目里成立。
  * `aggregated` 仍按「有没有载体工具进面」记账，右栏与验收读它。
  */
-export async function createRuntimeSurface({ registry, view, fileService, advisorBaseUrl, projectRoot, skillsDir, mcpOptions, pluginDirs } = {}) {
+export async function createRuntimeSurface({ registry, view, fileService, advisorBaseUrl, projectRoot, skillsDir, mcpOptions, pluginDirs, serviceLogPool = null } = {}) {
   const kernelServer = createPinaxMcpServer({ name: SURFACE_NAME, version: SURFACE_VERSION, advisorBaseUrl })
   const { map, missing } = collectCarrierTools({ registry, view, fileService })
   const root = projectRoot ?? view?.root ?? fileService?.root ?? null
-  // 技能装载：tools 必须都在这一刻的面上（内核 ∪ 载体 ∪ 技能读取自己），缺一把就不装载并记账。
-  const availableTools = [...kernelToolNames(), ...map.keys(), SKILL_READ_TOOL]
+  // 技能装载：tools 必须都在这一刻的面上（内核 ∪ 载体 ∪ 原生工具），缺一把就不装载并记账。
+  // 批次49：pinax_service_log_list 与 pinax_skill_read 同属运行时原生工具，恒定上报——
+  // 没有服务时它如实回空数组，工具面形状不随项目有没有服务而漂。
+  const availableTools = [...kernelToolNames(), ...map.keys(), SKILL_READ_TOOL, SERVICE_LOG_LIST_TOOL]
   const loaded = await loadSkills({ ...(skillsDir ? { dir: skillsDir } : {}), availableTools })
   const nativeMap = createSkillTools({ skills: loaded.skills })
+  for (const [name, entry] of createServiceLogTools({ pool: serviceLogPool })) nativeMap.set(name, entry)
   const guard = (tool, args) => guardKernelToolCall({ tool, args, root, registry })
   // 协议 v3：启用的载体可以把外部 MCP 服务端挂进来（view.mcp 已在安装期按 prefix 仲裁过命名空间）。
   // 相对路径按插件自己的目录解析（与服务声明同一口径）：清单里写 'mcp.mjs' 的，落地的也是插件目录里那一份。

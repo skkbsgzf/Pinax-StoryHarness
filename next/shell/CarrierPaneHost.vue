@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
 import { resolvePaneView } from './viewRegistry.mjs'
 import { recordCarrierOfPaneId } from './recordCarriers.mjs'
@@ -454,6 +454,28 @@ watch(() => [props.data.draftSelection?.start, props.data.draftSelection?.end], 
  * 不做「读得到但一保存就被洗成默认值」那种事。
  */
 const recordCarrier = computed(() => recordCarrierOfPaneId(props.pane?.id))
+
+/**
+ * 漫画预览（批次49 · 批次48 欠账）：地址取这块载体在 services 声明里的端口，不写死 8191。
+ * 快照由 AppNext 经 provide 给（池的整份读数）；只有服务就绪（绿）时才可点。
+ * 落点仍归宿主：<a target="_blank"> 交给主进程 setWindowOpenHandler → shell.openExternal，
+ * 载体自己不调壳、不开窗（formTaxonomy 的 jump 纪律）。
+ */
+const serviceSnapshot = inject('pinaxServiceSnapshot', null)
+const comicPreviewService = computed(() => {
+  if (recordCarrier.value?.key !== 'comic') return null
+  const carrierId = String(props.pane?.pluginId ?? '')
+  const row = (serviceSnapshot?.value?.carriers ?? []).find((entry) => entry.carrierId === carrierId)
+  return row?.items?.find((item) => item.kind === 'service' && Number.isSafeInteger(item.port)) ?? null
+})
+const comicPreviewReady = computed(() => comicPreviewService.value?.color === 'green')
+const comicPreviewUrl = computed(() => {
+  const port = comicPreviewService.value?.port
+  if (!Number.isSafeInteger(port)) return null
+  const base = `http://127.0.0.1:${port}/`
+  const root = String(props.projectRoot ?? '')
+  return root ? `${base}?root=${encodeURIComponent(root)}` : base
+})
 const recordTags = computed(() => (Array.isArray(props.data.record?.tags) ? props.data.record.tags : []))
 const recordRefs = computed(() => (Array.isArray(props.data.record?.refs) ? props.data.record.refs : []))
 const recordMetaCount = computed(() => {
@@ -1316,6 +1338,24 @@ function actOnSaveChip() {
         <div class="doc-head">
           <h2 class="doc-title">{{ data.record.title || data.record.id }}</h2>
           <span class="nx-pane-actions">
+            <!-- 漫画预览（批次49）：服务在跑才给链接；不在跑就禁用并说明原因。 -->
+            <template v-if="recordCarrier?.key === 'comic'">
+              <a
+                v-if="comicPreviewReady && comicPreviewUrl"
+                class="control-quiet records-preview"
+                :href="comicPreviewUrl"
+                target="_blank"
+                rel="noopener"
+                title="在浏览器中打开漫画预览"
+              >预览</a>
+              <button
+                v-else
+                type="button"
+                class="control-quiet records-preview"
+                disabled
+                title="服务未运行"
+              >预览</button>
+            </template>
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
               <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>

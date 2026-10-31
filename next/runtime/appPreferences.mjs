@@ -21,6 +21,8 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   writingTextIndent：2（默认）或 0–2、步进 0.5——首行缩进（批次46B 排版偏好）；
  *   writingTypewriter：false（默认）或 true——打字机滚动开关（批次46B）；
  *   writingFocusMode：false（默认）或 true——段落聚焦开关（批次46B）；
+ *   serviceNoticesAckedAt：null 或 ISO 时间串——服务与外部 MCP 通知的确认水位（批次49）。
+ *     只存应用级：确认的是「这台机器上这个应用看过了」，不随项目走、不进 .pinax/；
  *   theme：可选迁移字段（D2）——'light' / 'dark' / null；缺省表示「还没迁过」，
  *     渲染层用老 localStorage 的值兜底并一次性迁入（老前端退役后删掉那条兜底）。
  */
@@ -38,7 +40,9 @@ export const PREFS_DEFAULTS = Object.freeze({
   writingParagraphSpacing: 0.8,
   writingTextIndent: 2,
   writingTypewriter: false,
-  writingFocusMode: false
+  writingFocusMode: false,
+  // 批次49：服务通知确认水位（应用级；只记时间，不记项目）。
+  serviceNoticesAckedAt: null
 })
 
 const ZOOM_MIN = 0.5
@@ -175,6 +179,18 @@ export function normalizePrefs(raw) {
       return { ok: false, error: `${field} 必须是 true／false，收到：${JSON.stringify(value)}` }
     }
     out[field] = value
+  }
+  if ('serviceNoticesAckedAt' in source) {
+    const value = source.serviceNoticesAckedAt
+    if (value === null || value === undefined || value === '') {
+      out.serviceNoticesAckedAt = null
+    } else {
+      const stamp = new Date(String(value))
+      if (Number.isNaN(stamp.getTime())) {
+        return { ok: false, error: `serviceNoticesAckedAt 必须是 ISO 时间串或 null，收到：${JSON.stringify(value ?? null)}` }
+      }
+      out.serviceNoticesAckedAt = stamp.toISOString()
+    }
   }
   if ('theme' in source) {
     // D2 主题迁移：null / 空串表示「还没迁过」，渲染层用老 localStorage 的值兜底。

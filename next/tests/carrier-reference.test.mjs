@@ -76,7 +76,7 @@ test('工具面：资料载体启用后四把工具进面、归属它；内核�
   try {
     assert.equal(opened.value.view.projectKind, 'generic', '资料可以是泛型项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...REFERENCE_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 24, '19 内核 ＋ 技能读取 1 ＋ 资料自有 4（H2 加 pinax_reference_search）')
+    assert.equal(runtime.listTools().length, 25, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 资料自有 4（H2 加 pinax_reference_search）')
     assert.equal(runtime.ownerOf('pinax_document_list'), REFERENCE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_document_read'), REFERENCE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_document_save'), REFERENCE_CARRIER_ID)
