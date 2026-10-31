@@ -493,4 +493,3 @@ function waitExit(child, timeoutMs) {
     })
   })
 }
-
