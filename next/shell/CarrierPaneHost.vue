@@ -15,6 +15,7 @@ import PluginPanelHost from './PluginPanelHost.vue'
 import EntryDetailPanel from './EntryDetailPanel.vue'
 import EntriesBoard from './EntriesBoard.vue'
 import ExternalAppHost from './ExternalAppHost.vue'
+import { buildEntryTokenMap, linkifyEntryNames } from './wikiLinks.mjs'
 
 /**
  * 核心区里的载体面板：正文的编辑面、构思的编辑面、大纲的编辑面、世界书条目的阅读与编辑面
@@ -105,8 +106,8 @@ const recordHtml = computed(() => renderMarkdown(props.data.record?.body ?? ''))
  *   1) 阅读态＝源文渲染成 HTML（标题／粗体／列表／引用／代码块…），走同一条 mdRender 路径；
  *   2) 编辑态＝textarea 拿源文（作者改的是源文，不是渲染结果）；
  *   3) 头部一枚「编辑」按钮切过去、「取消」切回来——默认落在阅读态（文档先是一篇文，再是编辑器）。
+ * 批次55：正文阅读面再按 preview.loading 分两档（见下面的分页块），构思／大纲／约束仍是整读。
  */
-const chapterHtml = computed(() => renderMarkdown(props.data.draft ?? ''))
 const noteHtml = computed(() => renderMarkdown(props.data.noteDraft ?? ''))
 const ruleHtml = computed(() => renderMarkdown(props.data.ruleDraft ?? ''))
 const outlineNoteHtml = computed(() => renderMarkdown(props.data.outlineDraft?.nodes?.[props.data.outlineNodeIndex]?.note ?? ''))
@@ -126,6 +127,177 @@ watch(() => props.data.chapter?.file ?? null, () => {
 watch(() => props.data.note?.file ?? null, () => { noteEditing.value = false })
 watch(() => props.data.rule?.file ?? null, () => { ruleEditing.value = false })
 watch(() => props.data.outlineDraft?.nodes?.[props.data.outlineNodeIndex]?.id ?? null, () => { outlineEditing.value = false })
+
+/* —— 正文阅读面：preview.loading 两档（批次55）————————————————————————
+ *
+ * 工单口径：`text-pages` 首次只渲染首屏，翻页／滚到底才懒补下一页；`bytes-complete` 保留整读
+ * （小文件、写前校验用）。载体用批次52 的 preview.register 指定档位。
+ *
+ * 两处落地约束：
+ *   1) 清单里的 preview 目前还没投到渲染层（批次53 欠账，ipcContract.shellView 未投影）；
+ *      所以先读 pane 上的 preview（投影补上后自动生效），没有就按内容面回落——
+ *      正文阅读面 text-pages，其余整读。清单补投影后删掉这条回落即可。
+ *   2) 编辑态 textarea 与 data.draft 一个字不动：分页只切「渲染什么」，
+ *      不切「编辑什么」——自动保存／指纹基线照旧以整份草稿为准。
+ *
+ * 页内取文先吃已载入的草稿（与编辑态同一份文字，未落盘的改动也看得见）；
+ * 草稿之外（只载入前段的大稿）才经 pinax_chapter_read 的 offset／maxChars 懒补。
+ */
+const CHAPTER_PAGE_CHARS = 2400
+const CHAPTER_LOADING_MODES = ['text-pages', 'bytes-complete']
+
+const chapterLoadingMode = computed(() => {
+  const declared = props.pane?.preview?.loading ?? props.pane?.previewLoading ?? null
+  if (CHAPTER_LOADING_MODES.includes(declared)) return declared
+  return viewKind.value === 'chapter-editor' ? 'text-pages' : 'bytes-complete'
+})
+const textPagesReading = computed(() => chapterLoadingMode.value === 'text-pages')
+
+const chapterPageIndex = ref(0)
+const chapterPageText = ref('')
+const chapterPageCache = ref({})
+const chapterPageBusy = ref(false)
+const chapterPageError = ref('')
+let chapterPageTicket = 0
+const chapterPagePending = new Map()
+
+const chapterTotalChars = computed(() => {
+  const total = Number(props.data.chapter?.totalChars)
+  if (Number.isSafeInteger(total) && total >= 0) return total
+  return String(props.data.draft ?? '').length
+})
+const chapterPageCount = computed(() => Math.max(1, Math.ceil(chapterTotalChars.value / CHAPTER_PAGE_CHARS)))
+
+function resetChapterPaging() {
+  chapterPageIndex.value = 0
+  chapterPageText.value = ''
+  chapterPageCache.value = {}
+  chapterPageError.value = ''
+  chapterPageTicket += 1
+  chapterPagePending.clear()
+}
+
+/** 懒补一页（草稿之外的部分）：走正文载体的 pinax_chapter_read，offset／maxChars 都是字符数。 */
+function fetchChapterPage(offset, maxChars) {
+  const file = props.data.chapter?.file
+  if (!file || typeof props.data.tool !== 'function') return Promise.resolve('')
+  const key = `${file}:${offset}:${maxChars}`
+  if (chapterPagePending.has(key)) return chapterPagePending.get(key)
+  const task = Promise.resolve(props.data.tool('pinax_chapter_read', { file, offset, maxChars }))
+    .then((result) => {
+      chapterPagePending.delete(key)
+      if (!result?.ok) {
+        chapterPageError.value = result?.message ?? '读取下一页失败'
+        return ''
+      }
+      return String(result.value?.text ?? '')
+    }, (error) => {
+      chapterPagePending.delete(key)
+      chapterPageError.value = String(error?.message ?? error)
+      return ''
+    })
+  chapterPagePending.set(key, task)
+  return task
+}
+
+async function resolveChapterPage(index) {
+  const draft = String(props.data.draft ?? '')
+  const start = index * CHAPTER_PAGE_CHARS
+  const truncated = props.data.chapter?.truncated === true
+  if (start < draft.length) {
+    const slice = draft.slice(start, start + CHAPTER_PAGE_CHARS)
+    // 草稿整段覆盖本页：直接用（作者未落盘的改动也照原样显示）。
+    if (!truncated || slice.length === CHAPTER_PAGE_CHARS) return slice
+    // 草稿只到页中间（只载入前段的大稿）：后半页懒补，拼成完整一页。
+    const rest = await fetchChapterPage(start + slice.length, CHAPTER_PAGE_CHARS - slice.length)
+    return slice + rest
+  }
+  if (!truncated) return ''
+  if (chapterPageCache.value[index] !== undefined) return chapterPageCache.value[index]
+  const text = await fetchChapterPage(start, CHAPTER_PAGE_CHARS)
+  chapterPageCache.value = { ...chapterPageCache.value, [index]: text }
+  return text
+}
+
+/** 落到某一页：只渲染这一页；页码钳在 0..count-1，迟到的旧请求按票号丢弃。 */
+async function loadChapterPage(index) {
+  if (!props.data.chapter || !textPagesReading.value) return
+  const bounded = Math.min(Math.max(Number.isSafeInteger(index) ? index : 0, 0), chapterPageCount.value - 1)
+  const ticket = ++chapterPageTicket
+  chapterPageBusy.value = true
+  chapterPageError.value = ''
+  const text = await resolveChapterPage(bounded)
+  if (ticket !== chapterPageTicket) return
+  chapterPageBusy.value = false
+  chapterPageIndex.value = bounded
+  chapterPageText.value = text
+}
+
+function goChapterPage(index) {
+  void loadChapterPage(index)
+}
+
+/** 滚到底＝翻下一页（「滚动触发下一页」）；已经是最后一页就不动。 */
+function onChapterReadingScroll(event) {
+  if (!textPagesReading.value || chapterPageBusy.value) return
+  const el = event?.target
+  if (!el || el.scrollTop + el.clientHeight < el.scrollHeight - 80) return
+  if (chapterPageIndex.value >= chapterPageCount.value - 1) return
+  goChapterPage(chapterPageIndex.value + 1)
+}
+
+// 换章：页码与页缓存清零，从第一页重新起读（编辑态同一条路——取消编辑回来也落回当前页）。
+watch(() => props.data.chapter?.file ?? null, () => {
+  resetChapterPaging()
+  void loadChapterPage(0)
+}, { immediate: true })
+
+// 草稿长度／修订号变化：重算当前页（自动保存回写也会走到这里）。
+watch(() => [props.data.draft, props.data.chapter?.revision], () => {
+  if (chapterEditing.value || !textPagesReading.value || !props.data.chapter) return
+  void loadChapterPage(chapterPageIndex.value)
+})
+
+watch(chapterEditing, (editing) => {
+  if (!editing) void loadChapterPage(chapterPageIndex.value)
+})
+
+/** 阅读面正文：text-pages 只看当前页，bytes-complete 仍是整份草稿（批次43 的旧行为）。 */
+const chapterReadingSourceText = computed(() => (textPagesReading.value ? chapterPageText.value : String(props.data.draft ?? '')))
+const chapterReadingHtml = computed(() => renderMarkdown(chapterReadingSourceText.value))
+
+/**
+ * 跨页重渲染（批次44 的 :key 招）：key 里带页号与页文长度，换页时整块 DOM 重来——
+ * 上一页留下的 .nx-wikilink 锚点不会跟着节点缓存漂到这一页上。
+ */
+const chapterReadingKey = computed(() => (textPagesReading.value
+  ? `page:${props.data.chapter?.file ?? ''}:${chapterPageIndex.value}:${chapterPageText.value.length}`
+  : `whole:${props.data.chapter?.file ?? ''}:${props.data.chapter?.revision ?? ''}`))
+
+/**
+ * 每页各自的 Wiki 词表（批次55 任务三）：唯一归属的词才进表（buildEntryTokenMap），
+ * 再按当前页文本过滤——这一页没出现的词不参与链接，换页即换表。
+ * 词表与点击解析共用同一张表：链出去的词点下去一定打得开（批次44 纪律）。
+ */
+const chapterEntryTokenMap = computed(() => buildEntryTokenMap(props.data.entries ?? []))
+const chapterLinkTokens = computed(() => {
+  const text = chapterReadingSourceText.value
+  if (!text) return []
+  return [...chapterEntryTokenMap.value.keys()].filter((token) => text.includes(token))
+})
+const chapterRenderedEl = ref(null)
+watch([chapterReadingKey, chapterReadingSourceText, chapterEntryTokenMap], async () => {
+  await nextTick()
+  if (chapterEditing.value || !chapterRenderedEl.value) return
+  linkifyEntryNames(chapterRenderedEl.value, chapterLinkTokens.value, { firstOnly: true })
+})
+
+function onChapterRenderedClick(event) {
+  const link = event.target?.closest?.('.nx-wikilink')
+  if (!link) return
+  const item = chapterEntryTokenMap.value.get(String(link.dataset.entry ?? ''))
+  if (item) props.data.openEntry(item)
+}
 
 /**
  * 未落盘的改动（批次43）：自动保存还没跑到时，底部给一句人话。
@@ -892,9 +1064,41 @@ function actOnSaveChip() {
             <button v-else type="button" class="control-quiet chapter-cancel" data-test="chapter-cancel" @click="chapterEditing = false">取消</button>
           </span>
         </div>
-        <!-- 阅读态（批次43）：正文是 md 稿子，默认渲染出来（标题／粗体／列表…），不再是裸源码。 -->
-        <div v-if="!chapterEditing" class="entry-text nx-rendered-md doc-reading chapter-reading" data-test="chapter-rendered" v-html="chapterHtml" />
-        <div v-else class="nx-editor-wrap">
+        <!-- 阅读态（批次43）：正文是 md 稿子，默认渲染出来（标题／粗体／列表…），不再是裸源码。
+             批次55：text-pages 档只渲染当前页；key 带页号，翻页时整块重渲染（旧蓝链不残留）。 -->
+        <div
+          v-if="!chapterEditing"
+          :key="chapterReadingKey"
+          ref="chapterRenderedEl"
+          class="entry-text nx-rendered-md doc-reading chapter-reading"
+          data-test="chapter-rendered"
+          :data-page-mode="chapterLoadingMode"
+          :data-page-index="chapterPageIndex"
+          :data-page-count="chapterPageCount"
+          :data-page-chars="CHAPTER_PAGE_CHARS"
+          @scroll="onChapterReadingScroll"
+          @click="onChapterRenderedClick"
+          v-html="chapterReadingHtml"
+        />
+        <div v-if="!chapterEditing && textPagesReading && chapterPageCount > 1" class="chapter-pager" data-test="chapter-pager">
+          <button
+            type="button"
+            class="control-quiet"
+            data-test="chapter-page-prev"
+            :disabled="chapterPageIndex <= 0 || chapterPageBusy"
+            @click="goChapterPage(chapterPageIndex - 1)"
+          >上一页</button>
+          <span class="chapter-pager-state" data-test="chapter-page-indicator">{{ chapterPageIndex + 1 }} / {{ chapterPageCount }}</span>
+          <button
+            type="button"
+            class="control-quiet"
+            data-test="chapter-page-next"
+            :disabled="chapterPageIndex >= chapterPageCount - 1 || chapterPageBusy"
+            @click="goChapterPage(chapterPageIndex + 1)"
+          >下一页</button>
+        </div>
+        <p v-if="!chapterEditing && chapterPageError" class="pane-notice" data-test="chapter-page-error">{{ chapterPageError }}</p>
+        <div v-if="chapterEditing" class="nx-editor-wrap">
           <textarea
             ref="chapterArea"
             class="editor-area"

@@ -794,6 +794,19 @@ input.doc-title {
   color: var(--signal-warm);
   font-style: normal;
 }
+/* 正文分页条（批次55）：只在 text-pages 且多页时出现，quiet 钮＋页码；
+   与底部 hint 同一档小字、同一档横向留白——翻页是读的辅助，不是另一排控件。 */
+.chapter-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 20px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
 /* 条目／资料／剧本的窗格外壳（批次31 · P18 第 1 条）：不再是一张卡片——
    正文满幅铺在窗格底色上，只留纵向留白（横向留白由 .center 的 24px 给，
    正文 textarea 自己还有一层 padding，那是呼吸，不是框）。 */

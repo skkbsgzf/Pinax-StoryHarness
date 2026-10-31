@@ -512,6 +512,92 @@ test('提案读／弃／记状态（工单A）：名字只认目录内一层，�
   }
 })
 
+test('只读分页口 readRange（批次55）：字节区间、UTF-8 边界对齐、revision 与整读一致且不写修订账', async () => {
+  const { service, root, workspace } = await setup()
+  try {
+    const body = '甲A乙。沈青梧推开门。'
+    await writeFile(join(root, '正文', '第005章-分页.md'), body, 'utf-8')
+    const readState = () => readFile(join(root, '.pinax', 'state', 'revisions.json'), 'utf-8').catch(() => '')
+    const stateBefore = await readState()
+    const bytes = Buffer.from(body, 'utf-8')
+
+    // 未记账的既有文件：分页读按第 1 版报，但不把它写进账本。
+    const first = await service.readRange({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md', from: 0, to: 3 })
+    assert.equal(first.ok, true, JSON.stringify(first.error ?? {}))
+    assert.equal(first.value.text, '甲')
+    assert.equal(first.value.revision, 1)
+    assert.equal(first.value.totalBytes, bytes.length)
+    assert.equal(await readState(), stateBefore, '分页读不写 revisions 账')
+
+    // 端点切在多字节字符中间：向外扩到完整字符，文本里不出现半个字符。
+    const inside = await service.readRange({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md', from: 1, to: 2 })
+    assert.equal(inside.ok, true, JSON.stringify(inside.error ?? {}))
+    assert.equal(inside.value.text, '甲')
+    assert.equal(inside.value.from, 0, '起点前移到字符首字节')
+    assert.equal(inside.value.to, 3, '终点后移到字符结束')
+    assert.equal(inside.value.startExpandedBy, 1)
+    assert.equal(inside.value.endExpandedBy, 1)
+    assert.equal(inside.value.text.includes('\uFFFD'), false, 'UTF-8 边界不截断字符')
+
+    // 整读与分页读同一口径：未记账文件都报第 1 版（整读会建档，这是既有读语义）。
+    const whole = await service.read({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md' })
+    assert.equal(whole.value.revision, first.value.revision)
+
+    // 记账后接着写一版：分页读与整读都报第 2 版。
+    const saved = await service.write({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md', text: body, expectedRevision: 1 })
+    assert.equal(saved.ok, true, JSON.stringify(saved.error ?? {}))
+    const after = await service.readRange({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md', from: 0, to: 3 })
+    const reread = await service.read({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md' })
+    assert.equal(after.value.revision, 2)
+    assert.equal(after.value.revision, reread.value.revision, '分页读的 revision 与整读一致')
+
+    // 越界请求钳到文件尾：空区间不报错，eof 如实。
+    const eof = await service.readRange({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md', from: bytes.length, to: bytes.length + 10 })
+    assert.equal(eof.ok, true, JSON.stringify(eof.error ?? {}))
+    assert.equal(eof.value.text, '')
+    assert.equal(eof.value.eof, true)
+    assert.equal(eof.value.from, bytes.length)
+
+    // 非法区间与缺文件如实拒；归属闸照走。
+    for (const bad of [
+      { from: -1, to: 3 },
+      { from: 3, to: 3 },
+      { from: 0, to: 1.5 }
+    ]) {
+      const rejected = await service.readRange({ pluginId: 'fixture.novel', dir: '正文', file: '第005章-分页.md', ...bad })
+      assert.equal(rejected.ok, false, JSON.stringify(bad))
+      assert.equal(rejected.error.code, 'PINAX_INVALID_INPUT', JSON.stringify(bad))
+    }
+    const missing = await service.readRange({ pluginId: 'fixture.novel', dir: '正文', file: '没有.md', from: 0, to: 1 })
+    assert.equal(missing.ok, false)
+    assert.equal(missing.error.code, 'PINAX_INVALID_INPUT')
+    const foreign = await service.readRange({ pluginId: 'fixture.worldbook', dir: '正文', file: '第005章-分页.md', from: 0, to: 1 })
+    assert.equal(foreign.ok, false)
+    assert.equal(foreign.error.code, 'PINAX_DIR_CONFLICT')
+
+    // 只读授权（file:世界书:r）也能分页读：作用域闸按 read 判。
+    const readOnlyArchive = withMutation(FIXTURE_WORLDBOOK, (m) => {
+      m.id = 'fixture.archive'
+      m.title = '归档（只读夹具）'
+      m.tools = ['archive.list']
+      m.capabilities = []
+      m.scopes = ['file:世界书:r']
+    })
+    await writeFile(join(root, '世界书', '角色.md'), '李二', 'utf-8')
+    const withArchive = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+    withArchive.install(FIXTURE_NOVEL)
+    withArchive.install(FIXTURE_WORLDBOOK)
+    withArchive.install(readOnlyArchive)
+    const scoped = createFileService({ root, registry: withArchive })
+    await scoped.init()
+    const granted = await scoped.readRange({ pluginId: 'fixture.archive', dir: '世界书', file: '角色.md', from: 0, to: 3 })
+    assert.equal(granted.ok, true, JSON.stringify(granted.error ?? {}))
+    assert.equal(granted.value.text, '李')
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
 test('崩溃恢复只清 .pinax-tmp-*，不动正文', async () => {
   const { service, root, workspace } = await setup()
   try {

@@ -112,6 +112,69 @@ export function createFileService({ root, registry, fsImpl, onWrite, snapshot = 
       })
     },
 
+    /**
+     * 只读分页口（批次55）：按字节区间读，供渲染层分页取文；绝不与写口混用。
+     *
+     * 三道闸照旧：归属（locate → DIR_CONFLICT）、作用域（file:<目录>:r）、路径合法性。
+     * 修订号只读（peekRevision）：与整读同一口径（账上有按账、既有文件第 1 版），
+     * 但不把「未记账的既有文件」写进 revisions 账，也不清陈账——分页读是浏览，不是建档。
+     * UTF-8 边界：区间端点落在多字节字符中间时向外扩到完整字符（from 前移、to 后移），
+     * 回来的 text 里没有被劈开的半个字符；扩了多少在 startExpandedBy／endExpandedBy 如实标注。
+     * 首版直读整份再切片，不做缓存层（记账后另议）。
+     */
+    async readRange({ pluginId, dir, file, from = 0, to } = {}) {
+      if (!Number.isSafeInteger(from) || from < 0) {
+        return fail('INVALID_INPUT', '分页读的 from 必须是 ≥0 的整数（字节偏移）', { from })
+      }
+      if (!Number.isSafeInteger(to) || to <= from) {
+        return fail('INVALID_INPUT', '分页读的 to 必须是 > from 的整数（字节偏移，右开区间）', { from, to })
+      }
+      const located = await locate({ pluginId, dir, file })
+      if (!located.ok) return located
+      const grant = canPerform(registry.grantFor(pluginId), { type: 'file', dir: located.value.ownerDir, mode: 'read' })
+      if (!grant.ok) return grant
+      let buffer
+      try {
+        const raw = await io.readFile(located.value.targetFile)
+        buffer = Buffer.isBuffer(raw) ? raw : Buffer.from(raw)
+      } catch (error) {
+        if (error?.code === 'ENOENT') return fail('INVALID_INPUT', `文件不存在：${located.value.relativePath}`, { path: located.value.relativePath })
+        return fail('IO_FAILED', `读取失败：${located.value.relativePath}`, { cause: String(error?.message || error) })
+      }
+      const totalBytes = buffer.length
+      const requestedTo = Math.min(to, totalBytes)
+      if (from >= totalBytes || requestedTo <= from) {
+        const settled = Math.min(from, totalBytes)
+        return ok({
+          relativePath: located.value.relativePath,
+          text: '',
+          from: settled,
+          to: settled,
+          totalBytes,
+          revision: await peekRevision(located.value.relativePath),
+          requested: { from, to },
+          startExpandedBy: 0,
+          endExpandedBy: 0,
+          eof: true
+        })
+      }
+      // 向外扩到完整字符：起点不在字符首字节就往前退，终点落在 continuation 上就往后进。
+      const start = alignUtf8Start(buffer, from)
+      const end = alignUtf8End(buffer, requestedTo)
+      return ok({
+        relativePath: located.value.relativePath,
+        text: buffer.subarray(start, end).toString('utf-8'),
+        from: start,
+        to: end,
+        totalBytes,
+        revision: await peekRevision(located.value.relativePath),
+        requested: { from, to },
+        startExpandedBy: from - start,
+        endExpandedBy: end - requestedTo,
+        eof: end >= totalBytes
+      })
+    },
+
     /** 修订并发：expectedRevision 必填；新建文件传 0。 */
     async write({ pluginId, dir, file, text, expectedRevision }) {
       if (typeof text !== 'string') return fail('INVALID_INPUT', '写入内容必须是字符串')
@@ -682,6 +745,17 @@ export function createFileService({ root, registry, fsImpl, onWrite, snapshot = 
   }
 
   /**
+   * 只读修订号（批次55）：与 adoptRevision 同口径，但不改账本。
+   * 盘上没有＝0；账上有＝账上那一版；盘上有而账上没有＝1（既有文件按第 1 版）。
+   * 陈账（账上有、盘上没有）按 0 报但不清账——清账归写口与显式读，分页读不接管。
+   */
+  async function peekRevision(relativePath) {
+    const exists = await io.stat(join(projectRoot, relativePath)).then(() => true, () => false)
+    if (!exists) return 0
+    return revisions.has(relativePath) ? revisions.get(relativePath) : 1
+  }
+
+  /**
    * 修订号采纳（M2 补的洞）：作者整目录导入的既有稿子没进过账，若按 0 处理，
    * 「新建文件传 0」就成了盲写原稿的通道。磁盘上有文件而账上没记录 → 记为第 1 版，
    * 于是 expectedRevision 0 只可能是真正的新建。
@@ -763,6 +837,25 @@ export function createFileService({ root, registry, fsImpl, onWrite, snapshot = 
 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf-8').digest('hex')
+}
+
+/** UTF-8 continuation 字节（10xxxxxx）：落在它上面就说明切在了多字节字符中间。 */
+function isUtf8Continuation(byte) {
+  return (byte & 0xc0) === 0x80
+}
+
+/** 起点前移到字符首字节（只前移，不改变请求区间的完整性）。 */
+function alignUtf8Start(buffer, index) {
+  let at = index
+  while (at > 0 && at < buffer.length && isUtf8Continuation(buffer[at])) at -= 1
+  return at
+}
+
+/** 终点后移到下一个字符首字节（右开区间：把被切开的那个字符整颗包含进来）。 */
+function alignUtf8End(buffer, index) {
+  let at = index
+  while (at < buffer.length && isUtf8Continuation(buffer[at])) at += 1
+  return at
 }
 
 /** 章节排序（批次46B）：数字前缀按数值比（2 排在 10 前面），其余按中文口径。 */

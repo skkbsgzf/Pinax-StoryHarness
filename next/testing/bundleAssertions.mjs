@@ -415,6 +415,37 @@ check('r3 adopt 声明完整：走 adopt 的服务必须同时声明 port 与 he
   adoptOffenders.length === 0,
   adoptOffenders.join(', ') || 'adopt 服务 0 条（内置自起档）')
 
+// 批次55（门禁 s）：分页读与分页渲染的纪律面。两条都按源码原文核——产物压缩会改标识符，
+// 但「实现体调了哪个函数」在源码里一眼可查；行为由用例守（file-service.test 与 chapter-paging.spec）。
+//   s1 readRange 只读：实现体用 peekRevision 取修订号（与整读同口径），不得出现 saveRevisions／
+//      adoptRevision／revisions.set|delete——分页读是浏览，不是建档，更不是第二条写口。
+//   s2 两档渲染与按页词表：正文阅读面走 text-pages（CHAPTER_PAGE_CHARS 分页、pinax_chapter_read 的
+//      offset／maxChars 懒补），bytes-complete 保留整读；Wiki 词表按当前页文本现算并对条目变化重算，
+//      跨页残留由 :key 重渲染兜底——「跨页不残留旧蓝链」与「唯一归属」两条断言在分页 spec 里。
+const fileServiceSource = await readFile(join(repoRoot, 'next', 'fs', 'fileService.mjs'), 'utf-8')
+const readRangeStart = fileServiceSource.indexOf('async readRange(')
+const readRangeBody = readRangeStart < 0
+  ? ''
+  : fileServiceSource.slice(readRangeStart, fileServiceSource.indexOf('/** 修订并发', readRangeStart))
+check('s1 分页读只读：readRange 走 peekRevision 取修订号，实现体不写 revisions 账（不调 saveRevisions／adoptRevision／revisions.set|delete）',
+  readRangeBody.includes('peekRevision(')
+    && !/saveRevisions\s*\(/.test(readRangeBody)
+    && !/adoptRevision\s*\(/.test(readRangeBody)
+    && !/revisions\.(set|delete)\s*\(/.test(readRangeBody),
+  readRangeBody ? `${readRangeBody.length}B` : '(缺 readRange)')
+
+const carrierPaneHostSource = await readFile(join(repoRoot, 'next', 'shell', 'CarrierPaneHost.vue'), 'utf-8')
+const pagingSpecSource = await readFile(join(repoRoot, 'next', 'tests', 'chapter-paging.spec.mjs'), 'utf-8')
+check('s2 分页两档与按页词表：正文阅读面 text-pages（分页＋offset 懒补）、整读保留 bytes-complete；词表按当前页现算，跨页旧蓝链与唯一归属都有断言',
+  carrierPaneHostSource.includes('CHAPTER_PAGE_CHARS')
+    && carrierPaneHostSource.includes("'text-pages'") && carrierPaneHostSource.includes("'bytes-complete'")
+    && /props\.data\.tool\('pinax_chapter_read',\s*\{\s*file,\s*offset,\s*maxChars\s*\}\)/.test(carrierPaneHostSource)
+    && /watch\(\[chapterReadingKey,\s*chapterReadingSourceText,\s*chapterEntryTokenMap\]/.test(carrierPaneHostSource)
+    && pagingSpecSource.includes('跨页不残留旧蓝链')
+    && pagingSpecSource.includes('唯一归属纪律照旧')
+    && pagingSpecSource.includes("'bytes-complete'"),
+  `宿主=${carrierPaneHostSource.includes('CHAPTER_PAGE_CHARS') ? '分页' : '缺'} · spec=${pagingSpecSource.includes('跨页不残留旧蓝链') ? '两断言在' : '缺跨页断言'}`)
+
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
 // 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，
 // 旧正则 join\\(currentDir… 会被标识符改名误伤（门禁该守路径，不该守压缩后的变量名）。

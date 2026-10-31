@@ -141,6 +141,26 @@ try {
       && !/被推翻的写法/.test(chapterOnDisk),
     `盲写=${blindWrite.value.payload?.code} 正写=${goodWrite.value.payload?.revision ?? '-'}`)
 
+  // ── 批次55：只读分页口 readRange——渲染层分页取文，绝不与写口混用 ────────────────
+  // 修订号只读：先快照 revisions.json，分页读前后必须一字节不动；文本是整读的字节前缀。
+  // 区间 3..31 落在「里」字中间：UTF-8 边界向外扩到 33，扩了多少如实回传。
+  const revisionsPath = join(carrierRoot, '.pinax', 'state', 'revisions.json')
+  const revisionsBefore = await readFile(revisionsPath, 'utf-8')
+  const ranged = await carrierOpened.value.fileService.readRange({ pluginId: NOVEL_CARRIER_ID, dir: '正文', file: '第001章-入场.md', from: 3, to: 31 })
+  const fullRead = await carrierOpened.value.fileService.read({ pluginId: NOVEL_CARRIER_ID, dir: '正文', file: '第001章-入场.md' })
+  const revisionsAfter = await readFile(revisionsPath, 'utf-8')
+  record('批次55 分页读：readRange 与整读同修订号（第 2 版）、字节区间是整读前缀（UTF-8 边界外扩如实标注）、不写 revisions 账',
+    ranged.ok === true && fullRead.ok === true
+      && ranged.value.revision === fullRead.value.revision && ranged.value.revision === 2
+      && ranged.value.totalBytes === fullRead.value.bytes
+      && ranged.value.from === 3 && ranged.value.to === 33
+      && ranged.value.startExpandedBy === 0 && ranged.value.endExpandedBy === 2
+      && ranged.value.eof === false
+      && ranged.value.text.length > 0 && fullRead.value.text.startsWith(ranged.value.text, 1)
+      && !ranged.value.text.includes('\uFFFD')
+      && revisionsAfter === revisionsBefore,
+    `range=${ranged.value?.from}-${ranged.value?.to}/${ranged.value?.totalBytes}B rev=${ranged.value?.revision} 整读 rev=${fullRead.value?.revision} 账本=${revisionsAfter === revisionsBefore ? '未动' : '被改'}`)
+
   const worldbookList = await carrierRuntime.callTool('pinax_worldbook_list', {})
   // 工单E2（断言同步）：约束/ 升 rw 后，读写全走两把自有工具——list 把全文随手带回，save 带修订号落盘；
   // 覆写种子文件（expectedRevision 1→2，不新建文件），后面的写族闸 record 靠目录清单不变继续成立。
