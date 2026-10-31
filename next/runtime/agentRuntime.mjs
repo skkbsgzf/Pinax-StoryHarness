@@ -56,6 +56,15 @@ export function createAgentRuntime(options = {}) {
     return collectPluginDirs({ registry, overrides: options.pluginDirs })
   }
 
+  /**
+   * 当前项目根：文件服务知道最准，视图是兜底。
+   * 载体声明的服务常要靠它定位项目里的数据（如漫画预览服务读 漫画/漫画.json）——
+   * 宿主把它摆在环境里（PINAX_PROJECT_ROOT），服务自己决定用不用，不替它猜路径。
+   */
+  function projectRootOf() {
+    return fileService?.root ?? options.view?.root ?? null
+  }
+
   const runtime = {
     contract: RUNTIME_CONTRACT,
     grantTable: grants,
@@ -69,6 +78,8 @@ export function createAgentRuntime(options = {}) {
         supervisor = createServiceSupervisor({
           services: serviceSpecs,
           pluginDirs: buildPluginDirs(),
+          // 项目根摆进环境：服务不猜路径，用不用它自己决定。
+          baseEnv: { ...process.env, ...(projectRootOf() ? { PINAX_PROJECT_ROOT: String(projectRootOf()) } : {}) },
           onEvent: typeof options.onServiceEvent === 'function' ? options.onServiceEvent : null
         })
         const startedServices = await supervisor.start()
@@ -81,7 +92,7 @@ export function createAgentRuntime(options = {}) {
       link = await connectInProcess(surface.server, { clientName: options.clientName ?? 'pinax-next-shell' })
       toolCache = await link.listTools()
       // 宿主替声明了 project.changed 的启用载体挂投递：只认当前项目根，换项目＝换运行时＝新订阅。
-      const projectRoot = fileService?.root ?? options.view?.root ?? null
+      const projectRoot = projectRootOf()
       const subscribers = surface.subscribedCarriers ?? []
       if (projectRoot && subscribers.length) {
         detachProjectEvents = subscribeProjectEvents(projectRoot, (event) => deliverProjectEvent(event, subscribers))

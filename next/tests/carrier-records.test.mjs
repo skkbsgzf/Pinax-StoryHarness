@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import net from 'node:net'
 import { join } from 'node:path'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
@@ -82,6 +83,17 @@ async function installAll({ without = [] } = {}) {
   return registry
 }
 
+function freePort() {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const server = net.createServer()
+    server.on('error', rejectPromise)
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address()
+      server.close(() => resolvePromise(port))
+    })
+  })
+}
+
 async function recordsProject(label, { primary = MATERIAL_CARRIER_ID, extras = [] } = {}) {
   const workspace = await createTempWorkspace(label)
   const root = join(workspace.projects, '记录载体靶子')
@@ -90,7 +102,15 @@ async function recordsProject(label, { primary = MATERIAL_CARRIER_ID, extras = [
   assert.equal(created.ok, true, JSON.stringify(created.error ?? {}))
   const opened = await openProject({ root, registry })
   assert.equal(opened.ok, true, JSON.stringify(opened.error ?? {}))
-  const runtime = createAgentRuntime({ registry, fileService: opened.value.fileService, view: opened.value.view })
+  // 漫画预览服务写死 8191：并行用例各用各的临时口，谁也别抢谁的。
+  const previewPort = await freePort()
+  const view = {
+    ...opened.value.view,
+    services: opened.value.view.services.map((service) => (
+      service.id === 'comic-preview' ? { ...service, port: previewPort } : service
+    ))
+  }
+  const runtime = createAgentRuntime({ registry, fileService: opened.value.fileService, view })
   const started = await runtime.start()
   assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
   return { workspace, root, registry, created, opened, runtime }
@@ -117,7 +137,9 @@ test('五份记录清单：各自一块目录、四把自有工具，外壳对�
     assert.equal(manifest.permissions[0].dir, meta.dir)
     assert.equal(manifest.permissions[0].mode, 'rw', `${key}：记录写入走 file:<目录>:rw`)
     assert.equal(manifest.permissions.includes('agent:ask'), true, `${key}：模型调用载体工具要前置授权`)
-    assert.deepEqual(manifest.context.providers, [], `${key}：本批不提供上下文块，清单不谎报`)
+    // 批次48：漫画是记录载体里唯一带上下文块的一栏（references 交页清单），其余四栏本批仍为空。
+    const expectedProviders = key === 'comic' ? ['references'] : []
+    assert.deepEqual(manifest.context.providers, expectedProviders, `${key}：清单里的 providers 与实现一致，不谎报`)
     assert.equal(manifest.subscriptions.includes('project.changed'), true)
 
     const panes = manifest.contributes.panes.map((pane) => pane.id)
@@ -187,7 +209,7 @@ test('记录底座真链路：空文档起步、带修订号写入、未传字�
     const surface = runtime.surfaceInfo()
     const expectedNames = [...MATERIAL_TOOL_NAMES, ...COMIC_TOOL_NAMES, ...VIDEO_TOOL_NAMES, ...EXPERIENCE_TOOL_NAMES, ...ONLINE_TOOL_NAMES, ...SCRIPT_TOOL_NAMES].sort()
     assert.deepEqual([...surface.carrierToolNames].sort(), expectedNames, '五块记录载体各四把＋依赖闭包带进来的剧本三把')
-    assert.equal(runtime.listTools().length, 19 + 1 + 23, '19 内核 ＋ 技能读取 1 ＋ 载体自有 23')
+    assert.equal(runtime.listTools().length, 19 + 1 + 23 + 3, '19 内核 ＋ 技能读取 1 ＋ 载体自有 23 ＋ 漫画 comfy 桥三把')
     assert.equal(runtime.ownerOf('pinax_material_list'), MATERIAL_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_online_remove'), ONLINE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_script_list'), SCRIPT_CARRIER_ID, '闭包装进来的剧本工具确实在面上')

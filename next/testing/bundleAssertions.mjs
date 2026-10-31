@@ -296,6 +296,32 @@ check('n3 载体作者须知进产物：.build/<载体>/AGENT.md 与源码逐一
   carrierDirsInSource.length > 0 && missingAgentMd.length === 0,
   missingAgentMd.length ? `缺 ${missingAgentMd.join(', ')}` : `${carrierDirsInSource.length} 份`)
 
+// 批次48（门禁 o）：services／mcp 牌声明的 .mjs 运行期脚本必须随载体进产物。
+// 理由：宿主按清单以插件目录为 cwd 起这些脚本（node preview-server.mjs／comfy-mcp-bridge.mjs）；
+// 脚本没拷进 .build，装机后就是「声明在、进程永远起不来」——预览白页、桥连不上，
+// 而且失败只落在服务日志里，不会让构建报错。所以从清单取文件名逐一对照产物，不硬编码。
+const runtimeScripts = []
+for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
+  const name = String(plugin?.meta?.source ?? '').split('/').pop()
+  const declared = [...(plugin.manifest?.services ?? []), ...(plugin.manifest?.mcp ?? [])]
+  for (const item of declared) {
+    for (const arg of Array.isArray(item?.args) ? item.args : []) {
+      const raw = String(arg ?? '')
+      if (/\.mjs$/u.test(raw) && !raw.includes('/') && !raw.includes('\\')) runtimeScripts.push({ name, script: raw })
+    }
+  }
+}
+const missingRuntimeScripts = []
+for (const { name, script } of runtimeScripts) {
+  const exists = await stat(join(BUILD_DIR, name, script)).then((info) => info.isFile(), () => false)
+  if (!exists) missingRuntimeScripts.push(`${name}/${script}`)
+}
+check('o 载体 services／mcp 脚本进产物：清单声明的 .mjs 运行期脚本在 .build/<载体>/ 下逐一存在',
+  runtimeScripts.length > 0 && missingRuntimeScripts.length === 0,
+  missingRuntimeScripts.length
+    ? `缺 ${missingRuntimeScripts.join(', ')}`
+    : runtimeScripts.map((item) => `${item.name}/${item.script}`).join(' / '))
+
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
 // 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，
 // 旧正则 join\\(currentDir… 会被标识符改名误伤（门禁该守路径，不该守压缩后的变量名）。

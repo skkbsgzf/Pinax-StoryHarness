@@ -8,6 +8,15 @@
  *
  * provides storyboard.shots：漫画页与分镜共用「一格一格讲故事」的能力口径；
  * 将来视频载体要引用漫画分镜时，闭包按能力找得到它。
+ *
+ * 批次48：这块载体是 v3 四张牌的第一个真实内置消费者——
+ *   mcp       stdio 起 comfy-mcp-bridge.mjs，三把 comfy_* 工具以 comfy. 前缀进聚合面；
+ *   services  autostart 起 preview-server.mjs（只读预览，127.0.0.1:8191）；
+ *   context   references 块交漫画页清单（页名＋格数＋首句台词）；
+ *   agentMd   AGENT.md 写清数据形状与两族工具的关系。
+ * 档案从 writing-selection 换成 authoring-knowledge：只有后者（含 storyboard-*）的块表里有
+ * references，且它映射到只读任务 authoring.knowledge.query；writing-selection 的块表没有
+ * references，声明了也只会被如实忽略。
  */
 export const COMIC_CARRIER_ID = 'pinax.carrier.comic'
 
@@ -17,14 +26,14 @@ export const COMIC_CARRIER = Object.freeze({
   manifestVersion: 3,
   id: COMIC_CARRIER_ID,
   title: '漫画',
-  version: '1.1.0',
+  version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
 
   primary: {
     projectKind: 'generic',
     defaultPane: 'comic.editor',
-    contextProfile: 'writing-selection'
+    contextProfile: 'authoring-knowledge'
   },
 
   dataDirs: Object.freeze({
@@ -45,7 +54,7 @@ export const COMIC_CARRIER = Object.freeze({
   tools: ['pinax_comic_list', 'pinax_comic_read', 'pinax_comic_save', 'pinax_comic_remove'],
 
   context: {
-    providers: [],
+    providers: ['references'],
     budgetChars: 12000
   },
 
@@ -53,11 +62,34 @@ export const COMIC_CARRIER = Object.freeze({
 
   subscriptions: ['project.changed'],
 
-  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
-  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  // 协议 v3 的四张牌：
+  //   entry    仍用宿主视图（漫画壳由 records-editor 渲染，不自带面板）；
+  //   services 预览服务——零依赖 node:http，只读 漫画/漫画.json，端口只给本机回环；
+  //   mcp      ComfyUI 桥——三把 comfy_* 以 comfy. 前缀进聚合工具面（出图不是写盘，
+  //            不落图片、只回 prompt_id 与产物元数据）；
+  //   agentMd  作者须知——运行时把它并进上下文信封。
   entry: null,
-  services: Object.freeze([]),
-  mcp: Object.freeze([]),
+  services: Object.freeze([
+    {
+      id: 'comic-preview',
+      command: 'node',
+      args: ['preview-server.mjs'],
+      port: 8191,
+      healthPath: '/health',
+      restart: 'on-failure',
+      autostart: true
+    }
+  ]),
+  mcp: Object.freeze([
+    {
+      id: 'comfy',
+      transport: 'stdio',
+      command: 'node',
+      args: ['comfy-mcp-bridge.mjs'],
+      prefix: 'comfy',
+      allow: ['comfy_status', 'comfy_submit', 'comfy_result']
+    }
+  ]),
   agentMd: 'AGENT.md'
 })
 

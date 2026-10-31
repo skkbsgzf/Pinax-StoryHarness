@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
@@ -27,6 +28,18 @@ process.env.PINAX_MIRROR_ROOT = join(workspace, 'mirror')
 function record(name, passed, note = '') {
   results.push({ name, passed, note })
   console.log(`${passed ? '✔' : '✘'} ${name}${note ? ` — ${note}` : ''}`)
+}
+
+/** 临时空端口：漫画预览服务写死 8191，验收并行跑别的用例时不能去抢别人的口。 */
+function freePort() {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const server = net.createServer()
+    server.on('error', rejectPromise)
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address()
+      server.close(() => resolvePromise(port))
+    })
+  })
 }
 
 try {
@@ -218,11 +231,27 @@ try {
     recordsMade.ok ? `enabled=${recordsMade.value.enabled.join(',')}` : String(recordsMade.error?.message || ''))
 
   const recordsOpened = await openProject({ root: recordsRoot, registry: recordsRegistry })
-  const recordsRuntime = createAgentRuntime({ registry: recordsRegistry, fileService: recordsOpened.value.fileService, view: recordsOpened.value.view })
+  const previewPort = await freePort()
+  const recordsView = {
+    ...recordsOpened.value.view,
+    services: recordsOpened.value.view.services.map((service) => (
+      service.id === 'comic-preview' ? { ...service, port: previewPort } : service
+    ))
+  }
+  const recordsRuntime = createAgentRuntime({ registry: recordsRegistry, fileService: recordsOpened.value.fileService, view: recordsView })
   const recordsStarted = await recordsRuntime.start()
-  record('M4/M5 聚合工具面：19 内核 ∪ 技能读取 1 ∪ 五块记录载体各四把＋剧本三把＝43，其中 23 个名字由载体服务',
-    recordsStarted.ok === true && recordsStarted.value.toolCount === 43 && recordsStarted.value.carrierTools === 23,
-    `toolCount=${recordsStarted.value?.toolCount} carrierTools=${recordsStarted.value?.carrierTools}`)
+  const comfyNames = recordsRuntime.listTools().map((tool) => tool.name).filter((name) => name.startsWith('comfy.'))
+  record('M4/M5 聚合工具面：19 内核 ∪ 技能读取 1 ∪ 五块记录载体各四把＋剧本三把＋comfy 桥三把＝46，其中 23 个名字由载体服务、3 把走外部 MCP',
+    recordsStarted.ok === true && recordsStarted.value.toolCount === 46 && recordsStarted.value.carrierTools === 23
+      && recordsStarted.value.externalServers === 1 && recordsStarted.value.externalFailures === 0
+      && comfyNames.sort().join() === 'comfy.comfy_result,comfy.comfy_status,comfy.comfy_submit',
+    `toolCount=${recordsStarted.value?.toolCount} carrierTools=${recordsStarted.value?.carrierTools} external=${recordsStarted.value?.externalServers} comfy=${comfyNames.length}`)
+
+  const previewStatus = recordsRuntime.serviceStatus().find((service) => service.id === 'comic-preview')
+  record('M4/M5 载体 services 牌真用：漫画预览服务由监督器 autostart 并探活（端口只在本机回环）',
+    recordsStarted.value.services === 1 && recordsStarted.value.serviceFailures === 0
+      && previewStatus?.status === 'ready',
+    `services=${recordsStarted.value?.services} status=${previewStatus?.status ?? '-'} port=${previewPort}`)
 
   const recordsEmpty = await recordsRuntime.callTool('pinax_material_list', {})
   const recordCreated = await recordsRuntime.callTool('pinax_material_save', {
@@ -245,14 +274,26 @@ try {
     `空=${recordsEmpty.value.payload?.revision} 建=${recordCreated.value.payload?.revision} 盲写=${recordBlind.value.payload?.code} 改=${recordUpdated.value.payload?.revision} 删=${recordRemoved.value.payload?.revision}`)
 
   // 另一块载体写的是另一份文档：互不串修订号。
-  const comicSaved = await recordsRuntime.callTool('pinax_comic_save', { title: '第1页', type: 'comic-page', expectedRevision: 0 })
+  const comicSaved = await recordsRuntime.callTool('pinax_comic_save', {
+    title: '第1页', type: 'comic-page', expectedRevision: 0,
+    meta: { panels: [{ composition: '中景', dialogue: '门开了。' }] }
+  })
   const materialAfterComic = await recordsRuntime.callTool('pinax_material_list', {})
   record('M4/M5 一载体一文档：漫画写入落 漫画/漫画.json，素材文档修订号不受影响',
     comicSaved.value.payload.ok === true && comicSaved.value.payload.file === '漫画/漫画.json'
       && materialAfterComic.value.payload.file === '素材/素材.json' && materialAfterComic.value.payload.revision === 3,
     `漫画=${comicSaved.value.payload?.file}@${comicSaved.value.payload?.revision} 素材=${materialAfterComic.value.payload?.file}@${materialAfterComic.value.payload?.revision}`)
 
+  const previewHtml = await fetch(`http://127.0.0.1:${previewPort}/?root=${encodeURIComponent(recordsRoot)}`).then((res) => res.text()).catch(() => '')
+  record('M4/M5 预览服务读真数据：/?root= 渲染页序、格数与台词（只读，无写口）',
+    /第1页/u.test(previewHtml) && /1 格/u.test(previewHtml) && /门开了/u.test(previewHtml)
+      && (await fetch(`http://127.0.0.1:${previewPort}/health`).then((res) => res.json()).catch(() => null))?.ok === true,
+    `html=${previewHtml.length}B`)
+
   await recordsRuntime.stop()
+  record('M4/M5 收尸：运行时 stop() 后预览端口不再监听、comfy 桥子进程一并关闭',
+    (await probePort(previewPort)) === false,
+    `port=${previewPort}`)
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

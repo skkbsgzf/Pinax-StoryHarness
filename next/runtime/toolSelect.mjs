@@ -24,7 +24,11 @@ const DOMAINS = Object.freeze([
   { id: 'outline', intent: /大纲|节点|卷章|结构|支线|伏笔/iu, tool: /outline/iu },
   { id: 'worldbook', intent: /世界书|条目|人物卡|暗线/iu, tool: /worldbook/iu },
   { id: 'chapter', intent: /章节|正文|原稿|这一章|上一章/iu, tool: /chapter/iu },
-  { id: 'script', intent: /剧本|场次|台词|分镜/iu, tool: /script/iu },
+  // 漫画域排在剧本前：分镜既是剧本词也是漫画词，漫画页＋出图才是这一格的落点。
+  // comfy_* 是在聚合面上带 comfy. 前缀的外部工具（出图桥）；comfy_submit 有意不进写族——
+  // 出图不是写盘，审计缓冲会另外记账。
+  { id: 'comic', intent: /漫画|分镜|画格|出图|comfy/iu, tool: /pinax_comic_|comfy_/iu },
+  { id: 'script', intent: /剧本|场次|台词/iu, tool: /script/iu },
   { id: 'rule', intent: /约束|禁忌|规则|设定/iu, tool: /rule/iu },
   { id: 'notes', intent: /构思|灵感|随想/iu, tool: /notes/iu },
   { id: 'reference', intent: /资料|素材|归档/iu, tool: /document|reference|knowledge/iu }
@@ -32,7 +36,8 @@ const DOMAINS = Object.freeze([
 
 // 写工具披露（批次46A 扩）：保存／写入／导入之外，删章与改名也是写盘动作——
 // 不披露它们，模型在「删掉这一章」这类请求里会拿到读工具而没法落地写策略。
-const WRITE_TOOL = /(_save|_write|_import|_delete|_rename)$/u
+// 批次48 补上 `_remove`（记录型载体的删一条同样是写盘）。
+const WRITE_TOOL = /(_save|_write|_import|_delete|_remove|_rename)$/u
 const READ_TOOL = /(_read|_list|_search|_status|_context)$/u
 
 function clampLimit(limit) {
@@ -91,7 +96,9 @@ export function selectTools({ tools = [], intent = '', skill = null, limit = TOO
     for (const tool of writes.slice(0, 2)) take(tool.name)
   }
 
-  const reads = entries.filter((tool) => READ_TOOL.test(tool.name))
+  // 读池：常规读工具之外，域内「既非写、也非读」的外部工具（如 comfy_submit／comfy_result）
+  // 也进池——它们不改本地文件，不披露就永远选不到出图这条路。真正的写盘边界仍在写策略层。
+  const reads = entries.filter((tool) => READ_TOOL.test(tool.name) || (domain && domain.tool.test(tool.name) && !WRITE_TOOL.test(tool.name)))
   const inDomain = domain ? reads.filter((tool) => domain.tool.test(tool.name)) : []
   const other = reads.filter((tool) => !inDomain.includes(tool))
   for (const tool of [...inDomain, ...other]) take(tool.name)

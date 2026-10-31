@@ -23,6 +23,7 @@ import { MATERIAL_CARRIER, MATERIAL_CARRIER_ID } from './material/manifest.mjs'
 import { MATERIAL_TOOL_NAMES, createMaterialTools } from './material/tools.mjs'
 import { COMIC_CARRIER, COMIC_CARRIER_ID } from './comic/manifest.mjs'
 import { COMIC_TOOL_NAMES, createComicTools } from './comic/tools.mjs'
+import { createComicBlocks, COMIC_CONTEXT_KINDS } from './comic/context.mjs'
 import { VIDEO_CARRIER, VIDEO_CARRIER_ID } from './video/manifest.mjs'
 import { VIDEO_TOOL_NAMES, createVideoTools } from './video/tools.mjs'
 import { EXPERIENCE_CARRIER, EXPERIENCE_CARRIER_ID } from './experience/manifest.mjs'
@@ -188,7 +189,16 @@ export function materialCarrierPlugin() {
 }
 
 export function comicCarrierPlugin() {
-  return recordsCarrierPlugin(COMIC_CARRIER, createComicTools, COMIC_CARRIER_TRUST, 'next/carriers/comic')
+  return {
+    manifest: COMIC_CARRIER,
+    impl: {
+      source: 'next/carriers/comic',
+      // 记录型载体里唯一带上下文块的一栏（批次48）：references 交漫画页清单。
+      tools: (context = {}) => createComicTools({ ...context, pluginId: context.pluginId ?? COMIC_CARRIER_ID }),
+      blocks: (context = {}) => createComicBlocks({ ...context, pluginId: context.pluginId ?? COMIC_CARRIER_ID })
+    },
+    meta: { trust: COMIC_CARRIER_TRUST, source: 'next/carriers/comic', dir: carrierDir('comic') }
+  }
 }
 
 export function videoCarrierPlugin() {
@@ -279,7 +289,9 @@ export {
   COMIC_CARRIER,
   COMIC_CARRIER_ID,
   COMIC_TOOL_NAMES,
+  COMIC_CONTEXT_KINDS,
   createComicTools,
+  createComicBlocks,
   VIDEO_CARRIER,
   VIDEO_CARRIER_ID,
   VIDEO_TOOL_NAMES,

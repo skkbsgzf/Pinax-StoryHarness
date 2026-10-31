@@ -87,9 +87,20 @@ export function createServiceSupervisor(options = {}) {
     return base ? resolvePath(base, raw) : raw
   }
 
+  /**
+   * 可执行入口的解析：裸命令名（node、python…）走 PATH 由系统找，
+   * 带路径分隔符的才按插件目录解析——否则 `command:'node'` 会被解析成
+   * `<插件目录>/node`，服务永远起不来（批次48 漫画预览服务踩出来的）。
+   */
+  function resolveCommand(entry, value) {
+    const raw = String(value ?? '')
+    if (!raw || (!raw.includes('/') && !raw.includes('\\'))) return raw || null
+    return resolveAgainstPlugin(entry, raw)
+  }
+
   function spawnService(entry) {
     return new Promise((resolvePromise) => {
-      const command = resolveAgainstPlugin(entry, entry.command)
+      const command = resolveCommand(entry, entry.command)
       const cwd = resolveAgainstPlugin(entry, entry.cwd) ?? resolveAgainstPlugin(entry, '.') ?? process.cwd()
       const env = { ...baseEnv, ...(entry.env ?? {}) }
       if (entry.port && !env.PORT) env.PORT = String(entry.port)

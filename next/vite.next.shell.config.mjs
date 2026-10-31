@@ -2,6 +2,7 @@ import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
+import { BUILT_IN_CARRIER_PLUGINS } from './carriers/index.mjs'
 
 /**
  * Next 外壳主进程构建（WP4）。与 next/vite.next.main.config.mjs 同两条硬规矩：
@@ -19,6 +20,9 @@ import { defineConfig } from 'vite'
  * 同一套路也管着 **AGENT.md**（协议 v3 的 agentMd 面）：它是运行时从插件目录读的文件，
  * 不是 vite 资产。只拷 ui/ 而漏了它，装机后每栏的作者须知会静默消失——
  * 须知缺席不报错，只是模型突然不守那栏的规矩。
+ *
+ * 批次48：载体清单 services／mcp 牌里声明的 .mjs 运行期脚本一并随载体拷进 .build/<载体>/，
+ * 宿主起服务／桥时以插件目录为 cwd，脚本不在产物里就是「声明在、进程起不来」。
  */
 const configDir = dirname(fileURLToPath(import.meta.url))
 const SKILLS_SOURCE = join(configDir, 'skills')
@@ -34,6 +38,28 @@ async function hasUiDir(dir) {
   } catch {
     return false
   }
+}
+
+/**
+ * 载体声明的**运行期脚本**（services／mcp 牌）——宿主按清单起子进程，脚本必须随产物走。
+ * 从清单里取（不硬编码文件名）：改了声明，拷贝与门禁断言跟着变，两边不会漂。
+ */
+function runtimeScriptsByCarrier() {
+  const table = new Map()
+  for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
+    const name = String(plugin?.meta?.source ?? '').split('/').pop()
+    if (!name) continue
+    const declared = [...(plugin.manifest?.services ?? []), ...(plugin.manifest?.mcp ?? [])]
+    const scripts = new Set()
+    for (const item of declared) {
+      for (const arg of Array.isArray(item?.args) ? item.args : []) {
+        const raw = String(arg ?? '')
+        if (/\.mjs$/u.test(raw) && !raw.includes('/') && !raw.includes('\\')) scripts.add(raw)
+      }
+    }
+    if (scripts.size) table.set(name, [...scripts])
+  }
+  return table
 }
 
 /**
@@ -63,6 +89,15 @@ async function copyCarrierAssets() {
     if (await stat(agentMd).then((info) => info.isFile(), () => false)) {
       await mkdir(target, { recursive: true })
       await cp(agentMd, join(target, 'AGENT.md'))
+      hasAsset = true
+    }
+    // 批次48：services／mcp 脚本（如 comic 的 comfy-mcp-bridge.mjs、preview-server.mjs）——
+    // 运行时按清单以插件目录为 cwd 起它们；漏拷就是「声明在、进程起不来」的静默失效。
+    for (const script of runtimeScriptsByCarrier().get(entry.name) ?? []) {
+      const from = join(source, script)
+      if (!(await stat(from).then((info) => info.isFile(), () => false))) continue
+      await mkdir(target, { recursive: true })
+      await cp(from, join(target, script))
       hasAsset = true
     }
     if (hasAsset) copied.push(entry.name)
