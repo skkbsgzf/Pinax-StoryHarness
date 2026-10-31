@@ -20,6 +20,14 @@ import { connectInProcess } from './transportInProcess.mjs'
 const KERNEL_TOOL_NAMES = new Set(kernelTools.map((tool) => tool.name))
 
 /**
+ * 载体工具输出合同的透出口（批次56 · ①档）。
+ * 声明挂在工具描述的 `_meta` 上：MCP 的 Tool 形状只保留已登记字段（zod 会剥掉未知顶层键），
+ * `_meta` 是协议留给扩展元数据的口子，等价于 annotations 的用法。
+ * 本批只透出、不消费——toolLoop 不拿它校验返回体（消费在 ②档）。
+ */
+export const TOOL_OUTPUT_META_KEY = 'pinax/output'
+
+/**
  * 写族调用审计环（批次45）：最近 50 条写类调用，只在内存里、只记账。
  *   不拦调用、不改返回、不做裁决——裁决归 writePolicy 与 kernelWriteGuard。
  * owner 的取法与 agentRuntime.ownerOf 同源：外部按 prefix 找声明它的插件，载体按 map 里的 pluginId，
@@ -68,7 +76,8 @@ export function collectCarrierTools({ registry, view, fileService } = {}) {
     for (const name of manifest.tools) {
       const tool = byName.get(name)
       if (tool) {
-        map.set(name, { pluginId, tool })
+        // 清单里声明的输出合同随工具一起进面；没声明就是 null（不透出 _meta）。
+        map.set(name, { pluginId, tool, output: manifest.toolOutputs?.[name] ?? null })
         continue
       }
       const fallsBack = KERNEL_TOOL_NAMES.has(name)
@@ -103,8 +112,8 @@ export async function createAggregatedMcpServer({
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const kernel = await inner.listTools()
     const merged = new Map(kernel.map((tool) => [tool.name, tool]))
-    for (const [toolName, { tool }] of carrierMap) {
-      merged.set(toolName, publicDescriptor(toolName, tool))
+    for (const [toolName, { tool, output }] of carrierMap) {
+      merged.set(toolName, publicDescriptor(toolName, tool, output))
     }
     // 运行时原生工具（M2.5-B：技能读取）：与载体工具同一个出口，但归运行时自己。
     for (const [toolName, { tool }] of nativeMap) {
@@ -165,13 +174,17 @@ export async function createAggregatedMcpServer({
   return { server, inner, carrierCount: carrierMap.size, closeInner }
 }
 
-function publicDescriptor(name, tool) {
+function publicDescriptor(name, tool, output = null) {
+  const meta = output
+    ? { ...(tool._meta && typeof tool._meta === 'object' ? tool._meta : {}), [TOOL_OUTPUT_META_KEY]: output }
+    : tool._meta && typeof tool._meta === 'object' ? tool._meta : null
   return {
     name,
     ...(tool.title ? { title: tool.title } : {}),
     description: String(tool.description ?? tool.title ?? name),
     inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
-    ...(tool.annotations ? { annotations: tool.annotations } : {})
+    ...(tool.annotations ? { annotations: tool.annotations } : {}),
+    ...(meta ? { _meta: meta } : {})
   }
 }
 

@@ -5,6 +5,7 @@ import { isPlainObject, validatePluginRelativePath } from './carrierManifest.sha
 import { validatePaneSemantics } from './carrierManifest.paneSemantics.mjs'
 import { validatePaneClaims } from './carrierManifest.claims.mjs'
 import { validatePreview } from './carrierManifest.previews.mjs'
+import { validateToolOutput } from './carrierManifest.toolOutputs.mjs'
 import {
   KERNEL_CONTRACT_VERSION,
   kernelRangeAllows,
@@ -38,6 +39,8 @@ import {
  *   资源认领   pane.claims／priority／canOpen／takes（carrierManifest.claims.mjs）
  *   渲染器注册 preview.register（carrierManifest.previews.mjs）
  *   合同上界   maxKernel 与 license（carrierManifest.contract.mjs）
+ * 批次56 起工具条目可带 output（输出体合同，carrierManifest.toolOutputs.mjs）：
+ * 只定义形状、不消费返回体——宿主把它透出到聚合面的 _meta 上，校验留给后续批次。
  * 老版本（@3／@2／@1）写了任何 @4 字段都拒装——沿用 V3_ONLY_FIELDS 的纪律。
  */
 export const CARRIER_SPEC_V1 = 'pinax-carrier@1'
@@ -73,6 +76,8 @@ export const V4_ONLY_TOP_FIELDS = Object.freeze(['maxKernel', 'license', 'previe
 export const V4_ONLY_SERVICE_FIELDS = Object.freeze(['adopt'])
 /** @4 的 settings 字段（批次54）：老版本写了即拒；volatile 决定设置页是否可写。 */
 export const V4_ONLY_SETTING_FIELDS = Object.freeze(['volatile', 'min', 'max', 'step'])
+/** @4 的 tool 条目字段（批次56）：老版本写了即拒（对象形态的条目本身也是 @4 写法）。 */
+export const V4_ONLY_TOOL_FIELDS = Object.freeze(['output'])
 export { KERNEL_CONTRACT_VERSION }
 
 /** pane.kind：内容面词表（与 next/shell/viewRegistry.mjs 的宿主视图分工一一对应，测试会核）。 */
@@ -251,7 +256,7 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (!capabilities.ok) return capabilities
   const requires = validateRequires(m.requires, m.id)
   if (!requires.ok) return requires
-  const tools = validateTools(m.tools, m.id)
+  const tools = validateTools(m.tools, m.id, { v4: m.spec === CARRIER_SPEC_V4 })
   if (!tools.ok) return tools
   const context = validateContext(m.context, m.id)
   if (!context.ok) return context
@@ -280,7 +285,10 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
     capabilities: capabilities.value,
     provides: capabilities.value,
     requires: requires.value,
-    tools: tools.value,
+    // tools 保持字符串数组（注册表、认领面、IPC 都吃这一份）；
+    // 输出合同另放 toolOutputs：只有真声明了 output 的清单才出这个键，老清单归一结果不多出死键。
+    tools: tools.value.names,
+    ...(Object.keys(tools.value.outputs).length ? { toolOutputs: tools.value.outputs } : {}),
     context: context.value,
     scopes: scopes.value,
     permissions: permissionsFromScopes(scopes.value),
@@ -298,8 +306,8 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
 }
 
 /**
- * @4 字段的归属扫描：顶层（maxKernel／license／preview）、pane 七字段、service adopt。
- * 只给「老版本写了新字段」的拒装用；@4 自己不走这条。
+ * @4 字段的归属扫描：顶层（maxKernel／license／preview）、pane 七字段、service adopt、
+ * setting 四字段、tool output。只给「老版本写了新字段」的拒装用；@4 自己不走这条。
  */
 function firstV4Field(manifest) {
   for (const field of V4_ONLY_TOP_FIELDS) {
@@ -329,6 +337,14 @@ function firstV4Field(manifest) {
     if (!isPlainObject(setting)) continue
     for (const field of V4_ONLY_SETTING_FIELDS) {
       if (setting[field] !== undefined) return { field, where: `setting:${String(setting.id ?? '?')}` }
+    }
+  }
+  // 批次56：工具条目的对象形态（{ name, output }）是 @4 写法；老清单写了 output 即拒。
+  const tools = Array.isArray(manifest.tools) ? manifest.tools : []
+  for (const tool of tools) {
+    if (!isPlainObject(tool)) continue
+    for (const field of V4_ONLY_TOOL_FIELDS) {
+      if (tool[field] !== undefined) return { field, where: `tool:${String(tool.name ?? '?')}` }
     }
   }
   return null
@@ -972,17 +988,46 @@ function validateRequires(value, pluginId) {
   return ok(out)
 }
 
-function validateTools(value, pluginId) {
+/**
+ * 工具声明（批次56 扩 output）。
+ *   'x.read'                                  老写法：只有名字，照装
+ *   { name: 'x.read', output: { schema, … } }  @4 写法：输出体合同随条目走
+ * 归一结果拆两半：names 仍是字符串数组（注册表／认领面／IPC 的读取面不变），
+ * outputs 只在真有声明时带键——存量 44 把工具零改动，归一结果不多出死字段。
+ */
+function validateTools(value, pluginId, { v4 = false } = {}) {
   if (!Array.isArray(value)) return fail('INVALID_MANIFEST', `${pluginId} 的 tools 必须是数组（可空）`)
-  const out = []
-  for (const name of value) {
-    if (typeof name !== 'string' || !TOOL_NAME_PATTERN.test(name)) {
-      return fail('TOOL_CONFLICT', `${pluginId} 的工具名不合法：${String(name)}；须匹配 ${TOOL_NAME_PATTERN}`, { pluginId })
+  const names = []
+  const outputs = {}
+  for (const entry of value) {
+    if (!isPlainObject(entry)) {
+      if (typeof entry !== 'string' || !TOOL_NAME_PATTERN.test(entry)) {
+        return fail('TOOL_CONFLICT', `${pluginId} 的工具名不合法：${String(entry)}；须匹配 ${TOOL_NAME_PATTERN}`, { pluginId })
+      }
+      if (names.includes(entry)) return fail('TOOL_CONFLICT', `${pluginId} 重复声明工具 ${entry}`)
+      names.push(entry)
+      continue
     }
-    if (out.includes(name)) return fail('TOOL_CONFLICT', `${pluginId} 重复声明工具 ${name}`)
-    out.push(name)
+    if (!v4) {
+      return fail('INVALID_MANIFEST', `${pluginId} 的工具条目 ${String(entry.name ?? '?')} 是对象形态：这是 ${CARRIER_SPEC_V4} 的写法，请把清单 spec 与 manifestVersion 一并升级`, { pluginId, toolName: entry.name ?? null })
+    }
+    for (const key of Object.keys(entry)) {
+      if (key === 'name') continue
+      if (V4_ONLY_TOOL_FIELDS.includes(key)) continue
+      return fail('INVALID_MANIFEST', `${pluginId} 的工具条目含未知字段 "${key}"：可声明 name / ${V4_ONLY_TOOL_FIELDS.join(' / ')}`, { pluginId, key })
+    }
+    if (typeof entry.name !== 'string' || !TOOL_NAME_PATTERN.test(entry.name)) {
+      return fail('TOOL_CONFLICT', `${pluginId} 的工具名不合法：${String(entry.name)}；须匹配 ${TOOL_NAME_PATTERN}`, { pluginId })
+    }
+    if (names.includes(entry.name)) return fail('TOOL_CONFLICT', `${pluginId} 重复声明工具 ${entry.name}`)
+    if (entry.output !== undefined) {
+      const output = validateToolOutput(entry.output, { pluginId, toolName: entry.name })
+      if (!output.ok) return output
+      outputs[entry.name] = output.value
+    }
+    names.push(entry.name)
   }
-  return ok(out)
+  return ok({ names, outputs })
 }
 
 function validateContext(value, pluginId) {

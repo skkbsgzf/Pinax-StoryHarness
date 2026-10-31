@@ -485,6 +485,86 @@ try {
       && portSourceCheck?.services?.[0]?.portSource === 'override',
     `state=${doctorReport.state} port=${portSourceCheck?.services?.[0]?.port}/${portSourceCheck?.services?.[0]?.portSource}`)
 
+  // ── 批次56：工具输出契约（路线图 ①档：只定义合同＋透出，返回体不校验）────────────
+  // 存量记账：十二块内置载体共 44 把工具全部还没声明 output——本批不值得动存量清单，
+  // 但条数要在门禁里当场核（兼容断言：没声明的照装，归一结果不出 toolOutputs 键）。
+  const outputLegacy = BUILT_IN_CARRIER_PLUGINS.map((plugin) => validateCarrierManifest(plugin.manifest))
+  const legacyToolCount = outputLegacy.reduce((sum, result) => sum + (result.ok ? result.value.tools.length : 0), 0)
+  const legacyDeclared = outputLegacy.filter((result) => result.ok && result.value.toolOutputs).length
+  record('批次56 输出契约兼容：12 份清单全部照装、44 把工具零 output 声明（归一结果不出 toolOutputs 键）',
+    outputLegacy.every((result) => result.ok) && legacyToolCount === 44 && legacyDeclared === 0,
+    `工具=${legacyToolCount} 已声明=${legacyDeclared}`)
+
+  const outputRoot = join(workspace, 'projects', '输出契约靶子')
+  const outputRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+  const outputSchema = {
+    type: 'object',
+    properties: { ok: { type: 'boolean' }, text: { type: 'string' } },
+    required: ['ok', 'text']
+  }
+  const outputManifest = {
+    spec: 'pinax-carrier@4',
+    manifestVersion: 4,
+    id: 'fixture.output',
+    title: '输出契约（验收夹具）',
+    version: '1.0.0',
+    minKernel: '1',
+    tier: 'carrier',
+    primary: { projectKind: 'generic', defaultPane: 'output.pane', contextProfile: 'authoring' },
+    dataDirs: { notes: '构思' },
+    panes: [{ slot: 'center', id: 'output.pane', title: '输出', view: 'pinax.view.notes', kind: 'notes-editor' }],
+    capabilities: [],
+    requires: [],
+    tools: [
+      { name: 'fixture_read', output: { schema: outputSchema, presentationMeta: { mode: 'list' } } },
+      'fixture_write'
+    ],
+    context: { providers: [], budgetChars: 2000 },
+    scopes: ['file:构思:rw', 'agent:ask']
+  }
+  const outputImpl = {
+    tools: () => [
+      {
+        name: 'fixture_read',
+        description: '读（声明了 output，返回体故意不符）',
+        inputSchema: { type: 'object', properties: {} },
+        annotations: { readOnlyHint: true },
+        run: async () => ({ ok: true, value: { ok: true, text: 42 } })
+      },
+      {
+        name: 'fixture_write',
+        description: '写（没有 output 声明）',
+        inputSchema: { type: 'object', properties: {} },
+        run: async () => ({ ok: true, value: { ok: true } })
+      }
+    ]
+  }
+  const outputInstalled = outputRegistry.install(outputManifest, outputImpl)
+  // 非法 schema 必须在安装期真拒（不是「存下来再说」）：根不是 object 就是一条。
+  const illegalInstalled = outputRegistry.install({
+    ...outputManifest,
+    id: 'fixture.badoutput',
+    title: '坏输出（验收夹具）',
+    tools: [{ name: 'fixture_read', output: { schema: { type: 'string' } } }]
+  })
+  const outputMade = await createProject({ root: outputRoot, name: '输出契约靶子', primaryCarrier: 'fixture.output', registry: outputRegistry })
+  const outputOpened = await openProject({ root: outputRoot, registry: outputRegistry })
+  const outputRuntime = createAgentRuntime({ registry: outputRegistry, fileService: outputOpened.value.fileService, view: outputOpened.value.view })
+  const outputStarted = await outputRuntime.start()
+  const outputTools = outputRuntime.listTools()
+  const outputRead = outputTools.find((tool) => tool.name === 'fixture_read')
+  const outputWrite = outputTools.find((tool) => tool.name === 'fixture_write')
+  const outputMismatch = await outputRuntime.callTool('fixture_read', {})
+  await outputRuntime.stop()
+  record('批次56 输出契约两半：聚合面 _meta[\'pinax/output\'] 透出声明；返回体不按声明校验（text:42 穿过 string）；非法 schema 安装期真拒',
+    outputInstalled.ok === true && outputMade.ok === true && outputOpened.ok === true && outputStarted.ok === true
+      && illegalInstalled.ok === false && illegalInstalled.error.code === NEXT_ERROR_CODES.INVALID_MANIFEST
+      && JSON.stringify(outputRead?._meta?.['pinax/output']?.schema) === JSON.stringify(outputSchema)
+      && outputRead?._meta?.['pinax/output']?.presentationMeta?.mode === 'list'
+      && !('_meta' in (outputWrite ?? {}))
+      && outputMismatch.ok === true && outputMismatch.value.payload.text === 42,
+    `装=${outputInstalled.ok ? 'ok' : outputInstalled.error?.code} 非法=${illegalInstalled.error?.code ?? '未拒'} meta=${outputRead?._meta ? '在' : '缺'} 返回体=${outputMismatch.value?.payload?.text ?? '-'}`)
+
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)
   process.exitCode = failed ? 1 : 0

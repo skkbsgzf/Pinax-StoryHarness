@@ -547,6 +547,16 @@ check('t 批次54 两层覆盖进产物：组装点标「默认→覆盖」，�
   mergeOrderMarked && missingOverrideMarkers.length === 0 && shellBundle.includes('--dump-settings-schema'),
   `mergeOrder=${mergeOrderMarked} main=${missingOverrideMarkers.join(',') || '齐'} dump=${shellBundle.includes('--dump-settings-schema')}`)
 
+// 批次56（门禁 u）：工具输出合同在装机轨里不是死声明。
+//   词表：JSON Schema 子集校验随校验器进主进程 bundle（presentationMeta 与 output.schema 的拒绝文案同一处）；
+//   透出：聚合面把声明写到 _meta['pinax/output']——键没进包，宿主与后续批次都读不到，声明等于没写。
+// 计数不新增：12 份清单 44 把工具仍零 output（记账在 acceptance 与批次记录），本句只守「点在不在」。
+const outputMarkers = ['pinax/output', 'presentationMeta', 'output.schema']
+const missingOutputMarkers = outputMarkers.filter((marker) => !bundle.includes(marker))
+check('u 批次56 工具输出合同进产物：主进程 bundle 带 output.schema／presentationMeta 的校验文案与 _meta 透出键 pinax/output',
+  missingOutputMarkers.length === 0,
+  missingOutputMarkers.length ? `缺 ${missingOutputMarkers.join(' ')}` : `${outputMarkers.length} 个标记齐`)
+
 if (failures.length) {
   console.log(`\n打包门禁：${failures.length} 项不合格 → ${failures.join(' / ')}`)
   process.exitCode = 1
