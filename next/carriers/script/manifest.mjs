@@ -20,14 +20,15 @@
 export const SCRIPT_CARRIER_ID = 'pinax.carrier.script'
 
 export const SCRIPT_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: SCRIPT_CARRIER_ID,
   title: '剧本',
   version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'screenplay',
@@ -42,8 +43,10 @@ export const SCRIPT_CARRIER = Object.freeze({
   contributes: Object.freeze({
     panes: [
       // 竖条图标用 film（老前端图标表里的片子那一枚）；中栏是剧本正文。
-      { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film', view: 'pinax.view.list', kind: 'script-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
-      { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor', kind: 'script-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      // 槽语义（批次53）：剧本板是整栏一份的篇目清单（single＋project），兜底认领 剧本/**。
+      { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film', view: 'pinax.view.list', kind: 'script-editor', multiplicity: 'single', scope: 'project', claims: ['剧本/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：编辑位绑一场剧本（single＋entry），认领 剧本/**/*.md 并以 extension 档接管。
+      { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor', kind: 'script-editor', multiplicity: 'single', scope: 'entry', claims: ['剧本/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'script' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

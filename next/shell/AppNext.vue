@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CenterSlotHost from './CenterSlotHost.vue'
@@ -155,6 +155,16 @@ const runtime = computed(() => view.value?.runtime ?? { tools: [], started: fals
 const leftItems = computed(() => view.value?.left ?? [])
 const centerPanes = computed(() => view.value?.center ?? [])
 const carriers = computed(() => view.value?.carriers ?? [])
+/**
+ * 资源认领（批次53 · 协议 @4）：把各载体 pane 的 claims／priority／canOpen／takes 交给数据层作裁决表。
+ * 裁决在打开某份资源时发生（useBoardData.noteClaim），这里只负责喂表——清单一变（热载／启停）就重喂。
+ * 裁决是旁路事实：它记录「谁赢了／谁为什么落选」，不拦任何打开。
+ */
+watch(
+  () => carriers.value.flatMap((carrier) => (Array.isArray(carrier?.panes) ? carrier.panes : [])),
+  (panes) => data.declareClaimPanes?.(panes),
+  { immediate: true }
+)
 const rejected = computed(() => view.value?.rejected ?? [])
 const needsPrimary = computed(() => Boolean(view.value?.needsPrimary))
 const openError = computed(() => view.value?.openError ?? null)
@@ -857,8 +867,27 @@ async function openProposalFromSettings(item) {
   indexOpen.value = true
   await data.openProposal(item)
 }
-/** 核心区只挂这块板的 center 面板：正文不再被目录视图挤到旁边。 */
-const activeCenterPane = computed(() => activeBoard.value?.centerPanes?.[0] ?? null)
+/**
+ * 核心区挂哪块 center pane：一块板可能声明两块以上（comic.editor 与 comic.canvas 同载体双 center）。
+ * 作者选过的那块按板记住（centerPaneChoice[boardId]）；没选过或已不在板上时回落第一块。
+ * 批次58 实拍的「双中栏 pane 无切换入口」由这条选择 + 下方切换条收口。
+ */
+const centerPaneChoice = reactive({})
+const activeCenterPanes = computed(() => activeBoard.value?.centerPanes ?? [])
+const activeCenterPane = computed(() => {
+  const panes = activeCenterPanes.value
+  if (!panes.length) return null
+  const chosen = centerPaneChoice[activeBoard.value?.id]
+  return panes.find((pane) => pane.id === chosen) ?? panes[0]
+})
+/** 同一块板有两块以上中栏 pane 时才出切换条（单 pane 的板维持原样，不新增视觉噪声）。 */
+const centerPaneTabs = computed(() => (activeCenterPanes.value.length > 1 ? activeCenterPanes.value : []))
+function chooseCenterPane(paneId) {
+  const boardId = activeBoard.value?.id
+  if (!boardId) return null
+  centerPaneChoice[boardId] = String(paneId ?? '')
+  return centerPaneChoice[boardId]
+}
 
 /* —— 多形态打开（协议 v1.2 P18–P21）——————————————————————————————
  * 形态是宿主状态：dock＝三栏里的中栏、split＝中栏右侧副栏、overlay＝宿主浮窗、
@@ -1722,14 +1751,37 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <p v-else-if="!mainCenterPane && activeCenterPane" class="center-empty">「{{ activeCenterPane.title }}」现在以浮窗打开。</p>
-        <CenterSlotHost
-          v-else
-          :active-pane="mainCenterPane"
-          :data="data"
-          :project-root="project?.root ?? ''"
-          @history="openHistoryFor"
-        />
+        <!-- 批次53：一块板声明多块中栏 pane 时（comic.editor／comic.canvas），核心区顶部出切换条；
+             单 pane 板不显。形态面（沉浸／全屏／分屏）各有自己的形态条，这里让位。 -->
+        <template v-else>
+          <div
+            v-if="centerPaneTabs.length"
+            class="nx-center-tabs"
+            role="tablist"
+            aria-label="核心区视图切换"
+            data-test="center-pane-tabs"
+          >
+            <button
+              v-for="pane in centerPaneTabs"
+              :key="pane.id"
+              type="button"
+              class="control-quiet nx-center-tab"
+              :class="{ 'is-active': pane.id === activeCenterPane?.id }"
+              role="tab"
+              :aria-selected="pane.id === activeCenterPane?.id"
+              :data-pane="pane.id"
+              @click="chooseCenterPane(pane.id)"
+            >{{ pane.title ?? pane.id }}</button>
+          </div>
+          <p v-if="!mainCenterPane && activeCenterPane" class="center-empty">「{{ activeCenterPane.title }}」现在以浮窗打开。</p>
+          <CenterSlotHost
+            v-else
+            :active-pane="mainCenterPane"
+            :data="data"
+            :project-root="project?.root ?? ''"
+            @history="openHistoryFor"
+          />
+        </template>
       </div>
 
       <!-- 右栏与它的分界在沉浸态一起让位（分界属于右栏的边界，不单独留下一条 5px 的缝）。 -->
@@ -1892,3 +1944,35 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+/* 批次53：一块板声明多块中栏 pane 时的切换条。
+   形态沿用老版侧栏行的度量与色阶：发丝分隔线、muted 底、选中走 workbench-selected。 */
+.nx-center-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--surface-workbench-muted);
+}
+.nx-center-tab {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-md);
+}
+.nx-center-tab:hover {
+  background: var(--workbench-selected);
+  color: var(--archive-ink);
+}
+.nx-center-tab.is-active {
+  background: var(--surface-workbench);
+  border-color: var(--hairline-soft);
+  color: var(--archive-ink);
+}
+</style>

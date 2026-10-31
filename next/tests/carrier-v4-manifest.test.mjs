@@ -50,6 +50,22 @@ function v4With(mutate) {
   return withMutation(FIXTURE_V4, mutate)
 }
 
+/**
+ * @3 基线夹具（批次53）：小说清单已升 @4，测「新字段只对 @4 生效」时先把它降回 @3
+ * （连同 @4 字段一起剥掉，否则是「@3 清单写了 @4 字段」，测的就成了另一条纪律）。
+ */
+function downgradeToV3(manifest) {
+  const copy = structuredClone(manifest)
+  copy.spec = CARRIER_SPEC_V3
+  copy.manifestVersion = 3
+  delete copy.license
+  for (const pane of copy.contributes.panes) {
+    for (const field of V4_ONLY_FIELDS) delete pane[field]
+  }
+  for (const service of copy.services ?? []) delete service.adopt
+  return copy
+}
+
 function paneWith(index, fields) {
   return v4With((manifest) => Object.assign(manifest.panes[index], fields))
 }
@@ -70,7 +86,7 @@ test('@4 进 SUPPORTED_CARRIER_SPECS，CARRIER_SPEC 指向 @4，@1/@2/@3 仍可�
   }))
   assert.equal(v2.ok, true, JSON.stringify(v2.error ?? {}))
 
-  const v3 = validateCarrierManifest(NOVEL_CARRIER)
+  const v3 = validateCarrierManifest(downgradeToV3(NOVEL_CARRIER))
   assert.equal(v3.ok, true, JSON.stringify(v3.error ?? {}))
 })
 
@@ -87,7 +103,7 @@ test('12 份现有载体清单零误拒：校验器与注册表都照旧收下�
   assert.equal(registry.manifests().size, 12)
 
   // 老清单的归一结果不多出新字段（读侧字节不变）：@3 的 pane 没有 multiplicity／claims 的默认键。
-  const novel = validateCarrierManifest(NOVEL_CARRIER)
+  const novel = validateCarrierManifest(downgradeToV3(NOVEL_CARRIER))
   assert.equal('multiplicity' in novel.value.panes[0], false)
   assert.equal('claims' in novel.value.panes[0], false)
   assert.equal(novel.value.maxKernel, null)
@@ -255,21 +271,21 @@ test('V4_ONLY_FIELDS：七个 pane 字段、三个顶层字段、一个 service 
   assert.deepEqual(V4_ONLY_SERVICE_FIELDS, ['adopt'])
 
   for (const field of V4_ONLY_FIELDS) {
-    const manifest = withMutation(NOVEL_CARRIER, (copy) => {
+    const manifest = withMutation(downgradeToV3(NOVEL_CARRIER), (copy) => {
       copy.contributes.panes[0][field] = field === 'claims' ? ['正文/*.md'] : field === 'priority' ? 10 : 'x'
     })
     const error = rejects(manifest)
     assert.match(error.message, /pinax-carrier@4/u, `字段 ${field} 应指向 @4`)
   }
   for (const field of V4_ONLY_TOP_FIELDS) {
-    const manifest = withMutation(NOVEL_CARRIER, (copy) => {
+    const manifest = withMutation(downgradeToV3(NOVEL_CARRIER), (copy) => {
       copy[field] = field === 'preview'
         ? { register: [{ id: 'md', extensions: ['.md'], loading: 'text-pages', maxBytes: 1024 }] }
         : field === 'license' ? { mode: 'free' } : '2'
     })
     rejects(manifest)
   }
-  rejects(withMutation(NOVEL_CARRIER, (copy) => {
+  rejects(withMutation(downgradeToV3(NOVEL_CARRIER), (copy) => {
     copy.services = [{ id: 'external', adopt: true, port: 9101, healthPath: '/health' }]
   }))
 

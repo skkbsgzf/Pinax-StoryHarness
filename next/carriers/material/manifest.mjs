@@ -20,13 +20,15 @@
 export const MATERIAL_CARRIER_ID = 'pinax.carrier.material'
 
 export const MATERIAL_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: MATERIAL_CARRIER_ID,
   title: '素材',
   version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -40,10 +42,14 @@ export const MATERIAL_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'material.board', title: '素材库', icon: 'image', view: 'pinax.view.list', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'material.editor', title: '素材', icon: 'image', view: 'pinax.view.editor', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      // 槽语义（批次53）：记录板是整栏一份的记录树（single＋project），兜底认领 素材/**。
+      { slot: 'left-dock', id: 'material.board', title: '素材库', icon: 'image', view: 'pinax.view.list', kind: 'records-editor', multiplicity: 'single', scope: 'project', claims: ['素材/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      // 槽语义（批次53）：编辑位绑一条记录（single＋entry）；记录真源是 素材/素材.json，
+      // 认领 素材/**/*.json 并以 extension 档接管。
+      { slot: 'center', id: 'material.editor', title: '素材', icon: 'image', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['素材/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'material-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
       // 自带面板（协议 v3）：内容面是插件自己的页面，宿主只给一块沙箱 iframe 与一条只读工具桥。
-      { slot: 'overlay', id: 'material.panel', title: '素材面板', icon: 'image', view: 'pinax.view.custom', kind: 'custom-panel', width: 320, forms: ['overlay'] }
+      // 槽语义（批次53）：面板是只读的第二看法，允许多开（list）且随会话存续（session）；不认领文件。
+      { slot: 'overlay', id: 'material.panel', title: '素材面板', icon: 'image', view: 'pinax.view.custom', kind: 'custom-panel', width: 320, multiplicity: 'list', scope: 'session', forms: ['overlay'] }
     ],
     settings: []
   }),

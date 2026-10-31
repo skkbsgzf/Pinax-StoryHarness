@@ -12,14 +12,15 @@
 export const OUTLINE_CARRIER_ID = 'pinax.carrier.outline'
 
 export const OUTLINE_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: OUTLINE_CARRIER_ID,
   title: '大纲',
   version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -34,11 +35,16 @@ export const OUTLINE_CARRIER = Object.freeze({
   // 工单 C2：pane 自声明 view（大纲树／编辑器），宿主不再按 id 前缀猜。
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
-      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：大纲树是全项目一份的导航面（single＋project），兜底认领 大纲/**。
+      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', kind: 'outline-editor', multiplicity: 'single', scope: 'project', claims: ['大纲/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：编辑位绑的是整份 outline.json（不是单个节点），所以 scope 是 project 而不是 entry；
+      // 认领同目录、以 extension 档接管大纲资源，canOpen 只放行 kind=outline（其它文件仍留给兜底面）。
+      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', kind: 'outline-editor', multiplicity: 'single', scope: 'project', claims: ['大纲/**'], priority: 70, canOpen: { field: 'kind', equals: 'outline' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
       // 协议 v1.1-C：悬浮小工具窗（作者点名「大纲变成微型悬浮窗，悬浮在小说正文的某个位置」）。
       // 载体只声明意图与宽度；定位、拖动、收起/展开、位置记忆全归宿主 next/shell/FloatingWidget.vue。
-      { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, view: 'pinax.view.tree', kind: 'outline-editor' }
+      // 槽语义（批次53）：悬浮窗是同一份大纲的第二种看法，允许开多份（list），生命周期跟会话（session）；
+      // 它不是资源的所有者（不认领文件），所以不带 claims／priority。
+      { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, view: 'pinax.view.tree', kind: 'outline-editor', multiplicity: 'list', scope: 'session' }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

@@ -10,7 +10,10 @@ import {
   createViewRegistry,
   hostViewRegistry,
   legacyBindingForPane,
-  resolvePaneView
+  matchClaimPath,
+  normalizeClaimPath,
+  resolvePaneView,
+  resolveResourceClaim
 } from '../shell/viewRegistry.mjs'
 
 /**
@@ -138,4 +141,88 @@ test('v3 pane.kind 是权威：同一 id 前缀下以声明为准，不再被前
 
   // 没有 kind、也没有认得出的前缀：如实返回 null（宿主出占位）。
   assert.equal(resolvePaneView({ id: 'unknown.pane', view: 'pinax.view.editor' }, {}).result, null)
+})
+
+/**
+ * 资源认领裁决（批次53 · 协议 @4）：同一份资源被多块 pane 认领时，谁赢要能断言。
+ * 顺序：claims 命中 → canOpen 谓词 → takes 档位（extension > fallback）→ priority → paneId。
+ */
+test('认领 glob：** 独占一段可零段，* 不跨目录，路径分隔统一成 /', () => {
+  const backslash = String.fromCharCode(92)
+  assert.equal(normalizeClaimPath(`.${backslash}世界书${backslash}a.md/`), '世界书/a.md')
+  assert.equal(matchClaimPath('正文/**/*.md', '正文/第001章.md'), true, '** 可以零段')
+  assert.equal(matchClaimPath('正文/**/*.md', '正文/第一卷/第001章.md'), true)
+  assert.equal(matchClaimPath('正文/*.md', '正文/第一卷/第001章.md'), false, '* 不跨目录')
+  assert.equal(matchClaimPath('世界书/**', '世界书/人物/张三.md'), true)
+  assert.equal(matchClaimPath('世界书/**', '约束/人物/张三.md'), false)
+})
+
+test('裁决：extension 档胜过 fallback 档——正文编辑器赢过书架（同一份章节）', () => {
+  const decision = resolveResourceClaim([
+    { id: 'novel.shelf', pluginId: 'pinax.carrier.novel', title: '书架', claims: ['正文/**'], priority: 30, takes: 'fallback' },
+    { id: 'novel.editor', pluginId: 'pinax.carrier.novel', title: '正文', claims: ['正文/**/*.md'], priority: 70, takes: 'extension' }
+  ], { path: '正文/第一卷/第001章.md', kind: 'chapter' })
+
+  assert.equal(decision.winner.paneId, 'novel.editor', '编辑器必须赢（extension 接管）')
+  assert.equal(decision.winner.won, true)
+  const shelf = decision.considered.find((pane) => pane.paneId === 'novel.shelf')
+  assert.equal(shelf.status, 'lost')
+  assert.match(shelf.reason, /lost-take/u, '落选原因要可读：同命中时输在 takes 档位')
+})
+
+test('裁决：canOpen 谓词不命中即退出竞争，且缺字段也算不命中', () => {
+  const panes = [
+    { id: 'worldbook.board', claims: ['世界书/**'], priority: 30, takes: 'fallback' },
+    { id: 'worldbook.entries', claims: ['世界书/**/*.md'], priority: 70, takes: 'extension', canOpen: { field: 'kind', in: ['entry', 'proposal'] } }
+  ]
+
+  // kind 命中：看板区赢。
+  const hit = resolveResourceClaim(panes, { path: '世界书/人物/张三.md', kind: 'entry' })
+  assert.equal(hit.winner.paneId, 'worldbook.entries')
+  assert.equal(hit.considered.find((pane) => pane.paneId === 'worldbook.board').reason, 'lost-take')
+
+  // kind 不命中：看板区 predicate-miss，导航树兜底赢。
+  const miss = resolveResourceClaim(panes, { path: '世界书/人物/张三.md', kind: 'outline' })
+  assert.equal(miss.winner.paneId, 'worldbook.board')
+  assert.equal(miss.considered.find((pane) => pane.paneId === 'worldbook.entries').reason, 'predicate-miss')
+
+  // 资源没带 kind：谓词字段缺失＝不命中（不静默放行）。
+  const missing = resolveResourceClaim(panes, { path: '世界书/人物/张三.md' })
+  assert.equal(missing.winner.paneId, 'worldbook.board')
+  assert.equal(missing.considered.find((pane) => pane.paneId === 'worldbook.entries').reason, 'predicate-missing-field')
+})
+
+test('裁决：同档同谓词时按 priority 降序、再按 paneId 升序，落选原因逐项可读', () => {
+  const decision = resolveResourceClaim([
+    { id: 'b.editor', claims: ['文档/**'], priority: 50, takes: 'extension' },
+    { id: 'a.editor', claims: ['文档/**'], priority: 50, takes: 'extension' },
+    { id: 'c.editor', claims: ['文档/**'], priority: 80, takes: 'extension' },
+    { id: 'other.pane', claims: ['资料/**'], priority: 99, takes: 'extension' }
+  ], { path: '文档/草稿.md' })
+
+  assert.equal(decision.winner.paneId, 'c.editor', 'priority 高的赢')
+  const a = decision.considered.find((pane) => pane.paneId === 'a.editor')
+  const b = decision.considered.find((pane) => pane.paneId === 'b.editor')
+  assert.equal(a.status, 'lost')
+  assert.equal(a.reason, 'lost-priority')
+  assert.equal(b.reason, 'lost-priority')
+  assert.equal(decision.considered.find((pane) => pane.paneId === 'other.pane').reason, 'claim-miss')
+
+  // 同 priority 时 paneId 升序：a 赢 b。
+  const tie = resolveResourceClaim([
+    { id: 'b.editor', claims: ['文档/**'], priority: 50, takes: 'extension' },
+    { id: 'a.editor', claims: ['文档/**'], priority: 50, takes: 'extension' }
+  ], { path: '文档/草稿.md' })
+  assert.equal(tie.winner.paneId, 'a.editor')
+  assert.equal(tie.considered.find((pane) => pane.paneId === 'b.editor').reason, 'lost-order')
+})
+
+test('裁决：没写 claims 的 pane 不参评（认领是显式声明，不按 id 猜）', () => {
+  const decision = resolveResourceClaim([
+    { id: 'novel.shelf', claims: ['正文/**'], priority: 30, takes: 'fallback' },
+    { id: 'novel.editor', priority: 70 }
+  ], { path: '正文/第001章.md', kind: 'chapter' })
+
+  assert.equal(decision.winner.paneId, 'novel.shelf')
+  assert.equal(decision.considered.some((pane) => pane.paneId === 'novel.editor'), false, '无 claims 的 pane 连参评都算不上')
 })

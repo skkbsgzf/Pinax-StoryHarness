@@ -28,14 +28,15 @@
 export const COMIC_CARRIER_ID = 'pinax.carrier.comic'
 
 export const COMIC_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: COMIC_CARRIER_ID,
   title: '漫画',
   version: '1.3.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -49,10 +50,15 @@ export const COMIC_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'comic.board', title: '漫画页', icon: 'comics', view: 'pinax.view.list', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'comic.editor', title: '漫画', icon: 'comics', view: 'pinax.view.editor', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      // 槽语义（批次53）：漫画页板是整栏一份的记录树（single＋project），兜底认领 漫画/**。
+      { slot: 'left-dock', id: 'comic.board', title: '漫画页', icon: 'comics', view: 'pinax.view.list', kind: 'records-editor', multiplicity: 'single', scope: 'project', claims: ['漫画/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      // 槽语义（批次53）：编辑位绑一条漫画页记录（single＋entry），认领 漫画/**/*.json 并以 extension 档接管。
+      { slot: 'center', id: 'comic.editor', title: '漫画', icon: 'comics', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['漫画/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'comic-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
       // 画布是独立体①：toonflow（:3010）自己长什么样就什么样，宿主只给一块内嵌浏览器，不手搓组件。
-      { slot: 'center', id: 'comic.canvas', title: 'Toonflow 画布', icon: 'comics', view: 'pinax.view.app', kind: 'external-app', app: { url: 'http://127.0.0.1:3010' }, forms: ['dock', 'split', 'fullscreen', 'immersive'] }
+      // 槽语义（批次53）：画布是**项目级唯一**的一块外部应用面（single＋project）——它不认领项目内文件
+      // （内容住在 toonflow 自己的数据里），与 comic.editor 同属 center 槽、按 pane id 各自成实例：
+      // 外壳的中栏切换条据此在两块中间切换（批次58 实拍的「双中栏无入口」由这里收口）。
+      { slot: 'center', id: 'comic.canvas', title: 'Toonflow 画布', icon: 'comics', view: 'pinax.view.app', kind: 'external-app', multiplicity: 'single', scope: 'project', app: { url: 'http://127.0.0.1:3010' }, forms: ['dock', 'split', 'fullscreen', 'immersive'] }
     ],
     settings: []
   }),

@@ -19,14 +19,16 @@
 export const NOVEL_CARRIER_ID = 'pinax.carrier.novel'
 
 export const NOVEL_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: NOVEL_CARRIER_ID,
   title: '小说',
   version: '0.5.0',
   minKernel: '1',
   tier: 'carrier',
+  // 随框架发布的内置载体没有议价面：免费。外部订阅／买断由第三方清单自己声明（v4 起）。
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'novel',
@@ -44,8 +46,12 @@ export const NOVEL_CARRIER = Object.freeze({
       // 竖条图标对齐老版「书稿」那一格用的就是 outline（WorkspaceContentGroups.vue:23），
       // 见 next-shell-alignment-inventory-20261028.md 差异表 #3（B 类）。
       // view（工单 C2）：pane 自己声明视图类型，宿主不再按 id 前缀猜。
-      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
-      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      // 槽语义（批次53）：书稿是整本书的章节索引，整份项目只有一份（single＋project）；
+      // 它是正文/** 的兜底面——精确到某一章 .md 的打开由 novel.editor 接管（fallback，优先级低）。
+      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', kind: 'chapter-editor', multiplicity: 'single', scope: 'project', claims: ['正文/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：正文编辑位绑「一条正文资源」（scope:entry，一章一编辑位）；
+      // 它认领 正文/**/*.md 并以 extension 档接管——同一章同时命中书稿时，编辑面赢。
+      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', multiplicity: 'single', scope: 'entry', claims: ['正文/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['chapter', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14 → v2：v1 的 { id, title } 读成 section；「写作偏好」仍是目录项＋空态。
     settings: [{ id: 'novel.writing', title: '写作偏好', type: 'section' }]

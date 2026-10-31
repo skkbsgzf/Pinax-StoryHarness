@@ -13,14 +13,15 @@
 export const WORLDBOOK_CARRIER_ID = 'pinax.carrier.worldbook'
 
 export const WORLDBOOK_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: WORLDBOOK_CARRIER_ID,
   title: '世界书',
   version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -38,8 +39,12 @@ export const WORLDBOOK_CARRIER = Object.freeze({
       // 非常别扭，更合理的一个情况是，上面放图表列，下面放详情信息」）：
       // 窄栏退成**类别导航树**（只管按类别找条目），核心区做成**看板区**（上图表列、下详情）。
       // 两块 pane 的形态因此不再是「文档面」：窄栏是树、核心区是看板——形态三分类见 formTaxonomy.mjs。
-      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', kind: 'entries-categories', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
-      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      // 槽语义（批次53）：窄栏类别树是整栏一份的导航面（single＋project），兜底认领 世界书/**。
+      // 批次44 的「按 pane id 改 kind」例外表由此转正：两块 pane 的分工改由 claims／takes 正面表达。
+      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', kind: 'entries-categories', multiplicity: 'single', scope: 'project', claims: ['世界书/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：看板区按**条目路径**各开各的（keyed＋entry，keyField='path'）；
+      // 它认领 世界书/**/*.md 并以 extension 档接管：同一份条目同时命中类别树时，看板区赢。
+      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', multiplicity: 'keyed', scope: 'entry', keyField: 'path', claims: ['世界书/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['entry', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

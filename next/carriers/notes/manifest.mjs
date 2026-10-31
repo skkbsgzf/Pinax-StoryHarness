@@ -12,14 +12,15 @@
 export const NOTES_CARRIER_ID = 'pinax.carrier.notes'
 
 export const NOTES_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: NOTES_CARRIER_ID,
   title: '构思',
   version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -33,8 +34,10 @@ export const NOTES_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list', kind: 'notes-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
-      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', kind: 'notes-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      // 槽语义（批次53）：清单是整栏一份的导航面（single＋project），兜底认领 构思/**。
+      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list', kind: 'notes-editor', multiplicity: 'single', scope: 'project', claims: ['构思/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：编辑位绑一篇构思（single＋entry），认领 构思/**/*.md 并以 extension 档接管。
+      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', kind: 'notes-editor', multiplicity: 'single', scope: 'entry', claims: ['构思/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'note' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

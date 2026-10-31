@@ -10,14 +10,15 @@
 export const VIDEO_CARRIER_ID = 'pinax.carrier.video'
 
 export const VIDEO_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: VIDEO_CARRIER_ID,
   title: '视频',
   version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -31,8 +32,10 @@ export const VIDEO_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'video.board', title: '镜头与成片', icon: 'film', view: 'pinax.view.list', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'video.editor', title: '视频', icon: 'film', view: 'pinax.view.editor', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      // 槽语义（批次53）：镜头与成片板是整栏一份的记录树（single＋project），兜底认领 视频/**。
+      { slot: 'left-dock', id: 'video.board', title: '镜头与成片', icon: 'film', view: 'pinax.view.list', kind: 'records-editor', multiplicity: 'single', scope: 'project', claims: ['视频/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      // 槽语义（批次53）：编辑位绑一条镜头／成片记录（single＋entry），认领 视频/**/*.json 并以 extension 档接管。
+      { slot: 'center', id: 'video.editor', title: '视频', icon: 'film', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['视频/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'video-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     settings: []
   }),

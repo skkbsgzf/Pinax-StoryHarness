@@ -357,6 +357,64 @@ check('q @4 合同与 adopt 分支进产物：清单词表（@4／maxKernel／�
   missingV4Markers.length === 0,
   missingV4Markers.length ? `缺 ${missingV4Markers.join(' ')}` : `${v4Markers.length + adoptMarkers.length} 个标记齐`)
 
+// 批次53（门禁 r）：12 份载体清单全部升 @4——字段不是死声明，源清单的形状在这里核：
+//   r1 12/12 spec=@4 ＋ manifestVersion=4 ＋ license 显式（内置一律 free）；
+//   r2 四组字段的清单面：槽语义（multiplicity／scope，keyed 必带 keyField）、资源认领
+//      （claims 命中的 pane 必须有合法 priority／takes，canOpen 若声明必须带 field）、
+//      渲染器注册与合同上界（若声明则形状合法；读取点由 q 在产物里核）。
+//      计数写理由：24 块认领 pane（12 载体各两块，除去 outline.widget／material.panel／comic.canvas 三块不认领文件）、
+//      keyed 1 块（worldbook.entries 按条目 path 各开各的）——数字变了先说明为什么，再改这里。
+//   r3 adopt 声明完整：走 adopt 的服务必须同时给 port 与 healthPath；内置十二块目前全是自起档
+//      （comic 预览服务不 adopt），adopt 的正身由 acceptance 与 carrier-v4-adopt-supervisor 覆盖。
+const MULTIPLICITIES = ['single', 'list', 'keyed']
+const SCOPES = ['project', 'entry', 'session']
+const TAKES = ['extension', 'fallback']
+const specOffenders = []
+const fieldOffenders = []
+const adoptOffenders = []
+let panesWithClaims = 0
+let keyedPanes = 0
+for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
+  const manifest = plugin?.manifest ?? {}
+  if (manifest.spec !== 'pinax-carrier@4' || manifest.manifestVersion !== 4) {
+    specOffenders.push(`${manifest.id}:${manifest.spec}/${manifest.manifestVersion}`)
+  }
+  if (manifest.license?.mode !== 'free') specOffenders.push(`${manifest.id}:license=${manifest.license?.mode ?? '(缺)'}`)
+  if (manifest.maxKernel !== undefined && typeof manifest.maxKernel !== 'string') {
+    fieldOffenders.push(`${manifest.id}:maxKernel 不是字符串`)
+  }
+  if (manifest.preview !== undefined && !Array.isArray(manifest.preview?.register)) {
+    fieldOffenders.push(`${manifest.id}:preview.register 不是数组`)
+  }
+  for (const pane of manifest.contributes?.panes ?? []) {
+    const label = `${manifest.id}/${pane.id}`
+    if (!MULTIPLICITIES.includes(pane.multiplicity)) fieldOffenders.push(`${label}:multiplicity=${pane.multiplicity}`)
+    if (!SCOPES.includes(pane.scope)) fieldOffenders.push(`${label}:scope=${pane.scope}`)
+    if (pane.multiplicity === 'keyed') {
+      keyedPanes += 1
+      if (!pane.keyField) fieldOffenders.push(`${label}:keyed 缺 keyField`)
+    }
+    if (!Array.isArray(pane.claims) || !pane.claims.length) continue
+    panesWithClaims += 1
+    if (!Number.isSafeInteger(pane.priority) || pane.priority < 0 || pane.priority > 100) fieldOffenders.push(`${label}:priority=${pane.priority}`)
+    if (!TAKES.includes(pane.takes)) fieldOffenders.push(`${label}:takes=${pane.takes}`)
+    if (pane.canOpen !== undefined && !('field' in pane.canOpen)) fieldOffenders.push(`${label}:canOpen 缺 field`)
+  }
+  for (const service of manifest.services ?? []) {
+    if (service.adopt !== true) continue
+    if (!Number.isSafeInteger(service.port) || !service.healthPath) adoptOffenders.push(`${manifest.id}/service:${service.id}:adopt 缺 port/healthPath`)
+  }
+}
+check('r1 12 份载体清单 @4：spec＝pinax-carrier@4、manifestVersion＝4、license 显式（内置 free）',
+  BUILT_IN_CARRIER_PLUGINS.length === 12 && specOffenders.length === 0,
+  specOffenders.join(', ') || '12/12 @4 + free')
+check('r2 四组字段落地：槽语义齐、认领 pane 的 priority／takes／canOpen 合法、keyed 必带 keyField',
+  fieldOffenders.length === 0 && panesWithClaims === 24 && keyedPanes === 1,
+  fieldOffenders.join(', ') || `认领 pane ${panesWithClaims}、keyed ${keyedPanes}`)
+check('r3 adopt 声明完整：走 adopt 的服务必须同时声明 port 与 healthPath（内置全为自起档，adopt=0）',
+  adoptOffenders.length === 0,
+  adoptOffenders.join(', ') || 'adopt 服务 0 条（内置自起档）')
+
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
 // 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，
 // 旧正则 join\\(currentDir… 会被标识符改名误伤（门禁该守路径，不该守压缩后的变量名）。

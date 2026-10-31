@@ -18,14 +18,15 @@
 export const REFERENCE_CARRIER_ID = 'pinax.carrier.reference'
 
 export const REFERENCE_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: REFERENCE_CARRIER_ID,
   title: '资料',
   version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -39,8 +40,11 @@ export const REFERENCE_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources', view: 'pinax.view.list', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
-      { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      // 槽语义（批次53）：资料板是整栏一份的篇目清单（single＋project），兜底认领 资料/**。
+      { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources', view: 'pinax.view.list', kind: 'document-detail', multiplicity: 'single', scope: 'project', claims: ['资料/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：阅读位绑一篇资料（single＋entry）；资料收 .md 与 .txt 两种（工具契约），
+      // 所以两条 claim 都认，以 extension 档接管。
+      { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', multiplicity: 'single', scope: 'entry', claims: ['资料/**/*.md', '资料/**/*.txt'], priority: 70, canOpen: { field: 'kind', equals: 'document' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14 载体设置注册（工单A 第二步）：本载体暂无设置项——空数组＝设置页不出这一格。
     settings: []

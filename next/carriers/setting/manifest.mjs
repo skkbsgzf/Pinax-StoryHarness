@@ -12,14 +12,15 @@
 export const SETTING_CARRIER_ID = 'pinax.carrier.setting'
 
 export const SETTING_CARRIER = Object.freeze({
-  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
-  spec: 'pinax-carrier@3',
-  manifestVersion: 3,
+  // 协议 v4（批次53）：manifestVersion 显式 4；pane 在 v3 的 view／kind 之上补槽语义与资源认领。
+  spec: 'pinax-carrier@4',
+  manifestVersion: 4,
   id: SETTING_CARRIER_ID,
   title: '设定',
   version: '0.7.0',
   minKernel: '1',
   tier: 'carrier',
+  license: Object.freeze({ mode: 'free' }),
 
   primary: {
     projectKind: 'generic',
@@ -33,8 +34,10 @@ export const SETTING_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'setting.board', title: '设定板', icon: 'library', view: 'pinax.view.tree', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
-      { slot: 'center', id: 'setting.rules', title: '约束', icon: 'list', view: 'pinax.view.editor', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      // 槽语义（批次53）：设定板是整栏一份的约束树（single＋project），兜底认领 约束/**。
+      { slot: 'left-dock', id: 'setting.board', title: '设定板', icon: 'library', view: 'pinax.view.tree', kind: 'rule-editor', multiplicity: 'single', scope: 'project', claims: ['约束/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      // 槽语义（批次53）：编辑位绑一份约束（single＋entry），认领 约束/**/*.md 并以 extension 档接管。
+      { slot: 'center', id: 'setting.rules', title: '约束', icon: 'list', view: 'pinax.view.editor', kind: 'rule-editor', multiplicity: 'single', scope: 'entry', claims: ['约束/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'rule' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
     // 协议 P14 载体设置注册：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []

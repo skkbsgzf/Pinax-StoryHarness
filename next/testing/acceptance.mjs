@@ -308,15 +308,15 @@ try {
     (await probePort(previewPort)) === false,
     `port=${previewPort}`)
 
-  // ── 批次52：@4 合同收口与 services.adopt ────────────────────────────────────
+  // ── 批次52：@4 合同收口与 services.adopt（批次53：12 份清单已全部升 @4）────────────────
   // @4 校验器升级（合同上界改 major.minor、四组新字段）不许回头咬既有载体：
-  // 12 份清单仍写 @3 / minKernel:'1'，全部必须原样通过。这是回归闸，不是新功能计数。
+  // 12 份清单统一写 @4 / minKernel:'1'，全部必须原样通过。这是回归闸，不是新功能计数。
   const v4Regressions = BUILT_IN_CARRIER_PLUGINS
-    .map((plugin) => ({ id: plugin.manifest.id, result: validateCarrierManifest(plugin.manifest) }))
-    .filter((entry) => !entry.result.ok)
-  record('批次52 @4 收口：12 份现有载体清单（@3 / minKernel:1）全部通过新校验器，零误拒',
+    .map((plugin) => ({ id: plugin.manifest.id, spec: plugin.manifest.spec, result: validateCarrierManifest(plugin.manifest) }))
+    .filter((entry) => entry.spec !== 'pinax-carrier@4' || !entry.result.ok)
+  record('批次53 @4 落地：12 份载体清单全部 spec=@4 / minKernel:1 并通过校验器，零误拒',
     BUILT_IN_CARRIER_PLUGINS.length === 12 && v4Regressions.length === 0,
-    v4Regressions.length ? v4Regressions.map((entry) => `${entry.id}:${entry.result.error.code}`).join(',') : '12/12')
+    v4Regressions.length ? v4Regressions.map((entry) => `${entry.id}:${entry.spec}:${entry.result.error?.code}`).join(',') : '12/12')
 
   // adopt 服务的正身（批次58 三独立体端口管理）：宿主只探活／状态灯／池记账，绝不 spawn。
   // 这里注入探针，锁住「start 会成功、pid 为空、spawnImpl 从未被调用」；真端口探活由

@@ -593,6 +593,33 @@ describe('Obsidian 三栏', () => {
     wrapper.unmount()
   })
 
+  it('同载体双中栏 pane（批次58 实拍缺口）：顶部出切换条，点第二块换核心区', async () => {
+    const view = {
+      ...carrierView(),
+      carriers: [{ id: 'fixture.comic', title: '漫画（夹具）', primary: { projectKind: 'generic' }, isPrimary: false, isEnabled: true, capabilities: [], requires: [], scopes: [], dataDirs: ['漫画'], settings: [] }],
+      left: [{ slot: 'left-dock', id: 'comic.board', title: '漫画板', icon: 'board', pluginId: 'fixture.comic', pluginTitle: '漫画（夹具）', view: 'pinax.view.tree', kind: 'records-editor' }],
+      center: [
+        { slot: 'center', id: 'comic.editor', title: '编辑器', icon: 'writing', pluginId: 'fixture.comic', pluginTitle: '漫画（夹具）', view: 'pinax.view.editor', kind: 'records-editor' },
+        { slot: 'center', id: 'comic.canvas', title: '画布', icon: 'board', pluginId: 'fixture.comic', pluginTitle: '漫画（夹具）', view: 'pinax.view.app', kind: 'external-app', app: { url: 'http://127.0.0.1:3010' } }
+      ]
+    }
+    const wrapper = mount(AppNext, { props: { bridge: stubBridge(view) } })
+    await flushPromises()
+
+    const tabs = wrapper.find('[data-test="center-pane-tabs"]')
+    expect(tabs.exists()).toBe(true)
+    expect(tabs.findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['编辑器', '画布'])
+    expect(tabs.find('[role="tab"][data-pane="comic.editor"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('[data-pane-id="comic.editor"]').exists()).toBe(true)
+
+    await tabs.find('[data-pane="comic.canvas"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-pane-id="comic.canvas"]').exists()).toBe(true)
+    expect(wrapper.find('[data-pane-id="comic.editor"]').exists()).toBe(false)
+    expect(wrapper.find('[role="tab"][data-pane="comic.canvas"]').attributes('aria-selected')).toBe('true')
+    wrapper.unmount()
+  })
+
   it('索引窗的行用老版的 .workspace-nav-item 词汇，选中行标出当前项', async () => {
     const tools = vi.fn(async (channel, payload) => {
       if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }

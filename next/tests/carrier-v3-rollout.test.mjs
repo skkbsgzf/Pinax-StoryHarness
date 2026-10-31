@@ -5,25 +5,27 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
-import { CARRIER_SPEC_V3, PANE_KIND_WORDS, validateCarrierManifest } from '../kernel/carrierManifest.mjs'
+import { CARRIER_SPEC_V4, PANE_KIND_WORDS, validateCarrierManifest } from '../kernel/carrierManifest.mjs'
 import { diagnoseCarrier, loadHostDescriptor } from '../doctor.mjs'
 import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
+import { WORLDBOOK_CARRIER } from '../carriers/worldbook/manifest.mjs'
 import { LEGACY_VIEW_BINDINGS, legacyBindingForPane } from '../shell/viewRegistry.mjs'
 import { collectAgentMdBlocks } from '../runtime/contextProfiles.mjs'
 
 /**
- * 十二块载体按协议 v3 改造后的整体验收。
+ * 十二块载体按协议 v3 改造后的整体验收（批次53 起全部升 @4）。
  *
- * 改造口径（作者裁定的 v3 全套）：
- *   - 清单升 pinax-carrier@3，显式写 manifestVersion: 3；
+ * 改造口径（作者裁定的 v3 全套，批次53 再升 @4）：
+ *   - 清单升 pinax-carrier@4，显式写 manifestVersion: 4；
  *   - 每个 pane 自声明 view 与 kind（不再按 id 前缀猜内容面）；
- *   - 四张牌齐：entry（自带面板）／services（本地服务）／mcp（外部 MCP）／agentMd（作者须知）。
+ *   - 四张牌齐：entry（自带面板）／services（本地服务）／mcp（外部 MCP）／agentMd（作者须知）；
+ *   - 批次53 起每块 pane 再带 multiplicity／scope／claims（认领语义正面表达形态）。
  *
  * 本文件钉三件事：
- *   1) 十二块全部是 @3，且每块 pane 的 kind 与迁移期那张前缀对照表**逐项一致**——
- *      改造不许顺手改渲染语义，kind 对不上就是行为变了
- *      （唯一例外：世界书那两块 pane，批次44 由作者点名改过，例外登记在
- *        KIND_OVERRIDES_BY_PANE_ID 里并照样逐项断言新值）；
+ *   1) 十二块全部是 @4，且每块 pane 的 kind 与迁移期那张前缀对照表**逐项一致**——
+ *      改造不许顺手改渲染语义，kind 对不上就是行为变了；
+ *      世界书那两块 pane 的形态（批次44 作者点名的上图表列下详情）在批次53 改由 @4 认领语义
+ *      正面表达（同资源、不同角色），这里直接钉它们的值，不再靠例外表放行；
  *   2) 每块载体在盘上真有一份 AGENT.md，清单声明的路径与内容对得上（须知不许声明了却不生效）；
  *   3) 十二块对着真宿主描述符全部诊断为 ok。
  */
@@ -36,20 +38,26 @@ const EXPECTED_KIND_BY_PREFIX = Object.freeze(
 )
 
 /**
- * 批次44 的**唯一一处**kind 例外（作者 2026-10-31 点名改的，理由写在这里，不做静默放行）：
- * 「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空，非常别扭，
- *   更合理的一个情况是，上面放图表列，下面放详情信息」
- * 于是世界书这一栏的两块 pane 都不再是文档面：
- *   窄栏那块退成类别导航树（entries-categories），核心区那块做成看板区（entries-workspace）。
- * 迁移期那张前缀对照表本身不改（它还是「v1 → v3 改造不许顺手改语义」的凭据）；
- * 这里只登记这一处被作者点名改掉的例外，并且照样逐项断言新值——放行不等于不查。
+ * 批次44 作者点名的世界书形态（2026-10-31）：
+ * 「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空……上面放图表列，下面放详情信息」
+ * 窄栏退成类别导航树（entries-categories）、核心区做成看板区（entries-workspace）。
+ * 批次53 起这两块 pane 在清单里以 multiplicity／scope／claims 正面表达「同一份世界书资源，
+ * 一块 fallback 导航、一块 extension 看板」，例外表随之删除；这里改为逐块直接断言新值——
+ * 放行不等于不查，形态一旦回退，这条断言先红。
  */
-const KIND_OVERRIDES_BY_PANE_ID = Object.freeze({
-  'worldbook.board': 'entries-categories',
-  'worldbook.entries': 'entries-workspace'
-})
+function assertWorldBookKind(pane) {
+  if (pane.id === 'worldbook.board') {
+    assert.equal(pane.kind, 'entries-categories', 'worldbook.board：批次44 起窄栏是类别导航树（上图表列、下详情）')
+    return true
+  }
+  if (pane.id === 'worldbook.entries') {
+    assert.equal(pane.kind, 'entries-workspace', 'worldbook.entries：批次44 起核心区是看板区（上图表列、下详情）')
+    return true
+  }
+  return false
+}
 
-test('十二块载体全部升到 @3：spec／manifestVersion／四张牌齐，pane 自声明 view 与 kind', () => {
+test('十二块载体全部升到 @4：spec／manifestVersion／四张牌齐，pane 自声明 view 与 kind', () => {
   assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 12, '十二块内置载体（v1.1-A 七块 ＋ M4／M5 五块）')
   const customPanes = []
   const appPanes = []
@@ -57,8 +65,8 @@ test('十二块载体全部升到 @3：spec／manifestVersion／四张牌齐，p
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
     const manifest = plugin.manifest
     const id = manifest.id
-    assert.equal(manifest.spec, CARRIER_SPEC_V3, `${id}：清单没升到 ${CARRIER_SPEC_V3}`)
-    assert.equal(manifest.manifestVersion, 3, `${id}：manifestVersion 必须显式写 3`)
+    assert.equal(manifest.spec, CARRIER_SPEC_V4, `${id}：清单没升到 ${CARRIER_SPEC_V4}`)
+    assert.equal(manifest.manifestVersion, 4, `${id}：manifestVersion 必须显式写 4`)
 
     // 四张牌必须显式在场（不许靠「不写＝没有」蒙混）：清单里要能一眼看见这四行。
     for (const field of ['entry', 'services', 'mcp', 'agentMd']) {
@@ -91,12 +99,11 @@ test('十二块载体全部升到 @3：spec／manifestVersion／四张牌齐，p
       }
       const binding = legacyBindingForPane(pane.id)
       assert.ok(binding, `${id}/${pane.id}：迁移期的前缀对照表里没有这一块 pane`)
-      const override = KIND_OVERRIDES_BY_PANE_ID[pane.id]
-      const expectedKind = override ?? EXPECTED_KIND_BY_PREFIX[binding.prefix]
+      // 世界书两块是批次44 作者点名的形态，直接钉值；其余按迁移期对照表逐项对齐。
+      if (assertWorldBookKind(pane)) continue
+      const expectedKind = EXPECTED_KIND_BY_PREFIX[binding.prefix]
       assert.equal(pane.kind, expectedKind,
-        override
-          ? `${id}/${pane.id}：批次44 把这块的 kind 定成「${override}」（作者点名：上图表列下详情），收到「${pane.kind}」`
-          : `${id}/${pane.id}：kind 从「${expectedKind}」变成「${pane.kind}」，改造不许顺手改渲染语义`)
+        `${id}/${pane.id}：kind 从「${expectedKind}」变成「${pane.kind}」，改造不许顺手改渲染语义`)
     }
   }
 
@@ -106,6 +113,31 @@ test('十二块载体全部升到 @3：spec／manifestVersion／四张牌齐，p
   // 批次58：画布（toonflow :3010）是十二块里唯一一块应用面——宿主只给内嵌浏览器，不手搓组件。
   assert.deepEqual(appPanes, ['pinax.carrier.comic/comic.canvas'],
     '十二块里只有漫画那一栏带应用面（独立体①的接入面），别的一栏不许悄悄多出应用面')
+})
+
+test('世界书两块 pane 的形态由 @4 认领语义正面表达：例外表删除后等价断言仍在', () => {
+  const validated = validateCarrierManifest(WORLDBOOK_CARRIER, { kinds: Object.keys(PROJECT_KINDS) })
+  assert.equal(validated.ok, true, JSON.stringify(validated.error ?? {}))
+  const panes = Object.fromEntries(validated.value.panes.map((pane) => [pane.id, pane]))
+
+  // 形态不回退：窄栏仍是类别导航树、核心区仍是看板区；两块都还挂在原来的槽位上。
+  assert.equal(panes['worldbook.board'].slot, 'left-dock')
+  assert.equal(panes['worldbook.board'].kind, 'entries-categories')
+  assert.equal(panes['worldbook.entries'].slot, 'center')
+  assert.equal(panes['worldbook.entries'].kind, 'entries-workspace')
+
+  // 分工改由认领字段正面表达：同一份世界书资源，导航兜底、看板按条目路径扩展接管。
+  assert.equal(panes['worldbook.board'].multiplicity, 'single')
+  assert.equal(panes['worldbook.board'].scope, 'project')
+  assert.deepEqual(panes['worldbook.board'].claims, ['世界书/**'])
+  assert.equal(panes['worldbook.board'].takes, 'fallback')
+
+  assert.equal(panes['worldbook.entries'].multiplicity, 'keyed')
+  assert.equal(panes['worldbook.entries'].scope, 'entry')
+  assert.equal(panes['worldbook.entries'].keyField, 'path')
+  assert.deepEqual(panes['worldbook.entries'].claims, ['世界书/**/*.md'])
+  assert.equal(panes['worldbook.entries'].takes, 'extension')
+  assert.deepEqual(panes['worldbook.entries'].canOpen, { field: 'kind', in: ['entry', 'proposal'] })
 })
 
 test('十二块载体的 AGENT.md 真在盘上：清单声明的路径对得上，文件有内容', async () => {

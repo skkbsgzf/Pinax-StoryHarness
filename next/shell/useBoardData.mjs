@@ -4,6 +4,7 @@ import { canMoveNode, moveNode, outlineDepths, removeNode } from './outlineTree.
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIERS, RECORD_CARRIER_KEYS, recordTreeKey } from './recordCarriers.mjs'
 import { applyWritingResult, normalizeSelection, writingActionOf } from './writingActions.mjs'
+import { resolveResourceClaim } from './viewRegistry.mjs'
 
 /**
  * 板块数据（章节／大纲／构思／条目／约束／资料）的单一归属。
@@ -162,7 +163,12 @@ export function useBoardData(bridge) {
       scripts: false,
       ...Object.fromEntries(RECORD_CARRIER_KEYS.map((key) => [recordTreeKey(key), false]))
     },
-    selection: { type: null, item: null }
+    selection: { type: null, item: null },
+    /** 资源认领裁决（批次53 · 协议 @4）：外壳把启用的 pane 认领清单申报进来（claimPanes），
+     *  每次打开一条资源算一次归属（claimDecision）——winner 与每块 pane 的落选原因都可读，
+     *  测试据此断言「谁赢了」。裁决是旁路事实，不拦打开：打开路径仍由各载体的工具决定。 */
+    claimPanes: [],
+    claimDecision: null
   })
 
   /** 资料板检索的请求序号：换板/清空后旧请求晚到的结果不再覆盖新状态。 */
@@ -331,6 +337,8 @@ export function useBoardData(bridge) {
     state.reviewError = null
     state.reviewResult = null
     state.selection = { type: 'chapter', item: { ...item, revision: read.value.revision } }
+    // 批次53：正文资源同时落在「书稿索引」与「正文编辑位」的 claim 范围内——记一笔谁接管。
+    noteClaim({ path: item.file, kind: 'chapter' })
   }
 
   /** 保存＝作者按 Ctrl+S 的那一下（工单H1：常驻保存按钮已移除）：带读到的修订号走 pinax_chapter_save，
@@ -678,6 +686,7 @@ export function useBoardData(bridge) {
     state.notice = ''
     state.saveFeedback = null
     state.selection = { type: 'note', item: { ...item } }
+    noteClaim({ path: item.file, kind: 'note' })
   }
 
   function setNoteDraft(value) {
@@ -770,6 +779,7 @@ export function useBoardData(bridge) {
     state.notice = ''
     state.saveFeedback = null
     state.selection = { type: 'rule', item: { ...item } }
+    noteClaim({ path: item.file, kind: 'rule' })
   }
 
   function setRuleDraft(value) {
@@ -875,6 +885,7 @@ export function useBoardData(bridge) {
     state.documentDraft = read.value.text ?? ''
     state.editingDocument = false
     state.selection = { type: 'document', item: { ...item, revision: read.value.revision } }
+    noteClaim({ path: item.file, kind: 'document' })
   }
 
   /** 资料编辑（工单G1）：与条目同一套开关——「编辑」把正文拷进草稿，「取消」原样退回。 */
@@ -982,6 +993,7 @@ export function useBoardData(bridge) {
     state.scriptDraft = read.value.text ?? ''
     state.editingScript = false
     state.selection = { type: 'script', item: { ...item, revision: read.value.revision } }
+    noteClaim({ path: item.file, kind: 'script' })
   }
 
   /** 剧本编辑：与资料同一套开关——「编辑」把正文拷进草稿，「取消」原样退回。 */
@@ -1106,6 +1118,8 @@ export function useBoardData(bridge) {
     state.editingRecord = false
     state.recordSets[key].revision = read.value.revision
     state.selection = { type: 'record', item: { carrier: key, id: record.id } }
+    // 记录真源是一份文件（<目录>/<载体>.json）：路径与 kind 都按载体约定给裁决。
+    noteClaim({ path: `${config.dir}/${config.file}`, kind: `${key}-record` })
   }
 
   function editRecord() {
@@ -1289,6 +1303,8 @@ export function useBoardData(bridge) {
       ? '这条提案已经采纳过；再采纳会按当前章节版本重新写入一版。'
       : ''
     state.selection = { type: 'proposal', item: { name: proposal.name, target: proposal.target ?? null } }
+    // 提案的目标是正文：按目标章路径记一笔归属（读不到目标章时仍按提案本身的目标文件记）。
+    if (targetFile) noteClaim({ path: targetFile, kind: 'proposal' })
   }
 
   /**
@@ -1438,6 +1454,8 @@ export function useBoardData(bridge) {
     state.entry = read.value.entry
     state.entryWarnings = [...(read.value.warnings ?? [])]
     state.selection = { type: 'entry', item }
+    const entryPath = item.path ?? state.entry?.path
+    if (entryPath) noteClaim({ path: entryPath, kind: 'entry' })
   }
 
   /** 条目编辑（工单A2）：「编辑」进草稿，「取消」原样退回，保存走设定载体自有的 pinax_worldbook_save
@@ -1803,6 +1821,8 @@ export function useBoardData(bridge) {
     state.error = null
     state.notice = ''
     state.selection = { type: 'outline-node', item: { ...node, index } }
+    // 大纲草稿是整份文档：归属按 outline.json 这一个资源裁决（编辑位 vs 大纲树）。
+    noteClaim({ path: '大纲/outline.json', kind: 'outline' })
   }
 
   /** 大纲还没建档时的第一笔：起一份只有一个未命名节点的草稿，改名后保存即建 outline.json。
@@ -2085,6 +2105,28 @@ export function useBoardData(bridge) {
     return targets
   }
 
+  /* —— 资源认领裁决（批次53 · 协议 @4）———————————————————————————————— */
+
+  /**
+   * 外壳申报当前启用的 pane 清单：只留声明了 claims 的块（其余不参评）。
+   * 启用集合一变，旧裁决就作废——同一路径的归属可能已经换了人。
+   */
+  function declareClaimPanes(panes) {
+    const list = Array.isArray(panes) ? panes : []
+    state.claimPanes = list.filter((pane) => Array.isArray(pane?.claims) && pane.claims.length > 0)
+    state.claimDecision = null
+  }
+
+  /**
+   * 打开一条资源时记一笔归属裁决（纯旁路，不改变打开路径）。
+   * 返回这一次的裁决对象，调用方与测试都能读 winner／considered。
+   */
+  function noteClaim(resource) {
+    const target = typeof resource === 'string' ? { path: resource } : (resource ?? {})
+    state.claimDecision = resolveResourceClaim(state.claimPanes, target)
+    return state.claimDecision
+  }
+
   /** 换板时清瞬时提示：上一块板的提示、保存 chip 与检索结果不该出现在这一块板上（批次18 验收修 / 工单H1/H2）。
    *  协议 v1.1-A 起一载体一棵本域内容树：上一栏的树级错误（treeError）与世界书列举警告（listWarnings）
    *  也随换板收掉，否则「世界书/ 读失败」会挂到小说栏的正文树上。 */
@@ -2104,6 +2146,8 @@ export function useBoardData(bridge) {
     clearTransient,
     dispose,
     refreshFromProjectEvent,
+    declareClaimPanes,
+    noteClaim,
     searchKnowledge,
     clearKnowledgeSearch,
     loadChapters,

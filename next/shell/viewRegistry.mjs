@@ -240,3 +240,153 @@ hostViewRegistry.registerView(CUSTOM_VIEW_TYPE, customViewFactory, { owner: 'hos
 export function resolvePaneView(pane, data) {
   return hostViewRegistry.bind(pane, data)
 }
+
+/* —— 资源认领裁决（批次53 · 协议 @4 的 claims／priority／canOpen／takes 消费面）——————————
+ *
+ * 同一份资源可能同时落进多块 pane 的 claim 范围（世界书的类别树与看板区、章节索引与正文编辑位）。
+ * 归属按四步定，纯函数、无 IO：
+ *   ① claims 的 glob 匹配资源路径（`**` 独占一段，可零段）；不命中即退出竞争；
+ *   ② canOpen 谓词对资源字段求值（缺字段＝不放行，不猜）；
+ *   ③ takes 分档：extension 优先于 fallback（没声明 takes 的排最后）；
+ *   ④ 同档再比 priority（高者先），最后按 pane id 字典序——同样的清单永远得到同样的赢家。
+ * 返回值里带全部参评者的落选原因，测试与界面据此断言「谁赢了、别人为什么没赢」。
+ */
+
+const TAKE_RANK = Object.freeze({ extension: 2, fallback: 1 })
+
+/** 项目内路径归一：统一用 / 分段，去掉开头的 ./（工具回传的路径两种写法都见过）。 */
+export function normalizeClaimPath(value) {
+  return String(value ?? '').replaceAll('\\', '/').replace(/^\.\//u, '').replace(/\/+$/u, '')
+}
+
+const SEGMENT_ESCAPE = /[.+^${}()|\\]/gu
+
+function matchClaimSegment(pattern, value) {
+  let source = ''
+  for (let index = 0; index < pattern.length; index += 1) {
+    const ch = pattern[index]
+    if (ch === '*') source += '[^/]*'
+    else if (ch === '?') source += '[^/]'
+    else if (ch === '[') {
+      const end = pattern.indexOf(']', index + 1)
+      if (end === -1) {
+        source += '\\['
+        continue
+      }
+      source += `[${pattern.slice(index + 1, end)}]`
+      index = end
+    } else source += ch.replace(SEGMENT_ESCAPE, '\\$&')
+  }
+  return new RegExp(`^${source}$`, 'u').test(value)
+}
+
+function matchClaimSegments(patternSegs, pathSegs, patternIndex, pathIndex) {
+  if (patternIndex === patternSegs.length) return pathIndex === pathSegs.length
+  const segment = patternSegs[patternIndex]
+  if (segment === '**') {
+    if (matchClaimSegments(patternSegs, pathSegs, patternIndex + 1, pathIndex)) return true
+    return pathIndex < pathSegs.length && matchClaimSegments(patternSegs, pathSegs, patternIndex, pathIndex + 1)
+  }
+  if (pathIndex >= pathSegs.length) return false
+  return matchClaimSegment(segment, pathSegs[pathIndex])
+    && matchClaimSegments(patternSegs, pathSegs, patternIndex + 1, pathIndex + 1)
+}
+
+/** 单条 claim（项目内相对 glob）是否命中资源路径。 */
+export function matchClaimPath(claim, resourcePath) {
+  const pattern = normalizeClaimPath(claim).split('/').filter(Boolean)
+  const target = normalizeClaimPath(resourcePath).split('/').filter(Boolean)
+  if (!pattern.length || !target.length) return false
+  return matchClaimSegments(pattern, target, 0, 0)
+}
+
+function readResourceField(resource, field) {
+  let value = resource
+  for (const key of String(field ?? '').split('.')) {
+    if (value === null || value === undefined) return undefined
+    value = value[key]
+  }
+  return value
+}
+
+/** canOpen：声明式谓词求值；没声明谓词＝认领范围内全放行。 */
+function evaluateCanOpen(canOpen, resource) {
+  if (!canOpen) return { ok: true, reason: 'open' }
+  const value = readResourceField(resource, canOpen.field)
+  if (value === undefined) return { ok: false, reason: 'predicate-missing-field' }
+  const matched = 'equals' in canOpen ? Object.is(value, canOpen.equals) : canOpen.in.includes(value)
+  return matched ? { ok: true, reason: 'open' } : { ok: false, reason: 'predicate-miss' }
+}
+
+function compareClaimCandidates(a, b) {
+  const takeDelta = (TAKE_RANK[b.takes] ?? 0) - (TAKE_RANK[a.takes] ?? 0)
+  if (takeDelta !== 0) return takeDelta
+  if (a.priority !== b.priority) return b.priority - a.priority
+  return a.paneId < b.paneId ? -1 : a.paneId > b.paneId ? 1 : 0
+}
+
+/**
+ * 裁决一份资源归属哪块 pane。
+ *   panes    view.carriers[].panes 的扁平清单（声明了 claims 的才参评）
+ *   resource { path, kind }（也接受裸路径串）
+ * 返回 { path, kind, winner, considered }：
+ *   winner 是赢家的 { paneId, pluginId, title, priority, takes, matchedClaim }（没人接＝null）；
+ *   considered 按 pane 列全部参评者与结果：status＝won／lost／skipped，reason 说明落选原因。
+ */
+export function resolveResourceClaim(panes, resource = {}) {
+  const target = typeof resource === 'string' ? { path: resource } : (resource ?? {})
+  const resourcePath = normalizeClaimPath(target.path)
+  const considered = []
+  const eligible = []
+  for (const pane of Array.isArray(panes) ? panes : []) {
+    const paneId = String(pane?.id ?? '')
+    if (!paneId) continue
+    const claims = Array.isArray(pane.claims) ? pane.claims.filter((claim) => typeof claim === 'string') : []
+    // 不认领文件的 pane 不参评（浮窗、应用面）——它们不参与资源归属的竞争。
+    if (!claims.length) continue
+    const base = {
+      paneId,
+      pluginId: pane.pluginId ?? null,
+      title: pane.title ?? paneId,
+      priority: Number.isSafeInteger(pane.priority) ? pane.priority : 0,
+      takes: pane.takes ?? null
+    }
+    if (!resourcePath) {
+      considered.push({ ...base, matchedClaim: null, status: 'skipped', reason: 'missing-path', won: false })
+      continue
+    }
+    const matchedClaim = claims.find((claim) => matchClaimPath(claim, resourcePath)) ?? null
+    if (!matchedClaim) {
+      considered.push({ ...base, matchedClaim: null, status: 'skipped', reason: 'claim-miss', won: false })
+      continue
+    }
+    const predicate = evaluateCanOpen(pane.canOpen ?? null, target)
+    if (!predicate.ok) {
+      considered.push({ ...base, matchedClaim, status: 'skipped', reason: predicate.reason, won: false })
+      continue
+    }
+    const candidate = { ...base, matchedClaim, status: 'eligible', reason: 'open', won: false }
+    considered.push(candidate)
+    eligible.push(candidate)
+  }
+  eligible.sort(compareClaimCandidates)
+  const winner = eligible[0] ?? null
+  if (winner) {
+    winner.status = 'won'
+    winner.won = true
+  }
+  for (const entry of eligible) {
+    if (entry !== winner) {
+      entry.status = 'lost'
+      entry.reason = (TAKE_RANK[winner.takes] ?? 0) > (TAKE_RANK[entry.takes] ?? 0)
+        ? 'lost-take'
+        : winner.priority !== entry.priority ? 'lost-priority' : 'lost-order'
+    }
+  }
+  return {
+    path: resourcePath,
+    kind: target.kind ?? null,
+    winner: winner ? { ...winner } : null,
+    considered: considered.map((entry) => ({ ...entry }))
+  }
+}
