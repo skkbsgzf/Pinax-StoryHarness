@@ -69,6 +69,24 @@ const categoryOptions = computed(() => entryCategoryTree(props.data.entries ?? [
   .filter((node) => node.name !== '__all')
   .map((node) => ({ value: node.name, label: node.label })))
 
+/**
+ * 新建条目（批次60 · 工单任务一）：批次59 下线左栏新建入口后，新建搬回看板区工具条——
+ * 类别下拉＋标题输入，落盘仍走既有 createEntry（世界书/<类别>/<名称>.md）。
+ * 类别下拉的清空项是「顶层」，与没有类别目录的旧项目同一落点。
+ */
+const newTitle = ref('')
+const newCat = ref('')
+const createCategoryOptions = computed(() => [
+  { value: '', label: '顶层' },
+  ...categoryOptions.value
+])
+async function submitNewEntry() {
+  const title = newTitle.value.trim()
+  if (!title) return
+  await props.data.createEntry?.(title, newCat.value)
+  newTitle.value = ''
+}
+
 /** 筛完的条目：类别精确匹配 ＋ 文本对名称／关键词／摘要做包含匹配。 */
 const visibleEntries = computed(() => filterEntries(props.data.entries ?? [], {
   text: filter.value,
@@ -148,6 +166,32 @@ function rowHint(item) {
         <option value="">全部类别</option>
         <option v-for="option in categoryOptions" :key="option.value || '__uncat'" :value="option.value">{{ option.label }}</option>
       </select>
+      <!-- 新建条目（批次60）：类别下拉＋标题输入，回车或点「新建」落盘。 -->
+      <span class="nx-entries-new">
+        <select
+          v-model="newCat"
+          class="nx-field nx-entries-new-cat"
+          data-test="entries-new-category"
+          aria-label="新条目类别"
+        >
+          <option v-for="option in createCategoryOptions" :key="option.value || '__top'" :value="option.value">{{ option.label }}</option>
+        </select>
+        <input
+          v-model="newTitle"
+          class="nx-field nx-entries-new-title"
+          data-test="entries-new-title"
+          placeholder="新建条目名"
+          aria-label="新条目名"
+          @keydown.enter.prevent="submitNewEntry"
+        >
+        <button
+          type="button"
+          class="control-quiet nx-entries-new-submit"
+          data-test="entries-new-submit"
+          :disabled="!newTitle.trim()"
+          @click="submitNewEntry"
+        >新建</button>
+      </span>
     </header>
 
     <div class="nx-entries-board-body">
@@ -250,7 +294,9 @@ function rowHint(item) {
 .nx-entries-board-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
+  row-gap: 6px;
   flex: none;
   margin: 0 0 6px;
 }
@@ -328,6 +374,22 @@ function rowHint(item) {
 .nx-entries-cat-filter {
   flex: 0 1 42%;
   min-width: 0;
+}
+/* 新建组：类别下拉＋标题输入＋「新建」，与筛选行同一套字段度量。 */
+.nx-entries-new {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.nx-entries-new-cat {
+  width: 84px;
+}
+.nx-entries-new-title {
+  width: 120px;
+}
+.nx-entries-new-submit {
+  flex: none;
 }
 .nx-entries-board-head .nx-field {
   min-height: 28px;

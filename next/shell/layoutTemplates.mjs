@@ -31,6 +31,8 @@ export const TEMPLATE_SLOTS = Object.freeze({
 })
 
 const WEB_PANE_KINDS = new Set(['entries-workspace'])
+/** 图库模板的 pane id 前缀（批次60：素材；宿主据此不渲染左树、改出网格画廊）。 */
+const GALLERY_PANE_PREFIXES = Object.freeze(['material.'])
 
 export function isLayoutTemplate(value) {
   return LAYOUT_TEMPLATES.includes(value)
@@ -52,6 +54,9 @@ export function inferLayoutTemplate(pane = {}) {
   const kind = typeof pane.kind === 'string' ? pane.kind : ''
   const id = typeof pane.id === 'string' ? pane.id : ''
   if (WEB_PANE_KINDS.has(kind) || id.startsWith('worldbook.')) return 'web'
+  // 批次60：素材＝无左栏网格（卡片点击才开记录窗）。用 id 前缀认，不用 kind——
+  // records-editor 是记录型载体的共用面孔，按 kind 认会把漫画／视频等一并拖进图库。
+  if (GALLERY_PANE_PREFIXES.some((prefix) => id.startsWith(prefix))) return 'gallery'
   return DEFAULT_LAYOUT_TEMPLATE
 }
 

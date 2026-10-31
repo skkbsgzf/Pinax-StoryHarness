@@ -858,6 +858,19 @@ export function useBoardData(bridge) {
     if (current) await openDocument(current)
   }
 
+  /**
+   * 跨载体知识库（批次60）：蓝色双链的目标是世界书＋资料＋约束三棵树的并集。
+   * 这里只做「没取过就补一次」的数据闸——三棵树仍各走各自的 list 工具，
+   * 不新增工具、不合并状态；syncCurrent:false 保证补数不会替作者打开任何一篇。
+   */
+  async function ensureKnowledgeCatalog() {
+    const jobs = []
+    if (!state.loadedTrees.entries) jobs.push(loadEntries({ syncCurrent: false }))
+    if (!state.loadedTrees.documents) jobs.push(loadDocuments({ syncCurrent: false }))
+    if (!state.loadedTrees.rules) jobs.push(loadRules({ syncCurrent: false }))
+    await Promise.all(jobs)
+  }
+
   /** 点开一篇资料：走 pinax_document_read 取全文（列表那份最多 20000 字，不足以做编辑底稿）。 */
   async function openDocument(item) {
     if (!item) return
@@ -2173,6 +2186,7 @@ export function useBoardData(bridge) {
     saveRule,
     createRule,
     loadDocuments,
+    ensureKnowledgeCatalog,
     openDocument,
     editDocument,
     cancelEditDocument,

@@ -38,4 +38,20 @@
 
 ## §7 执行方回填 ／ §8 调度方验收
 
-（批次记录执行方落盘 `docs/plan/pinax-electron-next-m2-batch60-20261101.md`；§8 调度方补；diff 指引用临时索引法。）
+### §7 执行方回填（2026-11-01，Qoder CLI）
+
+全文见批次记录 [pinax-electron-next-m2-batch60-20261101.md](./pinax-electron-next-m2-batch60-20261101.md)。
+
+| 项 | 结果 |
+|---|---|
+| 五段门禁 | `npm run verify:next` `EXIT=0`：acceptance 35/35；node test 648/0；vitest 199/199；lint 0 警告；bundleAssertions 全过 |
+| 计数 | 11 份清单 @4（12→11）；44 把载体工具不变；聚合 40／载体服务 24 不变；认领 pane 22（24→22） |
+| 迁移 | `setting`／`reference` → `pinax.carrier.dossier`，打开期内存映射；《大梦》七块→六块，`project.json` 原样 |
+| 守卫 | 世界书无左树（既有）、素材画廊存在与点卡开窗（新增 2 条）、dossier 注册＋旧 id 生产源零命中（新增）、迁移用例 |
+| 记账 | 迁移映射表、世界书信息密度参数见批次记录 §3／§4 |
+| limitations | 真窗口实拍三张、《大梦》真盘 digest 由调度方接管；其余边界见批次记录 §7 |
+
+### §8 调度方验收
+
+（待调度方补：真窗口实拍三张核对、《大梦》enabled=6 与 digest、信用账。）
+

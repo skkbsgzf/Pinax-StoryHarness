@@ -55,8 +55,8 @@ const SIMPLE_SCHEMA = {
 
 // ── 兼容面：存量清单没有 output 也照装，归一结果不多出死字段 ─────────────────
 
-test('兼容：12 份内建清单 44 把工具零 output 照装（toolOutputs 不出键）', () => {
-  assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 12)
+test('兼容：11 份内建清单 44 把工具零 output 照装（toolOutputs 不出键）', () => {
+  assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 11)
   let declared = 0
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
@@ -68,7 +68,7 @@ test('兼容：12 份内建清单 44 把工具零 output 照装（toolOutputs �
     assert.equal(installed.ok, true, `${plugin.manifest.id}: ${installed.error?.message}`)
   }
   assert.equal(registry.rejected.length, 0, JSON.stringify(registry.rejected))
-  // 计数写理由：批次56 的记账口径——十二块载体共声明 44 把工具，全部还没有 output 声明。
+  // 计数写理由：批次56 的记账口径——批次60 合并后十一块载体仍共声明 44 把工具（设定与资料原六把合并保留原名），全部还没有 output 声明。
   assert.equal(declared, 44, '存量缺声明的条数变了先说明为什么，再改这里')
 })
 

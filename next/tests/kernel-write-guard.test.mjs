@@ -15,7 +15,7 @@ import {
   guardClassificationGaps,
   guardKernelToolCall
 } from '../runtime/kernelWriteGuard.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, REFERENCE_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, DOSSIER_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**
@@ -140,7 +140,7 @@ test('一目录一主人：认领过的目录内核写不进，未认领的目�
 
   // 协议 v1.1-A：目录主人随拆栏变更（一目录一主人仍是硬约束）。
   const claims = registry.dirClaims()
-  for (const [dir, owner] of [['正文', NOVEL_CARRIER_ID], ['大纲', OUTLINE_CARRIER_ID], ['构思', NOTES_CARRIER_ID], ['世界书', WORLDBOOK_CARRIER_ID], ['约束', SETTING_CARRIER_ID], ['资料', REFERENCE_CARRIER_ID]]) {
+  for (const [dir, owner] of [['正文', NOVEL_CARRIER_ID], ['大纲', OUTLINE_CARRIER_ID], ['构思', NOTES_CARRIER_ID], ['世界书', WORLDBOOK_CARRIER_ID], ['约束', DOSSIER_CARRIER_ID], ['资料', DOSSIER_CARRIER_ID]]) {
     assert.deepEqual([...(claims.get(dir) ?? [])], [owner], `「${dir}/」的主人应该是 ${owner}`)
   }
 
@@ -181,7 +181,7 @@ test('真运行时里闸是生效的：内核写族被拒，带修订号的载�
   const root = join(workspace.projects, '写族闸靶子')
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry.install(plugin.manifest, plugin.impl ?? {}, plugin.meta ?? {})
-  const created = await createProject({ root, name: '写族闸靶子', primaryCarrier: NOVEL_CARRIER_ID, registry, extraEnabled: [OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID, REFERENCE_CARRIER_ID] })
+  const created = await createProject({ root, name: '写族闸靶子', primaryCarrier: NOVEL_CARRIER_ID, registry, extraEnabled: [OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, WORLDBOOK_CARRIER_ID, DOSSIER_CARRIER_ID] })
   assert.equal(created.ok, true, JSON.stringify(created.error ?? {}))
   const opened = await openProject({ root, registry })
   assert.equal(opened.ok, true, JSON.stringify(opened.error ?? {}))
@@ -189,7 +189,7 @@ test('真运行时里闸是生效的：内核写族被拒，带修订号的载�
   const started = await runtime.start()
   assert.equal(started.ok, true)
   try {
-    assert.equal(started.value.toolCount, 37, '闸不改面的形状：内核 19 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 六载体自有 16（小说 6：正文写口＋删／改两把＋提案三把；大纲 1；构思 2；世界书 1；约束 2；资料 4；断言同步）')
+    assert.equal(started.value.toolCount, 37, '闸不改面的形状：内核 19 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 六载体自有 16（小说 6：正文写口＋删／改两把＋提案三把；大纲 1；构思 2；世界书 1；设定与资料 6；断言同步）')
     const guard = runtime.surfaceInfo().writeGuard
     assert.deepEqual([...guard.tools].sort(), [...WRITE_FAMILY].sort(), '右栏要能读出此刻受约束的是哪几把')
     assert.equal(guard.projectRoot, opened.value.fileService.root)

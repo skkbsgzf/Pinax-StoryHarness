@@ -19,8 +19,7 @@ import EntriesCategoryTree from './EntriesCategoryTree.vue'
  *   outline.*    → 大纲树
  *   notes.*      → 构思清单
  *   worldbook.*  → 世界书条目树
- *   setting.*    → 约束清单
- *   reference.*  → 资料清单
+ *   dossier.*    → 资料＋约束两段（批次60 由设定／资料合并）
  * 上一版把大纲／构思／世界书都塞进小说／设定板是模型错误，本版按六栏拆开。
  * 工单B：小说栏再纯粹化——只渲染章节树；提案区迁统一二级页（设置 → 文档 → 提案审阅）。
  * 卷→章两级：正文/ 下的一级子目录＝卷（不可点的分区标题），卷下是章行；没有子目录时
@@ -210,8 +209,8 @@ const treeKind = computed(() => {
   if (paneId.startsWith('notes.')) return 'notes'
   if (paneId.startsWith('worldbook.')) return 'entries'
   if (paneId.startsWith('script.')) return 'scripts'
-  if (paneId.startsWith('setting.')) return 'rules'
-  if (paneId.startsWith('reference.')) return 'documents'
+  // 批次60：设定与资料合并成一栏——同一棵索引树分两段（资料／约束）。
+  if (paneId.startsWith('dossier.')) return 'dossier'
   if (recordCarrierOfPaneId(paneId)) return 'records'
   return 'none'
 })
@@ -493,11 +492,10 @@ watch(() => props.board?.id, () => {
     void props.data.loadNotes()
   } else if (treeKind.value === 'entries') {
     void props.data.loadEntries()
-  } else if (treeKind.value === 'rules') {
-    void props.data.loadRules()
-  } else if (treeKind.value === 'documents') {
-    // 资料（工单G1）：资料板只有这一棵树；泛型项目里它也是主树。
+  } else if (treeKind.value === 'dossier') {
+    // 批次60：一棵树两段——两份清单都要列（各自失败各自报，互不顶替）。
     void props.data.loadDocuments()
+    void props.data.loadRules()
   } else if (treeKind.value === 'scripts') {
     // 剧本（批次26）：剧本板只有这一棵树（剧本/）。
     void props.data.loadScripts()
@@ -881,6 +879,100 @@ watch(() => props.board?.id, () => {
         </div>
         <EntriesCategoryTree v-if="data.entries.length" :data="data" />
         <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+      </template>
+
+      <!-- 设定与资料（批次60）：一棵索引树两段——资料在前（数据目录顺位），约束在后。
+           两段各自有新建入口、各自报错；打开行为沿用各自旧栏的做法（资料→阅读面，约束→规则面）。 -->
+      <template v-else-if="treeKind === 'dossier'">
+        <div class="nx-index-section-head" data-test="dossier-section-documents">
+          <p class="workspace-nav-section">资料</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="dossier-new-document-toggle"
+            aria-label="新建资料"
+            :aria-expanded="(newItem?.kind === 'documents').toString()"
+            v-workbench-tooltip="{ text: '新建资料', side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewItem('documents')"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
+        </div>
+        <div v-if="newItem?.kind === 'documents'" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newItemInput"
+            v-model="newItem.title"
+            class="nx-field is-tiny"
+            data-test="dossier-new-document-input"
+            placeholder="新资料标题"
+            aria-label="新资料标题"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
+          >
+        </div>
+        <ul class="nx-tree">
+          <li v-for="item in data.documents" :key="`dossier-doc:${item.file}`" class="nx-tree-line">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isDocumentOpen(item) }"
+              :aria-current="isDocumentOpen(item) ? 'page' : null"
+              :title="rowHint(item)"
+              @click="data.openDocument(item)"
+            >
+              <span class="workspace-nav-label">{{ item.title }}</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容（资料/）。</p>
+        <p v-if="data.documentsError" class="nx-index-error">{{ data.documentsError }}</p>
+
+        <div class="nx-index-section-head" data-test="dossier-section-rules">
+          <p class="workspace-nav-section">约束</p>
+          <button
+            type="button"
+            class="nx-row nx-index-icon-btn nx-index-add-toggle"
+            data-test="dossier-new-rule-toggle"
+            aria-label="新建约束"
+            :aria-expanded="(newItem?.kind === 'rules').toString()"
+            v-workbench-tooltip="{ text: '新建约束', side: 'left' }"
+            @mousedown.prevent
+            @click="toggleNewItem('rules')"
+          >
+            <WorkbenchIcon name="plus" :size="14" />
+          </button>
+        </div>
+        <div v-if="newItem?.kind === 'rules'" class="nx-index-new nx-index-new-inline">
+          <input
+            ref="newItemInput"
+            v-model="newItem.title"
+            class="nx-field is-tiny"
+            data-test="dossier-new-rule-input"
+            placeholder="新约束标题"
+            aria-label="新约束标题"
+            @keydown.enter.prevent="submitNewItem"
+            @keydown.esc.prevent="closeNewItem"
+            @blur="closeNewItem"
+          >
+        </div>
+        <ul class="nx-tree">
+          <li v-for="item in data.rules" :key="`dossier-rule:${item.file}`" class="nx-tree-line">
+            <button
+              type="button"
+              class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
+              :class="{ 'is-active': isRuleOpen(item) }"
+              :aria-current="isRuleOpen(item) ? 'page' : null"
+              :title="rowHint(item)"
+              @click="data.openRule(item)"
+            >
+              <span class="workspace-nav-label">{{ item.title }}</span>
+            </button>
+          </li>
+        </ul>
+        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容（约束/）。</p>
+        <p v-if="data.rulesError" class="nx-index-error">{{ data.rulesError }}</p>
       </template>
 
       <!-- 约束（协议 v1.1-A：设定栏只剩这一棵内容树；世界书已独立成栏）。

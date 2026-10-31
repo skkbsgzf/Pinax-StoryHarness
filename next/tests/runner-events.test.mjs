@@ -9,7 +9,7 @@ import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, DOSSIER_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**
@@ -192,7 +192,7 @@ async function materialProject(label) {
     name: '运行过程靶子',
     primaryCarrier: NOVEL_CARRIER_ID,
     registry,
-    extraEnabled: [OUTLINE_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID]
+    extraEnabled: [OUTLINE_CARRIER_ID, WORLDBOOK_CARRIER_ID, DOSSIER_CARRIER_ID]
   })
   assert.equal(created.ok, true, JSON.stringify(created.error ?? {}))
   await mkdir(join(root, '正文'), { recursive: true })

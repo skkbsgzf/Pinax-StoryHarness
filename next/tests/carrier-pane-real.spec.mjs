@@ -29,7 +29,7 @@ delete process.env.PINAX_PUBLIC_ORIGINS
 const isolatedRoot = await mkdtemp(join(tmpdir(), 'pinax-next-realpane-'))
 process.env.PINAX_APP_DATA = join(isolatedRoot, 'appdata')
 process.env.PINAX_MIRROR_ROOT = join(isolatedRoot, 'mirror')
-const { createNextSession, NOVEL_CARRIER_ID, SETTING_CARRIER_ID } = createRequire(import.meta.url)(resolve(here, '..', 'index.mjs'))
+const { createNextSession, NOVEL_CARRIER_ID, DOSSIER_CARRIER_ID } = createRequire(import.meta.url)(resolve(here, '..', 'index.mjs'))
 // 世界书载体的 id 从 carriers 清单直接取：next/index.mjs 的再导出名单不在本批改动面内。
 import { WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 
@@ -73,7 +73,7 @@ async function makeProject(label) {
   workspaces.push(workspace)
   const root = join(workspace, '真链路靶子')
   const session = await createNextSession({ root, autoOpen: false })
-  const created = await session.create({ name: '真链路靶子', primaryCarrier: NOVEL_CARRIER_ID, extraEnabled: [WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID] })
+  const created = await session.create({ name: '真链路靶子', primaryCarrier: NOVEL_CARRIER_ID, extraEnabled: [WORLDBOOK_CARRIER_ID, DOSSIER_CARRIER_ID] })
   expect(created.ok, JSON.stringify(created.error ?? {})).toBe(true)
   // 素材从文件系统侧落盘：这些是项目种子文件，不是面板写入（面板侧走载体的 save 工具）。
   await writeFile(join(root, '正文', '第001章-入场.md'), '雨从檐口滴下来，巷子里没人。', 'utf-8')
@@ -120,7 +120,7 @@ describe('载体面板接真会话', () => {
     await session.close()
   }, 30_000)
 
-  it('世界书与设定各占一栏：世界书栏读出真条目，设定栏只列约束；内核那份也进不了别人的目录', async () => {
+  it('世界书与设定资料各占一栏：世界书栏读出真条目，设定与资料栏只列两段本域内容；内核那份也进不了别人的目录', async () => {
     const { root, session } = await makeProject('setting')
     const bridge = realBridge(session)
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -140,15 +140,15 @@ describe('载体面板接真会话', () => {
     expect(wrapper.find('[data-test="entries-board"]').text()).toContain('人物·柯秒')
     expect(wrapper.find('[data-test="entries-workspace"] .entry-text').text()).toContain('醒来在雪夜')
 
-    // 设定栏（约束）：世界书条目不在这一栏，只有 约束/文风.md 一行；中栏是约束编辑面（点开才进）。
-    const settingBoard = wrapper.find('.nx-ribbon-item[aria-label="设定"]')
-    expect(settingBoard.exists(), '图标竖条应有设定板块的入口').toBe(true)
+    // 设定与资料栏（批次60 合并）：世界书条目不在这一栏；伪数据只有 约束/文风.md 一行，资料段为空。
+    const settingBoard = wrapper.find('.nx-ribbon-item[aria-label="设定与资料"]')
+    expect(settingBoard.exists(), '图标竖条应有设定与资料板块的入口').toBe(true)
     await settingBoard.trigger('click')
-    await waitFor(() => wrapper.find('[data-pane-id="setting.rules"]').exists() && wrapper.find('.nx-index-window').text().includes('文风'), { note: '设定栏没从磁盘读出约束' })
+    await waitFor(() => wrapper.find('[data-pane-id="dossier.editor"]').exists() && wrapper.find('.nx-index-window').text().includes('文风'), { note: '设定与资料栏没从磁盘读出约束' })
     expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(1)
     expect(wrapper.find('.nx-index-window').text()).not.toContain('人物·柯秒')
-    // 同一限定：世界书窗仍并存于窗层，这里只断言设定面里没有条目阅读态。
-    expect(wrapper.find('[data-pane-id="setting.rules"] .entry-text').exists()).toBe(false)
+    // 同一限定：世界书窗仍并存于窗层，这里只断言设定与资料面里没有条目阅读态。
+    expect(wrapper.find('[data-pane-id="dossier.editor"] .entry-text').exists()).toBe(false)
 
     // 界面上没有任何写入通道：面板存在前后，世界书目录的文件清单一个字都没变。
     expect((await readdir(join(root, '世界书'))).join()).toBe('人物·柯秒.md')
@@ -175,6 +175,9 @@ describe('载体面板接真会话', () => {
     expect((await readdir(join(root, '世界书'))).join()).toBe('人物·柯秒.md')
     expect((await readdir(join(root, '正文'))).join()).toBe('第001章-入场.md')
     wrapper.unmount()
+    // 批次60：这一栏换板会同时取资料与约束两份清单；等界面在途调用落定再关运行时，
+    // 否则关连接时 MCP 的 pending 请求会以 ConnectionClosed 拒绝，变成 vitest 的未处理错误。
+    await settle(4)
     await session.close()
   }, 30_000)
 

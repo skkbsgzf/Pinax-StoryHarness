@@ -1,7 +1,7 @@
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, inject, nextTick, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
-import { buildEntryTokenMap, computeBacklinks, linkifyEntryNames, ownEntryTokens } from './wikiLinks.mjs'
+import { buildEntryTokenMap, buildKnowledgeCatalog, computeBacklinks, linkifyEntryNames, ownEntryTokens } from './wikiLinks.mjs'
 
 /**
  * 条目详情面（批次44 · 从 CarrierPaneHost 里拆出来的独立面板）。
@@ -13,12 +13,13 @@ import { buildEntryTokenMap, computeBacklinks, linkifyEntryNames, ownEntryTokens
  *
  * 蓝色标签那件事（作者 2026-10-31：「你在前端设计了一些蓝色的标签，看上去能跳转，但是其实不行，
  * 非常矛盾」）：老实说，染成可点色却点不动，比不染更坏。所以这里的纪律是
- * **看着能点就必须点得动**——词表只收「恰好指向一条条目」的词：
+ * **看着能点就必须点得动**——词表只收「恰好指向一条知识条目」的词（批次60 起跨载体：
+ * 世界书条目＋资料＋约束同属一个知识库）：
  *   - 全名、短名（· 后缀）、别名（aliases／keys）、标签（tags）都算候选；
  *   - 一个词若落在两条以上条目上（通用标签「记忆」「结构」就是这种），它不进词表——
  *     正文里就当普通文字，不染蓝；
- *   - 链进去的每个词都在同一张表里查得到归属条目（buildEntryTokenMap），
- *     点下去走的是同一个 openEntry，不会出现「链出去却打不开」。
+ *   - 链进去的每个词都在同一张表里查得到归属，点下去经宿主的 openKnowledge 切栏开窗，
+ *     不会出现「链出去却打不开」。
  */
 const props = defineProps({
   /** useBoardData 的返回值。 */
@@ -32,16 +33,32 @@ const props = defineProps({
   emptyHint: { type: String, default: '从左边索引窗里选一条设定。' }
 })
 const emit = defineEmits(['chip-action'])
+/** 跨载体跳转（批次60）：宿主在 AppNext 里给的一枚路由；没有时退回只开条目。 */
+const openKnowledge = inject('pinaxOpenKnowledge', null)
 
 /** 阅读态的 md 渲染：与其它文档面同一条路径（mdRender.mjs）。 */
 const entryHtml = computed(() => renderMarkdown(props.data.entry?.content ?? ''))
 
 /**
- * 双链词表：所有条目候选词里，去掉「有多条归属」的，再去掉当前条目自己的词。
- * 一张表两用——链的时候取它的 key，点的时候按同一张表查归属（老做法是链用一份词、
- * 点用另一份匹配规则，两份对不上就出现「蓝的却点不动」）。
+ * 双链词表（批次60：跨载体）：
+ *   1) 目标＝整个知识库——世界书条目＋资料＋约束（buildKnowledgeCatalog 只做归一）；
+ *   2) 词表仍只收「恰好指向一条」的词，同名多归属的词不染蓝（看着能点就必须点得动）；
+ *   3) 链与点查的是同一张表，点下去经宿主的 openKnowledge 切栏＋开窗，不会链出去打不开。
  */
-const entryTokenMap = computed(() => buildEntryTokenMap(props.data.entries ?? []))
+const linkTargets = computed(() => buildKnowledgeCatalog({
+  entries: props.data.entries ?? [],
+  documents: props.data.documents ?? [],
+  rules: props.data.rules ?? []
+}).map((target) => ({
+  name: target.name,
+  path: target.path,
+  aliases: target.item?.aliases ?? [],
+  keys: target.item?.keys ?? [],
+  tags: target.item?.tags ?? [],
+  kind: target.kind,
+  item: target.item
+})))
+const entryTokenMap = computed(() => buildEntryTokenMap(linkTargets.value))
 const entryLinkTokens = computed(() => {
   const own = ownEntryTokens(props.data.entry)
   return [...entryTokenMap.value.keys()].filter((token) => !own.has(token))
@@ -58,11 +75,21 @@ function resolveEntryToken(token) {
   return entryTokenMap.value.get(String(token ?? '')) ?? null
 }
 
+/** 跳到词表查到的目标：资料／约束由宿主切到合并体那一栏并开窗，条目沿用既有的打开路径。 */
+function openTarget(target) {
+  if (!target) return
+  if (typeof openKnowledge === 'function') {
+    openKnowledge(target)
+    return
+  }
+  if (target.kind === 'entry') props.data.openEntry(target.item)
+}
+
 function onRenderedClick(event) {
   const link = event.target?.closest?.('.nx-wikilink')
   if (!link) return
   const item = resolveEntryToken(link.dataset.entry)
-  if (item) props.data.openEntry(item)
+  if (item) openTarget(item)
 }
 
 const entryBacklinks = computed(() => computeBacklinks(props.data.entries ?? [], props.data.entry?.name, props.data.entry?.path))

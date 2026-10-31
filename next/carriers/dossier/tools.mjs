@@ -1,32 +1,32 @@
 import { fail, ok } from '../../kernel/errors.mjs'
+import { isSameProjectRoot, normalizeProjectRoot } from '../../fs/projectPath.mjs'
 import { getSharedKnowledgeService } from '../../runtime/knowledgeService.mjs'
-import { REFERENCE_CARRIER_ID } from './manifest.mjs'
+import { DOSSIER_CARRIER, DOSSIER_CARRIER_ID } from './manifest.mjs'
 
 /**
- * 资料载体的工具实现（工单G1 ＋ H2）。
- * 读盘一律走内核文件服务（next/fs/fileService.mjs）——归属闸、作用域闸、修订并发都在那边，
- * 载体只负责「按资料的语义把 资料/ 讲成人话」，绝不自己 open 文件句柄。
- * 四把工具都是载体自有名字（内核 19 里没有同名工具），所以不存在「认领＝同名接管」这件事；
- * 形状照已有先例：
- *   pinax_document_list  照 pinax_notes_list：列篇目并把正文随手带回（前 20000 字，超出标注），
- *                        省一次单独的读取；保存是覆盖式，截断时别整篇回写；
- *   pinax_document_read  单篇全文，maxChars 可选（1000–200000），照 pinax_chapter_read 的截断口径；
- *   pinax_document_save  照 pinax_chapter_save／pinax_notes_save：新建传 expectedRevision 0，
- *                        改稿必须带回读到的修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。
- *   pinax_reference_search（工单H2）：资料板检索。走主进程内的 knowledgeService（createKnowledgeRuntime，
- *                         worker 线程、零 HTTP），verb 固定 kb_search，q 必填，dir 恒限定 资料；
- *                         内核未安装／忙／超时等码原样透传。它不认领内核的 pinax_knowledge_search。
- * 本批只认 .md 与 .txt（工单边界：不做 PDF/图片，也不做拖拽导入）。
+ * 设定与资料载体的工具实现（批次60：由 setting／reference 两块载体的工具原样合并）。
+ *
+ * 六把工具的名字与语义一字不改——这是 Agent 面零破坏的硬约束：
+ *   约束   pinax_rule_list / pinax_rule_save
+ *   资料   pinax_document_list / pinax_document_read / pinax_document_save
+ *   检索   pinax_reference_search
+ * 内部只多了一层「目录归属」：同一次 createDossierTools 同时拿到 资料/ 与 约束/ 的读写权，
+ * 六把工具各走各的目录，互不串门（rule_* 只碰 约束/，document_* 只碰 资料/）。
+ *
+ * 读盘一律走内核文件服务（next/fs/fileService.mjs）：归属闸、作用域闸、修订并发都在那边。
  */
-export const REFERENCE_DIR = '资料'
 const MAX_TEXT_CHARS = 200_000
-/** 列表随篇带回正文的上限（与 pinax_notes_list 同一档）；超出截断并在条目上标注。 */
+const RULES_DIR = DOSSIER_CARRIER.dataDirs.constraints
+const REFERENCE_DIR = DOSSIER_CARRIER.dataDirs.documents
+/** 约束列表随篇带回正文的上限（与构思速记的 pinax_notes_list 同一档）；超出截断并在条目上标注。 */
+const RULE_LIST_TEXT_CHARS = 20_000
+/** 资料列表随篇带回正文的上限（同一档）；超出截断并在条目上标注。 */
 const DOCUMENT_LIST_TEXT_CHARS = 20_000
 const TEXT_FILE_PATTERN = /\.(?:md|txt)$/iu
 const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
 
-export function createReferenceTools(context = {}) {
-  const pluginId = context.pluginId ?? REFERENCE_CARRIER_ID
+export function createDossierTools(context = {}) {
+  const pluginId = context.pluginId ?? DOSSIER_CARRIER_ID
   const fileService = context.fileService ?? null
   const projectRoot = context.root ?? fileService?.root ?? null
   /** 显式注入优先（测试/其它运行时），否则取主进程挂上的单例；两者都没有时工具如实报缺。 */
@@ -40,6 +40,52 @@ export function createReferenceTools(context = {}) {
     return fileService
       ? null
       : fail('INVALID_INPUT', `载体 ${pluginId} 的工具需要已打开项目的文件服务；空框架下请回落内核工具`, { pluginId })
+  }
+
+  /** 本地化轨的硬口径：这块板块只服务当前打开的 Next 项目，不接受第二个项目路径。 */
+  function checkProjectRef(args) {
+    const given = typeof args?.projectPath === 'string' ? args.projectPath.trim() : ''
+    if (!given) return null
+    const current = normalizeProjectRoot(projectRoot)
+    if (!current) {
+      return fail('INVALID_INPUT', `设定与资料载体 ${pluginId} 没有项目根：请先打开一个含 .pinax/project.json 的本地文件夹`, { projectPath: given })
+    }
+    // 归一与比较用 next/fs 的同一份实现：载体与运行时写族闸判「是不是当前这个项目」必须同一条规矩。
+    if (!isSameProjectRoot(given, current)) {
+      return fail('INVALID_INPUT', `设定与资料载体只服务当前打开的 Next 项目（${current}），不读别的项目路径`, {
+        projectPath: given,
+        currentRoot: current
+      })
+    }
+    return null
+  }
+
+  /** 约束目录＝规则序列：文件名排序，正文随条目带回，单篇超长截断并标注。 */
+  async function listRules() {
+    const missing = needService()
+    if (missing) return missing
+    const listed = await fileService.list({ pluginId, dir: RULES_DIR })
+    if (!listed.ok) return listed
+    const names = listed.value.entries
+      .filter((entry) => entry.kind === 'file' && /\.md$/iu.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => collator.compare(a, b))
+    const rules = []
+    for (const name of names) {
+      const relativePath = `${RULES_DIR}/${name}`
+      const read = await fileService.read({ pluginId, dir: RULES_DIR, file: name })
+      rules.push({
+        index: rules.length,
+        title: name.replace(/\.md$/iu, ''),
+        file: relativePath,
+        name,
+        revision: read.ok ? read.value.revision : await fileService.revisionOf(relativePath),
+        text: read.ok ? read.value.text.slice(0, RULE_LIST_TEXT_CHARS) : '',
+        totalChars: read.ok ? read.value.text.length : 0,
+        truncated: read.ok ? read.value.text.length > RULE_LIST_TEXT_CHARS : false
+      })
+    }
+    return ok({ rules, total: rules.length })
   }
 
   /** 资料目录＝篇目序列：与构思速记同一个列法（文件名排序，正文随条目带回，单篇超长截断并标注）。 */
@@ -72,8 +118,82 @@ export function createReferenceTools(context = {}) {
 
   return [
     {
+      name: 'pinax_rule_list',
+      title: '列出约束（设定与资料载体）',
+      description: '按「约束/」文件名排序列出约束文件（序号、标题、相对路径、修订号），并把全文一并带回——约束是短文本，省一次单独的读取；单篇超过 20000 字时截断并在条目上标注，不谎报读全了。只读，不改任何文件。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          projectPath: { type: 'string', maxLength: 240, description: '当前项目根路径；与打开的项目不一致时直接拒绝，绝不换目录读。' },
+          limit: { type: 'integer', minimum: 1, maximum: 500, description: '最多返回多少篇，默认 200。' }
+        }
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        const rejected = checkProjectRef(args)
+        if (rejected) return rejected
+        const limit = args.limit === undefined ? 200 : args.limit
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+          return fail('INVALID_INPUT', 'limit 须是 1–500 的整数', { got: args.limit })
+        }
+        const all = await listRules()
+        if (!all.ok) return all
+        return ok({
+          total: all.value.total,
+          truncated: all.value.total > limit,
+          projectRoot,
+          rules: all.value.rules.slice(0, limit)
+        })
+      }
+    },
+    {
+      name: 'pinax_rule_save',
+      title: '保存约束（设定与资料载体）',
+      description: '作者确认后的约束落盘口：新建传 expectedRevision 0；改稿必须带回 pinax_rule_list 给的修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。写 约束/ 走文件服务三道闸（归属＋file:约束:rw＋并发）；文件名必须是 .md。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text', 'expectedRevision'],
+        properties: {
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（约束/ 下），与 title 二选一。' },
+          title: { type: 'string', minLength: 1, maxLength: 120, description: '新建约束用标题，落成「约束/<标题>.md」。' },
+          text: { type: 'string', minLength: 1, maxLength: MAX_TEXT_CHARS, description: '整篇内容（覆盖式保存，故必须带修订号）。' },
+          expectedRevision: { type: 'integer', minimum: 0, description: 'pinax_rule_list 给的修订号；新建传 0。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        const rejected = checkProjectRef(args)
+        if (rejected) return rejected
+        if (typeof args.text !== 'string' || !args.text.length) return fail('INVALID_INPUT', 'text 必填且非空')
+        if (args.text.length > MAX_TEXT_CHARS) return fail('INVALID_INPUT', `text 超出单篇上限 ${MAX_TEXT_CHARS} 字符`, { got: args.text.length })
+        if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 0) {
+          return fail('INVALID_INPUT', 'expectedRevision 必填（新建传 0），改稿请带回 pinax_rule_list 给的修订号')
+        }
+        const target = args.file ?? ruleFileNameFromTitle(args.title)
+        if (!target) return fail('INVALID_INPUT', '要给 file（约束/ 下的相对路径）或 title（新建约束标题）')
+        const relative = toDirRelative(RULES_DIR, target)
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '约束文件名必须以 .md 结尾', { file: target })
+
+        const written = await fileService.write({ pluginId, dir: RULES_DIR, file: relative, text: args.text, expectedRevision: args.expectedRevision })
+        if (!written.ok) return written
+        return ok({
+          file: written.value.relativePath,
+          revision: written.value.revision,
+          created: args.expectedRevision === 0,
+          sha256: written.value.sha256,
+          bytes: written.value.bytes
+        })
+      }
+    },
+    {
       name: 'pinax_document_list',
-      title: '列出资料（资料载体）',
+      title: '列出资料（设定与资料载体）',
       description: '按「资料/」文件名排序列出 .md 与 .txt 资料（序号、标题、相对路径、修订号），并把正文一并带回——资料多为随手收的短篇，省一次单独的读取；单篇超过 20000 字时截断并在条目上标注，不谎报读全了。只读，不改任何文件。',
       inputSchema: {
         type: 'object',
@@ -99,7 +219,7 @@ export function createReferenceTools(context = {}) {
     },
     {
       name: 'pinax_document_read',
-      title: '读取资料（资料载体）',
+      title: '读取资料（设定与资料载体）',
       description: '按 index／title／file 任一定位读一篇资料的全文，支持 maxChars 截断；返回修订号，供保存时原样带回做并发校验。读不到就说读不到，不拼一篇相近的冒充。',
       inputSchema: {
         type: 'object',
@@ -144,7 +264,7 @@ export function createReferenceTools(context = {}) {
     },
     {
       name: 'pinax_document_save',
-      title: '保存资料（资料载体）',
+      title: '保存资料（设定与资料载体）',
       description: '作者确认后的资料落盘口：新建传 expectedRevision 0；改稿必须带回 pinax_document_list（或 pinax_document_read）给的修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。写 资料/ 走文件服务三道闸（归属＋file:资料:rw＋并发）；文件名必须是 .md 或 .txt（本批不认 PDF/图片）。',
       inputSchema: {
         type: 'object',
@@ -186,7 +306,7 @@ export function createReferenceTools(context = {}) {
     },
     {
       name: 'pinax_reference_search',
-      title: '检索资料（资料载体）',
+      title: '检索资料（设定与资料载体）',
       description: '在本书的 RAG 输入集里检索「资料/」（进程内知识内核 kb_search，worker 线程、零 HTTP）：返回命中条目的标题、readRef、片段与覆盖信息。q 必填；dir 可选，只接受「资料」（资料板检索的边界）。首次检索会编译/刷新项目档，可能较慢；知识内核未安装、服务忙、超时等上游码原样报出，不冒充空结果。只读，不改任何文件。',
       inputSchema: {
         type: 'object',
@@ -213,24 +333,31 @@ export function createReferenceTools(context = {}) {
         if (args.k !== undefined && (!Number.isSafeInteger(args.k) || args.k < 1 || args.k > 30)) {
           return fail('INVALID_INPUT', 'k 须是 1–30 的整数', { got: args.k })
         }
-        const dir = args.dir === undefined ? '资料' : String(args.dir).trim().replace(/\/+$/u, '')
-        if (dir && dir !== '资料') {
-          return fail('INVALID_INPUT', '资料检索只覆盖「资料/」目录：dir 只能省略或写 资料', { got: args.dir })
+        const dir = args.dir === undefined ? REFERENCE_DIR : String(args.dir).trim().replace(/\/+$/u, '')
+        if (dir && dir !== REFERENCE_DIR) {
+          return fail('INVALID_INPUT', `资料检索只覆盖「${REFERENCE_DIR}/」目录：dir 只能省略或写 ${REFERENCE_DIR}`, { got: args.dir })
         }
         return knowledgeService.search({
           root: projectRoot,
           verb: 'kb_search',
           q: query,
           ...(args.k !== undefined ? { k: args.k } : {}),
-          dir: '资料'
+          dir: REFERENCE_DIR
         })
       }
     }
   ]
 }
 
-/** 载体自有（读/写/检索）的工具名，供门禁核「认领面只增不减」；四把都是载体自有名字。 */
-export const REFERENCE_TOOL_NAMES = Object.freeze(['pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'])
+/** 载体自有的六把工具名（约束对＋资料三把＋检索），供门禁核「认领面只增不减」。 */
+export const DOSSIER_TOOL_NAMES = Object.freeze([
+  'pinax_rule_list',
+  'pinax_rule_save',
+  'pinax_document_list',
+  'pinax_document_read',
+  'pinax_document_save',
+  'pinax_reference_search'
+])
 
 async function resolveDocument(args, listDocuments) {
   const all = await listDocuments()
@@ -270,13 +397,26 @@ async function resolveDocument(args, listDocuments) {
   return fail('INVALID_INPUT', 'pinax_document_read 需要 index / title / file 任一定位方式')
 }
 
-/** 作者给的是「资料/xxx.md」还是「xxx.md」都接得住：文件服务那侧的入参是板块目录内的相对路径。 */
+/** 作者给的是「目录/xxx.md」还是「xxx.md」都接得住：文件服务那侧的入参是板块目录内的相对路径。 */
 function toDirRelative(dir, path) {
   const normalized = String(path).replaceAll('\\', '/')
   return normalized.startsWith(`${dir}/`) ? normalized.slice(dir.length + 1) : normalized
 }
 
-/** 标题→文件名：与小说／设定载体同一套规则（非法字符与控制字符换空格）；缺省扩展名是 .md。 */
+/** 标题→文件名：与小说载体的 chapterFileNameFromTitle 同一套规则（非法字符与控制字符换空格）。 */
+function ruleFileNameFromTitle(title) {
+  const cleaned = String(title ?? '')
+    .replace(/[\\/:*?"<>|]/gu, ' ')
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^\.+/u, '')
+    .slice(0, 120)
+  if (!cleaned) return null
+  return /\.md$/iu.test(cleaned) ? cleaned : `${cleaned}.md`
+}
+
+/** 标题→文件名：与小说／约束同一套规则；缺省扩展名是 .md。 */
 function documentFileNameFromTitle(title) {
   const cleaned = String(title ?? '')
     .replace(/[\\/:*?"<>|]/gu, ' ')
@@ -289,4 +429,4 @@ function documentFileNameFromTitle(title) {
   return TEXT_FILE_PATTERN.test(cleaned) ? cleaned : `${cleaned}.md`
 }
 
-export default createReferenceTools
+export default createDossierTools

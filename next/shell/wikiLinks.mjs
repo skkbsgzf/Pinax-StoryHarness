@@ -79,6 +79,29 @@ export function ownEntryTokens(entry) {
   return new Set(entryLinkTokensOf(entry))
 }
 
+/**
+ * 跨载体知识库（批次60）：蓝链的目标不再只是世界书——资料与约束同属一个知识库。
+ * 这里把三棵既有树归一成一张清单（kind／name／path／原始 item），词表仍交给
+ * buildEntryTokenMap 收口：一个词落在两条以上知识条目上，照旧不染蓝。
+ * 只做归一，不发任何工具调用——三棵树仍由 useBoardData 各记各的。
+ */
+export function buildKnowledgeCatalog({ entries = [], documents = [], rules = [] } = {}) {
+  const catalog = []
+  for (const item of entries ?? []) {
+    const name = String(item?.name ?? '').trim()
+    if (name) catalog.push({ kind: 'entry', name, path: String(item?.path ?? ''), item })
+  }
+  for (const item of documents ?? []) {
+    const name = String(item?.title ?? item?.name ?? '').trim() || String(item?.file ?? '')
+    if (name) catalog.push({ kind: 'document', name, path: String(item?.file ?? ''), item })
+  }
+  for (const item of rules ?? []) {
+    const name = String(item?.title ?? item?.name ?? '').trim() || String(item?.file ?? '')
+    if (name) catalog.push({ kind: 'rule', name, path: String(item?.file ?? ''), item })
+  }
+  return catalog
+}
+
 /** 纯函数：反向链接清单（relations 提到或正文包含；排除自己；node 轨可测）。 */
 export function computeBacklinks(entries, currentName, currentPath) {
   const name = String(currentName ?? '').trim()

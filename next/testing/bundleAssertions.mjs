@@ -299,15 +299,15 @@ check('n3 载体作者须知进产物：.build/<载体>/AGENT.md 与源码逐一
   missingAgentMd.length ? `缺 ${missingAgentMd.join(', ')}` : `${carrierDirsInSource.length} 份`)
 
 // 批次57（门禁 n3b）：作者须知里最值钱的是「已知边界」——模型读到它就知道哪些事这一栏做不到。
-// 十二份 AGENT.md 任何一份缺这一段，模型就会把「没做」当「能做」；所以逐份核段标题，不抽样。
+// 批次60 合并后十一份 AGENT.md 任何一份缺这一段，模型就会把「没做」当「能做」；所以逐份核段标题，不抽样。
 const missingKnownLimits = []
 for (const name of carrierDirsInSource) {
   const text = await readFile(join(CARRIERS_SOURCE, name, 'AGENT.md'), 'utf-8')
   if (!/^## 已知边界\s*$/mu.test(text)) missingKnownLimits.push(name)
 }
-check('n3b 载体作者须知含「已知边界」段：12 份 AGENT.md 逐一核',
-  carrierDirsInSource.length === 12 && missingKnownLimits.length === 0,
-  missingKnownLimits.length ? `缺 ${missingKnownLimits.join(', ')}` : `${carrierDirsInSource.length}/12 都有「## 已知边界」`)
+check('n3b 载体作者须知含「已知边界」段：11 份 AGENT.md 逐一核（批次60 合并后）',
+  carrierDirsInSource.length === 11 && missingKnownLimits.length === 0,
+  missingKnownLimits.length ? `缺 ${missingKnownLimits.join(', ')}` : `${carrierDirsInSource.length}/11 都有「## 已知边界」`)
 
 // 批次48（门禁 o）：services／mcp 牌声明的 .mjs 运行期脚本必须随载体进产物。
 // 理由：宿主按清单以插件目录为 cwd 起这些脚本（node preview-server.mjs／comfy-mcp-bridge.mjs）；
@@ -369,14 +369,14 @@ check('q @4 合同与 adopt 分支进产物：清单词表（@4／maxKernel／�
   missingV4Markers.length === 0,
   missingV4Markers.length ? `缺 ${missingV4Markers.join(' ')}` : `${v4Markers.length + adoptMarkers.length} 个标记齐`)
 
-// 批次53（门禁 r）：12 份载体清单全部升 @4——字段不是死声明，源清单的形状在这里核：
-//   r1 12/12 spec=@4 ＋ manifestVersion=4 ＋ license 显式（内置一律 free）；
+// 批次53（门禁 r）：载体清单全部升 @4（批次60 合并后 11 份）——字段不是死声明，源清单的形状在这里核：
+//   r1 11/11 spec=@4 ＋ manifestVersion=4 ＋ license 显式（内置一律 free）；
 //   r2 四组字段的清单面：槽语义（multiplicity／scope，keyed 必带 keyField）、资源认领
 //      （claims 命中的 pane 必须有合法 priority／takes，canOpen 若声明必须带 field）、
 //      渲染器注册与合同上界（若声明则形状合法；读取点由 q 在产物里核）。
-//      计数写理由：24 块认领 pane（12 载体各两块，除去 outline.widget／material.panel／comic.canvas 三块不认领文件）、
+//      计数写理由：22 块认领 pane（批次60 合并后 11 载体各两块，除去 outline.widget／material.panel／comic.canvas 三块不认领文件）、
 //      keyed 1 块（worldbook.entries 按条目 path 各开各的）——数字变了先说明为什么，再改这里。
-//   r3 adopt 声明完整：走 adopt 的服务必须同时给 port 与 healthPath；内置十二块目前全是自起档
+//   r3 adopt 声明完整：走 adopt 的服务必须同时给 port 与 healthPath；内置十一块目前全是自起档
 //      （comic 预览服务不 adopt），adopt 的正身由 acceptance 与 carrier-v4-adopt-supervisor 覆盖。
 const MULTIPLICITIES = ['single', 'list', 'keyed']
 const SCOPES = ['project', 'entry', 'session']
@@ -417,11 +417,11 @@ for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
     if (!Number.isSafeInteger(service.port) || !service.healthPath) adoptOffenders.push(`${manifest.id}/service:${service.id}:adopt 缺 port/healthPath`)
   }
 }
-check('r1 12 份载体清单 @4：spec＝pinax-carrier@4、manifestVersion＝4、license 显式（内置 free）',
-  BUILT_IN_CARRIER_PLUGINS.length === 12 && specOffenders.length === 0,
-  specOffenders.join(', ') || '12/12 @4 + free')
+check('r1 11 份载体清单 @4：spec＝pinax-carrier@4、manifestVersion＝4、license 显式（内置 free）',
+  BUILT_IN_CARRIER_PLUGINS.length === 11 && specOffenders.length === 0,
+  specOffenders.join(', ') || '11/11 @4 + free')
 check('r2 四组字段落地：槽语义齐、认领 pane 的 priority／takes／canOpen 合法、keyed 必带 keyField',
-  fieldOffenders.length === 0 && panesWithClaims === 24 && keyedPanes === 1,
+  fieldOffenders.length === 0 && panesWithClaims === 22 && keyedPanes === 1,
   fieldOffenders.join(', ') || `认领 pane ${panesWithClaims}、keyed ${keyedPanes}`)
 check('r3 adopt 声明完整：走 adopt 的服务必须同时声明 port 与 healthPath（内置全为自起档，adopt=0）',
   adoptOffenders.length === 0,
@@ -562,7 +562,7 @@ check('t 批次54 两层覆盖进产物：组装点标「默认→覆盖」，�
 // 批次56（门禁 u）：工具输出合同在装机轨里不是死声明。
 //   词表：JSON Schema 子集校验随校验器进主进程 bundle（presentationMeta 与 output.schema 的拒绝文案同一处）；
 //   透出：聚合面把声明写到 _meta['pinax/output']——键没进包，宿主与后续批次都读不到，声明等于没写。
-// 计数不新增：12 份清单 44 把工具仍零 output（记账在 acceptance 与批次记录），本句只守「点在不在」。
+// 计数不新增：11 份清单 44 把工具仍零 output（记账在 acceptance 与批次记录），本句只守「点在不在」。
 const outputMarkers = ['pinax/output', 'presentationMeta', 'output.schema']
 const missingOutputMarkers = outputMarkers.filter((marker) => !bundle.includes(marker))
 check('u 批次56 工具输出合同进产物：主进程 bundle 带 output.schema／presentationMeta 的校验文案与 _meta 透出键 pinax/output',

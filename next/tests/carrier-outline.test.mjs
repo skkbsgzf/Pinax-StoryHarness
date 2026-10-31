@@ -18,6 +18,7 @@ import {
   OUTLINE_CARRIER_ID,
   OUTLINE_TOOL_NAMES,
   NOVEL_CARRIER_ID,
+  DOSSIER_CARRIER_ID,
   createOutlineBlocks,
   createOutlineTools
 } from '../carriers/index.mjs'
@@ -256,7 +257,7 @@ test('一目录一主人：大纲/ 归大纲载体，小说与设定写不进来
   try {
     const own = await opened.value.fileService.write({ pluginId: OUTLINE_CARRIER_ID, dir: '大纲', file: 'outline.json', text: '{"nodes":[],"edges":[]}', expectedRevision: 0 })
     assert.equal(own.ok, true, JSON.stringify(own.error ?? {}))
-    for (const pluginId of [NOVEL_CARRIER_ID, 'pinax.carrier.setting']) {      const foreign = await opened.value.fileService.write({ pluginId, dir: '大纲', file: '别人偷写.json', text: '{}', expectedRevision: 0 })
+    for (const pluginId of [NOVEL_CARRIER_ID, DOSSIER_CARRIER_ID]) {      const foreign = await opened.value.fileService.write({ pluginId, dir: '大纲', file: '别人偷写.json', text: '{}', expectedRevision: 0 })
       assert.equal(foreign.ok, false, pluginId)
       assert.equal(foreign.error.code, NEXT_ERROR_CODES.DIR_CONFLICT, pluginId)
     }

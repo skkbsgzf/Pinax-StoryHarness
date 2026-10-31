@@ -4,6 +4,7 @@ import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CarrierPaneHost from './CarrierPaneHost.vue'
 import PaneWindow from './PaneWindow.vue'
+import MaterialGallery from './MaterialGallery.vue'
 import RuntimeDock from './RuntimeDock.vue'
 import SettingsModal from './SettingsModal.vue'
 import PrefsSection from './settings/PrefsSection.vue'
@@ -758,9 +759,29 @@ function showBoardWindow(board, { maximize = null } = {}) {
   return instance
 }
 
+/**
+ * 跨载体跳转（批次60）：蓝链的目标不限于世界书——资料与约束也在同一个知识库里。
+ * 先切到目标载体那一栏，再走窗口系统开／还原它的文档窗，最后把目标交给同一份数据打开
+ * （条目走 openEntry、资料走 openDocument、约束走 openRule）；三处仍是各自既有的读法。
+ */
+function boardWithPrefix(prefix) {
+  return boards.value.find((board) => (board.panes ?? []).some((pane) => String(pane.id).startsWith(prefix))) ?? null
+}
+
+function openKnowledge(target) {
+  const item = target?.item
+  if (!item) return
+  const board = boardWithPrefix(target.kind === 'entry' ? 'worldbook.' : 'dossier.')
+  if (board) activeBoardId.value = board.id
+  if (target.kind === 'entry') void data.openEntry(item)
+  else if (target.kind === 'rule') data.openRule(item)
+  else void data.openDocument(item)
+  if (board) showBoardWindow(board)
+}
+provide('pinaxOpenKnowledge', openKnowledge)
+
 /** 收起＝侧缘标签；标签点开＝还原（几何不动）。 */
-function collapseWindow(instance) {
-  return hostWorkspace.minimize(instance, 'tab')
+function collapseWindow(instance) {  return hostWorkspace.minimize(instance, 'tab')
 }
 
 function expandWindow(instance) {
@@ -907,9 +928,16 @@ async function preparePaneData(paneId) {
   if (id.startsWith('novel.')) await data.loadChapters()
   else if (id.startsWith('outline.')) await data.loadOutline()
   else if (id.startsWith('notes.')) await data.loadNotes()
-  else if (id.startsWith('worldbook.')) await data.loadEntries()
-  else if (id.startsWith('setting.')) await data.loadRules()
-  else if (id.startsWith('reference.')) await data.loadDocuments()
+  else if (id.startsWith('worldbook.')) {
+    await data.loadEntries()
+    // 批次60：蓝色双链指向整个知识库（条目＋资料＋约束）——另两棵树没取过就顺手补一次。
+    await data.ensureKnowledgeCatalog?.()
+  }
+  // 批次60：设定与资料合并体——编辑面要在文档与约束之间切换，两份清单都备齐。
+  else if (id.startsWith('dossier.')) {
+    await data.loadDocuments()
+    await data.loadRules()
+  }
   else if (id.startsWith('script.')) await data.loadScripts()
   else {
     const records = recordCarrierOfPaneId(id)
@@ -923,8 +951,8 @@ const PANE_TREE_KEYS = Object.freeze([
   ['outline.', 'outline'],
   ['notes.', 'notes'],
   ['worldbook.', 'entries'],
-  ['setting.', 'rules'],
-  ['reference.', 'documents'],
+  // 批次60：合并体的树由两份清单拼成——两棵树都取过才算齐。
+  ['dossier.', ['documents', 'rules']],
   ['script.', 'scripts'],
   ...RECORD_CARRIER_KEYS.map((key) => [`${key}.`, recordTreeKey(key)])
 ])
@@ -932,7 +960,8 @@ const PANE_TREE_KEYS = Object.freeze([
 function treeKeyForPane(paneId) {
   const id = String(paneId ?? '')
   const hit = PANE_TREE_KEYS.find(([prefix]) => id.startsWith(prefix))
-  return hit ? hit[1] : null
+  if (!hit) return null
+  return Array.isArray(hit[1]) ? hit[1] : [hit[1]]
 }
 
 /**
@@ -946,8 +975,8 @@ const overlayLoading = ref({})
 async function ensurePaneData(paneId) {
   const id = String(paneId ?? '')
   if (!id) return
-  const key = treeKeyForPane(id)
-  if (!key || data.loadedTrees?.[key]) return
+  const keys = treeKeyForPane(id)
+  if (!keys?.length || keys.every((key) => data.loadedTrees?.[key])) return
   if (overlayLoading.value[id]) return
   overlayLoading.value = { ...overlayLoading.value, [id]: true }
   try {
@@ -990,7 +1019,8 @@ function syncWorkspaceForView() {
     paneDataRestored = true
     for (const entry of hostWorkspace.list()) void preparePaneData(entry.pane)
     restoreActiveBoardFromWorkspace()
-    if (!anyOpenWindow()) showBoardWindow(activeBoard.value)
+    // 图库模板不补窗：它的内容（画廊）本身就在核心区，开一扇记录窗反而是多余的遮挡。
+    if (!anyOpenWindow() && layoutTemplateForBoard(activeBoard.value) !== 'gallery') showBoardWindow(activeBoard.value)
   }
 }
 
@@ -1080,6 +1110,12 @@ function selectBoard(id) {
   data.clearTransient?.()
   const board = boards.value.find((item) => item.id === id)
   if (!board) return
+  // 图库模板的内容就是画廊本身：竖条只负责换板，不替作者凭空开一扇记录窗。
+  if (layoutTemplateForBoard(board) === 'gallery') {
+    activeBoardId.value = id
+    indexOpen.value = false
+    return
+  }
   if (activeBoardId.value === id) {
     if (templateHasTree(layoutTemplateForBoard(board)) && indexOpen.value) {
       indexOpen.value = false
@@ -1460,7 +1496,15 @@ onBeforeUnmount(() => {
         <!-- 中间 doc 区＝窗口管理器（铁律二）：多载体共存；所有窗走同一个 PaneWindow。
              浮窗可叠、可拖动缩放；分屏对半贴；收起＝侧缘标签；×＝关窗。 -->
         <div class="nx-window-layer" data-test="window-layer">
-          <p v-if="!openWindows.length" class="center-empty">没有打开的窗口。点竖条上的载体打开它的文档窗。</p>
+          <!-- 图库模板（批次60）：没有左栏也没有缺省文档窗，核心区就是一整面素材卡片墙；
+               窗户仍叠在它上面，点一张卡才开那条记录的素材窗。 -->
+          <MaterialGallery
+            v-if="activeLayoutTemplate === 'gallery'"
+            :board="activeBoard"
+            :data="data"
+            @open="showBoardWindow(activeBoard)"
+          />
+          <p v-else-if="!openWindows.length" class="center-empty">没有打开的窗口。点竖条上的载体打开它的文档窗。</p>
           <PaneWindow
             v-for="win in openWindows"
             :key="win.entry.instance"

@@ -84,7 +84,7 @@ export const KERNEL_WRITE_CLASS = Object.freeze({
  * 协议 v1.1-A（作者 2026-10-28 裁定）把混合板拆成六栏后，落点表本身不变（工具名与目标目录没变），
  * 变的是主人：pinax_outline_save 写「大纲」归 pinax.carrier.outline、pinax_notes_save 写「构思」归
  * pinax.carrier.notes、pinax_worldbook_save 写「世界书」归 pinax.carrier.worldbook；pinax_chapter_save
- * 仍归 pinax.carrier.novel（正文），pinax_rule_save 仍归 pinax.carrier.setting（约束）——dirOutsideOwner
+ * 仍归 pinax.carrier.novel（正文），pinax_rule_save 在批次60 后续归 pinax.carrier.dossier（约束）——dirOutsideOwner
  * 就是这条主人关系的机器核对面。
  */
 export const CARRIER_WRITE_CLASS = Object.freeze({

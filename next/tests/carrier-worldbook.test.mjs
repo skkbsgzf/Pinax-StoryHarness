@@ -16,7 +16,7 @@ import { parseWorldbookEntryFile, serializeWorldbookEntryFile } from '../../shar
 import {
   BUILT_IN_CARRIER_IDS,
   BUILT_IN_CARRIER_PLUGINS,
-  SETTING_CARRIER_ID,
+  DOSSIER_CARRIER_ID,
   WORLDBOOK_CARRIER,
   WORLDBOOK_CARRIER_ID,
   WORLDBOOK_TOOL_NAMES,
@@ -444,7 +444,7 @@ test('一目录一主人：世界书/ 归世界书载体，设定载体写不进
   try {
     const own = await opened.value.fileService.write({ pluginId: WORLDBOOK_CARRIER_ID, dir: '世界书', file: '自己.md', text: 'x', expectedRevision: 0 })
     assert.equal(own.ok, true, JSON.stringify(own.error ?? {}))
-    const foreign = await opened.value.fileService.write({ pluginId: SETTING_CARRIER_ID, dir: '世界书', file: '别人偷写.md', text: 'x', expectedRevision: 0 })
+    const foreign = await opened.value.fileService.write({ pluginId: DOSSIER_CARRIER_ID, dir: '世界书', file: '别人偷写.md', text: 'x', expectedRevision: 0 })
     assert.equal(foreign.ok, false)
     assert.equal(foreign.error.code, NEXT_ERROR_CODES.DIR_CONFLICT)
     const ruleDir = await opened.value.fileService.write({ pluginId: WORLDBOOK_CARRIER_ID, dir: '约束', file: '偷写.md', text: 'x', expectedRevision: 0 })

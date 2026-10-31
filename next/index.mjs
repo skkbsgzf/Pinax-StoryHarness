@@ -34,9 +34,10 @@ export {
   NOVEL_CARRIER,
   NOVEL_CARRIER_ID,
   NOVEL_TOOL_NAMES,
-  SETTING_CARRIER,
-  SETTING_CARRIER_ID,
-  SETTING_TOOL_NAMES,
+  DOSSIER_CARRIER,
+  DOSSIER_CARRIER_ID,
+  DOSSIER_LEGACY_IDS,
+  DOSSIER_TOOL_NAMES,
   readSettingEntries
 } from './carriers/index.mjs'
 export { createAdvisorRunner, ADVISOR_RUNNER_SOURCE } from './runtime/runnerAdvisor.mjs'

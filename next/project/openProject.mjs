@@ -5,6 +5,7 @@ import { PROJECT_SPEC } from '../kernel/projectSkeleton.mjs'
 import { createFileService } from '../fs/fileService.mjs'
 import { buildArchiveView } from './carriers.mjs'
 import { readProjectDocument, writeProjectDocument } from './projectManifest.mjs'
+import { DOSSIER_LEGACY_IDS } from '../carriers/dossier/manifest.mjs'
 
 /**
  * 打开项目（本地优先：项目＝磁盘上的一个文件夹，`.pinax/` 为标记）。
@@ -51,6 +52,14 @@ export async function openProject({ root, registry, deps = {} }) {
     })
   }
 
+  // 批次60：设定／资料合并为一栏。已存项目若还写着旧载体 id（如《大梦》的 enabled 七块），
+  // 在此**只做内存映射**到 pinax.carrier.dossier——不写回 project.json、不动任何目录与文件；
+  // 两个旧 id 同时启用时合并成一条（七块 → 六块）。
+  const migratedCarriers = migrateLegacyCarrierIds(document.value.carriers)
+  if (migratedCarriers !== document.value.carriers) {
+    document.value = { ...document.value, carriers: migratedCarriers }
+  }
+
   const activation = registry.activate(document.value.carriers)
   if (!activation.ok) {
     return fail(activation.error.code, activation.error.message, { ...activation.error.details, root: projectRoot })
@@ -75,4 +84,24 @@ export async function openProject({ root, registry, deps = {} }) {
     archive: archive.value,
     rejectedPlugins: activation.value.rejected
   })
+}
+
+/**
+ * 旧载体 id → 合并后载体的打开期映射（批次60）。只读变换，不落盘：
+ * 返回同一个对象（没有旧 id 时）或一份新的 carriers（primary／enabled 都映射并去重）。
+ * 去重顺序保留原启用顺序——启停 revision 原样带回，下一次真正落盘仍走原乐观并发。
+ */
+function migrateLegacyCarrierIds(carriers) {
+  if (!carriers || typeof carriers !== 'object') return carriers
+  const enabled = Array.isArray(carriers.enabled) ? carriers.enabled : []
+  const mappedEnabled = [...new Set(enabled.map((id) => DOSSIER_LEGACY_IDS[id] ?? id))]
+  const mappedPrimary = carriers.primary ? (DOSSIER_LEGACY_IDS[carriers.primary] ?? carriers.primary) : null
+  if (mappedPrimary === (carriers.primary ?? null) && mappedEnabled.length === enabled.length
+    && mappedEnabled.every((id, index) => id === enabled[index])) {
+    return carriers
+  }
+  // 映射后的主载体必须仍在启用集里（旧文档的 primary 本就在 enabled，映射后自然成立；
+  // 这里兜底防脏数据把 dossier 弄成「未启用的主载体」）。
+  if (mappedPrimary && !mappedEnabled.includes(mappedPrimary)) mappedEnabled.push(mappedPrimary)
+  return { ...carriers, primary: mappedPrimary, enabled: mappedEnabled }
 }

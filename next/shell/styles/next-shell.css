@@ -842,28 +842,32 @@ input.doc-title {
   line-height: var(--writing-line-height, 1.9);
 }
 
-/* —— 世界书看板区（批次44）：上＝图表列，下＝详情信息 ————————————————————
-   作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空，非常别扭，
-   更合理的一个情况是，上面放图表列，下面放详情信息」。
-   所以核心区这一格是竖排两块：上半是图表列（列表／表格／图谱，自己滚），
-   下半是选中条目的详情（自己滚）。两块各占一份高度，谁也不挤谁。 */
+/* —— 世界书看板区（批次44 → 批次60）：左肥右窄，没有左树 —————————————————
+   批次44 作者：「上面放图表列，下面放详情信息」；批次60 工单把同一块板改成
+   左约 2/3 以上的图表区 ＋ 右侧固定宽度的窄条详情（左侧大面积给条目，详情只占一窄条）。
+   web 模板本就没有左树（铁律四），条目与详情都长在核心区这一格里；窄屏再叠回上下两段。 */
 .nx-entries-workspace {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 12px;
   flex: 1 1 auto;
+  min-width: 0;
   min-height: 0;
 }
 .nx-entries-workspace-board {
-  flex: 1 1 45%;
-  min-height: 140px;
+  flex: 1 1 66%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 .nx-entries-workspace-detail {
-  flex: 1 1 55%;
+  flex: 0 0 320px;
+  width: 320px;
   min-height: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--hairline-soft);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -915,6 +919,22 @@ input.doc-title {
     width: 100% !important;
     flex: 0 0 auto;
     height: 52vh;
+  }
+  /* 世界书看板区在窄屏叠回上下两段：左右分栏在手机上会剩不下可读的条目宽度。 */
+  .nx-entries-workspace {
+    flex-direction: column;
+  }
+  .nx-entries-workspace-board {
+    flex: 1 1 55%;
+    min-height: 140px;
+  }
+  .nx-entries-workspace-detail {
+    flex: 0 1 45%;
+    width: auto;
+    padding-left: 0;
+    padding-top: 8px;
+    border-left: 0;
+    border-top: 1px solid var(--hairline-soft);
   }
   .dock {
     border-left: 0;

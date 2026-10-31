@@ -13,12 +13,9 @@ import { createWorldbookBlocks, readWorldbookEntries } from './worldbook/context
 import { SCRIPT_CARRIER, SCRIPT_CARRIER_ID } from './script/manifest.mjs'
 import { SCRIPT_TOOL_NAMES, createScriptTools } from './script/tools.mjs'
 import { createScriptBlocks } from './script/context.mjs'
-import { SETTING_CARRIER, SETTING_CARRIER_ID } from './setting/manifest.mjs'
-import { SETTING_TOOL_NAMES, createSettingTools } from './setting/tools.mjs'
-import { createSettingBlocks } from './setting/context.mjs'
-import { REFERENCE_CARRIER, REFERENCE_CARRIER_ID } from './reference/manifest.mjs'
-import { REFERENCE_TOOL_NAMES, createReferenceTools } from './reference/tools.mjs'
-import { createReferenceBlocks } from './reference/context.mjs'
+import { DOSSIER_CARRIER, DOSSIER_CARRIER_ID, DOSSIER_LEGACY_IDS } from './dossier/manifest.mjs'
+import { DOSSIER_TOOL_NAMES, createDossierTools } from './dossier/tools.mjs'
+import { createDossierBlocks } from './dossier/context.mjs'
 import { MATERIAL_CARRIER, MATERIAL_CARRIER_ID } from './material/manifest.mjs'
 import { MATERIAL_TOOL_NAMES, createMaterialTools } from './material/tools.mjs'
 import { COMIC_CARRIER, COMIC_CARRIER_ID } from './comic/manifest.mjs'
@@ -32,7 +29,7 @@ import { ONLINE_CARRIER, ONLINE_CARRIER_ID } from './online/manifest.mjs'
 import { ONLINE_TOOL_NAMES, createOnlineTools } from './online/tools.mjs'
 
 /**
- * 随框架发布的载体清单（M2 起；协议 v1.1-A 起是六块）。
+ * 随框架发布的载体清单（M2 起；批次60 起十一块：设定／资料合并为「设定与资料」）。
  * M1 的口径是「carriers/ 目录为空，任何插件都不随框架发布」；M2 第一批放进两块：
  * 小说（正文/大纲/构思）与设定（世界书/约束）。
  * 工单G1 加第三块：资料（资料/，三把自有工具）——它补的是「资料/ 在骨架里却没人认领」的缺口；
@@ -42,9 +39,8 @@ import { ONLINE_TOOL_NAMES, createOnlineTools } from './online/tools.mjs'
  *   notes      构思/（构思清单）
  *   worldbook  世界书/（条目树）
  *   script     剧本/（剧本篇目；批次26 M6 提前，排在 worldbook 之后）
- *   setting    约束/（约束清单）
- *   reference  资料/（资料清单）
- * 竖条顺序即注册顺序（v1.1-A：v1 按注册顺序＝小说/大纲/构思/世界书/剧本/设定/资料）。
+ *   dossier    资料/ ＋ 约束/（批次60 由设定／资料两块合并而来，工具与能力面取并集）
+ * 竖条顺序即注册顺序（v1.1-A：v1 按注册顺序＝小说/大纲/构思/世界书/剧本/设定与资料）。
  * 批次40 起再排五栏（M4／M5）：素材／漫画／视频／体验／联机——它们都是记录型载体
  * （一份 `<目录>/<载体>.json` ＋ list/read/save/remove 四把工具），数据落点见 jsonRecords.mjs。
  * 每个包＝一份清单 ＋ 一个 impl，impl 只有两个可选工厂：
@@ -58,8 +54,7 @@ export const OUTLINE_CARRIER_TRUST = 't1'
 export const NOTES_CARRIER_TRUST = 't1'
 export const WORLDBOOK_CARRIER_TRUST = 't1'
 export const SCRIPT_CARRIER_TRUST = 't1'
-export const SETTING_CARRIER_TRUST = 't1'
-export const REFERENCE_CARRIER_TRUST = 't1'
+export const DOSSIER_CARRIER_TRUST = 't1'
 export const MATERIAL_CARRIER_TRUST = 't1'
 export const COMIC_CARRIER_TRUST = 't1'
 export const VIDEO_CARRIER_TRUST = 't1'
@@ -143,31 +138,17 @@ export function scriptCarrierPlugin() {
   }
 }
 
-export function settingCarrierPlugin() {
+export function dossierCarrierPlugin() {
   return {
-    manifest: SETTING_CARRIER,
+    manifest: DOSSIER_CARRIER,
     impl: {
-      source: 'next/carriers/setting',
-      // 约束这一对（pinax_rule_list / pinax_rule_save）＋两个上下文块提供者（rules/style）。
-      // 世界书三把随协议 v1.1-A 迁去 worldbook 载体。
-      tools: (context = {}) => createSettingTools({ ...context, pluginId: context.pluginId ?? SETTING_CARRIER_ID }),
-      blocks: (context = {}) => createSettingBlocks({ ...context, pluginId: context.pluginId ?? SETTING_CARRIER_ID })
+      source: 'next/carriers/dossier',
+      // 批次60：设定与资料合并成一栏。六把工具沿用原名单（约束对＋资料三把＋检索），
+      // 上下文块也是三块并集（rules/style/references）——Agent 面与信封面都不因形体重排而缩水。
+      tools: (context = {}) => createDossierTools({ ...context, pluginId: context.pluginId ?? DOSSIER_CARRIER_ID }),
+      blocks: (context = {}) => createDossierBlocks({ ...context, pluginId: context.pluginId ?? DOSSIER_CARRIER_ID })
     },
-    meta: { trust: SETTING_CARRIER_TRUST, source: 'next/carriers/setting', dir: carrierDir('setting') }
-  }
-}
-
-export function referenceCarrierPlugin() {
-  return {
-    manifest: REFERENCE_CARRIER,
-    impl: {
-      source: 'next/carriers/reference',
-      // 三把自有工具（列／读／写）＋一把检索（H2）＋一个上下文块提供者：资料/ 的权限由这块板块自己申请，
-      // 运行时不越过去开文件（与小说／设定同一条规矩）。
-      tools: (context = {}) => createReferenceTools({ ...context, pluginId: context.pluginId ?? REFERENCE_CARRIER_ID }),
-      blocks: (context = {}) => createReferenceBlocks({ ...context, pluginId: context.pluginId ?? REFERENCE_CARRIER_ID })
-    },
-    meta: { trust: REFERENCE_CARRIER_TRUST, source: 'next/carriers/reference', dir: carrierDir('reference') }
+    meta: { trust: DOSSIER_CARRIER_TRUST, source: 'next/carriers/dossier', dir: carrierDir('dossier') }
   }
 }
 
@@ -213,15 +194,17 @@ export function onlineCarrierPlugin() {
   return recordsCarrierPlugin(ONLINE_CARRIER, createOnlineTools, ONLINE_CARRIER_TRUST, 'next/carriers/online')
 }
 
-/** 竖条顺序＝注册顺序（协议 v1.1-A；批次26 起剧本排在 worldbook 之后；批次40 起 M4／M5 五栏排在最后）。 */
+/**
+ * 竖条顺序＝注册顺序（协议 v1.1-A；批次26 起剧本排在 worldbook 之后；批次40 起 M4／M5 五栏排在最后）。
+ * 批次60：设定／资料两块合并为「设定与资料」一栏（12 → 11），位置沿用原来的设定格。
+ */
 export const BUILT_IN_CARRIER_PLUGINS = Object.freeze([
   novelCarrierPlugin(),
   outlineCarrierPlugin(),
   notesCarrierPlugin(),
   worldbookCarrierPlugin(),
   scriptCarrierPlugin(),
-  settingCarrierPlugin(),
-  referenceCarrierPlugin(),
+  dossierCarrierPlugin(),
   materialCarrierPlugin(),
   comicCarrierPlugin(),
   videoCarrierPlugin(),
@@ -237,8 +220,7 @@ export const BUILT_IN_CLAIMED_TOOLS = Object.freeze([
   ...NOTES_TOOL_NAMES,
   ...WORLDBOOK_TOOL_NAMES,
   ...SCRIPT_TOOL_NAMES,
-  ...SETTING_TOOL_NAMES,
-  ...REFERENCE_TOOL_NAMES,
+  ...DOSSIER_TOOL_NAMES,
   ...MATERIAL_TOOL_NAMES,
   ...COMIC_TOOL_NAMES,
   ...VIDEO_TOOL_NAMES,
@@ -272,16 +254,12 @@ export {
   SCRIPT_TOOL_NAMES,
   createScriptTools,
   createScriptBlocks,
-  SETTING_CARRIER,
-  SETTING_CARRIER_ID,
-  SETTING_TOOL_NAMES,
-  createSettingTools,
-  createSettingBlocks,
-  REFERENCE_CARRIER,
-  REFERENCE_CARRIER_ID,
-  REFERENCE_TOOL_NAMES,
-  createReferenceTools,
-  createReferenceBlocks,
+  DOSSIER_CARRIER,
+  DOSSIER_CARRIER_ID,
+  DOSSIER_LEGACY_IDS,
+  DOSSIER_TOOL_NAMES,
+  createDossierTools,
+  createDossierBlocks,
   MATERIAL_CARRIER,
   MATERIAL_CARRIER_ID,
   MATERIAL_TOOL_NAMES,

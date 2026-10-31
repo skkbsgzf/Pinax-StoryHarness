@@ -12,7 +12,7 @@ import {
   BUILT_IN_CARRIER_PLUGINS,
   NOVEL_CARRIER_ID,
   OUTLINE_CARRIER_ID,
-  SETTING_CARRIER_ID,
+  DOSSIER_CARRIER_ID,
   WORLDBOOK_CARRIER_ID
 } from '../carriers/index.mjs'
 import { parseSkillMarkdown, loadSkills, skillCatalogLines, DEFAULT_SKILLS_DIR } from '../skills/loadSkills.mjs'
@@ -146,7 +146,7 @@ async function skillProject(label) {
     name: '技能靶子',
     primaryCarrier: NOVEL_CARRIER_ID,
     registry,
-    extraEnabled: [OUTLINE_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID]
+    extraEnabled: [OUTLINE_CARRIER_ID, WORLDBOOK_CARRIER_ID, DOSSIER_CARRIER_ID]
   })
   assert.equal(created.ok, true, JSON.stringify(created.error ?? {}))
   const opened = await openProject({ root, registry })

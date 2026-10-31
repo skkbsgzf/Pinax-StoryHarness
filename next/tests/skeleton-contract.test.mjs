@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { PROJECT_KINDS, validateRelativePath } from '../kernel/projectSkeleton.mjs'
 import { CAPABILITY_IDS } from '../kernel/capabilities.vocab.mjs'
 import { kernelToolNames } from '../runtime/mcpSurface.mjs'
-import { NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER } from '../carriers/index.mjs'
+import { NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER } from '../carriers/index.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
@@ -79,19 +79,19 @@ const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze([
  */
 const CARRIER_EXTENSION_DIRS = Object.freeze(['素材', '漫画', '视频', '体验', '联机'])
 
-test('M2 口径：next/carriers 发布十二块载体，目录不重叠且落在中文骨架并集或载体扩展目录里', async () => {
+test('M2 口径：next/carriers 发布十一块载体，目录不重叠且落在中文骨架并集或载体扩展目录里', async () => {
   const carriersDir = join(repoRoot, 'next', 'carriers')
   const entries = await readdir(carriersDir)
   const stray = entries.filter((name) => name.endsWith('.carrier.json') || name === 'manifests.json')
   assert.deepEqual(stray, [], '清单只允许写在 manifest.mjs 里过校验器，散落 JSON 会绕过 C1–C8')
   const published = entries.filter((name) => !name.startsWith('.'))
   assert.deepEqual(published.filter((name) => name.endsWith('.mjs')).sort(), ['index.mjs', 'jsonRecords.mjs'], '顶层只允许注册表与共用记录底座（jsonRecords 不含清单，清单仍写在各自 manifest.mjs）')
-  assert.deepEqual(published.filter((name) => !name.includes('.')).sort(), ['comic', 'experience', 'material', 'notes', 'novel', 'online', 'outline', 'reference', 'script', 'setting', 'video', 'worldbook'], '协议 v1.1-A ＋ 批次26 ＋ 批次40：十二块载体各占一栏')
+  assert.deepEqual(published.filter((name) => !name.includes('.')).sort(), ['comic', 'dossier', 'experience', 'material', 'notes', 'novel', 'online', 'outline', 'script', 'video', 'worldbook'], '批次60：设定与资料合并为 dossier，十一块载体各占一栏')
 
   const kernel = new Set(kernelToolNames())
   const skeletonUnion = new Set(Object.values(PROJECT_KINDS).flat())
   const dirs = new Set()
-  for (const manifest of [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER]) {
+  for (const manifest of [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER]) {
     for (const dir of Object.values(manifest.dataDirs)) {
       assert.equal(skeletonUnion.has(dir) || CARRIER_EXTENSION_DIRS.includes(dir), true, `${manifest.id} 的目录「${dir}」不在固化骨架里，也没进载体扩展目录名单`)
       assert.equal(dirs.has(dir), false, `目录「${dir}」被两块板块同时认领（C3 一目录一主人）`)
@@ -119,7 +119,7 @@ test('M2 口径：next/carriers 发布十二块载体，目录不重叠且落在
   }
   // 自有工具（内核没有的新名字）逐条点名：新增必须在这里留名，防止有人偷偷扩面。
   // 协议 v1.1-A 拆栏不新增工具名，只是把它们分给不同的主人。
-  const own = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, SETTING_CARRIER, REFERENCE_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
+  const own = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
   assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：十栏旧工具＋批次46A 删／改名两把＋批次40 五块记录载体的二十把（列／读／写／删）')
 })
 

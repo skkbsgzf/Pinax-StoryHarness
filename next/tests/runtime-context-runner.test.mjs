@@ -8,7 +8,7 @@ import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, SETTING_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, DOSSIER_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { AGENT_CONTEXT_PROFILES } from '../../shared/agentContextProfiles.js'
 import { validateAgentContextEnvelope } from '../../shared/agentContextContract.js'
 import { buildRuntimeEnvelope, readOnlyProfiles, readOnlyTaskForProfile } from '../runtime/contextProfiles.mjs'
@@ -31,7 +31,7 @@ import { createTempWorkspace } from '../testing/harness.mjs'
 const CHAPTER_TEXT = '# 第一章 入场\n\n他醒来时，雪已经埋了半条街。'
 const OUTLINE_JSON = JSON.stringify({ nodes: [{ id: 'n1', title: '开场', summary: '雪夜醒来' }], edges: [] }, null, 2)
 
-async function materialProject(label, { extraEnabled = [OUTLINE_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID], fill = true, chapterChars = null, bigRules = 0 } = {}) {
+async function materialProject(label, { extraEnabled = [OUTLINE_CARRIER_ID, WORLDBOOK_CARRIER_ID, DOSSIER_CARRIER_ID], fill = true, chapterChars = null, bigRules = 0 } = {}) {
   const workspace = await createTempWorkspace(label)
   const root = join(workspace.projects, '上下文靶子')
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })

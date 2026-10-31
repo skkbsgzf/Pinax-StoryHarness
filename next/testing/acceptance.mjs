@@ -19,7 +19,7 @@ import { createProject, initBareProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { buildRuntimeEnvelope } from '../runtime/contextProfiles.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, COMIC_CARRIER_ID, EXPERIENCE_CARRIER_ID, MATERIAL_CARRIER_ID, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, ONLINE_CARRIER_ID, OUTLINE_CARRIER_ID, REFERENCE_CARRIER_ID, SCRIPT_CARRIER_ID, SETTING_CARRIER_ID, VIDEO_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_PLUGINS, COMIC_CARRIER_ID, DOSSIER_CARRIER_ID, EXPERIENCE_CARRIER_ID, MATERIAL_CARRIER_ID, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, ONLINE_CARRIER_ID, OUTLINE_CARRIER_ID, SCRIPT_CARRIER_ID, VIDEO_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { FIXTURE_NOVEL } from './fixtures.mjs'
 import { probePort } from './harness.mjs'
 
@@ -127,8 +127,8 @@ try {
   const carrierRoot = join(workspace, 'projects', '真载体靶子')
   const carrierRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) carrierRegistry.install(plugin.manifest, plugin.impl, plugin.meta)
-  const carrierMade = await createProject({ root: carrierRoot, name: '真载体靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: carrierRegistry, extraEnabled: [OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, WORLDBOOK_CARRIER_ID, SETTING_CARRIER_ID, REFERENCE_CARRIER_ID, SCRIPT_CARRIER_ID] })
-  record('M2 建项目：主载体小说＋伴生五栏（大纲/构思/世界书/设定/资料），骨架目录全落盘',
+  const carrierMade = await createProject({ root: carrierRoot, name: '真载体靶子', primaryCarrier: NOVEL_CARRIER_ID, registry: carrierRegistry, extraEnabled: [OUTLINE_CARRIER_ID, NOTES_CARRIER_ID, WORLDBOOK_CARRIER_ID, DOSSIER_CARRIER_ID, SCRIPT_CARRIER_ID] })
+  record('M2 建项目：主载体小说＋伴生五栏（大纲/构思/世界书/设定与资料/剧本），骨架目录全落盘',
     carrierMade.ok === true && (await readdir(carrierRoot)).includes('世界书') && (await readdir(carrierRoot)).includes('资料') && (await readdir(carrierRoot)).includes('大纲') && (await readdir(carrierRoot)).includes('构思'),
     carrierMade.ok ? '' : String(carrierMade.error?.message || ''))
 
@@ -142,7 +142,7 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：19 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 七载体声明＝40，其中 24 个名字由载体服务（5 接管＋19 自有），端口仍为 0（v1.1-A 拆栏不新增工具名：小说 正文写口＋删／改两把＋提案三把；大纲写半边；构思这对；世界书写口；约束这对；资料三把＋检索；剧本三把。批次46A：章节删除／重命名进面。批次49：pinax_service_log_list 进原生面 +1）',
+  record('M2 聚合工具面：19 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 六载体声明＝40，其中 24 个名字由载体服务（5 接管＋19 自有），端口仍为 0（v1.1-A 拆栏不新增工具名：小说 正文写口＋删／改两把＋提案三把；大纲写半边；构思这对；世界书写口；设定与资料六把（约束这对＋资料三把＋检索）；剧本三把。批次46A：章节删除／重命名进面。批次49：pinax_service_log_list 进原生面 +1）',
     carrierStarted.ok === true
       && carrierStarted.value.toolCount === 40
       && carrierStarted.value.carrierTools === 24
@@ -201,7 +201,7 @@ try {
     worldbookList.value.payload.ok === true && worldbookList.value.payload.total === 1
       && worldbookList.value.owner === WORLDBOOK_CARRIER_ID
       && ruleList.value.payload.ok === true && ruleList.value.payload.total === 2
-      && ruleList.value.owner === SETTING_CARRIER_ID
+      && ruleList.value.owner === DOSSIER_CARRIER_ID
       && ruleList.value.payload.rules.every((rule) => typeof rule.text === 'string' && rule.text.length > 0)
       && ruleSaved.value.payload.ok === true && ruleSaved.value.payload.revision === 2
       && !rulesOnDisk.includes('载体想偷写.md')
@@ -351,15 +351,15 @@ try {
     (await probePort(previewPort)) === false,
     `port=${previewPort}`)
 
-  // ── 批次52：@4 合同收口与 services.adopt（批次53：12 份清单已全部升 @4）────────────────
+  // ── 批次52：@4 合同收口与 services.adopt（批次53：12 份清单已升 @4；批次60 合并后 11 份）─────
   // @4 校验器升级（合同上界改 major.minor、四组新字段）不许回头咬既有载体：
-  // 12 份清单统一写 @4 / minKernel:'1'，全部必须原样通过。这是回归闸，不是新功能计数。
+  // 11 份清单统一写 @4 / minKernel:'1'，全部必须原样通过。这是回归闸，不是新功能计数。
   const v4Regressions = BUILT_IN_CARRIER_PLUGINS
     .map((plugin) => ({ id: plugin.manifest.id, spec: plugin.manifest.spec, result: validateCarrierManifest(plugin.manifest) }))
     .filter((entry) => entry.spec !== 'pinax-carrier@4' || !entry.result.ok)
-  record('批次53 @4 落地：12 份载体清单全部 spec=@4 / minKernel:1 并通过校验器，零误拒',
-    BUILT_IN_CARRIER_PLUGINS.length === 12 && v4Regressions.length === 0,
-    v4Regressions.length ? v4Regressions.map((entry) => `${entry.id}:${entry.spec}:${entry.result.error?.code}`).join(',') : '12/12')
+  record('批次53 @4 落地（批次60 合并后 11 份）：载体清单全部 spec=@4 / minKernel:1 并通过校验器，零误拒',
+    BUILT_IN_CARRIER_PLUGINS.length === 11 && v4Regressions.length === 0,
+    v4Regressions.length ? v4Regressions.map((entry) => `${entry.id}:${entry.spec}:${entry.result.error?.code}`).join(',') : `${BUILT_IN_CARRIER_PLUGINS.length}/${BUILT_IN_CARRIER_PLUGINS.length}`)
 
   // adopt 服务的正身（批次58 三独立体端口管理）：宿主只探活／状态灯／池记账，绝不 spawn。
   // 这里注入探针，锁住「start 会成功、pid 为空、spawnImpl 从未被调用」；真端口探活由
@@ -486,12 +486,12 @@ try {
     `state=${doctorReport.state} port=${portSourceCheck?.services?.[0]?.port}/${portSourceCheck?.services?.[0]?.portSource}`)
 
   // ── 批次56：工具输出契约（路线图 ①档：只定义合同＋透出，返回体不校验）────────────
-  // 存量记账：十二块内置载体共 44 把工具全部还没声明 output——本批不值得动存量清单，
+  // 存量记账：批次60 合并后十一块内置载体仍共 44 把工具，全部还没声明 output——本批不值得动存量清单，
   // 但条数要在门禁里当场核（兼容断言：没声明的照装，归一结果不出 toolOutputs 键）。
   const outputLegacy = BUILT_IN_CARRIER_PLUGINS.map((plugin) => validateCarrierManifest(plugin.manifest))
   const legacyToolCount = outputLegacy.reduce((sum, result) => sum + (result.ok ? result.value.tools.length : 0), 0)
   const legacyDeclared = outputLegacy.filter((result) => result.ok && result.value.toolOutputs).length
-  record('批次56 输出契约兼容：12 份清单全部照装、44 把工具零 output 声明（归一结果不出 toolOutputs 键）',
+  record('批次56 输出契约兼容（批次60 后 11 份清单）：全部照装、44 把工具零 output 声明（归一结果不出 toolOutputs 键）',
     outputLegacy.every((result) => result.ok) && legacyToolCount === 44 && legacyDeclared === 0,
     `工具=${legacyToolCount} 已声明=${legacyDeclared}`)
 

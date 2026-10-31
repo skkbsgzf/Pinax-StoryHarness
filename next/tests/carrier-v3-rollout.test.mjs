@@ -57,8 +57,8 @@ function assertWorldBookKind(pane) {
   return false
 }
 
-test('十二块载体全部升到 @4：spec／manifestVersion／四张牌齐，pane 自声明 view 与 kind', () => {
-  assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 12, '十二块内置载体（v1.1-A 七块 ＋ M4／M5 五块）')
+test('十一块载体全部升到 @4：spec／manifestVersion／四张牌齐，pane 自声明 view 与 kind', () => {
+  assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 11, '十一块内置载体（批次60 合并后：文档面六块 ＋ M4／M5 五块）')
   const customPanes = []
   const appPanes = []
 
@@ -167,7 +167,7 @@ test('须知随载体一起装进注册表：启用集里每块都有自己那�
   assert.equal(activation.ok, true, JSON.stringify(activation.error ?? {}))
 
   const agents = activation.value.agents
-  assert.equal(agents.length, 12, '十二块载体各带一份作者须知入口')
+  assert.equal(agents.length, 11, '十一块载体各带一份作者须知入口')
   for (const agent of agents) {
     assert.equal(agent.path, 'AGENT.md')
     assert.ok(registry.dirOf(agent.pluginId), `${agent.pluginId}：宿主没登记它的插件目录，须知读不出来`)
@@ -185,7 +185,7 @@ test('须知真的会进上下文信封：block 的来源指得到那份文件',
 
   const collected = await collectAgentMdBlocks({ registry, view })
   assert.equal(collected.warnings.length, 0, `须知读取有记账：${collected.warnings.join(' / ')}`)
-  assert.equal(collected.blocks.length, 12, '十二块载体的须知都读到了')
+  assert.equal(collected.blocks.length, 11, '十一块载体的须知都读到了')
   for (const block of collected.blocks) {
     assert.equal(block.kind, 'agent-md')
     assert.equal(block.priority, 1100, '须知排在内容块前面（它是「怎么读这块内容」）')

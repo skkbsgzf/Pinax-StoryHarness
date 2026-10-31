@@ -35,7 +35,7 @@ import { FIXTURE_V4 } from '../testing/fixtures/carrierV4.mjs'
  *
  * 三条纪律在这里逐条落成断言：
  *   · 新增字段只对 @4 生效；老清单写新字段必须拒（V4_ONLY_FIELDS／V4_ONLY_TOP_FIELDS／V4_ONLY_SERVICE_FIELDS）。
- *   · 12 份现有清单零误拒——收紧 major.minor 与新增必填项不许回头咬老载体。
+ *   · 11 份现有清单零误拒——收紧 major.minor 与新增必填项不许回头咬老载体。
  *   · 每个新字段都要有宿主读取点：诊断把槽语义、认领、preview、license、adopt 摊开，读不到就是死字段。
  */
 
@@ -90,8 +90,8 @@ test('@4 进 SUPPORTED_CARRIER_SPECS，CARRIER_SPEC 指向 @4，@1/@2/@3 仍可�
   assert.equal(v3.ok, true, JSON.stringify(v3.error ?? {}))
 })
 
-test('12 份现有载体清单零误拒：校验器与注册表都照旧收下（major.minor 收紧不咬老清单）', () => {
-  assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 12)
+test('11 份现有载体清单零误拒（批次60 合并后）：校验器与注册表都照旧收下（major.minor 收紧不咬老清单）', () => {
+  assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 11)
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
     const validated = validateCarrierManifest(plugin.manifest)
@@ -100,7 +100,7 @@ test('12 份现有载体清单零误拒：校验器与注册表都照旧收下�
     assert.equal(installed.ok, true, `${plugin.manifest.id}: ${installed.error?.message}`)
   }
   assert.equal(registry.rejected.length, 0, JSON.stringify(registry.rejected))
-  assert.equal(registry.manifests().size, 12)
+  assert.equal(registry.manifests().size, 11)
 
   // 老清单的归一结果不多出新字段（读侧字节不变）：@3 的 pane 没有 multiplicity／claims 的默认键。
   const novel = validateCarrierManifest(downgradeToV3(NOVEL_CARRIER))

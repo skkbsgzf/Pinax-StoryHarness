@@ -23,8 +23,7 @@ function carrierCarriers() {
     { id: 'pinax.carrier.notes', title: '构思', isPrimary: false, isEnabled: true, dataDirs: ['构思'], scopes: ['file:构思:rw', 'agent:ask'], tools: ['pinax_notes_list', 'pinax_notes_save'], context: { providers: [], budgetChars: 20000 }, capabilities: ['notes.ideas'], panes: [{ slot: 'left-dock', id: 'notes.list', title: '构思清单' }, { slot: 'center', id: 'notes.editor', title: '构思编辑' }] },
     { id: 'pinax.carrier.worldbook', title: '世界书', isPrimary: false, isEnabled: true, dataDirs: ['世界书'], scopes: ['file:世界书:rw', 'agent:ask'], tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'], context: { providers: ['worldbook'], budgetChars: 20000 }, capabilities: ['setting.entries'], panes: [{ slot: 'left-dock', id: 'worldbook.board', title: '世界书板', view: 'pinax.view.tree', kind: 'entries-categories' }, { slot: 'center', id: 'worldbook.entries', title: '条目', view: 'pinax.view.board', kind: 'entries-workspace' }] },
     { id: 'pinax.carrier.script', title: '剧本', isPrimary: false, isEnabled: true, dataDirs: ['剧本'], scopes: ['file:剧本:rw', 'agent:ask'], tools: ['pinax_script_list', 'pinax_script_read', 'pinax_script_save'], context: { providers: ['script', 'references'], budgetChars: 12000 }, capabilities: ['script.scenes'], panes: [{ slot: 'left-dock', id: 'script.board', title: '剧本板' }, { slot: 'center', id: 'script.editor', title: '剧本' }] },
-    { id: 'pinax.carrier.setting', title: '设定', isPrimary: false, isEnabled: true, dataDirs: ['约束'], scopes: ['file:约束:rw', 'agent:ask'], tools: ['pinax_rule_list', 'pinax_rule_save'], context: { providers: ['rules', 'style'], budgetChars: 20000 }, capabilities: ['constraint.rules'], panes: [{ slot: 'left-dock', id: 'setting.board', title: '设定板' }, { slot: 'center', id: 'setting.rules', title: '约束' }] },
-    { id: 'pinax.carrier.reference', title: '资料', isPrimary: false, isEnabled: true, dataDirs: ['资料'], scopes: ['file:资料:rw', 'agent:ask'], tools: ['pinax_document_list', 'pinax_document_read', 'pinax_document_save'], context: { providers: ['references'], budgetChars: 12000 }, capabilities: ['reference.documents'], panes: [{ slot: 'left-dock', id: 'reference.board', title: '资料板' }, { slot: 'center', id: 'reference.documents', title: '资料' }] }
+    { id: 'pinax.carrier.dossier', title: '设定与资料', isPrimary: false, isEnabled: true, dataDirs: ['资料', '约束'], scopes: ['file:资料:rw', 'file:约束:rw', 'agent:ask'], tools: ['pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'], context: { providers: ['rules', 'style', 'references'], budgetChars: 20000 }, capabilities: ['constraint.rules', 'dossier.editor'], panes: [{ slot: 'left-dock', id: 'dossier.board', title: '设定与资料板' }, { slot: 'center', id: 'dossier.editor', title: '设定与资料' }] }
   ]
 }
 
@@ -43,7 +42,7 @@ const PROPOSAL = {
   createdAt: '2026-10-28T14:00:00'
 }
 
-function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐口滴下来。', chapterTruncated = false, outlineMissing = false, outlineEdges = null, outlineNodes = null, notes = [], proposals = [], rules = [], documents = [], scripts = [], entries = null } = {}) {
+function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐口滴下来。', chapterTruncated = false, outlineMissing = false, outlineEdges = null, outlineNodes = null, notes = [], proposals = [], rules = [], documents = [], scripts = [], materials = [], entries = null } = {}) {
   const state = {
     revision: 1,
     text: chapterText,
@@ -61,6 +60,7 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
     rules: rules.map((item) => ({ ...item })),
     documents: documents.map((item) => ({ ...item })),
     scripts: scripts.map((item) => ({ ...item })),
+    materials: materials.map((item) => ({ ...item })),
     entries: entries ?? [
       { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true, summary: '雪夜醒来的主角，袖中有一枚停摆的表。' },
       { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
@@ -130,19 +130,19 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
         }
         return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.novel', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
       }
-      if (payload.tool === 'pinax_worldbook_list') return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, total: state.entries.length, truncated: false, warnings: ['1 个世界书文件不符合文件契约（无 frontmatter 或缺 id），按整篇正文收录。'], skippedDirs: ['世界书/伏笔'], entries: state.entries } } }
+      if (payload.tool === 'pinax_worldbook_list') return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, total: state.entries.length, truncated: false, warnings: ['1 个世界书文件不符合文件契约（无 frontmatter 或缺 id），按整篇正文收录。'], skippedDirs: ['世界书/伏笔'], entries: state.entries } } }
       if (payload.tool === 'pinax_worldbook_read') {
         // 批次34：索引窗按 path 打开条目（同一名字可住在两个类别目录里）。
         const hit = state.entries.find((item) => (payload.args.path && item.path === payload.args.path) || (item.id && item.id === payload.args.id) || (payload.args.name && (item.name === payload.args.name || item.name.includes(payload.args.name))))
-        if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「世界书/」里没有 查无此人' } } }
+        if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '「世界书/」里没有 查无此人' } } }
         const content = hit.savedText ?? hit.content ?? (hit.name === '随手记' ? '一些还没整理的设定碎句。' : '冷穿越剧版主角，醒来在雪夜。')
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, entry: { ...hit, relations: Array.isArray(hit.relations) ? hit.relations : [], keys: hit.aliases ?? hit.keys ?? [], content, contentChars: content.length, contentTruncated: false }, warnings: hit.contract ? [] : ['条目「随手记」未按世界书文件契约建档（未找到 frontmatter），返回的是整篇正文。'] } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, entry: { ...hit, relations: Array.isArray(hit.relations) ? hit.relations : [], keys: hit.aliases ?? hit.keys ?? [], content, contentChars: content.length, contentTruncated: false }, warnings: hit.contract ? [] : ['条目「随手记」未按世界书文件契约建档（未找到 frontmatter），返回的是整篇正文。'] } } }
       }
       if (payload.tool === 'pinax_worldbook_save') {
         const hit = state.entries.find((item) => item.path === payload.args.path)
         const actual = hit?.revision ?? 0
         if (!hit || payload.args.expectedRevision !== actual) {
-          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${payload.args.path}」已被改动（第 ${actual} 版）`, details: { actual } } } }
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${payload.args.path}」已被改动（第 ${actual} 版）`, details: { actual } } } }
         }
         hit.revision += 1
         hit.savedText = payload.args.text
@@ -152,18 +152,18 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
           if (Array.isArray(payload.args.meta.tags)) hit.tags = payload.args.meta.tags
           if (typeof payload.args.meta.summary === 'string') hit.summary = payload.args.meta.summary
         }
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, file: hit.path, revision: hit.revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, file: hit.path, revision: hit.revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
       }
       if (payload.tool === 'pinax_rule_list') {
         // 工单E2：与真工具同一形状——列表把全文随手带回（判据：点开不再发第二次读）。
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, total: state.rules.length, truncated: false, projectRoot: 'D:/tmp/大梦', rules: state.rules } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: true, total: state.rules.length, truncated: false, projectRoot: 'D:/tmp/大梦', rules: state.rules } } }
       }
       if (payload.tool === 'pinax_rule_save') {
         const file = payload.args.file ?? `约束/${payload.args.title}.md`
         const hit = state.rules.find((item) => item.file === file)
         const actual = hit?.revision ?? 0
         if (stale || payload.args.expectedRevision !== actual) {
-          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${file}」已被改动（第 ${actual} 版）`, details: { actual } } } }
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${file}」已被改动（第 ${actual} 版）`, details: { actual } } } }
         }
         const revision = actual + 1
         if (hit) {
@@ -174,23 +174,23 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
         } else {
           state.rules.push({ index: state.rules.length, title: String(payload.args.title ?? '').replace(/\.md$/iu, ''), file, name: `${payload.args.title}.md`, revision, text: payload.args.text, totalChars: payload.args.text.length, truncated: false })
         }
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.setting', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
       }
       if (payload.tool === 'pinax_document_list') {
         // 工单G1：与真工具同一形状——列表把正文随手带回（判据：点开只再发一次 read 取全文）。
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.reference', payload: { ok: true, total: state.documents.length, truncated: false, documents: state.documents } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: true, total: state.documents.length, truncated: false, documents: state.documents } } }
       }
       if (payload.tool === 'pinax_document_read') {
         const hit = state.documents.find((item) => item.file === payload.args.file || (payload.args.index !== undefined && item.index === payload.args.index))
-        if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.reference', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: `找不到资料：${payload.args.file ?? payload.args.index}` } } }
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.reference', payload: { ok: true, document: { index: hit.index, title: hit.title, file: hit.file, name: hit.name, revision: hit.revision }, text: hit.text, maxChars: payload.args.maxChars ?? 50_000, totalChars: hit.totalChars, truncated: false, revision: hit.revision } } }
+        if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: `找不到资料：${payload.args.file ?? payload.args.index}` } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: true, document: { index: hit.index, title: hit.title, file: hit.file, name: hit.name, revision: hit.revision }, text: hit.text, maxChars: payload.args.maxChars ?? 50_000, totalChars: hit.totalChars, truncated: false, revision: hit.revision } } }
       }
       if (payload.tool === 'pinax_document_save') {
         const file = payload.args.file ?? `资料/${payload.args.title}.md`
         const hit = state.documents.find((item) => item.file === file)
         const actual = hit?.revision ?? 0
         if (stale || payload.args.expectedRevision !== actual) {
-          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.reference', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${file}」已被改动（第 ${actual} 版）`, details: { actual } } } }
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: `「${file}」已被改动（第 ${actual} 版）`, details: { actual } } } }
         }
         const revision = actual + 1
         if (hit) {
@@ -201,7 +201,7 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
         } else {
           state.documents.push({ index: state.documents.length, title: String(payload.args.title ?? '').replace(/\.(?:md|txt)$/iu, ''), file, name: file.split('/').pop(), revision, text: payload.args.text, totalChars: payload.args.text.length, truncated: false })
         }
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.reference', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.dossier', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
       }
       if (payload.tool === 'pinax_script_list') {
         // 批次26：与真工具同一形状（剧本篇目＋正文随手带回）。
@@ -229,6 +229,15 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
           state.scripts.push({ index: state.scripts.length, title: String(payload.args.title ?? '').replace(/\.md$/iu, ''), file, name: file.split('/').pop(), revision, text: payload.args.text, totalChars: payload.args.text.length, truncated: false })
         }
         return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.script', payload: { ok: true, file, revision, created: payload.args.expectedRevision === 0, bytes: payload.args.text.length } } }
+      }
+      if (payload.tool === 'pinax_material_list') {
+        // 批次60：素材改图库模板后，卡片墙仍走同一条 list（limit 500，syncCurrent:false）。
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: 1, total: state.materials.length, records: state.materials, truncated: false } } }
+      }
+      if (payload.tool === 'pinax_material_read') {
+        const hit = state.materials.find((item) => item.id === payload.args.id)
+        if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: `「素材/素材.json」里没有 id=${payload.args.id} 的记录` } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: 1, record: { ...hit, body: hit.body ?? '' } } } }
       }
       if (payload.tool === 'pinax_outline_read') {
         // 与真工具同一条口径：大纲目录空着（既没有 outline.json 也没有 大纲.md）就按 INVALID_INPUT 拒。
@@ -274,8 +283,8 @@ function shellView(extra = {}) {
     rejected: [],
     primary: { id: 'pinax.carrier.novel', title: '小说', primary: { projectKind: 'novel' } },
     carriers: carrierCarriers(),
-    left: [paneOf('novel.shelf'), paneOf('outline.tree'), paneOf('notes.list'), paneOf('worldbook.board'), paneOf('script.board'), paneOf('setting.board'), paneOf('reference.board')],
-    center: [paneOf('novel.editor'), paneOf('outline.editor'), paneOf('notes.editor'), paneOf('worldbook.entries'), paneOf('script.editor'), paneOf('setting.rules'), paneOf('reference.documents')],
+    left: [paneOf('novel.shelf'), paneOf('outline.tree'), paneOf('notes.list'), paneOf('worldbook.board'), paneOf('script.board'), paneOf('dossier.board')],
+    center: [paneOf('novel.editor'), paneOf('outline.editor'), paneOf('notes.editor'), paneOf('worldbook.entries'), paneOf('script.editor'), paneOf('dossier.editor')],
     skeletonDirs: ['正文', '大纲', '世界书', '构思', '资料', '日志', '约束'],
     archive: [],
     runtime: {
@@ -1312,7 +1321,7 @@ describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设
     await flushPromises()
 
     // 切到「设定」那块板：协议 v1.1-A 起这一栏只有约束一棵树（世界书已独立成栏）。
-    await openBoard(wrapper, '设定')
+    await openBoard(wrapper, '设定与资料')
     expect(tools.calls.some((call) => call.tool === 'pinax_rule_list')).toBe(true)
     expect(wrapper.find('.nx-index-window').findAll('.workspace-nav-section').map((node) => node.text())).not.toContain('世界书')
     const indexWindow = wrapper.find('.nx-index-window')
@@ -1407,7 +1416,7 @@ describe('批次43：md 原生渲染 · 改了就落盘 · 去掉无效提示', 
     expect(outlineHtml).toContain('<li>一条路</li>')
 
     // 约束：同一套渲染。
-    await openBoard(wrapper, '设定')
+    await openBoard(wrapper, '设定与资料')
     const ruleRow = wrapper.findAll('.nx-index-window .nx-tree-item').find((row) => row.text().includes('纪律'))
     await ruleRow.trigger('click')
     await flushPromises()
@@ -1516,11 +1525,11 @@ describe('批次43：md 原生渲染 · 改了就落盘 · 去掉无效提示', 
     expect(outlinePane.text()).not.toContain('共 1 个节点')
 
     // 约束面。
-    await openBoard(wrapper, '设定')
+    await openBoard(wrapper, '设定与资料')
     const ruleRow = wrapper.findAll('.nx-index-window .nx-tree-item').find((row) => row.text().includes('纪律'))
     await ruleRow.trigger('click')
     await flushPromises()
-    const rulePane = wrapper.find('[data-pane-id="setting.rules"]')
+    const rulePane = wrapper.find('[data-pane-id="dossier.editor"]')
     expect(rulePane.find('.doc-meta-hint').exists()).toBe(false)
     expect(rulePane.text()).not.toContain('约束/纪律.md')
     expect(rulePane.text()).not.toContain('第 1 版')
@@ -1529,11 +1538,10 @@ describe('批次43：md 原生渲染 · 改了就落盘 · 去掉无效提示', 
   })
 })
 
-describe('资料载体', () => {
-  /** 资料板（工单G1）默认不在 shellView 的板列里（那份夹具只摆小说＋设定）：
-   *  这个用例自己把 reference.* 两枚 pane 加进去，验证的正是「paneId 以 reference. 开头时列资料树」。 */
-  function referenceShellView() {
-    // 协议 v1.1-A 起六栏都在 shellView 的板列里，资料就是其中一格。
+describe('设定与资料载体', () => {
+  /** 批次60：设定与资料合并成一栏（dossier.*），索引窗一棵树两段（资料／约束）。
+   *  资料段的行点开进资料阅读面，约束段的行点开进约束面——同一块窗按选中类型换面。 */
+  function dossierShellView() {
     return shellView()
   }
 
@@ -1541,12 +1549,12 @@ describe('资料载体', () => {
     const tools = fakeTools({
       documents: [{ index: 0, title: '设定集', file: '资料/设定集.md', name: '设定集.md', revision: 1, text: '旧世界的年表。\n', totalChars: 8, truncated: false }]
     })
-    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: referenceShellView() } : tools.request(channel, payload)) }
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: dossierShellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    const board = wrapper.findAll('.nx-ribbon-item').find((item) => item.attributes('aria-label') === '资料')
-    expect(board, '图标竖条应有资料板块的入口').toBeTruthy()
+    const board = wrapper.findAll('.nx-ribbon-item').find((item) => item.attributes('aria-label') === '设定与资料')
+    expect(board, '图标竖条应有设定与资料板块的入口').toBeTruthy()
     await board.trigger('click')
     await flushPromises()
 
@@ -1561,7 +1569,7 @@ describe('资料载体', () => {
     await row.trigger('click')
     await flushPromises()
     expect(tools.calls.some((call) => call.tool === 'pinax_document_read')).toBe(true)
-    const pane = () => wrapper.find('[data-pane-id="reference.documents"]')
+    const pane = () => wrapper.find('[data-pane-id="dossier.editor"]')
     expect(pane().find('[aria-label="资料正文"]').text()).toBe('旧世界的年表。')
     // 批次43：路径 · 版本这些开发者信息不再摆在界面上。
     expect(pane().text()).not.toContain('资料/设定集.md')
@@ -1604,29 +1612,102 @@ describe('资料载体', () => {
 
   it('资料板新建：索引窗区头 ＋ → 临时输入 → Enter 走 pinax_document_save 的 expectedRevision 0', async () => {
     const tools = fakeTools()
-    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: referenceShellView() } : tools.request(channel, payload)) }
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: dossierShellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    await wrapper.findAll('.nx-ribbon-item').find((item) => item.attributes('aria-label') === '资料').trigger('click')
+    await wrapper.findAll('.nx-ribbon-item').find((item) => item.attributes('aria-label') === '设定与资料').trigger('click')
     await flushPromises()
     expect(wrapper.find('.nx-index-window').text()).toContain('资料还没有内容（资料/）')
 
     await wrapper.find('[aria-label="新建资料"]').trigger('click')
     await flushPromises()
-    await wrapper.find('[data-test="index-new-input"]').setValue('年表补遗')
-    await wrapper.find('[data-test="index-new-input"]').trigger('keydown', { key: 'Enter' })
+    await wrapper.find('[data-test="dossier-new-document-input"]').setValue('年表补遗')
+    await wrapper.find('[data-test="dossier-new-document-input"]').trigger('keydown', { key: 'Enter' })
     await flushPromises()
 
     const created = tools.calls.find((call) => call.tool === 'pinax_document_save' && call.args.title)
     expect(created.args).toEqual({ title: '年表补遗', text: '年表补遗\n', expectedRevision: 0 })
-    expect(wrapper.find('[data-pane-id="reference.documents"]').find('[aria-label="资料正文"]').text()).toBe('年表补遗')
+    expect(wrapper.find('[data-pane-id="dossier.editor"]').find('[aria-label="资料正文"]').text()).toBe('年表补遗')
+    wrapper.unmount()
+  })
+})
+
+describe('素材载体（批次60：图库模板，无左栏）', () => {
+  /** 素材清单原样（records-editor 两 pane），加上外壳视图；测试只测「模板换脸」，工具仍是四条原样。 */
+  const MATERIAL = {
+    id: 'pinax.carrier.material',
+    title: '素材',
+    isPrimary: false,
+    isEnabled: true,
+    dataDirs: ['素材'],
+    scopes: ['file:素材:rw', 'agent:ask'],
+    tools: ['pinax_material_list', 'pinax_material_read', 'pinax_material_save', 'pinax_material_remove'],
+    context: { providers: [], budgetChars: 12000 },
+    capabilities: ['media.assets'],
+    panes: [
+      { slot: 'left-dock', id: 'material.board', title: '素材库', icon: 'image', view: 'pinax.view.list', kind: 'records-editor' },
+      { slot: 'center', id: 'material.editor', title: '素材', icon: 'image', view: 'pinax.view.editor', kind: 'records-editor' }
+    ]
+  }
+  const materialPane = (pane) => ({ ...pane, pluginId: MATERIAL.id, pluginTitle: MATERIAL.title, primary: false })
+
+  function galleryShellView() {
+    const base = shellView()
+    return shellView({
+      carriers: [...base.carriers, MATERIAL],
+      left: [...base.left, materialPane(MATERIAL.panes[0])],
+      center: [...base.center, materialPane(MATERIAL.panes[1])]
+    })
+  }
+
+  it('点素材＝整面卡片墙：不渲染索引窗；点卡才开那条记录的素材窗', async () => {
+    const tools = fakeTools({
+      materials: [
+        { id: 'mat-1', title: '开篇的雨', type: 'inspiration', status: 'inbox', updatedAt: '2026-10-30T08:00:00', body: '雨从檐口滴下来。' },
+        { id: 'mat-2', title: '码头旧照', type: 'reference-image', status: 'accepted', updatedAt: '2026-10-31T09:30:00', body: '' }
+      ]
+    })
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: galleryShellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    await openBoard(wrapper, '素材')
+    // 图库模板没有 tree 槽：左树不出现，卡片墙直接铺在核心区。
+    expect(wrapper.find('.nx-index-window').exists()).toBe(false)
+    const gallery = wrapper.find('[data-test="material-gallery"]')
+    expect(gallery.exists()).toBe(true)
+    const cards = wrapper.findAll('[data-test="material-card"]')
+    expect(cards).toHaveLength(2)
+    expect(gallery.text()).toContain('开篇的雨')
+    expect(gallery.text()).toContain('inspiration')
+    expect(gallery.text()).toContain('码头旧照')
+    // 画廊本身不替作者凭空开窗：点卡之前没有素材窗。
+    expect(wrapper.find('.nx-pane-window[data-window-pane="material.editor"]').exists()).toBe(false)
+
+    await cards[0].trigger('click')
+    await flushPromises()
+    expect(tools.calls.some((call) => call.tool === 'pinax_material_read' && call.args.id === 'mat-1')).toBe(true)
+    expect(wrapper.find('.nx-pane-window[data-window-pane="material.editor"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('素材空库：画廊说清「还没有内容」，不退回左树', async () => {
+    const tools = fakeTools()
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: galleryShellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    await openBoard(wrapper, '素材')
+    expect(wrapper.find('.nx-index-window').exists()).toBe(false)
+    expect(wrapper.find('[data-test="material-gallery"]').text()).toContain('素材还没有内容（素材/素材.json）')
+    expect(wrapper.findAll('[data-test="material-card"]')).toHaveLength(0)
     wrapper.unmount()
   })
 })
 
 describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯粹的本域内容树）', () => {
-  it('竖条七格；每栏索引窗只列本载体的树，开窗后在册且聚焦', async () => {
+  it('竖条六格；每栏索引窗只列本载体的树，开窗后在册且聚焦', async () => {
     const tools = fakeTools({
       notes: [{ index: 0, title: '雨夜的表', file: '构思/雨夜的表.md', name: '雨夜的表.md', revision: 1, text: '袖口的表停在十二点差三分。', totalChars: 14, truncated: false }],
       rules: [{ index: 0, title: '纪律', file: '约束/纪律.md', name: '纪律.md', revision: 1, text: '- 不许出现现代词\n', totalChars: 10, truncated: false }],
@@ -1636,9 +1717,9 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 竖条＝七格（注册顺序：小说/大纲/构思/世界书/剧本/设定/资料）＋主题钮等动作位。
+    // 竖条＝六格（注册顺序：小说/大纲/构思/世界书/剧本/设定与资料）＋主题钮等动作位。
     const labels = wrapper.findAll('.nx-ribbon-item').map((node) => node.attributes('aria-label'))
-    for (const title of ['小说', '大纲', '构思', '世界书', '剧本', '设定', '资料']) {
+    for (const title of ['小说', '大纲', '构思', '世界书', '剧本', '设定与资料']) {
       expect(labels).toContain(title)
     }
 
@@ -1679,12 +1760,13 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
     expect(wrapper.find('[data-test="entries-board"]').exists()).toBe(true)
     expect(activeWindow().find('.entry-text').exists()).toBe(true)
 
-    // ⑤ 设定：只有约束清单；设定窗在册并聚焦（选中行后才是约束编辑面）。
-    await openBoard(wrapper, '设定')
-    expect(sections()).toEqual(['约束'])
-    expect(wrapper.find('.nx-pane-window[data-window-pane="setting.rules"]').exists()).toBe(true)
-    expect(activePane()).toBe('setting.rules')
+    // ⑤ 设定与资料：一棵索引树两段（资料在前、约束在后）；窗在册并聚焦，未选时先是资料面的提示。
+    await openBoard(wrapper, '设定与资料')
+    expect(sections()).toEqual(['资料', '约束'])
+    expect(wrapper.find('.nx-pane-window[data-window-pane="dossier.editor"]').exists()).toBe(true)
+    expect(activePane()).toBe('dossier.editor')
     expect(activeWindow().find('.entry-text').exists()).toBe(false)
+    expect(wrapper.text()).toContain('从左边索引窗里选一篇资料')
     const ruleRow = wrapper.findAll('.nx-index-window .nx-tree-item').find((row) => row.text().includes('纪律'))
     await ruleRow.trigger('click')
     await flushPromises()
@@ -1692,13 +1774,12 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
     expect(wrapper.find('[data-test="rule-rendered"]').exists()).toBe(true)
     expect(wrapper.find('[aria-label="约束编辑器"]').exists()).toBe(false)
 
-    // ⑥ 资料：只有资料清单；资料窗在册并聚焦。
-    await openBoard(wrapper, '资料')
-    expect(sections()).toEqual(['资料'])
-    expect(wrapper.find('.nx-pane-window[data-window-pane="reference.documents"]').exists()).toBe(true)
-    expect(activePane()).toBe('reference.documents')
+    // ⑥ 同一栏的资料段：点资料行换资料阅读面（资料检索入口在），不另开一格。
+    const documentRow = wrapper.findAll('.nx-index-window .nx-tree-item').find((row) => row.text().includes('设定集'))
+    await documentRow.trigger('click')
+    await flushPromises()
+    expect(activePane()).toBe('dossier.editor')
     expect(wrapper.find('[aria-label="资料检索"]').exists()).toBe(true, '资料阅读面的检索入口在')
-    expect(wrapper.text()).toContain('从左边索引窗里选一篇资料')
     wrapper.unmount()
   })
 

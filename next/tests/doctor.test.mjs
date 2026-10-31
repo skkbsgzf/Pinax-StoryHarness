@@ -5,9 +5,8 @@ import { NOVEL_CARRIER } from '../carriers/novel/manifest.mjs'
 import { OUTLINE_CARRIER } from '../carriers/outline/manifest.mjs'
 import { NOTES_CARRIER } from '../carriers/notes/manifest.mjs'
 import { WORLDBOOK_CARRIER } from '../carriers/worldbook/manifest.mjs'
-import { SETTING_CARRIER } from '../carriers/setting/manifest.mjs'
+import { DOSSIER_CARRIER } from '../carriers/dossier/manifest.mjs'
 import { SCRIPT_CARRIER } from '../carriers/script/manifest.mjs'
-import { REFERENCE_CARRIER } from '../carriers/reference/manifest.mjs'
 import { MATERIAL_CARRIER } from '../carriers/material/manifest.mjs'
 import { COMIC_CARRIER } from '../carriers/comic/manifest.mjs'
 import { VIDEO_CARRIER } from '../carriers/video/manifest.mjs'
@@ -46,7 +45,7 @@ test('描述符：真实文件可读，字段齐全；不支持真多窗口如�
   assert.equal(descriptor.host, 'pinax-next-shell')
   assert.equal(descriptor.supportsPopout, false, '今天的浮窗是应用内 absolute 卡片，不假装多窗口')
   assert.deepEqual(descriptor.slots, ['left-dock', 'center', 'overlay'])
-  // 批次45：描述符 forms 加 immersive；七个文档面载体声明它，五个记录型载体不声明。
+  // 批次45：描述符 forms 加 immersive；批次60 合并后六个文档面载体声明它，五个记录型载体不声明。
   assert.deepEqual(descriptor.forms, ['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
   assert.ok(descriptor.views.includes('pinax.view.custom'))
   // 批次52：六态——adopted-external 是「合法清单，但服务由外部进程自管」的事实，不是故障。
@@ -60,19 +59,19 @@ test('ok：真清单对得上宿主', () => {
   assert.equal(report.manifestId, 'pinax.carrier.novel')
 })
 
-test('七个内置载体全部对得上真描述符：没有一个需要升级／降权／换形态', () => {
+test('六个内置载体全部对得上真描述符：没有一个需要升级／降权／换形态', () => {
   const loaded = loadHostDescriptor()
   assert.equal(loaded.ok, true)
-  const carriers = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SETTING_CARRIER, SCRIPT_CARRIER, REFERENCE_CARRIER]
+  const carriers = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER]
   const reports = diagnoseAll(carriers, { descriptor: loaded.value })
-  assert.equal(reports.length, 7)
+  assert.equal(reports.length, 6)
   for (const report of reports) {
     assert.equal(report.state, 'ok', `${report.manifestId}: ${report.message} → ${report.fix}`)
   }
 })
 
-test('沉浸形态（批次45）：七个文档面载体声明 immersive，五个记录型载体不声明', () => {
-  const documentFaces = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SETTING_CARRIER, SCRIPT_CARRIER, REFERENCE_CARRIER]
+test('沉浸形态（批次45／批次60）：六个文档面载体声明 immersive，五个记录型载体不声明', () => {
+  const documentFaces = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER]
   for (const carrier of documentFaces) {
     const panes = carrier.contributes.panes.filter((pane) => Array.isArray(pane.forms))
     assert.ok(panes.length > 0, `${carrier.id} 应有带 forms 声明的 pane`)
@@ -93,10 +92,10 @@ test('沉浸形态（批次45）：七个文档面载体声明 immersive，五�
       assert.equal(pane.forms.includes('immersive'), false, `${carrier.id}/${pane.id} 是记录型载体，不该声明沉浸`)
     }
   }
-  // 十二个载体在真描述符下仍然全部 ok（新增第三档不改变任何既有判定）。
+  // 十一个载体在真描述符下仍然全部 ok（批次60 设定与资料合并后 12→11）。
   const loaded = loadHostDescriptor()
   const all = diagnoseAll([...documentFaces, ...recordFaces], { descriptor: loaded.value })
-  assert.equal(all.length, 12)
+  assert.equal(all.length, 11)
   for (const report of all) assert.equal(report.state, 'ok', `${report.manifestId}: ${report.message}`)
 })
 

@@ -30,8 +30,7 @@ import { buildEntryTokenMap, linkifyEntryNames } from './wikiLinks.mjs'
  *   notes.* → 构思编辑
  *   worldbook.* → 条目阅读/编辑
  *   script.* → 剧本阅读/编辑（批次26）
- *   setting.* → 约束编辑
- *   reference.* → 资料阅读/编辑
+ *   dossier.* → 资料／约束的阅读与编辑（批次60：设定与资料合并成一栏，按选中类型换面）
  *
  * 阅读态一律渲染 md（批次26）：Markdown → HTML 走 next/shell/mdRender.mjs（手写轻量解析，
  * 输入先整段转义再拼我们自己的标签，出线前过一遍 sanitize）；编辑态仍是 textarea 纯文本——
@@ -82,7 +81,16 @@ const emit = defineEmits(['history'])
  * 解析不到就出占位——不再在外壳里按前缀写死七个分支。
  */
 const viewResolution = computed(() => resolvePaneView(props.pane, props.data))
-const viewKind = computed(() => viewResolution.value?.result?.kind ?? 'placeholder')
+const viewKind = computed(() => {
+  const kind = viewResolution.value?.result?.kind ?? 'placeholder'
+  // 批次60：设定与资料的编辑面是同一块（document-detail），到约束上换成规则面孔。
+  // 判据用 selection（打开的是哪一类），不用 pane id 特判内容——保存目标随 viewKind 走。
+  if (kind === 'document-detail' && String(props.pane?.id ?? '').startsWith('dossier.')
+    && props.data.selection?.type === 'rule') {
+    return 'rule-editor'
+  }
+  return kind
+})
 const viewPlaceholderReason = computed(() => {
   const resolution = viewResolution.value
   if (!resolution) return '这块 pane 没有声明视图类型（view），宿主也不认它的 id 前缀。'
@@ -1433,12 +1441,12 @@ function actOnSaveChip() {
          窄栏退成类别导航树，点类别＝给这块看板区加一道筛选（同一格状态）。 -->
     <template v-else-if="viewKind === 'entries-workspace'">
       <div class="nx-entries-workspace" data-test="entries-workspace">
-        <!-- web 模板没有左树（批次59 铁律四）：列举层的错误与契约警告跟着看板走。 -->
-        <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
-        <ul v-if="data.listWarnings?.length" class="nx-index-warn">
-          <li v-for="(warning, index) in data.listWarnings" :key="`entries-warning-${index}`">{{ warning }}</li>
-        </ul>
         <div class="nx-entries-workspace-board">
+          <!-- web 模板没有左树（批次59 铁律四）：列举层的错误与契约警告跟着看板走。 -->
+          <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
+          <ul v-if="data.listWarnings?.length" class="nx-index-warn">
+            <li v-for="(warning, index) in data.listWarnings" :key="`entries-warning-${index}`">{{ warning }}</li>
+          </ul>
           <EntriesBoard
             :data="data"
             :project-root="projectRoot"
