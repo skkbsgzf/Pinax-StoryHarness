@@ -26,7 +26,8 @@ import { getCanonicalAgentTask } from '../../shared/agentCapabilityContract.js'
  *
  * 桥本身的协议往返在 comic-bridge.test.mjs 里（那是桥对 mock 的一侧）；
  * 这里证的是宿主这一侧：
- *   1) 聚合面：漫画启用时三把 comfy 工具以 comfy. 前缀进 ListTools，CallTool 按前缀路由到桥；
+ *   1) 聚合面：漫画启用时只读两把 comfy 工具以 comfy. 前缀进 ListTools，CallTool 按前缀路由到桥；
+ *      comfy_submit 不在面上（批次58：提交通路纪律归底座，底座提交闸未建前不开第二个口）；
  *   2) services：监督器真起漫画预览服务，/health 探活，/ 渲染出含页名的 HTML，崩一次重启一次；
  *   3) 信封：漫画启用时 references 块真的来自漫画页清单（页名＋格数＋首句台词）。
  *
@@ -131,14 +132,16 @@ async function waitFor(read, accept, timeoutMs = 15_000) {
   return read()
 }
 
-test('聚合面：漫画启用时三把 comfy 工具以 comfy. 前缀进面，CallTool 按前缀路由到桥', async () => {
+test('聚合面：漫画启用时只读两把 comfy 工具进面，comfy_submit 被 allow 挡在外面', async () => {
   const mock = await startMock()
   const { workspace, runtime } = await comicRuntime('comic-prefix', { mockUrl: mock.url })
   try {
     const names = runtime.listTools().map((tool) => tool.name)
-    for (const suffix of ['comfy_status', 'comfy_submit', 'comfy_result']) {
+    for (const suffix of ['comfy_status', 'comfy_result']) {
       assert.ok(names.includes(`comfy.${suffix}`), `面上要有 comfy.${suffix}，实际：${names.filter((n) => n.includes('comfy')).join(',')}`)
     }
+    assert.equal(names.includes('comfy.comfy_submit'), false,
+      `comfy_submit 不许回到工具面（提交通路纪律归底座）：${names.filter((n) => n.includes('comfy')).join(',')}`)
     assert.equal(runtime.ownerOf('comfy.comfy_status'), COMIC_CARRIER_ID, '外部工具的归属是声明它的插件')
 
     // 按前缀路由到桥：调用 comfy.comfy_status 应打到桥再打到 mock。
@@ -148,15 +151,36 @@ test('聚合面：漫画启用时三把 comfy 工具以 comfy. 前缀进面，Ca
     assert.equal(status.value.payload.ok, true, JSON.stringify(status.value.payload))
     assert.equal(status.value.payload.stats.system.comfyui_version, 'mock-0.0.1', '这一刀必须真打到 mock，而不是回一句编的')
 
-    // submit／result 同样按前缀路由：提交拿 prompt_id，回读拿图片元数据。
-    const submitted = await runtime.callTool('comfy.comfy_submit', { workflow: { 3: { class_type: 'KSampler', inputs: {} } } })
-    assert.equal(submitted.value.payload.prompt_id, 'mock-prompt-1', JSON.stringify(submitted.value.payload))
+    // result 同样按前缀路由：回读拿图片元数据（提交只在桥内部保留，不走宿主工具面）。
     const result = await runtime.callTool('comfy.comfy_result', { prompt_id: 'mock-prompt-1' })
     assert.deepEqual(result.value.payload.images, [{ filename: 'mock.png', subfolder: '', type: 'output' }])
   } finally {
     await runtime.stop()
     await workspace.cleanup()
     mock.child.kill()
+  }
+})
+
+test('清单守卫（批次58）：comfy allow 恰为只读两把，画布是 app 档 pane', () => {
+  const comfy = COMIC_CARRIER.mcp.find((spec) => spec.id === 'comfy')
+  assert.ok(comfy, '漫画清单要声明 comfy 桥')
+  assert.deepEqual(comfy.allow, ['comfy_status', 'comfy_result'], '恢复提交的条件是底座提交闸落地，不是谁顺手把 allow 加回来')
+
+  const panes = COMIC_CARRIER.contributes.panes
+  const canvas = panes.find((pane) => pane.id === 'comic.canvas')
+  assert.ok(canvas, '画布 pane 必须在清单里')
+  assert.equal(canvas.view, 'pinax.view.app')
+  assert.equal(canvas.kind, 'external-app')
+  assert.equal(canvas.app?.url, 'http://127.0.0.1:3010')
+  assert.deepEqual(canvas.forms, ['dock', 'split', 'fullscreen', 'immersive'])
+
+  // 全仓工具面零命中：内置载体的 tools 与 mcp.allow 里都不许再出现 comfy_submit。
+  for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
+    const manifest = plugin.manifest
+    assert.equal((manifest.tools ?? []).includes('comfy_submit'), false, `${manifest.id}：tools 里不许有 comfy_submit`)
+    for (const spec of manifest.mcp ?? []) {
+      assert.equal((spec.allow ?? []).includes('comfy_submit'), false, `${manifest.id}/${spec.id}：allow 里不许有 comfy_submit`)
+    }
   }
 })
 

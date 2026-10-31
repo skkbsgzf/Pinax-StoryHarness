@@ -144,10 +144,18 @@ test('五份记录清单：各自一块目录、四把自有工具，外壳对�
 
     const panes = manifest.contributes.panes.map((pane) => pane.id)
     // 素材这一栏多一块 overlay pane：它是协议 v3 的**自带面板样板**（内容面是插件自己的页面）。
+    // 批次58：漫画多一块 comic.canvas——toonflow 画布走 app 档，由内嵌浏览器承载（独立体①的接入面）。
     const expectedPanes = key === 'material'
       ? ['material.board', 'material.editor', 'material.panel']
-      : [`${key}.board`, `${key}.editor`]
-    assert.deepEqual(panes, expectedPanes, `${key}：左树＋中栏两块 pane（素材另有一块自带面板）`)
+      : key === 'comic'
+        ? ['comic.board', 'comic.editor', 'comic.canvas']
+        : [`${key}.board`, `${key}.editor`]
+    assert.deepEqual(panes, expectedPanes, `${key}：左树＋中栏两块 pane（素材另有一块自带面板，漫画另有画布）`)
+    if (key === 'comic') {
+      const canvas = manifest.contributes.panes.find((pane) => pane.id === 'comic.canvas')
+      assert.equal(canvas.kind, 'external-app', '画布是 app 档，不是手搓组件')
+      assert.equal(canvas.view, 'pinax.view.app')
+    }
     assert.equal(recordCarrierOfPaneId(`${key}.editor`).key, key)
     assert.equal(recordCarrierOfPaneId(`${key}.board`).key, key)
     assert.equal(recordTreeKey(key), `records:${key}`)
@@ -209,7 +217,7 @@ test('记录底座真链路：空文档起步、带修订号写入、未传字�
     const surface = runtime.surfaceInfo()
     const expectedNames = [...MATERIAL_TOOL_NAMES, ...COMIC_TOOL_NAMES, ...VIDEO_TOOL_NAMES, ...EXPERIENCE_TOOL_NAMES, ...ONLINE_TOOL_NAMES, ...SCRIPT_TOOL_NAMES].sort()
     assert.deepEqual([...surface.carrierToolNames].sort(), expectedNames, '五块记录载体各四把＋依赖闭包带进来的剧本三把')
-    assert.equal(runtime.listTools().length, 19 + 1 + 1 + 23 + 3, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 载体自有 23 ＋ 漫画 comfy 桥三把')
+    assert.equal(runtime.listTools().length, 19 + 1 + 1 + 23 + 2, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 载体自有 23 ＋ 漫画 comfy 桥两把（批次58 提交闸收口 −1）')
     assert.equal(runtime.ownerOf('pinax_material_list'), MATERIAL_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_online_remove'), ONLINE_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_script_list'), SCRIPT_CARRIER_ID, '闭包装进来的剧本工具确实在面上')

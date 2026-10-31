@@ -82,6 +82,12 @@ test('沉浸形态（批次45）：七个文档面载体声明 immersive，五�
   for (const carrier of recordFaces) {
     const panes = carrier.contributes.panes.filter((pane) => Array.isArray(pane.forms))
     for (const pane of panes) {
+      // 批次58：漫画的画布是 app 档（内嵌浏览器承载外部端口），不是记录编辑/文档面——
+      // 它按作者工单声明 immersive（整窗占满中栏看画布），不参与「记录型载体不许沉浸」这条。
+      if (pane.kind === 'external-app') {
+        assert.equal(pane.id, 'comic.canvas', `${carrier.id}/${pane.id}：记录型载体里只允许画布这一块应用面声明沉浸`)
+        continue
+      }
       assert.equal(pane.forms.includes('immersive'), false, `${carrier.id}/${pane.id} 是记录型载体，不该声明沉浸`)
     }
   }

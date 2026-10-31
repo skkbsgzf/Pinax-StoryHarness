@@ -39,4 +39,77 @@
 
 ## §7 执行方回填 ／ §8 调度方验收
 
-（同前几张工单格式；门禁计数变化必须写理由；§8 由调度方填。）
+### §7 执行方回填（Qoder CLI · 2026-10-31）
+
+**架构落点**：三独立体各自接入底座，本批只做「承载」与「纪律收口」，不 spawn、不内置中间件。
+
+#### 改动清单
+
+1. `next/carriers/comic/manifest.mjs`
+   - panes 增 `comic.canvas`：`slot:'center'`、`view:'pinax.view.app'`、`kind:'external-app'`、
+     `app.url:'http://127.0.0.1:3010'`、`forms:['dock','split','fullscreen','immersive']`，
+     标题「Toonflow 画布」。
+   - `mcp[comfy].allow` 摘除 `comfy_submit`，恰为 `['comfy_status','comfy_result']`；
+     桥脚本与 `comfy_submit` 实现保留（只读探活／收结果仍走桥）。
+   - 版本 `1.2.0 → 1.3.0`；头注释与 mcp 注释改写为「提交闸归底座」的纪律口径。
+2. `next/carriers/comic/AGENT.md`
+   - 新增「三个独立体，三个接入面」表：画布（toonflow :3010，app 档）／引擎（ComfyUI :8188，mcp 只读）／
+     资产（素材＋漫画记录族工具）；画布、引擎的人话失败文案与「复制地址单开」写清。
+   - 明写 **comfy_submit 停用**、理由（多提交方抢串行队列＝雪崩，CF2TF SPEC §1.1 教训）与
+     **恢复条件＝底座提交闸落地**；CF2TF 过渡定位一句话；adopt 模式（批次52 @4）与底座出图管线设计批的登记项。
+3. `next/shell/CarrierPaneHost.vue`（允许清单内的最小改动）
+   - 外部应用分支包一层 `.nx-app-pane`，底部 quiet 行给「复制地址单开」（`data-test="app-copy-url"`），
+     剪贴板不可用时如实提示「复制失败，请手动选中地址」；未改 ExternalAppHost（不在允许清单）。
+4. 测试
+   - `next/tests/comic-carrier-wiring.test.mjs`：聚合面只认 `comfy_status`／`comfy_result`，
+     `comfy.comfy_submit` 断言不在面；新增清单守卫（allow 恰为只读两把、`comic.canvas` 四形态与回环地址、
+     全十二块载体 `tools`／`mcp.allow` 零 `comfy_submit`）。
+   - `next/tests/carrier-records.test.mjs`：comic 期望 pane 增 `comic.canvas`；工具面 47→46（理由见下）。
+   - `next/tests/carrier-v3-rollout.test.mjs`：`external-app` 与 `custom-panel` 同理不受「kind 不许变」约束，
+     单独登记并断言全仓应用面恰为 `pinax.carrier.comic/comic.canvas`、view／kind／回环地址正确。
+   - `next/tests/doctor.test.mjs`：记录型载体「不许沉浸」的断言给 app 档 pane 放行（仅 `comic.canvas`），
+     其余记录面照旧不许沉浸。
+   - `next/tests/carrier-pane.spec.mjs`：应用面须有「复制地址单开」；新增点击复制用例（剪贴板拿到 :3010）。
+5. `next/testing/acceptance.mjs`：聚合工具面 47→46、comfy 名字三把→两把；新增「画布接入面」一条验收
+   （app 档／回环 :3010／allow 只读两把／面上无 submit）。验收条数 23→24。
+6. `next/testing/bundleAssertions.mjs`：新增门禁 p1（allow 恰为只读两把＋全载体工具面零 submit）、
+   p2（`comic.canvas` app 档 pane 与地址），理由写在门禁注释里。
+7. 本工单 §7。
+
+#### 门禁计数变化（必须写理由）
+
+| 计数 | 变化 | 理由 |
+| --- | --- | --- |
+| 聚合工具面（M4/M5 项目） | 47 → 46 | `mcp[comfy].allow` 摘除 `comfy_submit`：底座提交闸未建，不开第二个直连提交口。外部 MCP 3 把 → 2 把；桥实现与协议测试不变。 |
+| 载体 pane 数（comic） | 2 → 3 | 新增 `comic.canvas`（独立体①画布的 app 档承载面）。全仓应用面仍只有这一块、自带面板仍只有素材一块。 |
+| acceptance 条数 | 23 → 24 | 新增画布接入面验收一条。 |
+| 原生面（d2／M1） | 21 不变 | 本批不动内核原生工具。 |
+
+#### 验证结果（本机，2026-10-31）
+
+- `npm run next:build:main` ✅（`next/.build/pinax-next-main.mjs` 1,736.12 kB）
+- `npm run next:build:shell` ✅（外壳 1,997.64 kB；preload 5.30 kB）
+- `npm run verify:next` ✅ 五段全绿：
+  1. acceptance：24/24 通过（含新增画布接入面）
+  2. `node --test next/tests/*.test.mjs`：576 tests / 576 pass / 0 fail
+  3. vitest shell：13 files / 186 tests 全过
+  4. `lint:next`：0 警告
+  5. bundleAssertions：全过，含 p1 `allow=comfy_status,comfy_result submitOnSurface=false`、
+     p2 `pinax.view.app/external-app http://127.0.0.1:3010`
+
+#### 边界与限制（如实登记）
+
+1. **画布当前从「打开方式 → 沉浸」进入**：宿主 `AppNext.vue` 的 `formTargetsForBoard` 每个形态取该板第一块
+   center pane，`comic.editor` 先认领 dock／split／fullscreen，`comic.canvas` 只拿到 immersive（其声明四形态齐备）。
+   `AppNext.vue` 不在本工单允许文件清单内，故不改宿主菜单的 pane 分配。真窗口验收可用沉浸形态；
+   后续若要让画布直接停靠，需宿主支持多 center pane 选择器（另立小批）。
+2. **toonflow 未起时的人话态沿用批次44**：ExternalAppHost 的失败文案由 iframe 的 `error` 事件触发；
+   Electron 对跨源失败不一定派发该事件，可能出现「空白 iframe 而无提示」。本批未改 ExternalAppHost（不在允许清单），
+   只补了「复制地址单开」这条兜底路径。调度方真窗口若见空白，请按此边界登记，不视为本批回归。
+3. 未 spawn／kill toonflow、ComfyUI、electron；未执行 git；未改 `server/**`、`src/**`、`D:\CF2TF`、
+   `D:\toonflow`、`D:\ComfyUI-0.39`；未新增 npm 依赖；未动清单 schema @4 与 adopt 模式（批次52）。
+
+---
+
+§8 调度方验收（待填）
+

@@ -52,6 +52,7 @@ const KIND_OVERRIDES_BY_PANE_ID = Object.freeze({
 test('十二块载体全部升到 @3：spec／manifestVersion／四张牌齐，pane 自声明 view 与 kind', () => {
   assert.equal(BUILT_IN_CARRIER_PLUGINS.length, 12, '十二块内置载体（v1.1-A 七块 ＋ M4／M5 五块）')
   const customPanes = []
+  const appPanes = []
 
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
     const manifest = plugin.manifest
@@ -79,6 +80,15 @@ test('十二块载体全部升到 @3：spec／manifestVersion／四张牌齐，p
         assert.equal(pane.view, 'pinax.view.custom', `${id}/${pane.id}：自带面板必须挂在 custom 视图上`)
         continue
       }
+      // 应用面（kind=external-app，批次44 新增的内容面）同样不在前缀对照表里：
+      // 它是「内嵌浏览器承载外部端口」，不是宿主视图，所以不受「kind 不许变」的约束。
+      // 但地址必须显式声明且是回环——这正是 validateAppPane 已经验过的那一道，这里只登记身份。
+      if (pane.kind === 'external-app') {
+        appPanes.push(`${id}/${pane.id}`)
+        assert.equal(pane.view, 'pinax.view.app', `${id}/${pane.id}：应用面必须挂在 app 视图上`)
+        assert.ok(String(pane.app?.url ?? '').startsWith('http://127.0.0.1:'), `${id}/${pane.id}：应用面只接本机回环地址`)
+        continue
+      }
       const binding = legacyBindingForPane(pane.id)
       assert.ok(binding, `${id}/${pane.id}：迁移期的前缀对照表里没有这一块 pane`)
       const override = KIND_OVERRIDES_BY_PANE_ID[pane.id]
@@ -92,6 +102,10 @@ test('十二块载体全部升到 @3：spec／manifestVersion／四张牌齐，p
 
   assert.deepEqual(customPanes, ['pinax.carrier.material/material.panel'],
     '十二块里只有素材那一栏带自带面板（v3 的样板），别的一栏不许悄悄多出面板')
+
+  // 批次58：画布（toonflow :3010）是十二块里唯一一块应用面——宿主只给内嵌浏览器，不手搓组件。
+  assert.deepEqual(appPanes, ['pinax.carrier.comic/comic.canvas'],
+    '十二块里只有漫画那一栏带应用面（独立体①的接入面），别的一栏不许悄悄多出应用面')
 })
 
 test('十二块载体的 AGENT.md 真在盘上：清单声明的路径对得上，文件有内容', async () => {

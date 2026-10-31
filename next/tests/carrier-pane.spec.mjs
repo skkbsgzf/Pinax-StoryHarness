@@ -2078,8 +2078,34 @@ describe('应用面（批次44）：外部端口上的网页由内嵌浏览器�
     expect(frame.attributes('sandbox')).toContain('allow-scripts')
     // 地址摆出来：作者要能一眼看见自己开的是哪个端口（也能复制出去单开）。
     expect(wrapper.find('.nx-external-app-url').text()).toBe('http://127.0.0.1:8188/')
+    expect(wrapper.find('[data-test="app-copy-url"]').exists(), '要另给「复制地址单开」').toBe(true)
     expect(wrapper.find('.doc-title').text()).toBe('ComfyUI')
     wrapper.unmount()
+  })
+
+  it('批次58：地址复制出去自己开（剪贴板拿到的是清单里声明的那个回环地址）', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const data = useBoardData(fakeTools())
+    const pane = {
+      slot: 'center',
+      id: 'comic.canvas',
+      title: 'Toonflow 画布',
+      view: 'pinax.view.app',
+      kind: 'external-app',
+      app: { url: 'http://127.0.0.1:3010' }
+    }
+    const wrapper = mount(CarrierPaneHost, { props: { pane, data } })
+    await flushPromises()
+    try {
+      await wrapper.find('[data-test="app-copy-url"]').trigger('click')
+      await flushPromises()
+      expect(writeText).toHaveBeenCalledWith('http://127.0.0.1:3010')
+      expect(wrapper.find('[data-test="app-copy-note"]').text()).toContain('已复制')
+    } finally {
+      vi.unstubAllGlobals()
+      wrapper.unmount()
+    }
   })
 
   it('没声明地址时不摆空 iframe，如实说明', async () => {

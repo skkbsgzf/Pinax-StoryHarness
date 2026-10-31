@@ -323,6 +323,30 @@ check('o 载体 services／mcp 脚本进产物：清单声明的 .mjs 运行期�
     ? `缺 ${missingRuntimeScripts.join(', ')}`
     : runtimeScripts.map((item) => `${item.name}/${item.script}`).join(' / '))
 
+// 批次58（门禁 p）：三独立体接入底座的纪律面。计数变化要写理由，所以两句都把「为什么」放在名字里：
+//   p1 提交闸收口——comic 的 mcp[comfy].allow 恰为只读两把；聚合工具面因此从 47 降到 46（外部 MCP −1）。
+//      桥里仍保留 comfy_submit 的实现（comic-bridge.test 照旧验协议），只是不进宿主工具面；
+//      恢复条件是底座自己的单提交点 gate 落地，不是谁顺手把 allow 加回来。
+//   p2 画布接入面——comic.canvas 是十二块里唯一一块 app 档 pane（+1 块 pane），地址只给本机回环 :3010；
+//      toonflow 由作者的 dev 流程起，Pinax 只给内嵌浏览器承载，不 spawn、不手搓编辑器。
+const comicPlugin = BUILT_IN_CARRIER_PLUGINS.find((plugin) => plugin?.manifest?.id === 'pinax.carrier.comic')
+const comfySpec = comicPlugin?.manifest?.mcp?.find((spec) => spec?.id === 'comfy')
+const comfyAllow = Array.isArray(comfySpec?.allow) ? comfySpec.allow : []
+const comfySubmitOnSurface = BUILT_IN_CARRIER_PLUGINS.some((plugin) => (
+  (plugin?.manifest?.tools ?? []).includes('comfy_submit')
+  || (plugin?.manifest?.mcp ?? []).some((spec) => (spec?.allow ?? []).includes('comfy_submit'))
+))
+check('p1 提交闸收口：comic mcp[comfy].allow 恰为 comfy_status／comfy_result，comfy_submit 不在任何载体工具面',
+  comfyAllow.join() === 'comfy_status,comfy_result' && !comfySubmitOnSurface,
+  `allow=${comfyAllow.join(',') || '(缺)'} submitOnSurface=${comfySubmitOnSurface}`)
+
+const comicCanvas = comicPlugin?.manifest?.contributes?.panes?.find((pane) => pane?.id === 'comic.canvas')
+check('p2 画布接入面：comic.canvas 是 app 档 pane（pinax.view.app／external-app，回环 :3010）',
+  comicCanvas?.view === 'pinax.view.app'
+    && comicCanvas?.kind === 'external-app'
+    && comicCanvas?.app?.url === 'http://127.0.0.1:3010',
+  comicCanvas ? `${comicCanvas.view}/${comicCanvas.kind} ${comicCanvas.app?.url ?? '(无地址)'}` : '(缺 comic.canvas)')
+
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
 // 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，
 // 旧正则 join\\(currentDir… 会被标识符改名误伤（门禁该守路径，不该守压缩后的变量名）。

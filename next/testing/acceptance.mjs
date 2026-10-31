@@ -241,10 +241,10 @@ try {
   const recordsRuntime = createAgentRuntime({ registry: recordsRegistry, fileService: recordsOpened.value.fileService, view: recordsView })
   const recordsStarted = await recordsRuntime.start()
   const comfyNames = recordsRuntime.listTools().map((tool) => tool.name).filter((name) => name.startsWith('comfy.'))
-  record('M4/M5 聚合工具面：19 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 五块记录载体各四把＋剧本三把＋comfy 桥三把＝47，其中 23 个名字由载体服务、3 把走外部 MCP（批次49 原生面 +1）',
-    recordsStarted.ok === true && recordsStarted.value.toolCount === 47 && recordsStarted.value.carrierTools === 23
+  record('M4/M5 聚合工具面：19 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 五块记录载体各四把＋剧本三把＋comfy 桥两把＝46，其中 23 个名字由载体服务、2 把走外部 MCP（批次49 原生面 +1；批次58 提交闸收口 −1）',
+    recordsStarted.ok === true && recordsStarted.value.toolCount === 46 && recordsStarted.value.carrierTools === 23
       && recordsStarted.value.externalServers === 1 && recordsStarted.value.externalFailures === 0
-      && comfyNames.sort().join() === 'comfy.comfy_result,comfy.comfy_status,comfy.comfy_submit',
+      && comfyNames.sort().join() === 'comfy.comfy_result,comfy.comfy_status',
     `toolCount=${recordsStarted.value?.toolCount} carrierTools=${recordsStarted.value?.carrierTools} external=${recordsStarted.value?.externalServers} comfy=${comfyNames.length}`)
 
   const previewStatus = recordsRuntime.serviceStatus().find((service) => service.id === 'comic-preview')
@@ -252,6 +252,17 @@ try {
     recordsStarted.value.services === 1 && recordsStarted.value.serviceFailures === 0
       && previewStatus?.status === 'ready',
     `services=${recordsStarted.value?.services} status=${previewStatus?.status ?? '-'} port=${previewPort}`)
+
+  // 批次58：画布（独立体① toonflow）走 app 档 pane，宿主只给内嵌浏览器；提交通路不进聚合面。
+  const comicManifest = BUILT_IN_CARRIER_PLUGINS.find((plugin) => plugin.manifest.id === COMIC_CARRIER_ID)?.manifest
+  const canvasPane = comicManifest?.contributes?.panes?.find((pane) => pane.id === 'comic.canvas')
+  const comfyAllow = comicManifest?.mcp?.find((spec) => spec.id === 'comfy')?.allow ?? []
+  record('批次58 画布接入面：comic.canvas 是 app 档 pane（回环 :3010），comfy allow 只留只读两把',
+    canvasPane?.kind === 'external-app' && canvasPane?.view === 'pinax.view.app'
+      && canvasPane?.app?.url === 'http://127.0.0.1:3010'
+      && comfyAllow.join() === 'comfy_status,comfy_result'
+      && !comfyNames.includes('comfy.comfy_submit'),
+    `pane=${canvasPane?.kind ?? '-'} url=${canvasPane?.app?.url ?? '-'} allow=${comfyAllow.join(',')}`)
 
   const recordsEmpty = await recordsRuntime.callTool('pinax_material_list', {})
   const recordCreated = await recordsRuntime.callTool('pinax_material_save', {
