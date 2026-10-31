@@ -325,7 +325,13 @@ export function createServiceSupervisor(options = {}) {
         entry.health = { ok: true, statusCode: answer.statusCode ?? null, checkedAt: new Date().toISOString() }
         return true
       }
-      await delay(healthIntervalMs)
+      // 批次51 后的跨平台教训：这里的等待必须是 ref'd 且可被 stopping 打断的——
+      // unref 定时器不撑事件循环，Node 22 的 test runner 会在 drain 时把「Promise 未落定」
+      // 记成测试取消（win32 上 refused 快所以看不出来，CI 的 ubuntu/Node22 上必现）。
+      await new Promise((resolvePromise) => {
+        setTimeout(resolvePromise, healthIntervalMs)
+      })
+      if (stopping) return false
     }
     entry.health = { ok: false, statusCode: null, checkedAt: new Date().toISOString(), error: '超时' }
     return false
@@ -488,9 +494,3 @@ function waitExit(child, timeoutMs) {
   })
 }
 
-function delay(ms) {
-  return new Promise((resolvePromise) => {
-    const timer = setTimeout(resolvePromise, ms)
-    timer.unref?.()
-  })
-}
