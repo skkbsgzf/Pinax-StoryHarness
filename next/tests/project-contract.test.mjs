@@ -29,7 +29,7 @@ test('建项目：固化中文骨架 ＋ 每个板块自己的文件夹，一次
     assert.deepEqual(created.value.document.carriers.enabled.sort(), ['fixture.novel', 'fixture.worldbook'].sort())
     const doc = JSON.parse(await readFile(join(root, '.pinax', 'project.json'), 'utf-8'))
     assert.equal(doc.spec, PROJECT_SPEC)
-    assert.equal(doc.schemaVersion, 2)
+    assert.equal(doc.schemaVersion, 3)
     assert.equal(doc.kind, 'novel')
     assert.equal(doc.carriers.primary, 'fixture.novel')
   } finally {
@@ -213,7 +213,7 @@ test('D2：kind 缺失又带主载体的坏合同直接拒，不回落 novel', a
   }
 })
 
-test('legacy @1 文档（MCP 时代，无 carriers）：打开时按 kind 确定性推导主载体并升 @2（批次16 验收修）', async () => {
+test('legacy @1 文档（MCP 时代，无 carriers）：打开时按 kind 确定性推导主载体并升到当前合同（批次16 验收修）', async () => {
   const ws = await createTempWorkspace('legacy')
   const root = join(ws.projects, '大梦')
   await mkdir(join(root, '.pinax'), { recursive: true })
@@ -233,12 +233,12 @@ test('legacy @1 文档（MCP 时代，无 carriers）：打开时按 kind 确定
   const opened = await openProject({ root, registry })
   assert.equal(opened.ok, true, JSON.stringify(opened.error ?? {}))
   assert.equal(opened.value.document.carriers.primary, FIXTURE_NOVEL.id, '按 kind=novel 推导出小说主载体')
-  assert.equal(opened.value.document.spec, 'pinax-project@2', '打开即升 @2')
+  assert.equal(opened.value.document.spec, PROJECT_SPEC, '打开即升到当前合同')
   assert.equal(opened.value.document.needsPrimary, false)
 
   // 升级落盘：重读磁盘文档，carriers 已持久化
   const reread = JSON.parse(await readFile(join(root, '.pinax', 'project.json'), 'utf-8'))
-  assert.equal(reread.spec, 'pinax-project@2')
+  assert.equal(reread.spec, PROJECT_SPEC)
   assert.equal(reread.carriers.primary, FIXTURE_NOVEL.id)
 
   // kind 无匹配载体时：仍停在主载体闸，不猜
@@ -249,4 +249,39 @@ test('legacy @1 文档（MCP 时代，无 carriers）：打开时按 kind 确定
   const stopped = await openProject({ root, registry })
   assert.equal(stopped.ok, false)
   assert.equal(stopped.error.code, 'PINAX_PRIMARY_CARRIER_MISSING')
+})
+
+test('@2 文档读兼容：打开不擅改盘，落盘时机到了才写回 @3', async () => {
+  const ws = await createTempWorkspace('legacy2')
+  const root = join(ws.projects, '大梦-旧合同')
+  await mkdir(join(root, '.pinax'), { recursive: true })
+  await mkdir(join(root, '正文'), { recursive: true })
+  const legacyDoc = {
+    schemaVersion: 2,
+    spec: 'pinax-project@2',
+    projectId: 'proj_legacy2',
+    name: '大梦-旧合同',
+    kind: 'novel',
+    createdAt: '2026-10-26T16:54:39.645Z',
+    updatedAt: '2026-10-26T16:54:39.645Z',
+    carriers: { primary: 'fixture.novel', enabled: ['fixture.novel'], revision: 4 }
+  }
+  await writeFile(join(root, '.pinax', 'project.json'), JSON.stringify(legacyDoc, null, 2), 'utf-8')
+
+  const registry = registryWith(FIXTURE_NOVEL)
+  const opened = await openProject({ root, registry })
+  assert.equal(opened.ok, true, JSON.stringify(opened.error ?? {}))
+  assert.equal(opened.value.document.spec, PROJECT_SPEC, '内存里按当前合同呈现')
+  assert.equal(opened.value.document.carriers.revision, 4, 'revision 原样保留')
+
+  const untouched = JSON.parse(await readFile(join(root, '.pinax', 'project.json'), 'utf-8'))
+  assert.equal(untouched.spec, 'pinax-project@2', '只打开不写盘：不擅自改作者的项目文件')
+
+  // 真正落盘的时机（切主载体／启停）：此时才把 @2 写回 @3。
+  const switched = await setPrimaryCarrier({ root, registry, pluginId: 'fixture.novel', expectedRevision: 4 })
+  assert.equal(switched.ok, true, JSON.stringify(switched.error ?? {}))
+  const upgraded = JSON.parse(await readFile(join(root, '.pinax', 'project.json'), 'utf-8'))
+  assert.equal(upgraded.spec, PROJECT_SPEC)
+  assert.equal(upgraded.schemaVersion, 3)
+  assert.equal(upgraded.carriers.revision, 5)
 })

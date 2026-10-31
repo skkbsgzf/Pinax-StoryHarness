@@ -251,6 +251,51 @@ check('m3 外壳 bundle 的双落点解析在产物里：保留 PINAX_NEXT_SKILL
   shellBundle.includes('PINAX_NEXT_SKILLS_DIR'),
   shellBundle.includes('PINAX_NEXT_SKILLS_DIR') ? '覆盖口在' : '缺 PINAX_NEXT_SKILLS_DIR')
 
+// 协议 v3 的 entry 面（插件自带面板）在产物里得有两件东西：
+//   n  面板页与它的脚本随产物走（next/carriers/<名字>/ui → next/.build/<名字>/ui）；
+//      面板页是运行时从盘上读的静态文件，不进 vite 资产图——漏拷一次装机就是一块白板。
+//   n2 外壳 bundle 带着面板协议本身（pinax-plugin:// 与它的处理器）；
+//      协议没进包，面板页连都取不到。
+const CARRIERS_SOURCE = join(repoRoot, 'next', 'carriers')
+const BUILD_DIR = join(repoRoot, 'next', '.build')
+const sourceCarrierUiDirs = []
+for (const entry of await readdir(CARRIERS_SOURCE, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue
+  const hasUi = await stat(join(CARRIERS_SOURCE, entry.name, 'ui')).then((info) => info.isDirectory(), () => false)
+  if (hasUi) sourceCarrierUiDirs.push(entry.name)
+}
+const missingCarrierAssets = []
+for (const name of sourceCarrierUiDirs) {
+  const exists = await stat(join(BUILD_DIR, name, 'ui', 'index.html')).then(() => true, () => false)
+  if (!exists) missingCarrierAssets.push(name)
+}
+check('n 载体面板资产进产物：.build/<载体>/ui/index.html 与源码逐一对应',
+  sourceCarrierUiDirs.length > 0 && missingCarrierAssets.length === 0,
+  missingCarrierAssets.length ? `缺 ${missingCarrierAssets.join(', ')}` : `${sourceCarrierUiDirs.join(' / ')}`)
+
+const panelProtocolMarkers = ['pinax-plugin', 'registerSchemesAsPrivileged', 'content-security-policy']
+const missingPanelProtocol = panelProtocolMarkers.filter((marker) => !shellBundle.includes(marker))
+check('n2 面板协议在产物里：外壳 bundle 带 pinax-plugin 协议与它的 CSP 响应头',
+  missingPanelProtocol.length === 0,
+  missingPanelProtocol.length ? `缺 ${missingPanelProtocol.join(' ')}` : `${panelProtocolMarkers.length} 个标记齐`)
+
+// 协议 v3 的 agentMd 面：每栏的作者须知是运行时从插件目录读的文件（不进 vite 资产图）。
+// 漏拷一次，装机后十二栏的须知会静默消失——不报错，只是模型突然不守那栏的规矩。
+const carrierDirsInSource = []
+for (const entry of await readdir(CARRIERS_SOURCE, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue
+  const hasAgentMd = await stat(join(CARRIERS_SOURCE, entry.name, 'AGENT.md')).then((info) => info.isFile(), () => false)
+  if (hasAgentMd) carrierDirsInSource.push(entry.name)
+}
+const missingAgentMd = []
+for (const name of carrierDirsInSource) {
+  const exists = await stat(join(BUILD_DIR, name, 'AGENT.md')).then(() => true, () => false)
+  if (!exists) missingAgentMd.push(name)
+}
+check('n3 载体作者须知进产物：.build/<载体>/AGENT.md 与源码逐一对应',
+  carrierDirsInSource.length > 0 && missingAgentMd.length === 0,
+  missingAgentMd.length ? `缺 ${missingAgentMd.join(', ')}` : `${carrierDirsInSource.length} 份`)
+
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
 // 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，
 // 旧正则 join\\(currentDir… 会被标识符改名误伤（门禁该守路径，不该守压缩后的变量名）。

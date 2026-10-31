@@ -31,6 +31,11 @@ import {
   VIDEO_TOOL_NAMES
 } from '../carriers/index.mjs'
 import { RECORD_CARRIERS, RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from '../shell/recordCarriers.mjs'
+import { MATERIAL_RECORD_CONFIG } from '../carriers/material/tools.mjs'
+import { COMIC_RECORD_CONFIG } from '../carriers/comic/tools.mjs'
+import { VIDEO_RECORD_CONFIG } from '../carriers/video/tools.mjs'
+import { EXPERIENCE_RECORD_CONFIG } from '../carriers/experience/tools.mjs'
+import { ONLINE_RECORD_CONFIG } from '../carriers/online/tools.mjs'
 import { legacyBindingForPane } from '../shell/viewRegistry.mjs'
 import { HISTORY_ALLOWED_DIRS } from '../history/gitHistory.mjs'
 import { createTempWorkspace } from '../testing/harness.mjs'
@@ -57,6 +62,14 @@ const TOOL_NAMES = Object.freeze({
   video: VIDEO_TOOL_NAMES,
   experience: EXPERIENCE_TOOL_NAMES,
   online: ONLINE_TOOL_NAMES
+})
+/** 各栏记录底座的配置（工具自己用的那一份：目录／文件名／工具前缀）。 */
+const RECORD_CONFIGS = Object.freeze({
+  material: MATERIAL_RECORD_CONFIG,
+  comic: COMIC_RECORD_CONFIG,
+  video: VIDEO_RECORD_CONFIG,
+  experience: EXPERIENCE_RECORD_CONFIG,
+  online: ONLINE_RECORD_CONFIG
 })
 
 async function installAll({ without = [] } = {}) {
@@ -108,15 +121,30 @@ test('五份记录清单：各自一块目录、四把自有工具，外壳对�
     assert.equal(manifest.subscriptions.includes('project.changed'), true)
 
     const panes = manifest.contributes.panes.map((pane) => pane.id)
-    assert.deepEqual(panes, [`${key}.board`, `${key}.editor`], `${key}：左树＋中栏两块 pane`)
+    // 素材这一栏多一块 overlay pane：它是协议 v3 的**自带面板样板**（内容面是插件自己的页面）。
+    const expectedPanes = key === 'material'
+      ? ['material.board', 'material.editor', 'material.panel']
+      : [`${key}.board`, `${key}.editor`]
+    assert.deepEqual(panes, expectedPanes, `${key}：左树＋中栏两块 pane（素材另有一块自带面板）`)
     assert.equal(recordCarrierOfPaneId(`${key}.editor`).key, key)
     assert.equal(recordCarrierOfPaneId(`${key}.board`).key, key)
     assert.equal(recordTreeKey(key), `records:${key}`)
+    // 记录文件名：界面那份与工具那份必须同一个（漂了就是界面指的文件与工具写的文件不是一份）。
+    assert.equal(meta.file, RECORD_CONFIGS[key].file, `${key}：界面与工具说的记录文件名不是同一个`)
+    assert.equal(meta.dir, RECORD_CONFIGS[key].dir, `${key}：界面与工具说的目录不是同一个`)
+    assert.equal(meta.toolPrefix, RECORD_CONFIGS[key].prefix, `${key}：界面与工具说的工具前缀不是同一个`)
     assert.equal(legacyBindingForPane(`${key}.editor`).kind, 'records-editor', `${key}：中栏走宿主 editor 视图的 records-editor 分支，不在外壳里写死 pane 前缀`)
     assert.equal(manifest.contributes.panes[0].view, 'pinax.view.list', `${key}：左栏声明的是清单视图，树由索引窗按 pane 前缀渲染`)
     assert.equal(HISTORY_ALLOWED_DIRS.includes(meta.dir), true, `${key}：「${meta.dir}」必须进变更历史的允许前缀，作者才回溯得到`)
   }
   assert.equal(recordCarrierOfPaneId('novel.editor'), null, '非记录载体的 pane id 不落进记录表')
+
+  // 素材那一块是随框架发布的 v3 样板：自带面板必须三件套齐全（entry／custom 视图／custom-panel 内容面）。
+  const materialPanels = MATERIAL_CARRIER.contributes.panes.filter((pane) => pane.slot === 'overlay')
+  assert.equal(materialPanels.length, 1, '素材至多一块悬浮窗')
+  assert.equal(materialPanels[0].view, 'pinax.view.custom')
+  assert.equal(materialPanels[0].kind, 'custom-panel')
+  assert.deepEqual(MATERIAL_CARRIER.entry, { kind: 'iframe', path: 'ui/index.html' })
 
   assert.deepEqual(EXPERIENCE_CARRIER.requires.map((item) => item.capability), ['script.scenes'], '体验的本子是剧本：依赖是真闸，不是提示语')
   assert.equal(EXPERIENCE_CARRIER.primary.projectKind, 'screenplay')

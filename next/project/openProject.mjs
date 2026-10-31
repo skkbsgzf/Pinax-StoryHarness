@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fail, ok } from '../kernel/errors.mjs'
+import { PROJECT_SPEC } from '../kernel/projectSkeleton.mjs'
 import { createFileService } from '../fs/fileService.mjs'
 import { buildArchiveView } from './carriers.mjs'
 import { readProjectDocument, writeProjectDocument } from './projectManifest.mjs'
@@ -25,7 +26,7 @@ export async function openProject({ root, registry, deps = {} }) {
     if (match) {
       const derived = {
         ...document.value,
-        spec: 'pinax-project@2',
+        spec: PROJECT_SPEC,
         carriers: { primary: match.id, enabled: [match.id], revision: 1 },
         needsPrimary: false,
         legacyUpgraded: true

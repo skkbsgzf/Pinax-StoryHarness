@@ -12,12 +12,12 @@
 export const OUTLINE_CARRIER_ID = 'pinax.carrier.outline'
 
 export const OUTLINE_CARRIER = Object.freeze({
-  // 工单 C：写时只写 v2（manifestVersion 显式 2）。
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: OUTLINE_CARRIER_ID,
   title: '大纲',
-  version: '1.1.0',
+  version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -34,11 +34,11 @@ export const OUTLINE_CARRIER = Object.freeze({
   // 工单 C2：pane 自声明 view（大纲树／编辑器），宿主不再按 id 前缀猜。
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', kind: 'outline-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
       // 协议 v1.1-C：悬浮小工具窗（作者点名「大纲变成微型悬浮窗，悬浮在小说正文的某个位置」）。
       // 载体只声明意图与宽度；定位、拖动、收起/展开、位置记忆全归宿主 next/shell/FloatingWidget.vue。
-      { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, view: 'pinax.view.tree' }
+      { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, view: 'pinax.view.tree', kind: 'outline-editor' }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
@@ -58,7 +58,14 @@ export const OUTLINE_CARRIER = Object.freeze({
   // 读/写工具在运行时面上会被整组拒掉，作者点什么都调不动。与小说/资料同一口径。
   permissions: [{ type: 'file', dir: '大纲', mode: 'rw' }, 'agent:ask'],
 
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
+  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  entry: null,
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default OUTLINE_CARRIER

@@ -10,11 +10,12 @@
 export const VIDEO_CARRIER_ID = 'pinax.carrier.video'
 
 export const VIDEO_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: VIDEO_CARRIER_ID,
   title: '视频',
-  version: '1.0.0',
+  version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -30,8 +31,8 @@ export const VIDEO_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'video.board', title: '镜头与成片', icon: 'film', view: 'pinax.view.list', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'video.editor', title: '视频', icon: 'film', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'video.board', title: '镜头与成片', icon: 'film', view: 'pinax.view.list', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'video.editor', title: '视频', icon: 'film', view: 'pinax.view.editor', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     settings: []
   }),
@@ -48,7 +49,14 @@ export const VIDEO_CARRIER = Object.freeze({
 
   permissions: [{ type: 'file', dir: '视频', mode: 'rw' }, 'agent:ask'],
 
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
+  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  entry: null,
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default VIDEO_CARRIER

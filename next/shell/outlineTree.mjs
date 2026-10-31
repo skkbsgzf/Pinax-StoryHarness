@@ -119,7 +119,7 @@ export function canMoveNode(draft, index, delta) {
 
 /**
  * 删节点：连同以它为任一端的连线一起删（from/to 与 source/target 两种写法都算）。
- * 删的是草稿——按保存才落盘，所以界面上不做二次确认。
+ * 删的是草稿——改完自动落盘，所以界面上不做二次确认。
  */
 export function removeNode(draft, index) {
   const nodes = copyNodes(draft?.nodes)

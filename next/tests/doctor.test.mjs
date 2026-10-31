@@ -19,6 +19,8 @@ const DESCRIPTOR = {
   descriptorVersion: 1,
   host: 'pinax-next-shell',
   kernelContract: '1',
+  // 白名单照抄真实的 next/host-descriptor.json：外壳明确认 @1/@2/@3 三份合同。
+  carrierSpecs: ['pinax-carrier@1', 'pinax-carrier@2', 'pinax-carrier@3'],
   trustMode: 'same-process',
   slots: ['left-dock', 'center', 'overlay'],
   reservedSlots: ['right', 'top-menu'],
@@ -68,10 +70,18 @@ test('needs-host-upgrade：minKernel 高于外壳合同 / 外壳不认 v2 合同
   assert.equal(report.state, 'needs-host-upgrade')
   assert.match(report.fix, /升级外壳/u)
 
+  // 外壳合同太老（kernelContract 0）：@3 合同本身它认，但内核门槛过不了。
   const oldHost = { ...DESCRIPTOR, kernelContract: '0' }
   const legacyHost = diagnoseCarrier(OUTLINE_CARRIER, { descriptor: oldHost })
   assert.equal(legacyHost.state, 'needs-host-upgrade')
-  assert.match(legacyHost.fix, /pinax-carrier@1|升到/u)
+  assert.match(legacyHost.fix, /升级外壳/u)
+
+  // 老描述符没有 carrierSpecs 白名单：只认 v1/v2，@3 载体直接被判「外壳不认这个合同」。
+  const legacyDescriptor = { ...DESCRIPTOR }
+  delete legacyDescriptor.carrierSpecs
+  const unknownSpec = diagnoseCarrier(OUTLINE_CARRIER, { descriptor: legacyDescriptor })
+  assert.equal(unknownSpec.state, 'needs-host-upgrade')
+  assert.match(unknownSpec.fix, /pinax-carrier@1|升到/u)
 })
 
 test('missing-capability：requires 在已安装集合里凑不齐，fix 用载体自己给的那句', () => {

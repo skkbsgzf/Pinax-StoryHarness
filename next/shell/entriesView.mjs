@@ -62,6 +62,122 @@ export function nextEntriesView(view) {
   return ENTRIES_VIEWS[(index + 1) % ENTRIES_VIEWS.length] ?? 'table'
 }
 
+/* —— 看板区（批次44）的纯函数 ———————————————————————————————————————
+ * 批次44：世界书的图表列（列表／表格／图谱）从窄栏搬进核心区，成为一块看板区。
+ * 分组、筛选、排序、类别树都是纯计算——放在这里，组件只负责画（node 轨可测）。 */
+
+/** 表格列（批次36 定；批次44 随看板区搬到核心区，列本身不变）。 */
+export const ENTRY_COLUMNS = Object.freeze([
+  { key: 'name', label: '名称' },
+  { key: 'cat', label: '类别' },
+  { key: 'type', label: '类型' },
+  { key: 'keys', label: '关键词' },
+  { key: 'chars', label: '字数' },
+  { key: 'summary', label: '摘要' }
+])
+
+const entryCollator = new Intl.Collator('zh-Hans-CN')
+
+/** 条目的关键词（列表工具给的是 aliases，读工具给的是 keys——两处都认）。 */
+export function entryKeysOf(entry) {
+  return [...(Array.isArray(entry?.aliases) ? entry.aliases : []), ...(Array.isArray(entry?.keys) ? entry.keys : [])]
+}
+
+/**
+ * 按类别分组（批次34）：声明序在前、声明外出现过的类别按出现序补后，
+ * 没有类别的条目归「未分类」并永远排最后。
+ * 没有类别目录的旧项目（categories 为空）不摆「未分类」这个组头——列表与原样一致。
+ */
+export function groupEntriesByCat(entries, categories) {
+  const list = Array.isArray(entries) ? entries : []
+  const declared = Array.isArray(categories) ? categories : []
+  if (!declared.length) return list.length ? [{ name: '', label: '', items: list }] : []
+  const order = [...declared]
+  for (const entry of list) {
+    const cat = String(entry?.cat ?? '')
+    if (cat && !order.includes(cat)) order.push(cat)
+  }
+  const groups = []
+  for (const cat of order) {
+    const items = list.filter((entry) => String(entry?.cat ?? '') === cat)
+    if (items.length) groups.push({ name: cat, label: cat, items })
+  }
+  const loose = list.filter((entry) => !String(entry?.cat ?? ''))
+  if (loose.length) groups.push({ name: '', label: '未分类', items: loose })
+  return groups
+}
+
+/**
+ * 类别树（批次44 · 窄栏那份导航）：带条数，按声明序／出现序排。
+ * 「全部」是第一项——它不是类别，是筛选的清空位。
+ */
+export function entryCategoryTree(entries, categories) {
+  const list = Array.isArray(entries) ? entries : []
+  const declared = Array.isArray(categories) ? categories : []
+  const order = []
+  for (const cat of declared) {
+    if (cat && !order.includes(cat)) order.push(cat)
+  }
+  for (const entry of list) {
+    const cat = String(entry?.cat ?? '')
+    if (cat && !order.includes(cat)) order.push(cat)
+  }
+  const nodes = order.map((cat) => ({
+    name: cat,
+    label: cat,
+    count: list.filter((entry) => String(entry?.cat ?? '') === cat).length
+  }))
+  const loose = list.filter((entry) => !String(entry?.cat ?? '')).length
+  if (loose) nodes.push({ name: '', label: '未分类', count: loose })
+  return [{ name: '__all', label: '全部', count: list.length }, ...nodes]
+}
+
+/** 筛选：类别精确匹配；文本对名称／关键词／摘要做不区分大小写的包含匹配。 */
+export function filterEntries(entries, { text = '', cat = '' } = {}) {
+  const list = Array.isArray(entries) ? entries : []
+  const needle = String(text ?? '').trim().toLowerCase()
+  const wantCat = String(cat ?? '')
+  if (!needle && !wantCat) return list
+  return list.filter((entry) => {
+    if (wantCat && String(entry?.cat ?? '') !== wantCat) return false
+    if (!needle) return true
+    const haystack = [
+      String(entry?.name ?? ''),
+      entryKeysOf(entry).join('、'),
+      String(entry?.summary ?? '')
+    ].join('\n').toLowerCase()
+    return haystack.includes(needle)
+  })
+}
+
+function entrySortValue(entry, key) {
+  if (key === 'chars') return Number(entry?.chars ?? 0) || 0
+  if (key === 'keys') return entryKeysOf(entry).join('、')
+  if (key === 'cat') return String(entry?.cat ?? '')
+  if (key === 'type') return String(entry?.type ?? '')
+  if (key === 'summary') return String(entry?.summary ?? '')
+  return String(entry?.name ?? '')
+}
+
+/** 组内排序（组头顺序不动——分组是第一维，排序是组内第二维）。sort 为空＝按原序。 */
+export function sortEntriesBy(items, sort) {
+  const list = Array.isArray(items) ? items : []
+  if (!sort?.key) return list
+  const dir = sort.dir === 'desc' ? -1 : 1
+  return [...list].sort((a, b) => {
+    const left = entrySortValue(a, sort.key)
+    const right = entrySortValue(b, sort.key)
+    if (sort.key === 'chars') return (left - right) * dir
+    return entryCollator.compare(String(left), String(right)) * dir
+  })
+}
+
+/** 摘要列只占一格：截 40 字（截断只发生在显示上，磁盘与详情面仍是全文）。 */
+export function clipEntrySummary(value, max = 40) {
+  const text = String(value ?? '').trim()
+  return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
 /* —— 图谱的边与布局（批次36 · 任务二）—————————————————————————————— */
 
 /**
@@ -214,4 +330,18 @@ export function radialLayout(nodes, edges, { radius = 100, outerGap = 56 } = {})
   return result
 }
 
-export default { readEntriesView, writeEntriesView, nextEntriesView, entriesViewStorageKey, entryEdges, radialLayout }
+export default {
+  readEntriesView,
+  writeEntriesView,
+  nextEntriesView,
+  entriesViewStorageKey,
+  entryEdges,
+  radialLayout,
+  ENTRY_COLUMNS,
+  entryKeysOf,
+  groupEntriesByCat,
+  entryCategoryTree,
+  filterEntries,
+  sortEntriesBy,
+  clipEntrySummary
+}

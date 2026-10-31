@@ -97,11 +97,18 @@ test('信封由载体块拼成：五块齐、优先级按档案顺序、过的�
     assert.equal(payload.taskType, 'authoring.review.chapter')
     assert.equal(payload.capability, 'text')
     const allowed = AGENT_CONTEXT_PROFILES['writing-chapter'].blocks
-    assert.deepEqual(payload.envelope.blocks.map((block) => block.kind), ['rules', 'style', 'selection', 'outline', 'worldbook', 'worldbook'])
+    // 协议 v3 的 agentMd 面：四栏的作者须知排在内容块前面（优先级 1100），内容块仍按档案顺序排。
+    const agentMdBlocks = payload.envelope.blocks.filter((block) => block.kind === 'agent-md')
+    assert.equal(agentMdBlocks.length, 4, '小说／大纲／世界书／设定四栏的 AGENT.md 都进信封')
+    assert.deepEqual([...new Set(agentMdBlocks.map((block) => block.priority))], [1100])
+    assert.ok(agentMdBlocks.every((block) => block.sourceRefs[0].startsWith('agentmd:')))
+    assert.deepEqual(payload.envelope.blocks.map((block) => block.kind), ['agent-md', 'agent-md', 'agent-md', 'agent-md', 'rules', 'style', 'selection', 'outline', 'worldbook', 'worldbook'])
     assert.deepEqual(payload.missingKinds, [])
     payload.envelope.blocks.forEach((block, index) => {
       const kind = block.kind
-      assert.equal(block.priority, 1000 - allowed.indexOf(kind) * 10, `${kind} 的优先级要和档案顺序对齐`)
+      if (kind !== 'agent-md') {
+        assert.equal(block.priority, 1000 - allowed.indexOf(kind) * 10, `${kind} 的优先级要和档案顺序对齐`)
+      }
       assert.ok(block.sourceRefs.length > 0 && block.sourceRefs.length <= 32)
       assert.ok(block.sourceRefs.every((ref) => ref.length <= 200))
       assert.ok(index === 0 || block.priority <= payload.envelope.blocks[index - 1].priority)
@@ -152,7 +159,7 @@ test('板块缺席只记账不硬失败：未启用设定/大纲/世界书时 ru
     assert.deepEqual(built.value.providerKinds, ['selection'])
     assert.deepEqual(built.value.missingKinds.sort(), ['outline', 'rules', 'style', 'worldbook'])
     assert.ok(built.value.warnings.some((warning) => /没有提供者/.test(warning)))
-    assert.deepEqual(built.value.envelope.blocks.map((block) => block.kind), ['selection'])
+    assert.deepEqual(built.value.envelope.blocks.map((block) => block.kind), ['agent-md', 'selection'], '只有小说一栏开着：它那份作者须知也跟着进信封')
   } finally {
     await target.workspace.cleanup()
   }
@@ -234,7 +241,7 @@ test('端到端：runtime.ask 走进程内 advisor，信封/任务号/轮数闸�
     assert.equal(seen[0].taskType, 'authoring.review.chapter')
     assert.equal(seen[0].capability, 'text')
     assert.equal(seen[0].providerId, 'text-model')
-    assert.equal(seen[0].blocks, 6)
+    assert.equal(seen[0].blocks, 10, '真信封是十块：四栏的 AGENT.md ＋ 六块内容（rules/style/selection/outline/世界书×2）')
     assert.ok(seen[0].guard, '单次请求的模型调用轮数闸必须透传给运行器（与 advisor 路由同口径）')
     assert.equal(answer.value.meta.taskType, 'authoring.review.chapter')
     assert.match(answer.value.meta.targetRevision, /^novel-chapter:正文/)

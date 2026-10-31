@@ -13,6 +13,8 @@ export function createRegistry(options = {}) {
   const kinds = options.kinds ?? null
   const manifests = new Map()
   const impls = new Map()
+  /** 每插件的安装目录（协议 v3 的相对路径要靠它解析：服务的 command／cwd、面板的 entry）。 */
+  const pluginDirs = new Map()
   const rejected = []
   const toolOwners = new Map()
   const namespaceOwners = new Map()
@@ -82,9 +84,13 @@ export function createRegistry(options = {}) {
         toolOwners.set(tool, manifest.id)
         namespaceOwners.set(tool.split('.')[0], manifest.id)
       }
+      // 外部 MCP 的工具名在连接后才出现：装的时候就先把命名空间占住，
+      // 两个载体抢同一个前缀＝装的时候就拒，而不是等到聚合工具面撞名才发现。
+      for (const server of manifest.mcp ?? []) namespaceOwners.set(server.prefix, manifest.id)
 
       manifests.set(manifest.id, manifest)
       impls.set(manifest.id, { ...impl, trust: meta.trust ?? 't1' })
+      if (meta.dir) pluginDirs.set(manifest.id, String(meta.dir))
       return ok({ manifest, trust: meta.trust ?? 't1', scopeSummary: summarizeScopes(manifest) })
     },
 
@@ -96,6 +102,7 @@ export function createRegistry(options = {}) {
       releaseClaims(pluginId)
       manifests.delete(pluginId)
       impls.delete(pluginId)
+      pluginDirs.delete(pluginId)
       for (const listener of [...uninstallListeners]) {
         try {
           listener({ pluginId })
@@ -126,6 +133,11 @@ export function createRegistry(options = {}) {
       if (typeof listener !== 'function') return fail('INVALID_INPUT', 'onUninstalled 需要函数')
       uninstallListeners.add(listener)
       return ok({ off: () => uninstallListeners.delete(listener) })
+    },
+
+    /** 插件的安装目录（协议 v3 的相对路径解析基准；没登记就是 null）。 */
+    dirOf(pluginId) {
+      return pluginDirs.get(String(pluginId)) ?? null
     },
 
     /** 已安装清单里声明过的命令（v2 contributes.commands）。 */
@@ -215,6 +227,17 @@ export function createRegistry(options = {}) {
           'left-dock': panesOf(enabledIds, 'left-dock', primary),
           center: panesOf(enabledIds, 'center', primary)
         },
+        // 协议 v3 的四个运行面（只有 @3 清单才会有内容；@1/@2 归一后是 null／空数组）：
+        // 自带面板按 pane 走（pane.entry），服务与外部 MCP 是项目级的——运行时据此起子进程／连端点。
+        services: [...enabledIds].flatMap((id) => manifests.get(id).services.map((service) => ({
+          pluginId: id,
+          dir: pluginDirs.get(id) ?? null,
+          ...service
+        }))),
+        mcp: [...enabledIds].flatMap((id) => manifests.get(id).mcp.map((server) => ({ pluginId: id, ...server }))),
+        agents: [...enabledIds]
+          .filter((id) => manifests.get(id).agentMd)
+          .map((id) => ({ pluginId: id, path: manifests.get(id).agentMd })),
         tools: [...enabledIds].flatMap((id) => manifests.get(id).tools.map((tool) => ({
           name: tool, pluginId: id, title: `${manifests.get(id).title} · ${tool}`
         }))),
@@ -272,7 +295,8 @@ export function createRegistry(options = {}) {
       const manifest = manifests.get(id)
       for (const pane of manifest.panes) {
         if (pane.slot !== slot) continue
-        out.push({ ...pane, pluginId: id, pluginTitle: manifest.title, primary: id === primaryId })
+        // entry 随 pane 一起出去：宿主解析到 pinax.view.custom 时不必再回注册表找一遍入口。
+        out.push({ ...pane, pluginId: id, pluginTitle: manifest.title, primary: id === primaryId, entry: manifest.entry ?? null })
       }
     }
     return slot === 'left-dock' ? out.sort((a, b) => Number(b.primary) - Number(a.primary)) : out
@@ -285,6 +309,10 @@ export function createRegistry(options = {}) {
       const namespace = tool.split('.')[0]
       const owner = namespaceOwners.get(namespace)
       if (owner && owner !== manifest.id) return { namespace, owner, kind: 'namespace' }
+    }
+    for (const server of manifest.mcp ?? []) {
+      const owner = namespaceOwners.get(server.prefix)
+      if (owner && owner !== manifest.id) return { namespace: server.prefix, owner, kind: 'mcp-prefix' }
     }
     return null
   }

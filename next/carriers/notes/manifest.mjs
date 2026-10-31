@@ -12,11 +12,12 @@
 export const NOTES_CARRIER_ID = 'pinax.carrier.notes'
 
 export const NOTES_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: NOTES_CARRIER_ID,
   title: '构思',
-  version: '1.1.0',
+  version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -32,8 +33,8 @@ export const NOTES_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list', kind: 'notes-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', kind: 'notes-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
@@ -53,7 +54,14 @@ export const NOTES_CARRIER = Object.freeze({
   // 读写工具在运行时面上会被整组拒掉。与小说/资料同一口径。
   permissions: [{ type: 'file', dir: '构思', mode: 'rw' }, 'agent:ask'],
 
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
+  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  entry: null,
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default NOTES_CARRIER

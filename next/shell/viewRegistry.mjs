@@ -8,20 +8,25 @@
  * 三条边界（对齐 Obsidian 的 Views 协议）：
  *   1) 视图实例由宿主创建与销毁，插件不得持有引用——factory 是纯函数，每次解析现算；
  *   2) v2 只给第三方开 `pinax.view.custom` 一个类型名（富视图沙箱不在本批）；
- *   3) 六个宿主视图 `pinax.view.tree|list|editor|reader|diff|graph` 由宿主注册，
- *      载体不能顶替（注册同名即拒，与工具命名空间同一口径）。
+ *   3) 宿主视图类型由宿主注册，载体不能顶替（注册同名即拒，与工具命名空间同一口径）。
+ *
+ * 批次44：宿主视图类型从六个加到八个——多的是两块形态（见 next/shell/formTaxonomy.mjs）：
+ *   `pinax.view.board` 看板面（结构化数据的视图：列表／表格／图谱，核心区里成块的地方）；
+ *   `pinax.view.app`   应用面（外部端口上的网页应用，宿主给一块内嵌浏览器，不手搓组件）。
  *
  * 纯数据模块，不 import Vue——node:test 直接测注册/解析/释放。
  */
 
-/** 宿主自带的六个视图类型（P13 的渲染器词表落地版）。 */
+/** 宿主自带的视图类型（P13 的渲染器词表落地版 ＋ 批次44 的看板面与应用面）。 */
 export const HOST_VIEW_TYPES = Object.freeze([
   'pinax.view.tree',
   'pinax.view.list',
   'pinax.view.editor',
   'pinax.view.reader',
   'pinax.view.diff',
-  'pinax.view.graph'
+  'pinax.view.graph',
+  'pinax.view.board',
+  'pinax.view.app'
 ])
 
 /** 第三方唯一可用的视图类型名（v2 只登记类型名，不跑第三方代码）。 */
@@ -30,8 +35,8 @@ export const CUSTOM_VIEW_TYPE = 'pinax.view.custom'
 export const VIEW_TYPES = Object.freeze([...HOST_VIEW_TYPES, CUSTOM_VIEW_TYPE])
 
 /**
- * v1 兼容绑定：没有声明 view 的老 pane 按 id 前缀认内容面。
- * 这是「迁移期的一张对照表」，不是第二套真相——新 pane 一律写 view 字段。
+ * v1 兼容绑定：老 pane 既没声明 view、也没声明 kind 时，按 id 前缀认内容面。
+ * 这是「迁移期的一张对照表」，不是第二套真相——v3 的 pane 一律显式写 view 与 kind。
  * 顺序有意义：更长的前缀先匹配（outline.widget 先于 outline.）。
  */
 export const LEGACY_VIEW_BINDINGS = Object.freeze([
@@ -67,18 +72,16 @@ export function legacyBindingForPane(paneId) {
 
 /**
  * 宿主工厂：给定 pane 与当前数据，算出要渲染的内容面。
- * 声明了 view 的 pane 也必须落在宿主六个类型里（custom 走占位，因为 v2 不跑第三方代码）；
- * 没声明的按前缀回落——迁移期两条路并存，新 pane 一律写 view。
+ * v3：pane.kind 是权威来源；v1/v2 没写 kind 的 pane 才按 id 前缀回落（迁移期两条路并存）。
+ * view 决定渲染器，kind 决定内容面——两者不再互相推导。
  */
 export function hostViewFactory({ pane, data } = {}) {
-  const paneId = String(pane?.id ?? '')
-  const binding = legacyBindingForPane(paneId)
+  const binding = legacyBindingForPane(String(pane?.id ?? ''))
+  let kind = typeof pane?.kind === 'string' ? pane.kind : (binding?.kind ?? null)
+  if (!kind) return null
   // 提案审阅是「正文面 + selection=proposal」的一个状态，不是新视图类型（协议 v1.1-A）。
-  if (binding?.prefix === 'novel.' && data?.selection?.type === 'proposal') {
-    return { kind: 'proposal-review', view: pane?.view ?? binding.view }
-  }
-  if (!binding) return null
-  return { kind: binding.kind, view: pane?.view ?? binding.view }
+  if (kind === 'chapter-editor' && data?.selection?.type === 'proposal') kind = 'proposal-review'
+  return { kind, view: pane?.view ?? binding?.view ?? null }
 }
 
 /**
@@ -161,13 +164,33 @@ export function createViewRegistry() {
   return { registerView, resolve, bind, unregister, disposeOwner, list }
 }
 
-/** 宿主那份：六个类型都注册到 hostViewFactory（内容面由前缀 + 数据算）。 */
+/**
+ * 自带面板（协议 v3 的 `entry` 面）：内容面是插件自己的页面，宿主只给一块沙箱 iframe。
+ * 所以这个类型名的渲染器只回答一件事——「这块 pane 的内容面是 custom-panel」。
+ */
+export function customViewFactory({ pane } = {}) {
+  return { kind: 'custom-panel', view: CUSTOM_VIEW_TYPE, entry: pane?.entry ?? null }
+}
+
+/**
+ * 应用面（批次44）：内容面是一台外部服务自己的网页（ComfyUI 那种自带端口的）。
+ * 宿主只回答「这块 pane 的内容面是 external-app，地址是哪个」——界面由那块 iframe 自己长。
+ * 地址取自 pane.app.url（载体清单里声明；内核校验过它必须是本机 http 地址）。
+ */
+export function appViewFactory({ pane } = {}) {
+  return { kind: 'external-app', view: 'pinax.view.app', url: pane?.app?.url ?? null }
+}
+
+/** 宿主那份：视图类型都注册到 hostViewFactory（内容面由 pane 声明的 kind 决定）。 */
 export const hostViewRegistry = createViewRegistry()
 for (const type of HOST_VIEW_TYPES) {
+  if (type === 'pinax.view.app') continue
   hostViewRegistry.registerView(type, hostViewFactory, { owner: 'host', builtin: true })
 }
-// custom 也先占一个名字：解析得到「认这个类型、但没有渲染器」，宿主据此出占位而不是报错。
-hostViewRegistry.registerView(CUSTOM_VIEW_TYPE, () => null, { owner: 'host', builtin: true })
+// 应用面用自己的工厂（内容面固定 external-app，地址从 pane 上取）。
+hostViewRegistry.registerView('pinax.view.app', appViewFactory, { owner: 'host', builtin: true })
+// custom 也占一个名字：它不是「认这个类型、但没有渲染器」，而是自带面板这一种内容面。
+hostViewRegistry.registerView(CUSTOM_VIEW_TYPE, customViewFactory, { owner: 'host', builtin: true })
 
 /**
  * CarrierPaneHost 的唯一入口：解析失败（类型不存在）返回 null，调用方出占位。

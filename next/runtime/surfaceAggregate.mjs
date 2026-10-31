@@ -48,11 +48,15 @@ export function collectCarrierTools({ registry, view, fileService } = {}) {
 /**
  * 起一个聚合 MCP 服务。返回的 server 就是 connectInProcess 的入参；
  * 内部那条到内核的进程内链路随 server.close() 一起收。
+ *
+ * 协议 v3 的外部 MCP（`externalClients`）：每台客户端自带 prefix，工具以 `<prefix>.<name>` 进面；
+ * 列举每次现取（重连后工具面会变），调用按前缀路由，远端返回的 content[] 原样透传。
  */
 export async function createAggregatedMcpServer({
   kernelServer,
   carrierMap = new Map(),
   nativeMap = new Map(),
+  externalClients = [],
   name = 'pinax-runtime',
   version = '0.2.0',
   instructions = '',
@@ -72,11 +76,26 @@ export async function createAggregatedMcpServer({
     for (const [toolName, { tool }] of nativeMap) {
       merged.set(toolName, publicDescriptor(toolName, tool))
     }
+    // 外部 MCP：每次现取（重连会换面），连不上的那台只贡献零个名字，不阻断整面。
+    for (const client of externalClients) {
+      for (const tool of client.listTools()) {
+        const exposed = `${client.prefix}.${tool.name}`
+        merged.set(exposed, publicDescriptor(exposed, tool))
+      }
+    }
     return { tools: [...merged.values()] }
   })
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const toolName = String(request.params?.name ?? '')
+    // 外部工具先按前缀路由：prefix 前缀在安装期已仲裁，不会与本地工具名混淆。
+    const external = externalClients.find((client) => toolName.startsWith(`${client.prefix}.`))
+    if (external) {
+      const remote = toolName.slice(external.prefix.length + 1)
+      const result = await external.callTool(remote, request.params?.arguments ?? {})
+      if (result?.raw) return result.raw
+      return textResult(result?.payload ?? { ok: false, message: '外部 MCP 无返回' }, result?.ok === false)
+    }
     const entry = carrierMap.get(toolName) ?? nativeMap.get(toolName)
     if (entry) {
       const result = await entry.tool.run(request.params?.arguments ?? {}, { pluginId: entry.pluginId, advisorBaseUrl })

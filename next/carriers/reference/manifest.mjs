@@ -18,11 +18,12 @@
 export const REFERENCE_CARRIER_ID = 'pinax.carrier.reference'
 
 export const REFERENCE_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: REFERENCE_CARRIER_ID,
   title: '资料',
-  version: '1.1.0',
+  version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -38,8 +39,8 @@ export const REFERENCE_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources', view: 'pinax.view.list', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document', view: 'pinax.view.reader', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'reference.board', title: '资料板', icon: 'sources', view: 'pinax.view.list', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'reference.documents', title: '资料', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     // 协议 P14 载体设置注册（工单A 第二步）：本载体暂无设置项——空数组＝设置页不出这一格。
     settings: []
@@ -57,7 +58,14 @@ export const REFERENCE_CARRIER = Object.freeze({
 
   permissions: [{ type: 'file', dir: '资料', mode: 'rw' }, 'agent:ask'],
 
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
+  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  entry: null,
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default REFERENCE_CARRIER

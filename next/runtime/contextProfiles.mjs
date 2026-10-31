@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises'
+import { isAbsolute, relative, resolve } from 'node:path'
 import { AGENT_CONTEXT_PROFILES } from '../../shared/agentContextProfiles.js'
 import {
   buildAgentContextEnvelope,
@@ -18,6 +20,20 @@ import { fail, ok } from '../kernel/errors.mjs'
  */
 export const READ_ONLY_EFFECT_POLICIES = Object.freeze(['review-only', 'ephemeral', 'metrics-only'])
 export const MAX_BLOCKS_PER_ENVELOPE = 60
+/** 载体 AGENT.md 进信封时的上限（字）：作者须知太长会把内容块挤出去。 */
+export const AGENT_MD_MAX_CHARS = 1200
+/**
+ * 全部载体的 AGENT.md 合计上限（字）。
+ * 单份上限管不住「十二栏都开着」：须知一起涌进来会把内容块的预算吃光，
+ * 结果是一封信里全是写作须知、没有一句这本书的内容。所以再加一道总量闸——
+ * 超出的按主载体优先的顺序截掉，并在记账里留名。
+ *
+ * 上限取「今天的十二份合计（约 7000 字）」与「信封预算的三分之一」里的小者：
+ * 十二栏全开时须知一份不丢，小预算时又不会把内容块饿死。
+ */
+export const AGENT_MD_TOTAL_MAX_CHARS = 8000
+/** 须知合计最多占信封预算的几成（剩下的留给这本书的内容本身）。 */
+export const AGENT_MD_BUDGET_SHARE = 0.34
 
 const taskByProfile = new Map()
 
@@ -65,6 +81,80 @@ export function collectBlockProviders({ registry, view, fileService, allowedKind
     }
   }
   return { byKind, warnings }
+}
+
+/**
+ * 协议 v3 的 `agentMd` 面：载体自己的 AGENT.md（作者须知）并进上下文信封。
+ *
+ * 读的是**插件目录**里的那份文件（不是项目里的），路径只认清单声明的那一条相对路径；
+ * 越界、读不到、内容为空都只记一条 warning，不把整条信封拖垮——须知是加料，不是主菜。
+ * 优先级排在内容块之前（1100 > 1000）：它是「怎么读这块内容」，不是内容本身。
+ */
+export async function collectAgentMdBlocks({ registry, view, read = readFile, maxChars = AGENT_MD_MAX_CHARS, totalMaxChars = AGENT_MD_TOTAL_MAX_CHARS } = {}) {
+  const blocks = []
+  const warnings = []
+  for (const pluginId of orderedEnabled(view)) {
+    const manifest = registry?.get?.(pluginId)
+    const relativePath = manifest?.agentMd
+    if (!relativePath) continue
+    const dir = registry?.dirOf?.(pluginId)
+    if (!dir) {
+      warnings.push(`${manifest.title} 声明了 AGENT.md，但宿主没登记它的插件目录，这段作者须知没进上下文。`)
+      continue
+    }
+    const base = resolve(dir)
+    const file = resolve(base, relativePath)
+    const inside = relative(base, file)
+    if (inside.startsWith('..') || isAbsolute(inside)) {
+      warnings.push(`${manifest.title} 的 AGENT.md 路径越出了插件目录，没进上下文。`)
+      continue
+    }
+    let text
+    try {
+      text = await read(file)
+    } catch (error) {
+      warnings.push(`${manifest.title} 的 AGENT.md 读不出来：${String(error?.message || error)}`)
+      continue
+    }
+    const content = String(text ?? '').trim()
+    if (!content) {
+      warnings.push(`${manifest.title} 的 AGENT.md 是空的，跳过。`)
+      continue
+    }
+    blocks.push({
+      kind: 'agent-md',
+      content: content.slice(0, maxChars),
+      priority: 1100,
+      sourceRefs: [`agentmd:${pluginId}/${relativePath}`]
+    })
+  }
+  return { blocks: clipAgentMdBlocks(blocks, { totalMaxChars, warnings }), warnings }
+}
+
+/**
+ * 总量闸：各载体的须知合计不许超过 totalMaxChars。
+ * 截断按主载体优先的顺序（blocks 进来时已经排好序），截掉的与截短的都记一条账——
+ * 作者得知道「有几栏的须知没进上下文」，而不是看见模型漏了规矩。
+ */
+function clipAgentMdBlocks(blocks, { totalMaxChars, warnings }) {
+  let total = 0
+  const kept = []
+  for (const block of blocks) {
+    const room = totalMaxChars - total
+    if (room <= 0) {
+      warnings.push(`各载体的 AGENT.md 合计超过 ${totalMaxChars} 字，${block.sourceRefs?.[0] ?? '后面那份'} 没进上下文。`)
+      continue
+    }
+    if (block.content.length <= room) {
+      kept.push(block)
+      total += block.content.length
+      continue
+    }
+    kept.push({ ...block, content: block.content.slice(0, room) })
+    total += room
+    warnings.push(`各载体的 AGENT.md 合计超过 ${totalMaxChars} 字，${block.sourceRefs?.[0] ?? '有一份'}被截短。`)
+  }
+  return kept
 }
 
 /**
@@ -131,6 +221,8 @@ export async function buildRuntimeEnvelope({ registry, view, fileService, questi
     warnings.push(`块数超过 ${MAX_BLOCKS_PER_ENVELOPE}，只保留前 ${MAX_BLOCKS_PER_ENVELOPE} 个（其余 ${collected.length - MAX_BLOCKS_PER_ENVELOPE} 个未进信封）。`)
     collected.length = MAX_BLOCKS_PER_ENVELOPE
   }
+  // 协议 v3 的 agentMd 面：载体自己的作者须知排在内容块前面并进同一份信封。
+  // 先按原来的口径判「有没有内容块」——须知是加料，单独一份须知撑不起一次回答。
   if (!collected.length) {
     return fail('DEPENDENCY_UNMET', `本次提问组装不出任何上下文块：档案「${profileName}」要的 ${allowedKinds.join('/')} 里，有内容的块是 0 个。${warnings[0] ? `最近一条记账：${warnings[0]}` : ''}`, {
       profile: profileName,
@@ -139,8 +231,11 @@ export async function buildRuntimeEnvelope({ registry, view, fileService, questi
       warnings: warnings.slice(0, 12)
     })
   }
-
   const budget = resolveBudget({ profile, definition, view, maxChars })
+  const agentMd = await collectAgentMdBlocks({ registry, view, totalMaxChars: agentMdCapFor(budget) })
+  warnings.push(...agentMd.warnings)
+  collected.unshift(...agentMd.blocks)
+
   const envelope = clipAgentContextEnvelope(
     buildAgentContextEnvelope({
       surface: definition.owner,
@@ -192,6 +287,15 @@ function resolveBudget({ profile, definition, view, maxChars }) {
   const requested = Number(maxChars ?? contextBudgetOf(view))
   if (Number.isSafeInteger(requested) && requested > 0) caps.push(requested)
   return Math.max(2000, Math.min(...caps))
+}
+
+/**
+ * 须知合计闸按信封预算走：上限取固定天花板与「预算的三成几」的较小者。
+ * 小预算时须知只能占三分之一，剩下的留给这本书的内容——须知再多也不许把正文挤出去。
+ */
+function agentMdCapFor(budget) {
+  const byBudget = Math.floor(Number(budget ?? 0) * AGENT_MD_BUDGET_SHARE)
+  return Math.max(AGENT_MD_MAX_CHARS, Math.min(AGENT_MD_TOTAL_MAX_CHARS, byBudget))
 }
 
 /** 取块预算时尊重板块自己的声明（主载体的那条优先）。 */

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
 import * as gitHistory from '../history/gitHistory.mjs'
@@ -23,6 +23,8 @@ import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
+import { PLUGIN_PROTOCOL } from './pluginProtocol.mjs'
+import { createPluginFileHandler } from './pluginFileServer.mjs'
 
 /**
  * Next 桌面外壳的主进程入口（WP4）。
@@ -125,6 +127,19 @@ function exportFileName(title) {
 // setPath 必须在 whenReady 之前：Cache/GPUCache/锁文件全部跟着走，实例之间彻底隔离。
 const pinnedAppData = process.env.PINAX_APP_DATA
 if (pinnedAppData) app.setPath('userData', pinnedAppData)
+
+/**
+ * 协议 v3 的自带面板：自定义协议 `pinax-plugin://<pluginId>/<相对路径>`。
+ *
+ * 必须在 app ready 之前登记为特权协议（否则 iframe 里当普通外链处理，页面起不来）。
+ * 特权里只开四样：standard（当正经 origin 解析）、secure（不落到不安全上下文）、
+ * supportFetchAPI（面板里的 fetch 能用）、corsEnabled（同源资源互取）。
+ * 不开 stream、不开 bypassCSP——面板页的 CSP 由我们在响应头里给死。
+ */
+protocol.registerSchemesAsPrivileged([{
+  scheme: PLUGIN_PROTOCOL,
+  privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true }
+}])
 
 /**
  * 单实例锁（批次37 附条，作者在盘点讨论中同意并入本批）。
@@ -318,6 +333,29 @@ function createProjectToolLoop() {
 
 export async function startNextShell({ root = null, env = process.env.NODE_ENV, preloadPath = null } = {}) {
   await app.whenReady()
+
+  /**
+   * 面板协议（协议 v3 的 entry 面）：`pinax-plugin://<pluginId>/<相对路径>`。
+   * 面板页只能读**自己那个插件目录**里的文件——越界的路径 403，未知插件 404。
+   * 响应头里带一份 CSP：面板页不许向外发请求（connect-src 'none'），
+   * 脚本与样式只能取自己目录里的（script-src 'self'）。
+   */
+  const pluginFileHandler = createPluginFileHandler({
+    resolvePluginDir: (pluginId) => session?.registry?.dirOf?.(pluginId) ?? null
+  })
+  if (typeof protocol.isProtocolHandled === 'function' && !protocol.isProtocolHandled(PLUGIN_PROTOCOL)) {
+    protocol.handle(PLUGIN_PROTOCOL, async (request) => {
+      const result = await pluginFileHandler(request.url)
+      return new Response(result.body, {
+        status: result.status,
+        headers: {
+          'content-type': result.contentType,
+          'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'"
+        }
+      })
+    })
+  }
+
   buildMenu()
 
   // 应用级偏好（批次8①）：启动即读、即生效——模型面端点与界面缩放不再只靠 env。
@@ -406,7 +444,11 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     autoOpen: Boolean(root),
     // 批次37：工具循环接上真链。默认档是会话的 writeMode（review 时写工具只转提案），
     // 这一层不替作者猜档位——review/auto 的真值在会话 JSONL 与界面开关里。
-    runtimeOptions: { runner: createAdvisorRunner({ toolLoop: createProjectToolLoop() }) }
+    runtimeOptions: {
+      runner: createAdvisorRunner({ toolLoop: createProjectToolLoop() }),
+      // 协议 v3 的 services 面：服务状态变化推给渲染层（起停／崩溃／就绪），右栏不必轮询。
+      onServiceEvent: (payload) => sendToRenderer(IPC_PUSH.runtimeServiceEvent, payload)
+    }
   })
   dispatcher = createIpcDispatcher({
     session,
@@ -551,7 +593,17 @@ app.on('before-quit', (event) => {
 })
 
 // 只有作为 Forge/Node 的直接入口运行时才自启，单测与 bundle 构建 import 它不应拉起 Electron。
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+// 判据不是「argv[1] 恰好是本文件」——带参数的启动器（Playwright 的 --inspect、electron-forge、
+// 打包后的 exe）都会改写 argv 的形状，照旧判就会永远不起窗。现在：argv 里任何一项指到本文件即算，
+// 打包态（app.isPackaged）直接算——那时 argv 里根本没有脚本路径。
+const entryFile = fileURLToPath(import.meta.url)
+const invokedDirectly = app.isPackaged === true || process.argv.slice(1).some((arg) => {
+  try {
+    return resolve(String(arg)) === entryFile
+  } catch {
+    return false
+  }
+})
 // 抢不到单实例锁的进程已经在上面 app.quit()：不再装配会话、不再建窗（second-instance 负责提窗）。
 if (invokedDirectly && singleInstanceLock) {
   // 直开项目的两个入口（取先到）：位置参数（启动器传绝对路径，UTF-16 传递不吃编码）或

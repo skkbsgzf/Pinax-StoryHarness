@@ -103,5 +103,13 @@ export default [
     languageOptions: {
       globals: { ...globals.browser }
     }
+  },
+  // 夹具脚本的 stdout 就是测试协议本身（服务监督器读日志、SSE 夹具握手读 LISTENING:<port>），
+  // 关掉 no-console，别让它们被 --max-warnings 0 挡住。
+  {
+    files: ['next/testing/fixtures/**/*.mjs'],
+    rules: {
+      'no-console': 'off'
+    }
   }
 ]

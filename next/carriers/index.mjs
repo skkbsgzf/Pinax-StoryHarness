@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { NOVEL_CARRIER, NOVEL_CARRIER_ID } from './novel/manifest.mjs'
 import { NOVEL_TOOL_NAMES, createNovelTools } from './novel/tools.mjs'
 import { createNovelBlocks } from './novel/context.mjs'
@@ -64,6 +65,16 @@ export const VIDEO_CARRIER_TRUST = 't1'
 export const EXPERIENCE_CARRIER_TRUST = 't1'
 export const ONLINE_CARRIER_TRUST = 't1'
 
+/**
+ * 载体自己的资产目录（协议 v3 的 `entry` 面用）：面板页、服务脚本都住在这一块里。
+ * 基准是**本文件**的位置，所以开发轨是 `next/carriers/<名字>/`、装机轨是 `next/.build/<名字>/`
+ * （打包时把 `next/carriers/<名字>/ui` 原样拷到 `next/.build/<名字>/ui`，与技能目录同一套路）。
+ * 宿主据此把 `pinax-plugin://<pluginId>/…` 解析到插件自己的目录，不越界。
+ */
+function carrierDir(name) {
+  return fileURLToPath(new URL(`./${name}/`, import.meta.url))
+}
+
 export function novelCarrierPlugin() {
   return {
     manifest: NOVEL_CARRIER,
@@ -72,7 +83,7 @@ export function novelCarrierPlugin() {
       tools: (context = {}) => createNovelTools({ ...context, pluginId: context.pluginId ?? NOVEL_CARRIER_ID }),
       blocks: (context = {}) => createNovelBlocks({ ...context, pluginId: context.pluginId ?? NOVEL_CARRIER_ID })
     },
-    meta: { trust: NOVEL_CARRIER_TRUST, source: 'next/carriers/novel' }
+    meta: { trust: NOVEL_CARRIER_TRUST, source: 'next/carriers/novel', dir: carrierDir('novel') }
   }
 }
 
@@ -86,7 +97,7 @@ export function outlineCarrierPlugin() {
       tools: (context = {}) => createOutlineTools({ ...context, pluginId: context.pluginId ?? OUTLINE_CARRIER_ID }),
       blocks: (context = {}) => createOutlineBlocks({ ...context, pluginId: context.pluginId ?? OUTLINE_CARRIER_ID })
     },
-    meta: { trust: OUTLINE_CARRIER_TRUST, source: 'next/carriers/outline' }
+    meta: { trust: OUTLINE_CARRIER_TRUST, source: 'next/carriers/outline', dir: carrierDir('outline') }
   }
 }
 
@@ -99,7 +110,7 @@ export function notesCarrierPlugin() {
       // 这里也就不挂 blocks 工厂——声明一块不存在的素材比缺席更糟。
       tools: (context = {}) => createNotesTools({ ...context, pluginId: context.pluginId ?? NOTES_CARRIER_ID })
     },
-    meta: { trust: NOTES_CARRIER_TRUST, source: 'next/carriers/notes' }
+    meta: { trust: NOTES_CARRIER_TRUST, source: 'next/carriers/notes', dir: carrierDir('notes') }
   }
 }
 
@@ -113,7 +124,7 @@ export function worldbookCarrierPlugin() {
       tools: (context = {}) => createWorldbookTools({ ...context, pluginId: context.pluginId ?? WORLDBOOK_CARRIER_ID }),
       blocks: (context = {}) => createWorldbookBlocks({ ...context, pluginId: context.pluginId ?? WORLDBOOK_CARRIER_ID })
     },
-    meta: { trust: WORLDBOOK_CARRIER_TRUST, source: 'next/carriers/worldbook' }
+    meta: { trust: WORLDBOOK_CARRIER_TRUST, source: 'next/carriers/worldbook', dir: carrierDir('worldbook') }
   }
 }
 
@@ -127,7 +138,7 @@ export function scriptCarrierPlugin() {
       tools: (context = {}) => createScriptTools({ ...context, pluginId: context.pluginId ?? SCRIPT_CARRIER_ID }),
       blocks: (context = {}) => createScriptBlocks({ ...context, pluginId: context.pluginId ?? SCRIPT_CARRIER_ID })
     },
-    meta: { trust: SCRIPT_CARRIER_TRUST, source: 'next/carriers/script' }
+    meta: { trust: SCRIPT_CARRIER_TRUST, source: 'next/carriers/script', dir: carrierDir('script') }
   }
 }
 
@@ -141,7 +152,7 @@ export function settingCarrierPlugin() {
       tools: (context = {}) => createSettingTools({ ...context, pluginId: context.pluginId ?? SETTING_CARRIER_ID }),
       blocks: (context = {}) => createSettingBlocks({ ...context, pluginId: context.pluginId ?? SETTING_CARRIER_ID })
     },
-    meta: { trust: SETTING_CARRIER_TRUST, source: 'next/carriers/setting' }
+    meta: { trust: SETTING_CARRIER_TRUST, source: 'next/carriers/setting', dir: carrierDir('setting') }
   }
 }
 
@@ -155,19 +166,20 @@ export function referenceCarrierPlugin() {
       tools: (context = {}) => createReferenceTools({ ...context, pluginId: context.pluginId ?? REFERENCE_CARRIER_ID }),
       blocks: (context = {}) => createReferenceBlocks({ ...context, pluginId: context.pluginId ?? REFERENCE_CARRIER_ID })
     },
-    meta: { trust: REFERENCE_CARRIER_TRUST, source: 'next/carriers/reference' }
+    meta: { trust: REFERENCE_CARRIER_TRUST, source: 'next/carriers/reference', dir: carrierDir('reference') }
   }
 }
 
 /** 记录型载体（M4／M5）：没有 blocks 工厂——清单里的 providers 是空数组，不谎报素材块。 */
 function recordsCarrierPlugin(manifest, createTools, trust, source) {
+  const name = source.split('/').pop()
   return {
     manifest,
     impl: {
       source,
       tools: (context = {}) => createTools({ ...context, pluginId: context.pluginId ?? manifest.id })
     },
-    meta: { trust, source }
+    meta: { trust, source, dir: carrierDir(name) }
   }
 }
 

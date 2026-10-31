@@ -9,7 +9,9 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  * 今天两边互不认账：桌面轨写 schemaVersion=1 且不带 spec（electron/projects/projectManifest.mjs），
  * 服务端轨写 spec='pinax-project@1' ＋ kind（server/services/localMirrorService.js:477），
  * 于是服务端打开 Electron 建的项目必抛 ERR_SPEC_MISMATCH（同文件 :496）。
- * Next 统一升 `pinax-project@2`：spec 强制、加 carriers、读侧兼容 @1。
+ * Next 统一升 `pinax-project@3`：spec 强制、加 carriers、读侧兼容 @1／@2。
+ * @3 与 @2 的字段相同，升的是合同代际：项目引用的载体清单已按 pinax-carrier@3 写，
+ * 读到 @3 的老外壳必须显式升级；写回一律 @3（打开只读、不擅自改盘，落盘时机同以往）。
  */
 export const PROJECT_DOC_FIELDS = Object.freeze([
   'spec', 'schemaVersion', 'projectId', 'name', 'kind', 'createdAt', 'updatedAt', 'carriers'
@@ -44,7 +46,7 @@ export function validateProjectDocument(input) {
 
   return ok({
     spec: PROJECT_SPEC,
-    schemaVersion: 2,
+    schemaVersion: 3,
     legacySpec: legacy ? doc.spec : null,
     projectId: doc.projectId.trim(),
     name: doc.name.trim(),
@@ -62,7 +64,7 @@ export function buildProjectDocument({ projectId, name, kind, primaryCarrier, en
   const enabledSet = [...new Set([primaryCarrier, ...enabled.filter((id) => id !== primaryCarrier)])]
   return ok({
     spec: PROJECT_SPEC,
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectId: String(projectId),
     name: String(name).trim(),
     kind,
@@ -77,7 +79,7 @@ export function buildBareProjectDocument({ projectId, name, now = new Date().toI
   if (typeof name !== 'string' || !name.trim()) return fail('INVALID_INPUT', '项目名称必填')
   return ok({
     spec: PROJECT_SPEC,
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectId: String(projectId),
     name: name.trim(),
     kind: null,
@@ -90,7 +92,7 @@ export function buildBareProjectDocument({ projectId, name, now = new Date().toI
 export function normalizeCarriers(value, { legacy = false } = {}) {
   if (value === undefined || value === null) {
     if (legacy) return ok({ primary: null, enabled: [], revision: 0, migrated: true })
-    return fail('INVALID_INPUT', 'pinax-project@2 必须带 carriers（{primary,enabled,revision}）')
+    return fail('INVALID_INPUT', `${PROJECT_SPEC} 必须带 carriers（{primary,enabled,revision}）`)
   }
   if (!isPlainObject(value)) return fail('INVALID_INPUT', 'carriers 必须是对象')
   const enabled = Array.isArray(value.enabled) ? value.enabled.filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()) : []
@@ -145,7 +147,7 @@ export async function writeProjectDocument(root, document) {
   if (!validated.ok) return validated
   const payload = {
     spec: PROJECT_SPEC,
-    schemaVersion: 2,
+    schemaVersion: 3,
     projectId: validated.value.projectId,
     name: validated.value.name,
     kind: validated.value.kind,

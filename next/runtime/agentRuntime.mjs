@@ -1,9 +1,11 @@
 import { fail, ok, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { buildGrantTable, canPerform } from '../kernel/scopeGrant.mjs'
 import { createRuntimeSurface } from './mcpSurface.mjs'
+import { collectPluginDirs } from './pluginDirs.mjs'
 import { connectInProcess } from './transportInProcess.mjs'
 import { normalizeWriteMode } from './writePolicy.mjs'
 import { subscribeProjectEvents } from './eventBus.mjs'
+import { createServiceSupervisor } from './serviceSupervisor.mjs'
 import { RUNTIME_CONTRACT, RUNTIME_ID } from './runtimeContract.mjs'
 
 /**
@@ -24,6 +26,9 @@ export function createAgentRuntime(options = {}) {
   let surfaceState = null
   /** 项目事件的宿主投递（批次37）：一份订阅覆盖所有声明了 project.changed 的启用载体。 */
   let detachProjectEvents = null
+  /** 载体声明的服务（协议 v3 的 services 面）：运行时起它、探它、收它。 */
+  let supervisor = null
+  let serviceFailures = []
 
   /**
    * 把一次项目变更交给每个订阅载体的 impl.onProjectEvent（批次37，M2.5-C 承诺的兑现）。
@@ -43,6 +48,14 @@ export function createAgentRuntime(options = {}) {
     }
   }
 
+  /**
+   * 插件目录表（协议 v3 的相对路径解析基准）。
+   * 注册表登记的 dir 优先；宿主也可以用 pluginDirs 覆盖（外置插件不在安装目录里）。
+   */
+  function buildPluginDirs() {
+    return collectPluginDirs({ registry, overrides: options.pluginDirs })
+  }
+
   const runtime = {
     contract: RUNTIME_CONTRACT,
     grantTable: grants,
@@ -50,9 +63,20 @@ export function createAgentRuntime(options = {}) {
     /** 工具面在 start() 里现取：项目打开与否、启用了哪些载体，都只在这一刻决定面的形状。 */
     async start() {
       if (link) return ok({ already: true, toolCount: toolCache?.length ?? 0 })
+      // 服务先起：载体的外部 MCP／面板可能指着自己起的本地服务，顺序反了就是连不上。
+      const serviceSpecs = Array.isArray(options.view?.services) ? options.view.services : []
+      if (serviceSpecs.length) {
+        supervisor = createServiceSupervisor({
+          services: serviceSpecs,
+          pluginDirs: buildPluginDirs(),
+          onEvent: typeof options.onServiceEvent === 'function' ? options.onServiceEvent : null
+        })
+        const startedServices = await supervisor.start()
+        serviceFailures = startedServices.value?.failed ?? []
+      }
       const surface = options.surface
         ? { server: options.surface, carrierCount: 0, carrierToolNames: [], missingImplementations: [], aggregated: false, subscribedCarriers: [] }
-        : await createRuntimeSurface({ registry, view: options.view, fileService, advisorBaseUrl: options.advisorBaseUrl, skillsDir: options.skillsDir })
+        : await createRuntimeSurface({ registry, view: options.view, fileService, advisorBaseUrl: options.advisorBaseUrl, skillsDir: options.skillsDir, pluginDirs: buildPluginDirs() })
       surfaceState = surface
       link = await connectInProcess(surface.server, { clientName: options.clientName ?? 'pinax-next-shell' })
       toolCache = await link.listTools()
@@ -67,7 +91,12 @@ export function createAgentRuntime(options = {}) {
         carrierTools: surface.carrierCount,
         aggregatedSurface: surface.aggregated,
         subscribedCarriers: subscribers.length,
+        externalServers: surface.external?.count ?? 0,
+        externalFailures: surface.external?.failures?.length ?? 0,
+        services: supervisor ? supervisor.status().length : 0,
+        serviceFailures: serviceFailures.length,
         transports: ['in-process'],
+        // 外部 MCP 可能自己开端口（sse 连远端），但内核这一侧仍然不起 HTTP 服务。
         portsOpened: 0
       })
     },
@@ -87,11 +116,29 @@ export function createAgentRuntime(options = {}) {
         detachProjectEvents()
         detachProjectEvents = null
       }
+      if (supervisor) {
+        await supervisor.stop().catch(() => {})
+        supervisor = null
+        serviceFailures = []
+      }
       if (!link) return ok({ stopped: false })
       await link.close()
+      // 外部 MCP 的子进程／长连接不归聚合面收：它由这里逐一关闭。
+      if (typeof surfaceState?.external?.close === 'function') await surfaceState.external.close().catch(() => {})
       link = null
       toolCache = null
       return ok({ stopped: true })
+    },
+
+    /** 服务状态（右栏与 IPC 读这一份；没有服务时是空数组，不是一个 null）。 */
+    serviceStatus() {
+      return supervisor ? supervisor.status() : []
+    },
+
+    /** 手动重启一颗服务（界面上的「重启」按钮走这里）。 */
+    async restartService(id) {
+      if (!supervisor) return fail('INVALID_INPUT', '当前没有在跑的服务')
+      return supervisor.restart(id)
     },
 
     listTools() {
@@ -106,7 +153,15 @@ export function createAgentRuntime(options = {}) {
         aggregated: surfaceState?.aggregated ?? false,
         missingImplementations: surfaceState?.missingImplementations ?? [],
         subscribedCarriers: surfaceState?.subscribedCarriers ?? [],
+        external: {
+          count: surfaceState?.external?.count ?? 0,
+          failures: surfaceState?.external?.failures ?? [],
+          servers: surfaceState?.external?.servers ?? [],
+          toolNames: link ? (surfaceState?.external?.toolNames ?? []) : []
+        },
         writeGuard: surfaceState?.writeGuard ?? null,
+        services: runtime.serviceStatus(),
+        serviceFailures: [...serviceFailures],
         skills: surfaceState?.skills ?? { names: [], rejected: [], catalog: [] }
       }
     },
@@ -121,6 +176,9 @@ export function createAgentRuntime(options = {}) {
      * 载体被停用后它的工具不在面上，调用回落内核实现——这时拿停用者的 scope 去卡人就是错的。
      */
     ownerOf(name) {
+      // 外部 MCP 的工具名是 `<prefix>.<remote>`：归属是声明这台服务端的插件（安装期已仲裁 prefix）。
+      const external = surfaceState?.external?.servers?.find((server) => String(name).startsWith(`${server.prefix}.`))
+      if (external) return external.pluginId ?? 'kernel'
       const owner = registry?.ownerOfTool?.(name) ?? null
       if (!owner) return 'kernel'
       return runtime.surfaceInfo().carrierToolNames.includes(name) ? owner : 'kernel'
@@ -207,6 +265,7 @@ export function createAgentRuntime(options = {}) {
         builtIn: true,
         disableable: false,
         surface: runtime.surfaceInfo(),
+        services: runtime.serviceStatus(),
         tools: runtime.listTools().map((tool) => ({
           name: tool.name,
           title: tool.title ?? tool.name,

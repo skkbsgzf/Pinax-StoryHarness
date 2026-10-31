@@ -67,8 +67,10 @@ export function diagnoseCarrier(manifestInput, { descriptor, installed = [], kin
   const checks = []
 
   // 1) 合同版本与内核门槛：这两条不合适，后面的检查都无从谈起。
-  if (manifestInput?.spec === CARRIER_SPEC_V2 && !descSupportsSpec(desc)) {
-    return result('needs-host-upgrade', { id: manifestId }, `外壳合同 ${desc.kernelContract} 还不认 ${CARRIER_SPEC_V2}`, `把外壳升到认 ${CARRIER_SPEC_V2} 的版本，或让载体暂时写 ${CARRIER_SPEC_V1}`, checks)
+  // 描述符带 carrierSpecs 时按这份白名单判；老描述符没有这一项，只认 v1/v2（v3 必须显式声明）。
+  const spec = manifestInput?.spec
+  if (typeof spec === 'string' && spec !== CARRIER_SPEC_V1 && !descSupportsSpec(desc, spec)) {
+    return result('needs-host-upgrade', { id: manifestId }, `外壳合同 ${desc.kernelContract} 还不认 ${spec}`, `把外壳升到认 ${spec} 的版本（描述符 carrierSpecs 里登记它），或让载体暂时写 ${CARRIER_SPEC_V1}`, checks)
   }
   if (!compatibleKernelFor(manifestInput?.minKernel, desc)) {
     return result('needs-host-upgrade', { id: manifestId }, `载体要求 minKernel=${String(manifestInput?.minKernel)}，外壳合同是 ${desc.kernelContract}`, '升级外壳，或把 minKernel 调到外壳合同版本以内', checks)
@@ -116,9 +118,11 @@ function result(state, manifest, message, fix, checks) {
   return { state, manifestId: String(manifest?.id ?? '(未命名)'), message, fix, checks: [...checks] }
 }
 
-function descSupportsSpec(desc) {
+function descSupportsSpec(desc, spec) {
+  if (Array.isArray(desc.carrierSpecs)) return desc.carrierSpecs.includes(spec)
+  // 老描述符没有 carrierSpecs：按内核合同判定，等价于只认 v1/v2。
   const version = Number.parseInt(String(desc.kernelContract ?? '0').split('.')[0], 10)
-  return version >= 1
+  return version >= 1 && (spec === CARRIER_SPEC_V1 || spec === CARRIER_SPEC_V2)
 }
 
 function compatibleKernelFor(minKernel, desc) {
@@ -234,7 +238,7 @@ function mapValidationError(error) {
     return { state: 'permission-denied', fix: '只占用开放槽与自己的 dataDirs；跨载体请走对方声明的 tools' }
   }
   if (code === 'RESERVED_VIEW_TYPE') {
-    return { state: 'incompatible-form', fix: '宿主六种视图归宿主，第三方只能声明 pinax.view.custom' }
+    return { state: 'incompatible-form', fix: '宿主视图类型归宿主，第三方只能声明 pinax.view.custom' }
   }
   return { state: 'incompatible-form', fix: '按错误文案修清单：字段名、取值域或声明位置不对' }
 }

@@ -563,9 +563,12 @@ test('P18 文档为主：正文去框、常驻保存按钮拆净、节点操作�
   assert.match(index, /class="control-quiet nx-context-item/u, '节点菜单条目要走老版控件词汇（control-quiet／nx-context-item）')
 
   // ④ 条目信息默认折叠：字段容器挂在 entryMetaOpen 上（v-if＝收起时不在 DOM）。
-  assert.match(pane, /data-test="entry-meta-toggle"/u, '编辑面要有一行「条目信息」开关')
-  assert.match(pane, /v-if="entryMetaOpen"[^>]*class="entry-meta-edit"/u, '条目字段容器必须是 v-if="entryMetaOpen"（默认折叠，不是 v-show）')
-  assert.doesNotMatch(pane, /v-show="entryMetaOpen"/u, '折叠层不许用 v-show 假装折叠（字段仍在 DOM 里）')
+  //    批次44 起这段标记在 EntryDetailPanel.vue 里（条目详情面从 CarrierPaneHost 拆出去了，
+  //    因为世界书核心区改成了「上图表列、下详情」两块面板）。合同不变，只改查哪个文件。
+  const entryPanel = await readFile(join(shellDir, 'EntryDetailPanel.vue'), 'utf-8')
+  assert.match(entryPanel, /data-test="entry-meta-toggle"/u, '编辑面要有一行「条目信息」开关')
+  assert.match(entryPanel, /v-if="entryMetaOpen"[^>]*class="entry-meta-edit"/u, '条目字段容器必须是 v-if="entryMetaOpen"（默认折叠，不是 v-show）')
+  assert.doesNotMatch(entryPanel, /v-show="entryMetaOpen"/u, '折叠层不许用 v-show 假装折叠（字段仍在 DOM 里）')
 })
 
 /**

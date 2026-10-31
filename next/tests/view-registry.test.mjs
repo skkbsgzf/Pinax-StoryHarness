@@ -15,18 +15,24 @@ import {
 
 /**
  * 视图注册表单测（M2.5-C 任务二）。
- * 三条边界：宿主六种视图不许被顶替；第三方只用 pinax.view.custom；插件 dispose 后解析失败。
+ * 三条边界：宿主视图不许被顶替；第三方只用 pinax.view.custom；插件 dispose 后解析失败。
  * 纯数据模块，不 import Vue。
  */
 
-test('宿主视图词表：六种 + custom；宿主注册表里七种都在，且都标 builtin', () => {
+test('宿主视图词表：八种 ＋ custom；宿主注册表里九种都在，且都标 builtin', () => {
+  // 批次44 加了两块形态（见 next/shell/formTaxonomy.mjs）：
+  //   pinax.view.board 看板面——结构化数据的视图（列表／表格／图谱，核心区里成块的地方）；
+  //   pinax.view.app   应用面——外部端口上的网页应用，宿主给一块内嵌浏览器，不手搓组件。
+  // 词表是白名单，多一种就是多一种能顶替宿主渲染器的口子，所以这里逐个列出。
   assert.deepEqual([...HOST_VIEW_TYPES], [
     'pinax.view.tree',
     'pinax.view.list',
     'pinax.view.editor',
     'pinax.view.reader',
     'pinax.view.diff',
-    'pinax.view.graph'
+    'pinax.view.graph',
+    'pinax.view.board',
+    'pinax.view.app'
   ])
   assert.equal(CUSTOM_VIEW_TYPE, 'pinax.view.custom')
   assert.deepEqual([...VIEW_TYPES], [...HOST_VIEW_TYPES, CUSTOM_VIEW_TYPE])
@@ -120,4 +126,16 @@ test('宿主单例解析：大纲 pane 落在编辑器面，产物归宿主', ()
   assert.equal(bound.builtin, true)
   assert.equal(bound.owner, 'host')
   assert.equal(bound.result.kind, 'outline-editor')
+})
+
+test('v3 pane.kind 是权威：同一 id 前缀下以声明为准，不再被前缀改写', () => {
+  const declared = resolvePaneView({ id: 'novel.editor', view: 'pinax.view.editor', kind: 'records-editor' }, {})
+  assert.equal(declared.result.kind, 'records-editor', '显式 kind 优先于 novel. 前缀')
+
+  // 提案审阅仍是 chapter-editor 的一个状态，不是新视图类型。
+  const proposal = resolvePaneView({ id: 'novel.editor', view: 'pinax.view.editor', kind: 'chapter-editor' }, { selection: { type: 'proposal' } })
+  assert.equal(proposal.result.kind, 'proposal-review')
+
+  // 没有 kind、也没有认得出的前缀：如实返回 null（宿主出占位）。
+  assert.equal(resolvePaneView({ id: 'unknown.pane', view: 'pinax.view.editor' }, {}).result, null)
 })

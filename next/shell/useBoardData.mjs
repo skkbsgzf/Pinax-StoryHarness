@@ -26,6 +26,11 @@ export function useBoardData(bridge) {
      *  保存语义（expectedRevision／提案链）不在这里动，这里只记「这一下按下去的结果」。
      *  大纲与条目（批次19 H1 收尾）：保留各自的常驻保存按钮，同时接 Ctrl+S——两通道落的是同一格反馈。 */
     saveFeedback: null,
+    /** 未落盘的改动（批次43 · 作者 2026-10-31：「文件添加了，修改了，也没发保存」）。
+     *  每个编辑面一格：草稿与盘上那一份不一致就是 true。
+     *  界面只读它摆底部那一行「未保存／正在保存…」——不摆版本号、路径、字数这些开发者信息。
+     *  真正的落盘由自动保存计时器与 Ctrl+S 共用同一条 save 路径（同一套修订号闸、同一枚 chip）。 */
+    pendingSave: { chapter: false, note: false, outline: false, rule: false },
     /** 资料板检索（工单H2）：走 knowledge:search 通道，主进程内部是 createKnowledgeRuntime（worker 线程）。
      *  knowledgeSearched 只用来区分「还没检索」与「检索完没命中」；错误码留给界面翻人话。 */
     knowledgeSearching: false,
@@ -108,6 +113,9 @@ export function useBoardData(bridge) {
     /** 世界书类别（批次34）：世界书/ 下的一级子目录名（列表工具随 categories 带回）。
      *  索引窗按它分组、新建下拉按它出选项；顶层旧项目是空数组（下拉只剩「顶层」，列表一整组）。 */
     categories: [],
+    /** 世界书看板区的类别筛选（批次44）：窄栏的类别树与核心区的看板区共用这一格——
+     *  窄栏点一个类别＝给看板区加一道筛选；看板区下拉里改的也是它。两边不各记一份。 */
+    entriesFilterCat: '',
     entry: null,
     /** 条目编辑（工单A2）：阅读态与编辑态的开关＋草稿，与正文的 draft 分开各拿各的。 */
     editingEntry: false,
@@ -154,15 +162,97 @@ export function useBoardData(bridge) {
   }
 
   /** 保存 chip（工单H1）：保存一开始就把这一格翻成「保存中…」，
-   *  落盘结果再翻成「已保存 · 第 N 版」或「保存失败」（带 code，STALE 由界面换「重新载入」动作）。 */
-  function beginSaveFeedback(target) {
-    state.saveFeedback = { target, status: 'saving', revision: null, code: null, message: '' }
+   *  落盘结果再翻成「已保存 · 第 N 版」或「保存失败」（带 code，STALE 由界面换「重新载入」动作）。
+   *  auto 标记这一下是自动保存发的：chip 只说「已保存」，不报版本号（版本号是开发者信息）。 */
+  function beginSaveFeedback(target, { auto = false } = {}) {
+    state.saveFeedback = { target, status: 'saving', revision: null, code: null, message: '', auto }
   }
 
-  function settleSaveFeedback(target, saved) {
+  function settleSaveFeedback(target, saved, { auto = false } = {}) {
     state.saveFeedback = saved.ok
-      ? { target, status: 'saved', revision: saved.value.revision ?? null, code: null, message: '' }
-      : { target, status: 'error', revision: null, code: saved.code ?? null, message: saved.message ?? '' }
+      ? { target, status: 'saved', revision: saved.value.revision ?? null, code: null, message: '', auto }
+      : { target, status: 'error', revision: null, code: saved.code ?? null, message: saved.message ?? '', auto }
+  }
+
+  /* —— 自动保存（批次43）——————————————————————————————————————————————
+   * 作者 2026-10-31：「文件添加了，修改了，也没发保存」。
+   * 根因不是保存坏了，是保存只在 Ctrl+S 那一按——作者没有义务记得按。
+   *
+   * 三条纪律：
+   *   1) 自动保存与 Ctrl+S 走同一条路（同一个 expectedRevision、同一套 chip、同一套冲突拒绝），
+   *      所以它不会绕过修订号闸，也不会静默覆盖别人的改动；
+   *   2) 只读到前段（truncated）的文档不自动落盘：存下去会把没载入的后半段抹掉，
+   *      那种情况仍旧要作者自己按 Ctrl+S（界面也会说明）；
+   *   3) 计时器挂在这一份数据上，组件拆了必须收摊（dispose），不许在拆掉的面上去调工具。
+   */
+  const AUTOSAVE_DELAY_MS = 1500
+  /** 每个编辑面一个计时器：改字就重新计时（停手 1.5 秒才算数）。 */
+  const autosaveTimers = new Map()
+  /** 上次读到／落盘的那一份内容指纹：草稿与它不一致，就是「有未落盘的改动」。 */
+  const savedFingerprints = new Map()
+
+  function fingerprint(target) {
+    if (target === 'chapter') return String(state.draft ?? '')
+    if (target === 'note') return String(state.noteDraft ?? '')
+    if (target === 'rule') return String(state.ruleDraft ?? '')
+    if (target === 'outline') return JSON.stringify(state.outlineDraft ?? null)
+    return ''
+  }
+
+  function cancelAutosave(target) {
+    const timer = autosaveTimers.get(target)
+    if (timer) clearTimeout(timer)
+    autosaveTimers.delete(target)
+  }
+
+  /** 改动记一笔：置脏＋重新计时。界面据此摆「未保存的改动」，自动保存据此落盘。 */
+  function markDirty(target) {
+    state.pendingSave[target] = true
+    cancelAutosave(target)
+    autosaveTimers.set(target, setTimeout(() => {
+      autosaveTimers.delete(target)
+      void flushAutosave(target)
+    }, AUTOSAVE_DELAY_MS))
+  }
+
+  /** 自动保存到点：草稿与盘上那一份一致就不动（没改过的东西不重写）。 */
+  async function flushAutosave(target) {
+    if (target === 'chapter') {
+      if (!state.chapter || state.chapter.truncated) return
+      if (fingerprint('chapter') === savedFingerprints.get('chapter')) return
+      await save({ auto: true })
+      return
+    }
+    if (target === 'note') {
+      if (!state.note || state.note.truncated) return
+      if (fingerprint('note') === savedFingerprints.get('note')) return
+      await saveNote({ auto: true })
+      return
+    }
+    if (target === 'rule') {
+      if (!state.rule || state.rule.truncated) return
+      if (fingerprint('rule') === savedFingerprints.get('rule')) return
+      await saveRule({ auto: true })
+      return
+    }
+    if (target === 'outline') {
+      if (!state.outlineDraft || !state.outlineDraft.nodes.length) return
+      if (fingerprint('outline') === savedFingerprints.get('outline')) return
+      await saveOutline({ auto: true })
+    }
+  }
+
+  /** 收摊（关窗／组件拆了）：计时器不许在拆掉的面上去调工具。 */
+  function dispose() {
+    for (const timer of autosaveTimers.values()) clearTimeout(timer)
+    autosaveTimers.clear()
+  }
+
+  /** 打开一份文档＝盘上那一份成了基线：指纹记下，脏位清零，未落盘的计时器收掉。 */
+  function markBaseline(target) {
+    cancelAutosave(target)
+    savedFingerprints.set(target, fingerprint(target))
+    state.pendingSave[target] = false
   }
 
   async function loadChapters({ keep = true } = {}) {
@@ -202,6 +292,8 @@ export function useBoardData(bridge) {
     }
     state.chapter = { ...item, revision: read.value.revision, totalChars: read.value.totalChars, truncated: read.value.truncated }
     state.draft = read.value.text ?? ''
+    // 打开＝盘上那一份成了基线：脏位清零，没落盘的计时器收掉（别把上一章的自动保存打到这一章上）。
+    markBaseline('chapter')
     // 换章＝换正文：上一章没落位的生成结果、报错与选区都收回，别把一段旧文字插到新章里。
     writingCallId += 1
     state.writingBusy = false
@@ -212,23 +304,33 @@ export function useBoardData(bridge) {
   }
 
   /** 保存＝作者按 Ctrl+S 的那一下（工单H1：常驻保存按钮已移除）：带读到的修订号走 pinax_chapter_save，
-   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip，不再写一条常驻提示。 */
-  async function save() {
+   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip，不再写一条常驻提示。
+   *  auto=true 是自动保存发起的同一件事：同一套修订号闸、同一枚 chip，只是 chip 不报版本号、
+   *  不抢 busy 位（自动保存不该让界面卡一下）。 */
+  async function save({ auto = false } = {}) {
     if (!state.chapter || !state.draft) return
-    state.busy = true
-    state.error = null
-    state.notice = ''
-    beginSaveFeedback('chapter')
+    cancelAutosave('chapter')
+    if (!auto) {
+      state.busy = true
+      state.error = null
+      state.notice = ''
+    }
+    beginSaveFeedback('chapter', { auto })
     const saved = await tool('pinax_chapter_save', { file: state.chapter.file, text: state.draft, expectedRevision: state.chapter.revision })
     if (!saved.ok) {
-      state.busy = false
-      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新载入该章后再改，外壳不做静默合并）' : ''}`
-      settleSaveFeedback('chapter', saved)
+      if (!auto) state.busy = false
+      // 失败：改动还在作者手里（pendingSave 保持 true），界面给「重试／重新载入」。
+      if (!auto) {
+        state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新载入该章后再改，外壳不做静默合并）' : ''}`
+      }
+      settleSaveFeedback('chapter', saved, { auto })
       return
     }
     state.chapter = { ...state.chapter, revision: saved.value.revision, totalChars: state.draft.length, truncated: false }
-    state.busy = false
-    settleSaveFeedback('chapter', saved)
+    if (!auto) state.busy = false
+    savedFingerprints.set('chapter', fingerprint('chapter'))
+    state.pendingSave.chapter = false
+    settleSaveFeedback('chapter', saved, { auto })
     // 就地推进索引窗里的版本号，不为一次保存重读整章（重读会把 chip 的版本号冲掉）。
     state.chapters = state.chapters.map((item) => (item.file === saved.value.file ? { ...item, revision: saved.value.revision } : item))
     state.chapterGroups = groupChaptersByVolume(state.chapters)
@@ -279,6 +381,7 @@ export function useBoardData(bridge) {
     if (!item) return
     state.note = { ...item }
     state.noteDraft = item.text ?? ''
+    markBaseline('note')
     state.error = null
     // 打开只清旧提示：「已载入 N 字 · 第 N 版」不再占一条常驻 notice（工单H1）。
     state.notice = ''
@@ -288,26 +391,35 @@ export function useBoardData(bridge) {
 
   function setNoteDraft(value) {
     state.noteDraft = value
+    markDirty('note')
   }
 
   /** 保存速记＝作者按 Ctrl+S 的那一下：带读到的修订号走 pinax_notes_save，
-   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip（工单H1）。 */
-  async function saveNote() {
+   *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip（工单H1）。
+   *  auto=true 是自动保存发起的同一件事（同一条路、同一个修订号闸）。 */
+  async function saveNote({ auto = false } = {}) {
     if (!state.note || !state.noteDraft) return
-    state.busy = true
-    state.error = null
-    state.notice = ''
-    beginSaveFeedback('note')
+    cancelAutosave('note')
+    if (!auto) {
+      state.busy = true
+      state.error = null
+      state.notice = ''
+    }
+    beginSaveFeedback('note', { auto })
     const saved = await tool('pinax_notes_save', { file: state.note.file, text: state.noteDraft, expectedRevision: state.note.revision })
     if (!saved.ok) {
-      state.busy = false
-      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该篇后再改，外壳不做静默合并）' : ''}`
-      settleSaveFeedback('note', saved)
+      if (!auto) {
+        state.busy = false
+        state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该篇后再改，外壳不做静默合并）' : ''}`
+      }
+      settleSaveFeedback('note', saved, { auto })
       return
     }
-    state.note = { ...state.note, revision: saved.value.revision, totalChars: state.noteDraft.length, truncated: false }
-    state.busy = false
-    settleSaveFeedback('note', saved)
+    state.note = { ...state.note, revision: saved.value.revision, totalChars: state.noteDraft.length, truncated: false, text: state.noteDraft }
+    if (!auto) state.busy = false
+    savedFingerprints.set('note', fingerprint('note'))
+    state.pendingSave.note = false
+    settleSaveFeedback('note', saved, { auto })
     // 就地推进索引窗里的版本号与正文，不为一次保存重列整个构思目录。
     state.notes = state.notes.map((item) => (item.file === saved.value.file
       ? { ...item, revision: saved.value.revision, text: state.noteDraft, totalChars: state.noteDraft.length, truncated: false }
@@ -361,6 +473,7 @@ export function useBoardData(bridge) {
     if (!item) return
     state.rule = { ...item }
     state.ruleDraft = item.text ?? ''
+    markBaseline('rule')
     state.error = null
     // 打开只清旧提示：「已载入 N 字 · 第 N 版」不再占一条常驻 notice（工单H1）。
     state.notice = ''
@@ -370,26 +483,34 @@ export function useBoardData(bridge) {
 
   function setRuleDraft(value) {
     state.ruleDraft = value
+    markDirty('rule')
   }
 
   /** 保存约束＝作者按 Ctrl+S 的那一下：带读到的修订号走 pinax_rule_save，
    *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip（工单H1）。 */
-  async function saveRule() {
+  async function saveRule({ auto = false } = {}) {
     if (!state.rule || !state.ruleDraft) return
-    state.busy = true
-    state.error = null
-    state.notice = ''
-    beginSaveFeedback('rule')
+    cancelAutosave('rule')
+    if (!auto) {
+      state.busy = true
+      state.error = null
+      state.notice = ''
+    }
+    beginSaveFeedback('rule', { auto })
     const saved = await tool('pinax_rule_save', { file: state.rule.file, text: state.ruleDraft, expectedRevision: state.rule.revision })
     if (!saved.ok) {
-      state.busy = false
-      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该份约束后再改，外壳不做静默合并）' : ''}`
-      settleSaveFeedback('rule', saved)
+      if (!auto) {
+        state.busy = false
+        state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新打开该份约束后再改，外壳不做静默合并）' : ''}`
+      }
+      settleSaveFeedback('rule', saved, { auto })
       return
     }
-    state.rule = { ...state.rule, revision: saved.value.revision, totalChars: state.ruleDraft.length, truncated: false }
-    state.busy = false
-    settleSaveFeedback('rule', saved)
+    state.rule = { ...state.rule, revision: saved.value.revision, totalChars: state.ruleDraft.length, truncated: false, text: state.ruleDraft }
+    if (!auto) state.busy = false
+    savedFingerprints.set('rule', fingerprint('rule'))
+    state.pendingSave.rule = false
+    settleSaveFeedback('rule', saved, { auto })
     // 就地推进索引窗里的版本号与正文，不为一次保存重列整个约束目录。
     state.rules = state.rules.map((item) => (item.file === saved.value.file
       ? { ...item, revision: saved.value.revision, text: state.ruleDraft, totalChars: state.ruleDraft.length, truncated: false }
@@ -919,6 +1040,8 @@ export function useBoardData(bridge) {
     if (state.chapter?.file === saved.value.file) {
       state.chapter = { ...state.chapter, revision: saved.value.revision, totalChars: proposal.content.length, truncated: false }
       state.draft = proposal.content
+      // 盘上那一份已经换成采纳稿：基线跟着走（别让自动保存把旧草稿再写回去）。
+      markBaseline('chapter')
     }
     state.chapters = state.chapters.map((item) => (item.file === saved.value.file ? { ...item, revision: saved.value.revision } : item))
     state.chapterGroups = groupChaptersByVolume(state.chapters)
@@ -1150,8 +1273,14 @@ export function useBoardData(bridge) {
     if (made) await openEntry(made)
   }
 
+  /** 类别筛选（批次44）：窄栏的类别树与核心区看板区共用这一格。空串＝不过滤。 */
+  function setEntriesFilterCat(category) {
+    state.entriesFilterCat = String(category ?? '')
+  }
+
   function setDraft(value) {
     state.draft = value
+    markDirty('chapter')
   }
 
   /** 正文面的选区上报（批次41）：只在切换章节时清零，打字过程中由界面持续报。
@@ -1233,7 +1362,9 @@ export function useBoardData(bridge) {
     state.draftSelection = { start: applied.caret, end: applied.caret }
     state.writingResult = null
     state.writingError = null
-    state.notice = `已${applied.mode === 'replace' ? '替换' : '插入'}（${result.label}）· 记得保存这一版`
+    // 生成结果落进正文＝正文改过了：置脏，让自动保存把它落盘（作者不用再按一次 Ctrl+S）。
+    markDirty('chapter')
+    state.notice = `已${applied.mode === 'replace' ? '替换' : '插入'}（${result.label}）`
   }
 
   function discardWriting() {
@@ -1276,6 +1407,8 @@ export function useBoardData(bridge) {
         nodes: JSON.parse(JSON.stringify(plainOutlineNodes(state.outline))),
         edges: JSON.parse(JSON.stringify(state.outlineEdges ?? []))
       }
+      // 刚拷出来的草稿＝盘上那一份：脏位清零（还没改过，不该排自动保存）。
+      markBaseline('outline')
     }
     state.outlineNodeIndex = index
     const node = state.outlineDraft.nodes[index]
@@ -1297,17 +1430,24 @@ export function useBoardData(bridge) {
     syncOutlineTree()
   }
 
-  /** 改名落草稿：行内不改，中栏的标题输入框逐字进草稿，按保存才落盘。 */
+  /** 改名落草稿：行内不改，中栏的标题输入框逐字进草稿。
+   *  批次43：改完立刻把索引窗那棵树同步过去——作者改的是名字，树上那一行就该当场是这个名字；
+   *  早先这一路不同步，树上还停在「未命名节点」，看着像改名没生效。 */
   function setOutlineNodeTitle(index, title) {
     const node = state.outlineDraft?.nodes[index]
-    if (node) node.title = title
+    if (!node) return
+    node.title = title
+    syncOutlineTree()
+    markDirty('outline')
   }
 
   /** 节点备注（批次28 · 工单1c）：note 是节点上的普通字段（工具原样透传），同样只落草稿。
    *  长度上限由输入框 maxlength 守（200 字），这里不静默截断作者的输入。 */
   function setOutlineNodeNote(index, note) {
     const node = state.outlineDraft?.nodes[index]
-    if (node) node.note = String(note ?? '')
+    if (!node) return
+    node.note = String(note ?? '')
+    markDirty('outline')
   }
 
   /**
@@ -1340,13 +1480,16 @@ export function useBoardData(bridge) {
       state.outlineEdges = []
       state.selection = { type: null, item: null }
       state.notice = `已从草稿删掉最后一个节点「${removedTitle}」：空大纲不能保存（要清空请直接删 大纲/outline.json）`
+      // 草稿整个没了，没有可落盘的东西：脏位清掉（不然底部一直挂「未保存」）。
+      markBaseline('outline')
       return
     }
     state.outlineDraft = { nodes: result.nodes, edges: result.edges }
     state.outlineNodeIndex = result.index
-    state.notice = `已从草稿删掉「${removedTitle}」（按保存才落盘）`
+    state.notice = `已从草稿删掉「${removedTitle}」`
     state.selection = { type: 'outline-node', item: { ...result.nodes[result.index], index: result.index } }
     syncOutlineTree()
+    markDirty('outline')
   }
 
   /** 同级上移／下移（批次28 · 工单1b）：只重排 nodes 数组，不跨层；edges 一个字不改。
@@ -1358,9 +1501,10 @@ export function useBoardData(bridge) {
     state.error = null
     state.outlineDraft = { nodes: result.nodes, edges: result.edges }
     state.outlineNodeIndex = result.index
-    state.notice = '已调整节点顺序（草稿，按保存才落盘）'
+    state.notice = '已调整节点顺序'
     state.selection = { type: 'outline-node', item: { ...result.nodes[result.index], index: result.index } }
     syncOutlineTree()
+    markDirty('outline')
   }
 
   /** 这个方向上还动得动吗：与 outlineTree.canMoveNode 同一份判定，按钮禁用态直接读它。 */
@@ -1381,13 +1525,14 @@ export function useBoardData(bridge) {
     if (kind === 'child') state.outlineDraft.edges.push({ from: anchor.id, to: node.id })
     selectOutlineNode(state.outlineNodeIndex + 1)
     syncOutlineTree()
+    markDirty('outline')
   }
 
   /**
    * 在末尾追一个同级节点（批次31 · P18）：入口在索引窗大纲区标题行那枚 hover 显形的「＋」。
    * 与 addOutlineNode 的区别是不依赖「当前选中谁」——树还没有草稿时先起一份（同 startOutline），
    * 有草稿就直接追加，并把新节点选中送进中栏（作者接着改名）。
-   * 只改草稿：按 Ctrl+S 才落盘，与其余节点操作同一口径。
+   * 只改草稿：改完自动落盘（批次43），与其余节点操作同一口径。
    */
   function appendOutlineNode() {
     if (state.outlineError) return
@@ -1410,6 +1555,7 @@ export function useBoardData(bridge) {
     state.notice = ''
     state.selection = { type: 'outline-node', item: { ...node, index } }
     syncOutlineTree()
+    markDirty('outline')
   }
 
   function freshOutlineNodeId(nodes) {
@@ -1421,30 +1567,38 @@ export function useBoardData(bridge) {
 
   /** 大纲保存＝作者按下去的那一下（按钮与 Ctrl+S 是同一条路）：整份草稿走 pinax_outline_save，
    *  冲突由文件服务拒，不静默覆盖。成功率先进保存 chip（工单H1 同款，不再铺常驻 notice）；
-   *  成功后就地推进树与修订号（不重读、不冲掉提示），草稿继续开着——作者可以接着改。 */
-  async function saveOutline() {
+   *  成功后就地推进树与修订号（不重读、不冲掉提示），草稿继续开着——作者可以接着改。
+   *  auto=true 是自动保存发起的同一件事（批次43）：改名／备注／增删一停手就落盘。 */
+  async function saveOutline({ auto = false } = {}) {
     if (!state.outlineDraft || !state.outlineDraft.nodes.length) return
-    state.busy = true
-    state.error = null
-    state.notice = ''
-    beginSaveFeedback('outline')
+    cancelAutosave('outline')
+    if (!auto) {
+      state.busy = true
+      state.error = null
+      state.notice = ''
+    }
+    beginSaveFeedback('outline', { auto })
     const saved = await tool('pinax_outline_save', {
       nodes: state.outlineDraft.nodes,
       edges: state.outlineDraft.edges,
       expectedRevision: state.outlineRevision ?? 0
     })
     if (!saved.ok) {
-      state.busy = false
-      state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新点开大纲节点后再改，外壳不做静默合并）' : ''}`
-      settleSaveFeedback('outline', saved)
+      if (!auto) {
+        state.busy = false
+        state.error = `${saved.message}${saved.code === 'PINAX_STALE_REVISION' ? '（请重新点开大纲节点后再改，外壳不做静默合并）' : ''}`
+      }
+      settleSaveFeedback('outline', saved, { auto })
       return
     }
     state.outlineRevision = saved.value.revision
     // 就地推进树（不重读、不冲掉提示）：depth 按新 edges 现算，草稿继续开着。
     state.outline = decorateOutlineNodes(JSON.parse(JSON.stringify(state.outlineDraft.nodes)), state.outlineDraft.edges)
     state.outlineEdges = JSON.parse(JSON.stringify(state.outlineDraft.edges))
-    state.busy = false
-    settleSaveFeedback('outline', saved)
+    if (!auto) state.busy = false
+    savedFingerprints.set('outline', fingerprint('outline'))
+    state.pendingSave.outline = false
+    settleSaveFeedback('outline', saved, { auto })
   }
 
   /**
@@ -1559,6 +1713,7 @@ export function useBoardData(bridge) {
   return Object.assign(state, {
     tool,
     clearTransient,
+    dispose,
     refreshFromProjectEvent,
     searchKnowledge,
     clearKnowledgeSearch,
@@ -1613,6 +1768,7 @@ export function useBoardData(bridge) {
     removeEntryRelation,
     saveEntry,
     createEntry,
+    setEntriesFilterCat,
     loadOutline,
     selectOutlineNode,
     startOutline,

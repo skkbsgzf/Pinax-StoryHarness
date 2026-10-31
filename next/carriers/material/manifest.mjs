@@ -9,15 +9,22 @@
  * primary 写 generic：素材库可以是一个泛型项目的主载体；也可以在小说／剧本项目里当伴生板块。
  * contextProfile 取 writing-selection：它在只读任务表里；本批不提供上下文块（providers 空数组），
  * 不谎报一块不存在的素材。
+ *
+ * 协议 v3（这一块是随框架发布的**自带面板样板**）：
+ *   entry   { kind:'iframe', path:'ui/index.html' } —— 面板页住在 next/carriers/material/ui/，
+ *           宿主用 pinax-plugin:// 协议把它装进沙箱 iframe，页面只能用只读工具桥。
+ *   pane    material.panel（overlay 槽位）用 view=pinax.view.custom ＋ kind=custom-panel 挂它。
+ *   agentMd AGENT.md —— 这一栏的作者须知，运行时组上下文时并入。
+ * 素材这块本身的能力面没变：树照旧在左竖条、记录详情照旧在中栏；面板是第三块，只读、不写盘。
  */
 export const MATERIAL_CARRIER_ID = 'pinax.carrier.material'
 
 export const MATERIAL_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: MATERIAL_CARRIER_ID,
   title: '素材',
-  version: '1.0.0',
+  version: '1.1.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -33,8 +40,10 @@ export const MATERIAL_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'material.board', title: '素材库', icon: 'image', view: 'pinax.view.list', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'material.editor', title: '素材', icon: 'image', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'material.board', title: '素材库', icon: 'image', view: 'pinax.view.list', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'material.editor', title: '素材', icon: 'image', view: 'pinax.view.editor', kind: 'records-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      // 自带面板（协议 v3）：内容面是插件自己的页面，宿主只给一块沙箱 iframe 与一条只读工具桥。
+      { slot: 'overlay', id: 'material.panel', title: '素材面板', icon: 'image', view: 'pinax.view.custom', kind: 'custom-panel', width: 320, forms: ['overlay'] }
     ],
     settings: []
   }),
@@ -51,7 +60,13 @@ export const MATERIAL_CARRIER = Object.freeze({
 
   permissions: [{ type: 'file', dir: '素材', mode: 'rw' }, 'agent:ask'],
 
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏只声明面板与作者须知，不起服务、不挂外部 MCP。
+  entry: Object.freeze({ kind: 'iframe', path: 'ui/index.html' }),
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default MATERIAL_CARRIER

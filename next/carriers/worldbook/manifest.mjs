@@ -13,11 +13,12 @@
 export const WORLDBOOK_CARRIER_ID = 'pinax.carrier.worldbook'
 
 export const WORLDBOOK_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: WORLDBOOK_CARRIER_ID,
   title: '世界书',
-  version: '1.1.0',
+  version: '1.2.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -33,8 +34,12 @@ export const WORLDBOOK_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.reader', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      // 批次44（作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空，
+      // 非常别扭，更合理的一个情况是，上面放图表列，下面放详情信息」）：
+      // 窄栏退成**类别导航树**（只管按类别找条目），核心区做成**看板区**（上图表列、下详情）。
+      // 两块 pane 的形态因此不再是「文档面」：窄栏是树、核心区是看板——形态三分类见 formTaxonomy.mjs。
+      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', kind: 'entries-categories', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
@@ -54,7 +59,14 @@ export const WORLDBOOK_CARRIER = Object.freeze({
   // 读写工具在运行时面上会被整组拒掉。与小说/资料同一口径。
   permissions: [{ type: 'file', dir: '世界书', mode: 'rw' }, 'agent:ask'],
 
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
+  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  entry: null,
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default WORLDBOOK_CARRIER

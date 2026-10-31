@@ -734,7 +734,9 @@ describe('Obsidian 三栏', () => {
     await rows[2].trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-pane-id="novel.editor"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('正文/第二卷/第003章-雪夜.md')
+    // 批次43：文档面不再摆路径 · 版本这些开发者信息（作者 2026-10-31）——路径在索引窗那一行的 title 上。
+    expect(wrapper.find('[data-pane-id="novel.editor"]').text()).not.toContain('正文/第二卷/第003章-雪夜.md')
+    expect(rows[2].attributes('title')).toContain('正文/第二卷/第003章-雪夜.md')
     wrapper.unmount()
 
     // 平铺数据（没有卷子目录）：不画卷标题，行文与拆分前一样。
@@ -2115,8 +2117,10 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
   }
 
   async function openWidget(wrapper) {
-    const toggle = wrapper.find('[aria-label="悬浮大纲"]')
-    expect(toggle.exists(), '大纲区标题行右侧应有「悬浮」钮').toBe(true)
+    // 协议 v3：「悬浮」钮从大纲那一栏的专属位置搬到了索引窗标题行（每一块声明了 overlay 槽的载体都出这一枚，
+    // 素材那类自带面板原先声明了却点不开）。所以这里按类名找，别钉死 aria 文案。
+    const toggle = wrapper.find('.nx-index-overlay-btn')
+    expect(toggle.exists(), '索引窗标题行右侧应有「悬浮」钮').toBe(true)
     await toggle.trigger('click')
     await flushPromises()
   }
@@ -2189,7 +2193,8 @@ describe('大纲悬浮窗（协议 v1.1-C · 工单C）', () => {
     await first.trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-pane-id="outline.editor"]').exists()).toBe(true)
-    expect(wrapper.find('[aria-label="大纲节点标题"]').element.value).toBe('开场：雨夜进城')
+    // 批次43：大纲面默认是阅读态——头部那一行标题就是节点名（要改先按「编辑」）。
+    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
     expect(wrapper.find('.nx-overlay-widget').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -2441,8 +2446,8 @@ describe('多形态打开（协议 v1.2 P18–P21）', () => {
     expect(outlineRail, '竖条应有大纲栏').toBeTruthy()
     await outlineRail.trigger('click')
     await flushPromises()
-    const toggle = wrapper.find('[aria-label="悬浮大纲"]')
-    expect(toggle.exists(), '大纲区标题行右侧应有「悬浮」钮').toBe(true)
+    const toggle = wrapper.find('.nx-index-overlay-btn')
+    expect(toggle.exists(), '索引窗标题行右侧应有「悬浮」钮').toBe(true)
     await toggle.trigger('click')
     await flushPromises()
   }
@@ -2785,8 +2790,10 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
       tools: ['pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save'],
       context: { providers: ['worldbook'], budgetChars: 20000 },
       panes: [
-        { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'library' },
-        { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'library' }
+        // 批次44：窄栏退成类别导航树、核心区做成看板区（上图表列、下详情）——
+        // 形态跟着声明走（view + kind），不再靠 id 前缀回落。
+        { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'library', view: 'pinax.view.tree', kind: 'entries-categories' },
+        { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'library', view: 'pinax.view.board', kind: 'entries-workspace' }
       ]
     }
     const outline = {
@@ -2813,12 +2820,12 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
       carriers: [...base.carriers, worldbook, outline],
       left: [
         ...base.left,
-        { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'library', pluginId: 'pinax.carrier.worldbook', pluginTitle: '世界书' },
+        { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'library', pluginId: 'pinax.carrier.worldbook', pluginTitle: '世界书', view: 'pinax.view.tree', kind: 'entries-categories' },
         { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
       ],
       center: [
         ...base.center,
-        { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'library', pluginId: 'pinax.carrier.worldbook', pluginTitle: '世界书' },
+        { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'library', pluginId: 'pinax.carrier.worldbook', pluginTitle: '世界书', view: 'pinax.view.board', kind: 'entries-workspace' },
         { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
       ]
     }
@@ -2826,7 +2833,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
 
   const CHAPTERS = [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }]
 
-  function writingBridge({ nodes = OUTLINE_NODES, edges = OUTLINE_EDGES, entries = ENTRIES, categories = [], chapters = CHAPTERS } = {}) {
+  function writingBridge({ nodes = OUTLINE_NODES, edges = OUTLINE_EDGES, entries = ENTRIES, categories = [], chapters = CHAPTERS, entryContent = '冷穿越剧版主角，醒来在雪夜。' } = {}) {
     const calls = []
     // 条目夹具是模块级常量：这里拷一份，保存用例改的是这一次挂载自己的账。
     const book = entries.map((item) => ({ ...item }))
@@ -2853,7 +2860,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
         if (payload.tool === 'pinax_worldbook_read') {
           const hit = book.find((item) => (payload.args.path && item.path === payload.args.path) || (item.id && item.id === payload.args.id) || item.name === payload.args.name)
           if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: '没有这条' } } }
-          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, entry: { ...hit, keys: hit.aliases, relations: Array.isArray(hit.relations) ? hit.relations : [], content: '冷穿越剧版主角，醒来在雪夜。', contentChars: 16, contentTruncated: false }, warnings: [] } } }
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.worldbook', payload: { ok: true, entry: { ...hit, keys: hit.aliases, relations: Array.isArray(hit.relations) ? hit.relations : [], content: entryContent, contentChars: entryContent.length, contentTruncated: false }, warnings: [] } } }
         }
         if (payload.tool === 'pinax_worldbook_save') {
           const index = book.findIndex((item) => item.path === payload.args.path)
@@ -2900,105 +2907,127 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
 
   it('大纲树按 edges 缩进（不再有「·」记号）；节点操作退到树行右键菜单，编辑面只剩文档', async () => {
     globalThis.localStorage?.clear()
-    const bridge = writingBridge()
-    const wrapper = mount(AppNext, { props: { bridge } })
-    await flushPromises()
-    await openBoard(wrapper, '大纲')
-
-    const rows = () => wrapper.findAll('.nx-index-window .nx-tree-item')
-    expect(rows()).toHaveLength(3)
-    expect(rows().map((row) => row.element.style.paddingInlineStart)).toEqual(['10px', '24px', '10px'])
-    expect(wrapper.find('.nx-outline-mark').exists()).toBe(false)
-
-    // 点第一行：中栏只剩文档——无框大标题＋无框备注，没有常驻的节点按钮行（P18）。
-    await rows()[0].trigger('click')
-    await flushPromises()
-    const paneNow = () => wrapper.find('[data-pane-id="outline.editor"]')
-    expect(paneNow().exists()).toBe(true)
-    expect(paneNow().find('.doc-title').exists()).toBe(true)
-    const note = paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]')
-    expect(note.exists()).toBe(true)
-    expect(note.attributes('maxlength')).toBe('200')
-    expect(note.classes()).toContain('doc-field')
-    expect(paneNow().find('.editor-foot').exists()).toBe(false)
-    for (const gone of ['.outline-move', '.outline-remove', '.outline-add', '.pane-hint']) {
-      expect(paneNow().find(gone).exists(), `${gone} 不该再长在编辑面上`).toBe(false)
-    }
-
-    // 右键第一行＝节点菜单（批次31）：五项都在；首行上移禁用、下移可用；Esc 收起不改任何东西。
-    const openMenu = async (row) => {
-      row.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
+    // 自动保存有 1.5 秒的停手窗口：接管计时器，这一例的保存次数才数得准。
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const bridge = writingBridge()
+      const wrapper = mount(AppNext, { props: { bridge } })
       await flushPromises()
-      return wrapper.find('.nx-context-menu')
+      await openBoard(wrapper, '大纲')
+
+      const rows = () => wrapper.findAll('.nx-index-window .nx-tree-item')
+      expect(rows()).toHaveLength(3)
+      expect(rows().map((row) => row.element.style.paddingInlineStart)).toEqual(['10px', '24px', '10px'])
+      expect(wrapper.find('.nx-outline-mark').exists()).toBe(false)
+
+      // 点第一行：中栏只剩文档——无框大标题＋无框备注，没有常驻的节点按钮行（P18）。
+      await rows()[0].trigger('click')
+      await flushPromises()
+      const paneNow = () => wrapper.find('[data-pane-id="outline.editor"]')
+      expect(paneNow().exists()).toBe(true)
+      expect(paneNow().find('.doc-title').exists()).toBe(true)
+      // 批次43：大纲面默认是阅读态——头部那一行标题是节点名，正文是渲染出来的备注。
+      expect(paneNow().find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
+      expect(paneNow().find('[data-test="outline-rendered"]').exists()).toBe(true)
+      expect(paneNow().find('.editor-foot').exists()).toBe(false)
+      for (const gone of ['.outline-move', '.outline-remove', '.outline-add', '.pane-hint']) {
+        expect(paneNow().find(gone).exists(), `${gone} 不该再长在编辑面上`).toBe(false)
+      }
+      // 批次43：底部那行不再摆「共 N 个节点」这类开发者信息（没有未落盘的改动时整行都不在）。
+      expect(paneNow().find('.doc-meta-hint').exists()).toBe(false)
+
+      // 进编辑态：备注是无框的一行文字（textarea.outline-note）。
+      await paneNow().find('[data-test="outline-edit"]').trigger('click')
+      await flushPromises()
+      const note = paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]')
+      expect(note.exists()).toBe(true)
+      expect(note.attributes('maxlength')).toBe('200')
+      expect(note.classes()).toContain('doc-field')
+
+      // 右键第一行＝节点菜单（批次31）：五项都在；首行上移禁用、下移可用；Esc 收起不改任何东西。
+      const openMenu = async (row) => {
+        row.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 140, clientY: 200 }))
+        await flushPromises()
+        return wrapper.find('.nx-context-menu')
+      }
+      const menu = await openMenu(rows()[0])
+      expect(menu.exists()).toBe(true)
+      for (const key of ['outline-node-move-up', 'outline-node-move-down', 'outline-node-remove', 'outline-node-add-sibling', 'outline-node-add-child']) {
+        expect(menu.find(`[data-test="${key}"]`).exists(), `节点菜单缺 ${key}`).toBe(true)
+      }
+      expect(menu.find('[data-test="outline-node-move-up"]').attributes('disabled')).toBeDefined()
+      expect(menu.find('[data-test="outline-node-move-down"]').attributes('disabled')).toBeUndefined()
+      globalThis.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+      await flushPromises()
+      expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+      expect(bridge.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(0)
+
+      // 备注只进草稿；Ctrl+S 才随整份文档走（nodes 透传，不改工具合同）。
+      await note.setValue('开场要落一场雨')
+      expect(bridge.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(0)
+      await note.trigger('keydown', { key: 's', ctrlKey: true })
+      await flushPromises()
+      const saved = bridge.calls.filter((call) => call.tool === 'pinax_outline_save')
+      expect(saved).toHaveLength(1)
+      expect(saved[0].args.nodes[0].note).toBe('开场要落一场雨')
+      expect(saved[0].args.edges).toEqual(OUTLINE_EDGES)
+
+      // 下移：菜单里点一下，与同深度相邻节点互换（跨层不动），树当场换序；保存载荷跟着变。
+      const moveMenu = await openMenu(rows()[0])
+      await moveMenu.find('[data-test="outline-node-move-down"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+      expect(rows().map((row) => row.text())).toEqual(['第二折：钟楼', '第一折：停摆的表', '开场：雨夜进城'])
+      await paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]').trigger('keydown', { key: 's', ctrlKey: true })
+      await flushPromises()
+      const moved = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
+      expect(moved.args.nodes.map((node) => node.id)).toEqual(['n3', 'n2', 'n1'])
+      expect(moved.args.edges).toEqual(OUTLINE_EDGES)
+
+      // 删除节点：连同它的连线一起从草稿里删掉；树当场少一行。
+      // 批次43：换节点＝换文档，编辑态随之收掉（要继续改就先按「编辑」）。
+      const removeMenu = await openMenu(rows()[2])
+      await removeMenu.find('[data-test="outline-node-remove"]').trigger('click')
+      await flushPromises()
+      expect(rows()).toHaveLength(2)
+      expect(paneNow().find('[data-test="outline-edit"]').exists()).toBe(true)
+      await paneNow().find('[data-test="outline-edit"]').trigger('click')
+      await flushPromises()
+      await paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]').trigger('keydown', { key: 's', ctrlKey: true })
+      await flushPromises()
+      const removed = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
+      expect(removed.args.nodes.map((node) => node.id)).toEqual(['n3', 'n2'])
+      expect(removed.args.edges).toEqual([])
+
+      // 「＋」（区标题行，hover 才显形）：在末尾追一个同级节点；同样只进草稿，Ctrl+S 才落盘。
+      await wrapper.find('[data-test="outline-append-node"]').trigger('click')
+      await flushPromises()
+      expect(rows()).toHaveLength(3)
+      expect(rows()[2].text()).toBe('未命名节点')
+      // 批次43：追加节点＝换节点＝回到阅读态，按「编辑」才拿得到那枚标题输入框。
+      await paneNow().find('[data-test="outline-edit"]').trigger('click')
+      await flushPromises()
+      await paneNow().find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
+      await flushPromises()
+      const appended = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
+      expect(appended.args.nodes.map((node) => node.title)).toEqual(['第二折：钟楼', '第一折：停摆的表', '未命名节点'])
+      expect(appended.args.edges).toEqual([])
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
     }
-    const menu = await openMenu(rows()[0])
-    expect(menu.exists()).toBe(true)
-    for (const key of ['outline-node-move-up', 'outline-node-move-down', 'outline-node-remove', 'outline-node-add-sibling', 'outline-node-add-child']) {
-      expect(menu.find(`[data-test="${key}"]`).exists(), `节点菜单缺 ${key}`).toBe(true)
-    }
-    expect(menu.find('[data-test="outline-node-move-up"]').attributes('disabled')).toBeDefined()
-    expect(menu.find('[data-test="outline-node-move-down"]').attributes('disabled')).toBeUndefined()
-    globalThis.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
-    await flushPromises()
-    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
-    expect(bridge.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(0)
-
-    // 备注只进草稿；Ctrl+S 才随整份文档走（nodes 透传，不改工具合同）。
-    await note.setValue('开场要落一场雨')
-    expect(bridge.calls.filter((call) => call.tool === 'pinax_outline_save')).toHaveLength(0)
-    await note.trigger('keydown', { key: 's', ctrlKey: true })
-    await flushPromises()
-    const saved = bridge.calls.filter((call) => call.tool === 'pinax_outline_save')
-    expect(saved).toHaveLength(1)
-    expect(saved[0].args.nodes[0].note).toBe('开场要落一场雨')
-    expect(saved[0].args.edges).toEqual(OUTLINE_EDGES)
-
-    // 下移：菜单里点一下，与同深度相邻节点互换（跨层不动），树当场换序；保存载荷跟着变。
-    const moveMenu = await openMenu(rows()[0])
-    await moveMenu.find('[data-test="outline-node-move-down"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
-    expect(rows().map((row) => row.text())).toEqual(['第二折：钟楼', '第一折：停摆的表', '开场：雨夜进城'])
-    await paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]').trigger('keydown', { key: 's', ctrlKey: true })
-    await flushPromises()
-    const moved = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
-    expect(moved.args.nodes.map((node) => node.id)).toEqual(['n3', 'n2', 'n1'])
-    expect(moved.args.edges).toEqual(OUTLINE_EDGES)
-
-    // 删除节点：连同它的连线一起从草稿里删掉；头部节点数当场变，树也跟着少一行。
-    const removeMenu = await openMenu(rows()[2])
-    await removeMenu.find('[data-test="outline-node-remove"]').trigger('click')
-    await flushPromises()
-    expect(rows()).toHaveLength(2)
-    expect(paneNow().find('.doc-meta-hint').text()).toContain('共 2 个节点')
-    await paneNow().find('[aria-label="大纲节点备注（最多 200 字）"]').trigger('keydown', { key: 's', ctrlKey: true })
-    await flushPromises()
-    const removed = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
-    expect(removed.args.nodes.map((node) => node.id)).toEqual(['n3', 'n2'])
-    expect(removed.args.edges).toEqual([])
-
-    // 「＋」（区标题行，hover 才显形）：在末尾追一个同级节点；同样只进草稿，Ctrl+S 才落盘。
-    await wrapper.find('[data-test="outline-append-node"]').trigger('click')
-    await flushPromises()
-    expect(rows()).toHaveLength(3)
-    expect(rows()[2].text()).toBe('未命名节点')
-    await paneNow().find('[aria-label="大纲节点标题"]').trigger('keydown', { key: 's', ctrlKey: true })
-    await flushPromises()
-    const appended = bridge.calls.filter((call) => call.tool === 'pinax_outline_save').at(-1)
-    expect(appended.args.nodes.map((node) => node.title)).toEqual(['第二折：钟楼', '第一折：停摆的表', '未命名节点'])
-    expect(appended.args.edges).toEqual([])
-    wrapper.unmount()
   })
 
-  it('世界书条目表格：切换控件在区标题行，表格列齐、截摘要 40 字，行点击与列表同一个 openEntry', async () => {
+  it('世界书条目表格：切换控件在看板区头上，表格列齐、截摘要 40 字，行点击与列表同一个 openEntry', async () => {
     globalThis.localStorage?.clear()
     const bridge = writingBridge()
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
     await openBoard(wrapper, '世界书')
 
-    // 默认是列表视图：两行条目，没有表格。
-    expect(wrapper.find('.nx-index-window .nx-tree-item').exists()).toBe(true)
+    // 批次44：图表列搬去了核心区的看板区（上图表列、下详情），条目行不再在窄栏里。
+    // 窄栏退成类别导航树，所以条目行要在看板区里找。
+    expect(wrapper.find('[data-test="entries-board"] .nx-tree-item').exists()).toBe(true)
     expect(wrapper.find('[data-test="entries-table"]').exists()).toBe(false)
     const toggle = wrapper.find('[data-test="entries-view-toggle"]')
     expect(toggle.exists()).toBe(true)
@@ -3054,7 +3083,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await again.find('[data-test="entries-view-toggle"]').trigger('click')
     await flushPromises()
     expect(again.find('[data-test="entries-graph"]').exists()).toBe(false)
-    expect(again.find('.nx-index-window .nx-tree-item').exists()).toBe(true)
+    expect(again.find('[data-test="entries-board"] .nx-tree-item').exists()).toBe(true)
     expect(globalThis.localStorage.getItem('entriesView.D:/tmp/大梦')).toBe('list')
     again.unmount()
   })
@@ -3072,6 +3101,120 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     wrapper.unmount()
   })
 
+  /**
+   * 批次44 · 蓝色标签那件事（作者 2026-10-31：「你在前端设计了一些蓝色的标签，
+   * 看上去能跳转，但是其实不行，非常矛盾」）。
+   *
+   * 纪律：看着能点就必须点得动。所以：
+   *   - 染蓝的词必须**恰好**指向一条条目（指向两条以上的通用词不染蓝）；
+   *   - 点蓝链走的是同一个 openEntry，按 path 定位到那一条。
+   */
+  it('批次44：蓝链只指向唯一一条条目，点它就跳到那一条', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({
+      entries: CATEGORIZED,
+      categories: [...CATEGORIES],
+      entryContent: '他记得那场雨夜，冷穿越剧版主角，醒来在雪夜。'
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    // 打开「人物·柯秒」：正文里有别人的短名「雨夜」（唯一归属 编年·雨夜），
+    // 还有自己的标签「主角」（链到自己等于没跳，不该染蓝）。
+    const row = wrapper.findAll('[data-test="entries-board"] .nx-tree-item').find((item) => item.text().includes('人物·柯秒'))
+    expect(row, '看板区里应有「人物·柯秒」这一行').toBeTruthy()
+    await row.trigger('click')
+    await flushPromises()
+
+    const rendered = wrapper.find('[data-test="entry-rendered"]')
+    expect(rendered.exists()).toBe(true)
+    const links = rendered.findAll('.nx-wikilink')
+    expect(links.map((link) => link.text())).toEqual(['雨夜'])
+    expect(links[0].attributes('data-entry')).toBe('雨夜')
+    // 自己的标签留在正文里，不是一条打不开的蓝链。
+    expect(rendered.text()).toContain('主角')
+
+    // 点那条蓝链 → 走 openEntry（按 path 定位），详情换成那一条。
+    await links[0].trigger('click')
+    await flushPromises()
+    const read = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_read').at(-1)
+    expect(read.args).toEqual({ path: '世界书/编年/编年·雨夜.md' })
+    expect(wrapper.find('[data-pane-id="worldbook.entries"] .doc-title').text()).toBe('编年·雨夜')
+    wrapper.unmount()
+  })
+
+  it('批次44：两条共有的词不染蓝（染了也点不动，比不染更坏）', async () => {
+    globalThis.localStorage?.clear()
+    // 「主角」是两条共用的标签：它指向谁都不成立，正文里就当普通文字。
+    const shared = [
+      { id: 'wb-1', name: '人物·柯秒', type: 'character', cat: '人物', tags: ['主角'], aliases: ['柯秒'], chars: 18, summary: '', path: '世界书/人物/人物·柯秒.md', revision: 1, contract: true },
+      { id: 'wb-ch2', name: '编年·雨夜', type: 'event', cat: '编年', tags: ['主角'], aliases: [], chars: 12, summary: '', path: '世界书/编年/编年·雨夜.md', revision: 1, contract: true }
+    ]
+    const bridge = writingBridge({
+      entries: shared,
+      categories: ['编年', '人物'],
+      entryContent: '他记得那场雨夜，冷穿越剧版主角，醒来在雪夜。'
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    const row = wrapper.findAll('[data-test="entries-board"] .nx-tree-item').find((item) => item.text().includes('人物·柯秒'))
+    await row.trigger('click')
+    await flushPromises()
+
+    const rendered = wrapper.find('[data-test="entry-rendered"]')
+    // 「雨夜」仍是一条唯一入口，链上；「主角」是共有词，不链。
+    const links = rendered.findAll('.nx-wikilink')
+    expect(links.map((link) => link.text())).toEqual(['雨夜'])
+    expect(links.some((link) => link.text() === '主角')).toBe(false)
+    expect(rendered.text()).toContain('主角')
+    wrapper.unmount()
+  })
+
+  /**
+   * 批次44 · 排布（作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，
+   * 右侧大面积留空，非常别扭，更合理的一个情况是，上面放图表列，下面放详情信息」）。
+   *
+   * 机器钉子：核心区是竖排（看板在上、详情在下），窄栏退成类别导航树。
+   */
+  it('批次44：世界书核心区竖排——上图表列、下详情；窄栏只留类别导航', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({ entries: CATEGORIZED, categories: [...CATEGORIES] })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    const workspace = wrapper.find('[data-pane-id="worldbook.entries"] .nx-entries-workspace')
+    expect(workspace.exists(), '核心区该有一块竖排工作区').toBe(true)
+    const children = [...workspace.element.children]
+    expect(children.length, '工作区就是两块：上图表列、下详情').toBe(2)
+    expect(children[0].className).toContain('nx-entries-workspace-board')
+    expect(children[1].className).toContain('nx-entries-workspace-detail')
+
+    // 切换控件住在看板区头上，不在窄栏里。
+    expect(wrapper.find('[data-test="entries-board"] [data-test="entries-view-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-index-window [data-test="entries-view-toggle"]').exists()).toBe(false)
+
+    // 窄栏只剩类别导航树：树里每一行都是类别行，没有条目行，也没有表格与图谱。
+    expect(wrapper.find('.nx-index-window [data-test="entry-category-tree"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-index-window [data-test="entries-table"]').exists()).toBe(false)
+    expect(wrapper.find('.nx-index-window [data-test="entries-graph"]').exists()).toBe(false)
+    const narrowRows = wrapper.findAll('.nx-index-window .nx-tree-item')
+    expect(narrowRows.length).toBeGreaterThan(0)
+    for (const row of narrowRows) {
+      expect(row.attributes('data-test') ?? '').toMatch(/^entry-cat-/u)
+    }
+
+    // 点窄栏的一个类别 → 看板区跟着筛（两边共用 entriesFilterCat 一格）。
+    await wrapper.find('.nx-index-window [data-test="entry-cat-编年"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="entries-filter-category"]').element.value).toBe('编年')
+    expect(wrapper.findAll('[data-test="entries-board"] .nx-tree-item')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
   it('世界书关系边编辑（批次28 · 工单2b）：行编辑随 meta.relations 落盘，阅读态按「目标 · 类型 · 立场」显示', async () => {
     globalThis.localStorage?.clear()
     const bridge = writingBridge()
@@ -3080,7 +3223,8 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await openBoard(wrapper, '世界书')
 
     const paneNow = () => wrapper.find('[data-pane-id="worldbook.entries"]')
-    await wrapper.findAll('.nx-index-window .nx-tree-item')[0].trigger('click')
+    // 批次44：条目行搬进了核心区的看板区，窄栏只剩类别导航树——点条目要点看板区那一行。
+    await wrapper.findAll('[data-test="entries-board"] .nx-tree-item')[0].trigger('click')
     await flushPromises()
     expect(paneNow().find('[data-test="entry-relations-read"]').exists()).toBe(false, '没有关系就不摆这块')
 
@@ -3141,11 +3285,12 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await openBoard(wrapper, '世界书')
 
     // 列表视图：每组一个小节头（人物／编年／设定按工具给的顺序），组内是原来的条目行。
-    const sections = wrapper.findAll('.nx-index-window [data-test="entry-category"]')
+    // 批次44：这些组头与条目行搬进了核心区的看板区，窄栏只剩类别导航树。
+    const sections = wrapper.findAll('[data-test="entries-board"] [data-test="entry-category"]')
     expect(sections.map((node) => node.text())).toEqual(CATEGORIES)
-    const lists = wrapper.findAll('.nx-index-window .nx-tree')
+    const lists = wrapper.findAll('[data-test="entries-board"] .nx-tree')
     expect(lists.map((list) => list.findAll('.nx-tree-item').length)).toEqual([2, 2, 1])
-    expect(wrapper.find('.nx-index-window').text()).not.toContain('未分类')
+    expect(wrapper.find('[data-test="entries-board"]').text()).not.toContain('未分类')
 
     // 表格视图：多一列「类别」，值来自条目的 cat；批次36 起表格按类别分组（组头带条数）。
     await wrapper.find('[data-test="entries-view-toggle"]').trigger('click')

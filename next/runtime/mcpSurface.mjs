@@ -1,5 +1,7 @@
 import { createPinaxMcpServer, tools as kernelTools } from '../../server/mcp/createMcpServer.js'
 import { collectCarrierTools, createAggregatedMcpServer } from './surfaceAggregate.mjs'
+import { connectMcpServers, resolveMcpSpec } from './mcpClient.mjs'
+import { collectPluginDirs } from './pluginDirs.mjs'
 import { KERNEL_WRITE_TOOL_NAMES, guardKernelToolCall } from './kernelWriteGuard.mjs'
 import { loadSkills } from '../skills/loadSkills.mjs'
 import { createSkillTools, SKILL_READ_TOOL } from './skillTools.mjs'
@@ -52,7 +54,7 @@ export function createMcpSurface(options = {}) {
  * 否则「运行时不改原稿」就只在装了板块的项目里成立。
  * `aggregated` 仍按「有没有载体工具进面」记账，右栏与验收读它。
  */
-export async function createRuntimeSurface({ registry, view, fileService, advisorBaseUrl, projectRoot, skillsDir } = {}) {
+export async function createRuntimeSurface({ registry, view, fileService, advisorBaseUrl, projectRoot, skillsDir, mcpOptions, pluginDirs } = {}) {
   const kernelServer = createPinaxMcpServer({ name: SURFACE_NAME, version: SURFACE_VERSION, advisorBaseUrl })
   const { map, missing } = collectCarrierTools({ registry, view, fileService })
   const root = projectRoot ?? view?.root ?? fileService?.root ?? null
@@ -61,7 +63,21 @@ export async function createRuntimeSurface({ registry, view, fileService, adviso
   const loaded = await loadSkills({ ...(skillsDir ? { dir: skillsDir } : {}), availableTools })
   const nativeMap = createSkillTools({ skills: loaded.skills })
   const guard = (tool, args) => guardKernelToolCall({ tool, args, root, registry })
-  const aggregated = await createAggregatedMcpServer({ kernelServer, carrierMap: map, nativeMap, guard, name: SURFACE_NAME, version: SURFACE_VERSION })
+  // 协议 v3：启用的载体可以把外部 MCP 服务端挂进来（view.mcp 已在安装期按 prefix 仲裁过命名空间）。
+  // 相对路径按插件自己的目录解析（与服务声明同一口径）：清单里写 'mcp.mjs' 的，落地的也是插件目录里那一份。
+  const dirs = collectPluginDirs({ registry, overrides: pluginDirs })
+  const mcpSpecs = (Array.isArray(view?.mcp) ? view.mcp : [])
+    .map((spec) => resolveMcpSpec(spec, dirs[String(spec?.pluginId ?? '')]))
+  const external = await connectMcpServers(mcpSpecs, mcpOptions)
+  const aggregated = await createAggregatedMcpServer({
+    kernelServer,
+    carrierMap: map,
+    nativeMap,
+    externalClients: external.clients,
+    guard,
+    name: SURFACE_NAME,
+    version: SURFACE_VERSION
+  })
   // 批次37：清单声明了 subscriptions 的启用载体，宿主在激活时替它挂投递（M2.5-C 的承诺兑现）。
   // 今天七块载体都声明了 project.changed，但 impl 还没有 onProjectEvent —— 投递路径是真实的、空的，
   // surfaceInfo 会如实把这个名单摊出来，不假装事件已经被谁消费。
@@ -75,6 +91,15 @@ export async function createRuntimeSurface({ registry, view, fileService, adviso
     subscribedCarriers,
     aggregated: map.size > 0,
     writeGuard: { tools: KERNEL_WRITE_TOOL_NAMES, projectRoot: root },
+    external: {
+      count: external.clients.length,
+      failures: external.failures,
+      servers: external.clients.map((client) => client.info()),
+      toolNames: external.clients.flatMap((client) => client.listTools().map((tool) => `${client.prefix}.${tool.name}`)),
+      close: async () => {
+        for (const client of external.clients) await client.close()
+      }
+    },
     skills: {
       names: loaded.skills.map((skill) => skill.name),
       rejected: loaded.rejected,

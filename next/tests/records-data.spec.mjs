@@ -251,7 +251,10 @@ describe('记录型载体的中栏（批次40）', () => {
     expect(wrapper.text()).toContain('标签：雨夜')
     expect(wrapper.text()).toContain('引用：资料/参考/雨夜.png')
     expect(wrapper.text()).toContain('1 项载体私有字段')
-    expect(wrapper.find('.doc-meta-hint').text()).toContain('素材/素材.json · 第 1 版')
+    // 批次43：记录面的底部那行只留类型与状态——路径与版本号是开发者信息，不摆给作者看。
+    expect(wrapper.find('.doc-meta-hint').text()).toBe('reference-image · inbox')
+    expect(wrapper.find('.doc-meta-hint').text()).not.toContain('素材/素材.json')
+    expect(wrapper.find('.doc-meta-hint').text()).not.toContain('第 1 版')
 
     await wrapper.find('.records-edit').trigger('click')
     await wrapper.find('[aria-label="记录标题"]').setValue('雨夜参考图（改）')
@@ -262,7 +265,8 @@ describe('记录型载体的中栏（批次40）', () => {
     expect(data.record.title).toBe('雨夜参考图（改）')
     expect(data.record.status).toBe('accepted')
     expect(data.record.revision).toBe(2)
-    expect(wrapper.find('.doc-meta-hint').text()).toContain('第 2 版')
+    // 批次43：版本号不再摆在底部那行（它在保存 chip 与索引窗行的 title 里）。
+    expect(wrapper.find('.doc-meta-hint').text()).not.toContain('第 2 版')
 
     await wrapper.find('.records-remove').trigger('click')
     expect(wrapper.find('.records-remove').text()).toBe('确认删除')

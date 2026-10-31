@@ -3,9 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchTooltip.js'
 import { outlineDepths as depthsOfOutline } from './outlineTree.mjs'
-import { nextEntriesView, readEntriesView, writeEntriesView } from './entriesView.mjs'
 import { recordCarrierOfPaneId } from './recordCarriers.mjs'
-import EntryGraph from './EntryGraph.vue'
+import EntriesCategoryTree from './EntriesCategoryTree.vue'
 
 /**
  * 索引窗：竖条右边那一栏——会话管理／文件结构管理那件事就落在这里。
@@ -41,9 +40,7 @@ const props = defineProps({
   /** useBoardData 的返回值：索引窗与核心区看的是同一份数据。 */
   data: { type: Object, required: true },
   archive: { type: Array, default: () => [] },
-  width: { type: Number, default: 256 },
-  /** 当前项目根：只用来拼界面偏好的 localStorage 键（entriesView.<projectRoot>，照 paneForm 先例）。 */
-  projectRoot: { type: String, default: '' }
+  width: { type: Number, default: 256 }
 })
 const emit = defineEmits(['collapse', 'history', 'overlay', 'context-menu'])
 
@@ -88,7 +85,7 @@ function closeNodeMenu() {
   nodeMenu.value = null
 }
 
-/** 菜单里的一下：先收起菜单，再照旧走 useBoardData 的同一个动作（只改草稿，Ctrl+S 才落盘）。 */
+/** 菜单里的一下：先收起菜单，再照旧走 useBoardData 的同一个动作（只改草稿，改完自动落盘）。 */
 function runNodeAction(action, payload) {
   closeNodeMenu()
   if (action === 'move') props.data.moveOutlineNode(payload)
@@ -144,7 +141,6 @@ const recordSet = computed(() => {
 const treeDir = computed(() => props.board?.dataDirs?.[0] ?? props.board?.treePaneTitle ?? '目录')
 
 const isChapterOpen = (item) => props.data.selection?.type === 'chapter' && props.data.selection.item?.file === item.file
-const isEntryOpen = (item) => props.data.selection?.type === 'entry' && props.data.selection.item?.path === item.path
 const isNoteOpen = (item) => props.data.selection?.type === 'note' && props.data.selection.item?.file === item.file
 const isRuleOpen = (item) => props.data.selection?.type === 'rule' && props.data.selection.item?.file === item.file
 const isDocumentOpen = (item) => props.data.selection?.type === 'document' && props.data.selection.item?.file === item.file
@@ -181,159 +177,16 @@ const outlineIndent = (index) => 10 + (outlineDepths.value[index] ?? 0) * 14
 const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-node' && props.data.selection.item?.index === index
 
 /**
- * 世界书条目的列表/表格/图谱视图（批次28 · 工单3 → 批次36）：只这一栏有，别的栏不加。
- * 状态进 localStorage（`entriesView.<projectRoot>`，照 paneForm.<paneId> 的先例）——
- * 读写都收在 next/shell/entriesView.mjs 里，这里只把它接进一个 ref；
- * 键随项目根换（换项目＝各记各的），读失败按 list 起步，不把界面顶成空白。
+ * 世界书这一栏（批次44）：图表列（列表／表格／图谱）搬去了核心区的看板区，
+ * 窄栏退成**类别导航树**——只管「按类别找条目」。
+ *
+ * 为什么这么搬（作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空」）：
+ * 表格与图谱挤在两百多像素宽的窄栏里，列头折行、图谱缩成一小块，而核心区大片空着——
+ * 两头都不好用。搬上去之后核心区是竖排：上＝图表列，下＝选中条目的详情。
+ *
+ * 视图记忆（`entriesView.<projectRoot>`）与看板区的筛选排序都归 EntriesBoard 那块，
+ * 窄栏不再各记一份（那一格在 useBoardData 的 entriesFilterCat：点类别＝给看板区加一道筛选）。
  */
-const entriesView = ref('list')
-
-function toggleEntriesView() {
-  entriesView.value = nextEntriesView(entriesView.value)
-  writeEntriesView(props.projectRoot, entriesView.value)
-}
-
-/** 切换钮的文案跟着「下一步是哪个视图」走：list 显示「表」、table 显示「图」、graph 显示「列」。 */
-const ENTRIES_VIEW_TOGGLE = {
-  list: { label: '表', aria: '切换为表格视图', title: '表格视图' },
-  table: { label: '图', aria: '切换为图谱视图', title: '图谱视图' },
-  graph: { label: '列', aria: '切换为列表视图', title: '列表视图' }
-}
-
-/** 表格里的摘要列只占一格：截 40 字（截断只发生在显示上，磁盘与详情面仍是全文）。 */
-const TABLE_SUMMARY_CHARS = 40
-function clipTableSummary(value) {
-  const text = String(value ?? '').trim()
-  return text.length > TABLE_SUMMARY_CHARS ? `${text.slice(0, TABLE_SUMMARY_CHARS)}…` : text
-}
-
-/**
- * 世界书类别分组（批次34）：按 世界书/ 的一级子目录分组，组头用老版小节头词汇。
- * 组序以工具返回的 categories 为准（已是字典序）；声明外出现过的类别按出现序补在后；
- * 没有类别的条目归「未分类」并永远排最后——旧项目（没有子目录）只剩这一组，看上去与之前一样。
- * 批次36：表格视图的分组走同一只函数（Dataview 的组语义与列表一致），组内行再按当前排序摆。
- */
-function groupEntriesByCat(entries) {
-  const declared = Array.isArray(props.data.categories) ? props.data.categories : []
-  // 没有类别目录的旧项目：不摆「未分类」这个头——列表与原样一致（兼容优先）。
-  if (!declared.length) return entries.length ? [{ name: '', label: '', items: entries }] : []
-  const order = [...declared]
-  for (const entry of entries) {
-    const cat = String(entry?.cat ?? '')
-    if (cat && !order.includes(cat)) order.push(cat)
-  }
-  const groups = []
-  for (const cat of order) {
-    const items = entries.filter((entry) => String(entry?.cat ?? '') === cat)
-    if (items.length) groups.push({ name: cat, label: cat, items })
-  }
-  const loose = entries.filter((entry) => !String(entry?.cat ?? ''))
-  if (loose.length) groups.push({ name: '', label: '未分类', items: loose })
-  return groups
-}
-
-const entryGroups = computed(() => groupEntriesByCat(props.data.entries ?? []))
-
-/**
- * Dataview 式表格（批次36 · 任务一）：列头可排序（升→降→默认循环）、筛选行（文本包含匹配
- * 名称/关键词/摘要 ＋ 类别下拉）、按类别分组组头带条数。排序与筛选纯前端，数据源仍是
- * data.entries（不新增工具调用）。
- */
-const ENTRY_COLUMNS = [
-  { key: 'name', label: '名称' },
-  { key: 'cat', label: '类别' },
-  { key: 'type', label: '类型' },
-  { key: 'keys', label: '关键词' },
-  { key: 'chars', label: '字数' },
-  { key: 'summary', label: '摘要' }
-]
-
-const entriesFilter = ref('')
-const entriesFilterCat = ref('')
-const entriesSort = ref(null)
-
-function toggleEntriesSort(key) {
-  const current = entriesSort.value
-  if (!current || current.key !== key) {
-    entriesSort.value = { key, dir: 'asc' }
-    return
-  }
-  if (current.dir === 'asc') {
-    entriesSort.value = { key, dir: 'desc' }
-    return
-  }
-  entriesSort.value = null
-}
-
-function sortIndicator(key) {
-  const current = entriesSort.value
-  if (!current || current.key !== key) return ''
-  return current.dir === 'asc' ? '▲' : '▼'
-}
-
-/** 类别下拉的选项：全部＋既有类别（与分组同一顺序——声明在前，出现序补后）。 */
-const entryFilterOptions = computed(() => {
-  const order = []
-  for (const cat of Array.isArray(props.data.categories) ? props.data.categories : []) {
-    if (cat && !order.includes(cat)) order.push(cat)
-  }
-  for (const entry of props.data.entries ?? []) {
-    const cat = String(entry?.cat ?? '')
-    if (cat && !order.includes(cat)) order.push(cat)
-  }
-  return order
-})
-
-const entryCollator = new Intl.Collator('zh-Hans-CN')
-
-function entrySortValue(item, key) {
-  if (key === 'chars') return Number(item?.chars ?? 0) || 0
-  if (key === 'keys') return (Array.isArray(item?.aliases) ? item.aliases : []).join('、')
-  if (key === 'cat') return String(item?.cat ?? '')
-  if (key === 'type') return String(item?.type ?? '')
-  if (key === 'summary') return String(item?.summary ?? '')
-  return String(item?.name ?? '')
-}
-
-/** 筛选：类别精确匹配；文本对名称/关键词/摘要做不区分大小写的包含匹配。 */
-const filteredEntries = computed(() => {
-  const needle = entriesFilter.value.trim().toLowerCase()
-  const cat = entriesFilterCat.value
-  return (props.data.entries ?? []).filter((item) => {
-    if (cat && String(item?.cat ?? '') !== cat) return false
-    if (!needle) return true
-    const haystack = [
-      String(item?.name ?? ''),
-      (Array.isArray(item?.aliases) ? item.aliases : []).join('、'),
-      String(item?.summary ?? '')
-    ].join('\n').toLowerCase()
-    return haystack.includes(needle)
-  })
-})
-
-/** 组内排序（组头顺序不动——Dataview 的分组是第一维，排序是组内第二维）。 */
-function sortEntries(items) {
-  const sort = entriesSort.value
-  if (!sort) return items
-  const dir = sort.dir === 'desc' ? -1 : 1
-  return [...items].sort((a, b) => {
-    const left = entrySortValue(a, sort.key)
-    const right = entrySortValue(b, sort.key)
-    if (sort.key === 'chars') return (left - right) * dir
-    return entryCollator.compare(String(left), String(right)) * dir
-  })
-}
-
-const tableGroups = computed(() => groupEntriesByCat(filteredEntries.value)
-  .map((group) => ({ ...group, items: sortEntries(group.items) })))
-
-/** 换项目＝换树也换视图记忆；筛选与排序是会话内的临时状态，一并清零。 */
-watch(() => props.projectRoot, () => {
-  entriesView.value = readEntriesView(props.projectRoot)
-  entriesFilter.value = ''
-  entriesFilterCat.value = ''
-  entriesSort.value = null
-}, { immediate: true })
 
 /**
  * 新建下拉的选项（批次34）：有类别目录＝那些目录；一个都没有＝只有「顶层」。
@@ -439,6 +292,17 @@ watch(() => props.board?.id, () => {
   <aside id="nx-index-window" class="workspace-sidebar nx-index-window" :style="{ width: width + 'px' }" aria-label="索引窗">
     <header class="nx-index-head">
       <span class="workspace-nav-section">{{ board?.title ?? '索引' }}</span>
+      <!-- 协议 v3：载体声明了 overlay 槽的 pane（自带面板）才出这枚「悬浮」钮——
+           点它由外壳把那块 pane 开成浮窗（正文写作时不必切回这一栏）。
+           这枚钮原来只在大纲那一栏里，于是「素材面板」这类自带面板在界面上没有入口：
+           清单里声明了、运行时也渲染得出来，作者却点不开（声明了却不生效）。 -->
+      <button
+        v-if="board?.overlayPane"
+        type="button"
+        class="control-quiet nx-index-overlay-btn"
+        :aria-label="'悬浮 ' + (board.overlayPane.title ?? '面板')"
+        @click="emit('overlay', board.overlayPane.id)"
+      >悬浮</button>
       <button
         type="button"
         class="nx-row nx-index-collapse"
@@ -519,20 +383,12 @@ watch(() => props.board?.id, () => {
            层级用缩进阶梯表达（depth 由 edges 现算，批次28 起不再用「·」点标记）。
            大纲还没写就给一行说明＋「新建大纲」，不当成错误。 -->
       <template v-else-if="treeKind === 'outline'">
-        <!-- 工单C（协议 v1.1-C）：载体声明了 overlay pane 才出这枚「悬浮」钮——
-             点它由外壳打开 FloatingWidget 的大纲悬浮窗（正文写作时不必切回这一栏）。
-             批次31（P18）：区标题行右侧另有一枚 hover 才显形的「＋」——在末尾追一个同级节点；
-             大纲编辑面底部那排节点操作按钮拆掉后，新建入口只剩这里（带 tooltip 说明）。 -->
+        <!-- 批次31（P18）：区标题行右侧另有一枚 hover 才显形的「＋」——在末尾追一个同级节点；
+             大纲编辑面底部那排节点操作按钮拆掉后，新建入口只剩这里（带 tooltip 说明）。
+             「悬浮」钮搬去了索引窗标题行（协议 v3 的自带面板要对所有载体可见，不只大纲）。 -->
         <div class="nx-index-section-head is-outline">
           <p class="workspace-nav-section">{{ treeDir }}</p>
           <span class="nx-index-section-actions">
-            <button
-              v-if="board?.overlayPane"
-              type="button"
-              class="control-quiet nx-index-overlay-toggle"
-              aria-label="悬浮大纲"
-              @click="emit('overlay', board.overlayPane.id)"
-            >悬浮</button>
             <button
               type="button"
               class="nx-row nx-index-icon-btn nx-index-add-toggle nx-index-append-node"
@@ -640,25 +496,16 @@ watch(() => props.board?.id, () => {
         <p v-if="data.notesError" class="nx-index-error">{{ data.notesError }}</p>
       </template>
 
-      <!-- 世界书（协议 v1.1-A：独立一栏，条目树）。未建档的条目在行尾标出来。
-           批次28 · 工单3：区标题行右侧一枚视图切换——状态按项目根落 localStorage；
-           批次36 起：列表／表格／图谱三态循环（切换钮显示「下一步」），三态点行都是
-           同一个 openEntry（不新增工具调用）。
-           批次34：列表按类别分组（世界书/ 的一级子目录），表格有「类别」列，
-           新建（区头 ＋）的临时行带一枚类别下拉——选中的类别决定这一条落在哪个子目录。 -->
+      <!-- 世界书（批次44：窄栏只做类别导航，图表列搬去核心区的看板区）。
+           作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空，
+           非常别扭，更合理的一个情况是，上面放图表列，下面放详情信息」。
+           所以这一栏不再有视图切换钮、表格、图谱——只剩「按类别找条目」这一件事：
+           类别树点一下＝给核心区的看板区加一道类别筛选（共享 state.entriesFilterCat）。
+           新建（＋）留在这栏：IDE 的「新建」本来就是文件树的动作，建完条目在看板区显形。 -->
       <template v-else-if="treeKind === 'entries'">
         <div class="nx-index-section-head is-entries">
           <p class="workspace-nav-section">{{ treeDir }}</p>
           <span class="nx-index-section-actions">
-            <button
-              type="button"
-              class="control-quiet nx-index-view-toggle"
-              data-test="entries-view-toggle"
-              :aria-label="ENTRIES_VIEW_TOGGLE[entriesView].aria"
-              :aria-pressed="(entriesView !== 'list').toString()"
-              v-workbench-tooltip="{ text: ENTRIES_VIEW_TOGGLE[entriesView].title, side: 'left' }"
-              @click="toggleEntriesView"
-            >{{ ENTRIES_VIEW_TOGGLE[entriesView].label }}</button>
             <button
               type="button"
               class="nx-row nx-index-icon-btn nx-index-add-toggle"
@@ -694,102 +541,7 @@ watch(() => props.board?.id, () => {
             <option v-for="option in entryCategoryOptions" :key="option.value || '__top'" :value="option.value">{{ option.label }}</option>
           </select>
         </div>
-        <!-- Dataview 式表格（批次36 · 任务一）：筛选行（文本＋类别）＋可排序列头＋按类别分组
-             （组头带条数，与列表视图同一组语义）。排序与筛选纯前端，数据源仍是 data.entries。 -->
-        <div v-if="entriesView === 'table' && data.entries.length" class="nx-entries-tools" data-test="entries-tools">
-          <input
-            v-model="entriesFilter"
-            class="nx-field nx-entries-filter"
-            data-test="entries-filter-input"
-            placeholder="筛选：名称／关键词／摘要"
-            aria-label="筛选条目"
-          >
-          <select
-            v-model="entriesFilterCat"
-            class="nx-field nx-entries-cat-filter"
-            data-test="entries-filter-category"
-            aria-label="按类别筛选"
-          >
-            <option value="">全部类别</option>
-            <option v-for="cat in entryFilterOptions" :key="cat" :value="cat">{{ cat }}</option>
-          </select>
-        </div>
-        <table v-if="entriesView === 'table' && data.entries.length" class="nx-entries-table" data-test="entries-table">
-          <thead>
-            <tr>
-              <th v-for="column in ENTRY_COLUMNS" :key="column.key" scope="col">
-                <button
-                  type="button"
-                  class="control-quiet nx-entries-sort"
-                  :data-test="`entries-sort-${column.key}`"
-                  :aria-label="`按${column.label}排序`"
-                  @click="toggleEntriesSort(column.key)"
-                >{{ column.label }}<span v-if="sortIndicator(column.key)" class="nx-entries-sort-mark" aria-hidden="true">{{ sortIndicator(column.key) }}</span></button>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <template v-for="group in tableGroups" :key="group.name || '__uncategorized'">
-              <tr v-if="group.label" class="nx-entries-group-row" data-test="entries-table-group">
-                <td colspan="6">{{ group.label }}<span class="nx-entries-group-count"> · {{ group.items.length }} 条</span></td>
-              </tr>
-              <tr
-                v-for="item in group.items"
-                :key="item.path"
-                class="nx-entries-row"
-                :class="{ 'is-active': isEntryOpen(item) }"
-                :aria-current="isEntryOpen(item) ? 'page' : null"
-                tabindex="0"
-                @click="data.openEntry(item)"
-                @keydown.enter.prevent="data.openEntry(item)"
-                @contextmenu.prevent.stop="onRowContextMenu"
-              >
-                <td class="nx-entries-name">{{ item.name }}</td>
-                <td class="nx-entries-cat">{{ item.cat || '—' }}</td>
-                <td>{{ item.type }}</td>
-                <td class="nx-entries-keys">{{ (item.aliases ?? []).join('、') }}</td>
-                <td class="nx-entries-chars">{{ item.chars }}</td>
-                <td class="nx-entries-summary">{{ clipTableSummary(item.summary) }}</td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
-        <!-- 知识图谱（批次36 · 任务二）：节点＝条目，边＝relations[].to；点节点打开条目，
-             与列表／表格同一个 openEntry（EntryGraph.vue，坐标计算在 entriesView.mjs 纯函数里）。 -->
-        <EntryGraph
-          v-else-if="entriesView === 'graph' && data.entries.length"
-          :entries="data.entries"
-          @open="data.openEntry"
-        />
-        <template v-else>
-          <template v-for="group in entryGroups" :key="group.name || '__uncategorized'">
-            <p v-if="group.label" class="workspace-nav-section nx-entry-category" data-test="entry-category">{{ group.label }}</p>
-            <ul class="nx-tree">
-              <li v-for="item in group.items" :key="item.path" class="nx-tree-line">
-                <button
-                  type="button"
-                  class="workspace-nav-item workspace-nav-item--tree nx-tree-row nx-tree-item"
-                  :class="{ 'is-active': isEntryOpen(item) }"
-                  :aria-current="isEntryOpen(item) ? 'page' : null"
-                  :title="rowHint(item)"
-                  @click="data.openEntry(item)"
-                  @contextmenu.prevent.stop="onRowContextMenu"
-                >
-                  <span class="workspace-nav-label">{{ item.name }}</span>
-                </button>
-                <button
-                  type="button"
-                  class="nx-row nx-index-icon-btn nx-index-history"
-                  :aria-label="`「${item.name}」的历史`"
-                  v-workbench-tooltip="{ text: '历史', side: 'left' }"
-                  @click.stop="emit('history', { type: 'entry', item })"
-                >
-                  <WorkbenchIcon name="history" :size="14" />
-                </button>
-              </li>
-            </ul>
-          </template>
-        </template>
+        <EntriesCategoryTree v-if="data.entries.length" :data="data" />
         <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
       </template>
 
@@ -1104,14 +856,11 @@ watch(() => props.board?.id, () => {
 .nx-index-new-inline {
   padding-top: 0;
 }
-/* 「悬浮」小钮（工单C）：收在区标题行右侧，与「＋」同一条基准线；命中区压到行高内，不另起一行。 */
-.nx-index-overlay-toggle {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  transform: translateY(-50%);
+/* 「悬浮」小钮（协议 v3）：收在索引窗标题行里，与收起钮同一条基准线。
+   每一块声明了 overlay 槽的载体都出这枚——自带面板要在界面上有入口。 */
+.nx-index-overlay-btn {
   min-height: 24px;
-  padding: 0 6px;
+  padding: 0 8px;
   font-size: var(--nx-fs-2xs);
 }
 /* 区标题行右侧成组的小钮（批次31）：大纲那一行要放「悬浮」与「＋」两枚，
@@ -1185,140 +934,6 @@ watch(() => props.board?.id, () => {
   flex: 0 1 42%;
   min-width: 0;
 }
-/* 类别小节头（批次34）：组与组之间留一点呼吸，第一组紧贴区标题。 */
-.nx-tree + .nx-entry-category {
-  margin-top: 6px;
-}
-/* 世界书视图切换（批次28 · 工单3）：区标题行右侧一枚小钮，与「＋」「悬浮」同一条基准线；
-   文案是「表」（切到表格）／「列」（切回列表），命中区压到行高内，不另起一行。 */
-.nx-index-view-toggle {
-  position: absolute;
-  top: 50%;
-  right: 4px;
-  transform: translateY(-50%);
-  min-height: 24px;
-  padding: 0 6px;
-  font-size: var(--nx-fs-2xs);
-}
-/* 世界书那一行改成一组成组钮之后（批次34），视图切换与「＋」并排——
-   它不再自己定位，位置交给 .nx-index-section-actions。 */
-.nx-index-section-actions > .nx-index-view-toggle {
-  position: static;
-  transform: none;
-}
-/* 条目表格：列宽按内容伸缩，摘要列吃掉剩余宽度；行仍是「点一下打开条目」那件事。 */
-.nx-entries-table {
-  width: 100%;
-  margin: 0 0 8px;
-  border-collapse: collapse;
-  table-layout: fixed;
-  font-size: var(--nx-fs-2xs);
-  color: var(--text-primary);
-}
-.nx-entries-table th {
-  padding: 2px 4px;
-  text-align: start;
-  font-weight: 500;
-  font-size: var(--nx-fs-2xs);
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--hairline-soft);
-  white-space: nowrap;
-}
-.nx-entries-table td {
-  padding: 3px 4px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  border-bottom: 1px solid var(--hairline-soft);
-}
-/* 列宽（批次34：加了一列「类别」）：名称与关键词各让出一截，摘要仍吃剩余宽度。 */
-.nx-entries-table th:nth-child(1) { width: 22%; }
-.nx-entries-table th:nth-child(2) { width: 14%; }
-.nx-entries-table th:nth-child(3) { width: 12%; }
-.nx-entries-table th:nth-child(4) { width: 16%; }
-.nx-entries-table th:nth-child(5) { width: 9%; }
-.nx-entries-row {
-  cursor: pointer;
-}
-.nx-entries-row:hover td {
-  background: var(--nav-hover);
-}
-.nx-entries-row.is-active td {
-  background: var(--nav-selected);
-}
-.nx-entries-row:focus-visible {
-  outline: 2px solid var(--workbench-selected);
-  outline-offset: -2px;
-}
-.nx-entries-name {
-  color: var(--archive-ink);
-}
-.nx-entries-chars {
-  font-variant-numeric: tabular-nums;
-}
-.nx-entries-summary,
-.nx-entries-keys {
-  color: var(--text-muted);
-}
-/* —— Dataview 式表格（批次36）：筛选行／可排序列头／分组组头 ——————————————
-   筛选行：文本输入吃剩余宽度，类别下拉占一小截，与新建临时行同一档紧凑度量。
-   列头是共享词汇里的 control-quiet（门禁要求），这里把它的命中区压回表头尺寸。 */
-.nx-entries-tools {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin: 0 0 6px;
-}
-.nx-entries-tools .nx-field {
-  min-height: 28px;
-  padding: 4px 8px;
-  font-size: var(--nx-fs-2xs);
-}
-.nx-entries-filter {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.nx-entries-cat-filter {
-  flex: 0 1 42%;
-  min-width: 0;
-}
-.nx-entries-table th {
-  padding: 2px 2px;
-}
-.nx-entries-table th .nx-entries-sort {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 2px;
-  width: 100%;
-  min-height: 20px;
-  padding: 0;
-  font-size: var(--nx-fs-2xs);
-  font-weight: 500;
-  color: var(--text-muted);
-  text-align: start;
-  white-space: nowrap;
-}
-.nx-entries-table th .nx-entries-sort:hover {
-  background: transparent;
-  color: var(--archive-ink);
-}
-.nx-entries-sort-mark {
-  flex: none;
-  font-size: var(--nx-fs-2xs);
-  line-height: 1;
-}
-/* 组头行：与列表视图的小节头同一语义，样式走表格自己的度量（数字对齐交给 tabular-nums）。 */
-.nx-entries-group-row td {
-  padding: 6px 4px 2px;
-  border-bottom: 1px solid var(--hairline-soft);
-  font-size: var(--nx-fs-2xs);
-  font-weight: 500;
-  color: var(--archive-ink-soft);
-  white-space: nowrap;
-}
-.nx-entries-group-count {
-  color: var(--text-muted);
-  font-weight: 400;
-  font-variant-numeric: tabular-nums;
-}</style>
+/* 世界书视图切换（批次28 · 工单3）与条目表格样式（批次36）都搬去了核心区的看板区
+   （EntriesBoard.vue）——图表列不再挤在这条窄栏里。 */
+</style>

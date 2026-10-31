@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>演示面板</title>
+    <style>
+      /* 夹具面板页：自成一套样式（沙箱页面拿不到宿主的 CSS 变量），只求读得清。 */
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        padding: 10px 12px;
+        font: 13px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        color: #22262b;
+        background: transparent;
+      }
+      h1 { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+      .meta { font-size: 11px; color: #6b7280; margin-bottom: 8px; }
+      ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+      li { padding: 5px 8px; border: 1px solid #e3e5e8; border-radius: 4px; }
+      .empty, .error { padding: 10px 0; font-size: 12px; color: #6b7280; }
+      .error { color: #b3261e; }
+    </style>
+  </head>
+  <body>
+    <h1>演示面板</h1>
+    <p class="meta" id="meta">读取中…</p>
+    <ul id="list" aria-label="演示记录"></ul>
+    <p class="empty" id="empty">正在读演示记录…</p>
+
+    <!-- 脚本走外部文件：面板页的 CSP 是 script-src 'self'，不许行内脚本。 -->
+    <script src="./panel.js"></script>
+  </body>
+</html>

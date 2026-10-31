@@ -231,7 +231,7 @@ test('端到端：runtime.ask 第三参的事件口拿到真信封统计（block
     assert.deepEqual(events.map((event) => event.stage), ['start', 'envelope', 'model-round', 'answer'])
 
     const envelope = events[1]
-    assert.equal(envelope.blocks, 6, '真信封是六块（rules/style/selection/outline/世界书×2）')
+    assert.equal(envelope.blocks, 10, '真信封是十块（四栏的 AGENT.md ＋ 六块内容：rules/style/selection/outline/世界书×2）')
     assert.ok(envelope.chars > 0, '真信封的已用字数必须大于 0')
     assert.deepEqual(envelope.missingKinds, [], '五类素材齐时没有缺失记账')
     assert.equal(events.at(-1).roundsUsed, 1)

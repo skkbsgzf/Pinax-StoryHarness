@@ -16,12 +16,12 @@
 export const NOVEL_CARRIER_ID = 'pinax.carrier.novel'
 
 export const NOVEL_CARRIER = Object.freeze({
-  // 工单 C：写时只写 v2（manifestVersion 显式 2）；v1 读取保留一个版本周期。
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: NOVEL_CARRIER_ID,
   title: '小说',
-  version: '0.4.0',
+  version: '0.5.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -41,8 +41,8 @@ export const NOVEL_CARRIER = Object.freeze({
       // 竖条图标对齐老版「书稿」那一格用的就是 outline（WorkspaceContentGroups.vue:23），
       // 见 next-shell-alignment-inventory-20261028.md 差异表 #3（B 类）。
       // view（工单 C2）：pane 自己声明视图类型，宿主不再按 id 前缀猜。
-      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     // 协议 P14 → v2：v1 的 { id, title } 读成 section；「写作偏好」仍是目录项＋空态。
     settings: [{ id: 'novel.writing', title: '写作偏好', type: 'section' }]
@@ -64,7 +64,14 @@ export const NOVEL_CARRIER = Object.freeze({
   permissions: [{ type: 'file', dir: '正文', mode: 'rw' }, 'agent:ask'],
 
   // 工单 C3：订阅 project.changed（载体重载后由运行时广播）。
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
+  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  entry: null,
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default NOVEL_CARRIER

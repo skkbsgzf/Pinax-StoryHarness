@@ -90,15 +90,23 @@ afterAll(async () => {
 })
 
 describe('载体面板接真会话', () => {
+  // 这一组每条都要真建项目、真读真磁盘（三个临时工程各起一次会话），整机负载高时会超过
+  // vitest 默认的 5s 单测时限——那是机器忙，不是行为坏了，所以单测时限放到 30s，
+  // 行为断言一条不减。空载时整组 0.9s 跑完。
   it('中栏从磁盘读出章节并载入正文；改一笔落盘，第二次的修订号为 2', async () => {
     const { root, session } = await makeProject('editor')
     const wrapper = mount(AppNext, { props: { bridge: realBridge(session) } })
-    await waitFor(() => wrapper.find('[data-pane-id="novel.editor"]').exists() && wrapper.find('.editor-area').element.value.length > 0, { note: '正文编辑器没从磁盘载入章节' })
+    // 批次43：正文面默认是阅读态（md 渲染过的一篇文），要动它先按「编辑」。
+    await waitFor(() => wrapper.find('[data-pane-id="novel.editor"]').exists() && wrapper.find('[data-test="chapter-rendered"]').exists(), { note: '正文面没从磁盘载入章节' })
 
     expect(wrapper.find('[data-pane-id="novel.editor"]').exists()).toBe(true)
-    expect(wrapper.find('.editor-area').element.value).toBe('雨从檐口滴下来，巷子里没人。')
-    expect(wrapper.text()).toContain('第001章-入场.md')
+    expect(wrapper.find('[data-test="chapter-rendered"]').text()).toBe('雨从檐口滴下来，巷子里没人。')
+    // 批次43：路径不再摆在文档面上（它在索引窗那一行的 title 上）。
+    expect(wrapper.find('.nx-index-window .nx-tree-item').attributes('title')).toContain('第001章-入场.md')
 
+    await wrapper.find('[data-test="chapter-edit"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.editor-area').element.value).toBe('雨从檐口滴下来，巷子里没人。')
     await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。柯秒在巷口站住。')
     // 工单H1：常驻保存按钮已移除，编辑器聚焦时按 Ctrl+S 保存；结果落在保存 chip 上。
     await wrapper.find('.editor-area').trigger('keydown', { key: 's', ctrlKey: true })
@@ -110,7 +118,7 @@ describe('载体面板接真会话', () => {
     expect(wrapper.find('.pane-notice').exists()).toBe(false)
     wrapper.unmount()
     await session.close()
-  })
+  }, 30_000)
 
   it('世界书与设定各占一栏：世界书栏读出真条目，设定栏只列约束；内核那份也进不了别人的目录', async () => {
     const { root, session } = await makeProject('setting')
@@ -119,14 +127,15 @@ describe('载体面板接真会话', () => {
     await waitFor(() => wrapper.find('.nx-ribbon-item[aria-label="世界书"]').exists(), { note: '图标竖条没有世界书板块入口' })
 
     // 协议 v1.1-A：世界书独立一栏。靶子目录里只有一条条目。
+    // 批次44：条目行在核心区的看板区（上图表列、下详情），窄栏退成类别导航树。
     const board = wrapper.find('.nx-ribbon-item[aria-label="世界书"]')
     expect(board.exists(), '图标竖条应有世界书板块的入口').toBe(true)
     await board.trigger('click')
-    await waitFor(() => wrapper.find('[data-pane-id="worldbook.entries"]').exists() && wrapper.findAll('.nx-index-window .nx-tree-item').length === 1 && wrapper.find('.entry-text').exists(), { note: '世界书面板没从磁盘读出条目' })
+    await waitFor(() => wrapper.find('[data-pane-id="worldbook.entries"]').exists() && wrapper.findAll('[data-test="entries-board"] .nx-tree-item').length === 1 && wrapper.find('.entry-text').exists(), { note: '世界书面板没从磁盘读出条目' })
 
     expect(wrapper.find('[data-pane-id="worldbook.entries"]').exists()).toBe(true)
-    expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(1)
-    expect(wrapper.find('.nx-index-window').text()).toContain('人物·柯秒')
+    expect(wrapper.findAll('[data-test="entries-board"] .nx-tree-item')).toHaveLength(1)
+    expect(wrapper.find('[data-test="entries-board"]').text()).toContain('人物·柯秒')
     expect(wrapper.find('.entry-text').text()).toContain('醒来在雪夜')
 
     // 设定栏（约束）：世界书条目不在这一栏，只有 约束/文风.md 一行；中栏是约束编辑面（点开才进）。
@@ -164,7 +173,7 @@ describe('载体面板接真会话', () => {
     expect((await readdir(join(root, '正文'))).join()).toBe('第001章-入场.md')
     wrapper.unmount()
     await session.close()
-  })
+  }, 30_000)
 
   it('运行时的问句在真链路上仍如实报缺：没注入 runner 的这条轨道不编回答', async () => {
     const { session } = await makeProject('ask')
@@ -174,5 +183,5 @@ describe('载体面板接真会话', () => {
     expect(answer.error.code).toBe('PINAX_DEPENDENCY_UNMET')
     expect(answer.error.message).toContain('未接模型运行器')
     await session.close()
-  })
+  }, 30_000)
 })

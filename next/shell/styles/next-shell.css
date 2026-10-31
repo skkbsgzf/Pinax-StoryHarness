@@ -789,6 +789,45 @@ input.doc-title {
 .entry-body > .entry-text {
   padding: 0 20px;
 }
+/* 批次43：正文／构思／大纲／约束四面的阅读态（.doc-reading）摊在 .editor 窗格里。
+   度量照写作面那一档（写作字体＋写作偏好里的字号行高），留白与 .editor-area 对齐，
+   长文自己滚——文档面就该是文档的样子，不是另一个控件。 */
+.doc-reading {
+  padding: 18px 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  font-family: var(--font-writing);
+  font-size: var(--writing-font-size, var(--nx-fs-lg));
+  line-height: var(--writing-line-height, 1.9);
+}
+
+/* —— 世界书看板区（批次44）：上＝图表列，下＝详情信息 ————————————————————
+   作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空，非常别扭，
+   更合理的一个情况是，上面放图表列，下面放详情信息」。
+   所以核心区这一格是竖排两块：上半是图表列（列表／表格／图谱，自己滚），
+   下半是选中条目的详情（自己滚）。两块各占一份高度，谁也不挤谁。 */
+.nx-entries-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.nx-entries-workspace-board {
+  flex: 1 1 45%;
+  min-height: 140px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.nx-entries-workspace-detail {
+  flex: 1 1 55%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
 
 /* —— 窄屏（手机）：桌面那三栏在 390px 上会挤成一团，作者在手机侧要能真试 ——————
    竖条转成横条、正文占满上半、Agent 对话固定在下半屏，索引窗改成覆盖式抽屉。

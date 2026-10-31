@@ -34,6 +34,51 @@ export function wikiLinkRanges(text, names) {
   return ranges.sort((a, b) => a.start - b.start)
 }
 
+/**
+ * 条目词表（批次44 · 作者 2026-10-31：「你在前端设计了一些蓝色的标签，看上去能跳转，但是其实不行」）。
+ *
+ * 一条纪律贯穿：**看着能点就必须点得动**。所以词表只收「恰好指向一条条目」的词：
+ *   - 全名、短名（· 后缀）、别名（aliases／keys）、标签（tags）都算候选；
+ *   - 一个词若落在两条以上条目上（通用标签「记忆」「结构」就是这种），它不进词表——
+ *     正文里就当普通文字，不染蓝。染了蓝还点不动，比不染更坏。
+ * 词表与解析器共用这一张表（buildEntryTokenMap）：渲染时链进去的词，点下去一定打得开。
+ */
+export function buildEntryTokenMap(entries) {
+  const owners = new Map()
+  for (const entry of entries ?? []) {
+    for (const token of entryLinkTokensOf(entry)) {
+      if (!owners.has(token)) owners.set(token, new Set())
+      owners.get(token).add(entry)
+    }
+  }
+  const map = new Map()
+  for (const [token, ownersOfToken] of owners) {
+    if (ownersOfToken.size !== 1) continue
+    map.set(token, [...ownersOfToken][0])
+  }
+  return map
+}
+
+/** 一条条目贡献的全部候选词（去重、长度 ≥2）。 */
+export function entryLinkTokensOf(entry) {
+  const tokens = []
+  const push = (value) => {
+    const text = String(value ?? '').trim()
+    if (text.length >= 2 && !tokens.includes(text)) tokens.push(text)
+  }
+  const name = String(entry?.name ?? '').trim()
+  push(name)
+  const short = name.split('·')[1]
+  if (short) push(short)
+  for (const word of [...(entry?.aliases ?? []), ...(entry?.keys ?? []), ...(entry?.tags ?? [])]) push(word)
+  return tokens
+}
+
+/** 当前条目自己的词：它们不链自己（链到自己等于没跳）。 */
+export function ownEntryTokens(entry) {
+  return new Set(entryLinkTokensOf(entry))
+}
+
 /** 纯函数：反向链接清单（relations 提到或正文包含；排除自己；node 轨可测）。 */
 export function computeBacklinks(entries, currentName, currentPath) {
   const name = String(currentName ?? '').trim()

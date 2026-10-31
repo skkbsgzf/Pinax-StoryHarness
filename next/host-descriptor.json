@@ -2,6 +2,7 @@
   "descriptorVersion": 1,
   "host": "pinax-next-shell",
   "kernelContract": "1",
+  "carrierSpecs": ["pinax-carrier@1", "pinax-carrier@2", "pinax-carrier@3"],
   "trustMode": "same-process",
   "slots": ["left-dock", "center", "overlay"],
   "reservedSlots": ["right", "top-menu"],
@@ -13,6 +14,8 @@
     "pinax.view.reader",
     "pinax.view.diff",
     "pinax.view.graph",
+    "pinax.view.board",
+    "pinax.view.app",
     "pinax.view.custom"
   ],
   "uiLayers": ["shell-chrome", "pane-content", "floating-overlay"],

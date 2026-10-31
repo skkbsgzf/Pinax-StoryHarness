@@ -628,6 +628,9 @@ const activeBoard = computed(() => boards.value.find((board) => board.id === act
  * 协议 v1.1-C：启用的载体声明的 overlay pane（一载体至多一个实例）。
  * 从 view.carriers[].panes 里取（pluginRegistry 只把 left-dock/center 拆进视图的 left/center，
  * overlay 不进竖条、也不占中栏）。宽度用合同校验过的值（缺省 300）。
+ *
+ * 协议 v3：这块 pane 自己可能是「自带面板」（view=pinax.view.custom），
+ * 所以要把 entry／view／kind 一并带出来，宿主才知道给 iframe 还是给宿主视图。
  */
 const overlayPanes = computed(() => carriers.value
   .filter((carrier) => carrier.isEnabled)
@@ -635,10 +638,16 @@ const overlayPanes = computed(() => carriers.value
     .filter((pane) => pane?.slot === 'overlay' && pane.id)
     .map((pane) => ({
       paneId: pane.id,
+      id: pane.id,
       title: pane.title ?? carrier.title,
       width: Number.isSafeInteger(pane.width) ? pane.width : 300,
       carrierId: carrier.id,
-      carrierTitle: carrier.title
+      carrierTitle: carrier.title,
+      pluginId: carrier.id,
+      pluginTitle: carrier.title,
+      view: pane.view ?? null,
+      kind: pane.kind ?? null,
+      entry: carrier.entry ?? null
     }))))
 
 /**
@@ -1356,6 +1365,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  // 自动保存的计时器收摊（批次43）：组件拆了不许再拿着工具去写盘。
+  data.dispose?.()
   if (offProjectEvent) {
     offProjectEvent()
     offProjectEvent = null
@@ -1451,7 +1462,6 @@ onBeforeUnmount(() => {
           :board="activeBoard"
           :data="data"
           :width="indexWidth"
-          :project-root="view?.project?.root ?? ''"
           @collapse="indexOpen = false"
           @history="openHistoryFor"
           @overlay="toggleBoardOverlay"
@@ -1485,6 +1495,8 @@ onBeforeUnmount(() => {
           <CenterSlotHost
             :active-pane="fullscreenTarget"
             :data="data"
+            :project-root="project?.root ?? ''"
+            @history="openHistoryFor"
           />
         </template>
 
@@ -1495,6 +1507,8 @@ onBeforeUnmount(() => {
             <CenterSlotHost
               :active-pane="splitMainPane"
               :data="data"
+              :project-root="project?.root ?? ''"
+              @history="openHistoryFor"
             />
           </div>
           <div
@@ -1508,6 +1522,8 @@ onBeforeUnmount(() => {
             <CenterSlotHost
               :active-pane="splitTarget.pane"
               :data="data"
+              :project-root="project?.root ?? ''"
+              @history="openHistoryFor"
             />
           </div>
         </div>
@@ -1517,6 +1533,8 @@ onBeforeUnmount(() => {
           v-else
           :active-pane="mainCenterPane"
           :data="data"
+          :project-root="project?.root ?? ''"
+          @history="openHistoryFor"
         />
       </div>
 
@@ -1600,6 +1618,9 @@ onBeforeUnmount(() => {
                 </li>
               </ul>
             </template>
+            <!-- 协议 v3 的自带面板：这块悬浮窗的内容面是插件自己的页面（沙箱 iframe），
+                 宿主只提供容器与那条只读工具桥，所以走与中栏同一个 CarrierPaneHost。 -->
+            <CarrierPaneHost v-else-if="pane.view === 'pinax.view.custom'" :pane="pane" :data="data" />
             <p v-else class="nx-overlay-empty">这块悬浮窗还没有内容。</p>
           </FloatingWidget>
         </template>

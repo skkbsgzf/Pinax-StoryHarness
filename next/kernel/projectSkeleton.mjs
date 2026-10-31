@@ -8,8 +8,13 @@ import { fail, ok, NEXT_ERROR_CODES } from './errors.mjs'
  * 一致性由 next/tests/skeleton-contract.test.mjs 钉住，谁改了另一边的测试就红。
  * Next 不 import 服务端模块，避免内核被 Express 轨拖住（M1 桩 2c 的结论）。
  */
-export const PROJECT_SPEC = 'pinax-project@2'
-export const LEGACY_PROJECT_SPECS = Object.freeze(['pinax-project@1'])
+/**
+ * 项目合同 @3（协议 v3 同期）：文档字段与 @2 相同，升的是「合同代际」——
+ * 项目引用的载体清单已按 pinax-carrier@3 写（自带面板／服务／MCP／agentMd），
+ * 老外壳读到 @3 必须显式升级而不是半懂着打开。@1／@2 读侧兼容，写回一律 @3。
+ */
+export const PROJECT_SPEC = 'pinax-project@3'
+export const LEGACY_PROJECT_SPECS = Object.freeze(['pinax-project@1', 'pinax-project@2'])
 export const METADATA_DIR = '.pinax'
 
 export const PROJECT_KINDS = Object.freeze({

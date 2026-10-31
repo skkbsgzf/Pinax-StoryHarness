@@ -12,11 +12,12 @@
 export const SETTING_CARRIER_ID = 'pinax.carrier.setting'
 
 export const SETTING_CARRIER = Object.freeze({
-  spec: 'pinax-carrier@2',
-  manifestVersion: 2,
+  // 协议 v3：manifestVersion 显式 3；pane 自声明 view 与 kind（不再按 id 前缀猜内容面）。
+  spec: 'pinax-carrier@3',
+  manifestVersion: 3,
   id: SETTING_CARRIER_ID,
   title: '设定',
-  version: '0.6.0',
+  version: '0.7.0',
   minKernel: '1',
   tier: 'carrier',
 
@@ -32,8 +33,8 @@ export const SETTING_CARRIER = Object.freeze({
 
   contributes: Object.freeze({
     panes: [
-      { slot: 'left-dock', id: 'setting.board', title: '设定板', icon: 'library', view: 'pinax.view.tree', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
-      { slot: 'center', id: 'setting.rules', title: '约束', icon: 'list', view: 'pinax.view.editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'left-dock', id: 'setting.board', title: '设定板', icon: 'library', view: 'pinax.view.tree', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'center', id: 'setting.rules', title: '约束', icon: 'list', view: 'pinax.view.editor', kind: 'rule-editor', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
     // 协议 P14 载体设置注册：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
@@ -53,7 +54,14 @@ export const SETTING_CARRIER = Object.freeze({
   // 工具在运行时面上会被整组拒掉（原设定载体一直带着它）。与小说/资料同一口径。
   permissions: [{ type: 'file', dir: '约束', mode: 'rw' }, 'agent:ask'],
 
-  subscriptions: ['project.changed']
+  subscriptions: ['project.changed'],
+
+  // 协议 v3 的四张牌：这一栏用宿主视图（没有自带面板），不起本地服务、不挂外部 MCP；
+  // 只声明作者须知——运行时组上下文时把 AGENT.md 并进信封。
+  entry: null,
+  services: Object.freeze([]),
+  mcp: Object.freeze([]),
+  agentMd: 'AGENT.md'
 })
 
 export default SETTING_CARRIER

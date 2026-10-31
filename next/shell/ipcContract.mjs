@@ -41,6 +41,12 @@ export const IPC_CHANNELS = Object.freeze({
   runtimeAsk: 'pinax:agent:runtime:ask',
   runtimeToolCall: 'pinax:agent:runtime:tool-call',
   runtimePropose: 'pinax:agent:runtime:propose',
+  // 协议 v3 的 services 面：看服务状态／重启一颗服务。渲染层只读状态，重启要走主进程。
+  runtimeServices: 'pinax:agent:runtime:services',
+  runtimeServiceRestart: 'pinax:agent:runtime:service-restart',
+  // 协议 v3 的 entry 面：面板页要调工具走这一条。主进程只放只读工具，
+  // 且只放「这块板自己那本工具」与内核只读工具——别的板的工具不开放。
+  pluginToolCall: 'pinax:agent:plugin:tool-call',
   // 批次41：正文写作动作（续写／改写／扩写／压缩／润色）。载荷是「动作＋正文＋选区＋额外要求」，
   // 提示词在主进程由 writingActions 拼——不是一条通用模型管道。
   runtimeComplete: 'pinax:agent:runtime:complete',
@@ -96,7 +102,9 @@ export const IPC_EVENTS = Object.freeze(Object.values(IPC_EVENT))
  * preload 的事件白名单同时取 IPC_EVENTS 与这张表，所以渲染层不需要第二条订阅机制。
  */
 export const IPC_PUSH = Object.freeze({
-  runtimeAskEvent: 'pinax:agent:runtime:ask-event'
+  runtimeAskEvent: 'pinax:agent:runtime:ask-event',
+  // 协议 v3 的 services 面：服务起停／崩溃／就绪都推给渲染层，右栏不用轮询。
+  runtimeServiceEvent: 'pinax:agent:runtime:service-event'
 })
 
 export const IPC_PUSH_EVENTS = Object.freeze(Object.values(IPC_PUSH))
@@ -196,6 +204,12 @@ export function shellView(session) {
       panes: manifest.panes,
       // 载体声明的设置节（协议 P14）：统一设置二级页据此出目录项；空声明＝设置页不出这一格。
       settings: manifest.settings ?? [],
+      // 协议 v3：清单代际与「插件会自己动手」的四张牌（面板入口／本地服务／外部 MCP／AGENT.md）。
+      spec: manifest.spec,
+      entry: manifest.entry ?? null,
+      services: manifest.services ?? [],
+      mcp: manifest.mcp ?? [],
+      agentMd: manifest.agentMd ?? null,
       dataDirs: Object.values(manifest.dataDirs),
       isPrimary: manifest.id === primaryId,
       isEnabled: view ? view.enabled.includes(manifest.id) : false
@@ -393,6 +407,32 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
       case IPC_CHANNELS.runtimePropose:
         return session.runtime ? session.runtime.propose({ name: input.name, text: input.text }) : fail('INVALID_INPUT', '运行时尚未就绪')
+      // 协议 v3 的 services 面：状态只读，重启走主进程（渲染层不碰子进程）。
+      case IPC_CHANNELS.runtimeServices:
+        return ok({ services: session.runtime?.serviceStatus?.() ?? [] })
+      case IPC_CHANNELS.runtimeServiceRestart:
+        if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')
+        return session.runtime.restartService(input.id)
+      // 协议 v3 的 entry 面：面板页调工具。三道闸都在这一道通道里：
+      //   1) 工具得在面上（认不出＝不存在，不猜）；
+      //   2) 必须是只读工具（readOnlyHint === false 一律拒——面板没有写盘的口子）；
+      //   3) 归属要么是这块板自己，要么是内核（别的板的工具不开放）。
+      case IPC_CHANNELS.pluginToolCall: {
+        if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')
+        const name = String(input?.name ?? '')
+        const pluginId = String(input?.pluginId ?? '')
+        if (!name) return fail('INVALID_INPUT', '面板调用必须给出工具名')
+        const tool = session.runtime.listTools().find((item) => item?.name === name)
+        if (!tool) return fail('INVALID_INPUT', `工具面里没有 ${name}`, { tool: name })
+        if (tool.annotations?.readOnlyHint === false) {
+          return fail('INVALID_INPUT', `${name} 会写盘，面板不得调用`, { tool: name })
+        }
+        const owner = session.runtime.ownerOf(name)
+        if (owner !== pluginId && owner !== 'kernel') {
+          return fail('INVALID_INPUT', `${name} 属于 ${owner}，${pluginId || '面板'} 不能调`, { tool: name, owner })
+        }
+        return session.runtime.callTool(name, input?.args ?? {})
+      }
       // 批次41：正文写作动作。只认闭集动作（writingActions 里的五个），正文与选区原样交给主进程校验，
       // 提示词不进渲染层。动作没有注入就如实报缺——不在这里回落成一次普通提问。
       case IPC_CHANNELS.runtimeComplete: {

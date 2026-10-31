@@ -3,7 +3,7 @@ import { isKnownCapability } from './capabilities.vocab.mjs'
 import { isKnownKind, validatePhysicalDir } from './projectSkeleton.mjs'
 
 /**
- * 载体清单校验器：`pinax-carrier@2`（写）＋ `pinax-carrier@1`（读，保留一个版本周期）。
+ * 载体清单校验器：`pinax-carrier@3`（写）＋ `@2`／`@1`（读，保留兼容）。
  * 纯函数、无 IO：主进程、渲染进程、门禁脚本都能同一份调用。
  *
  * v2 的五个声明面（工单 C §3）：
@@ -14,11 +14,74 @@ import { isKnownKind, validatePhysicalDir } from './projectSkeleton.mjs'
  *   subscriptions 今天只认 project.changed
  * 归一化结果同时保留 v1 字段（capabilities／scopes／settings／panes），
  * 这样依赖闭包、目录唯一主人、载体设置页都不用为改名再改一遍。
+ *
+ * v3（AgentCore 口径）在 v2 之上补「插件会自己动手」的四张牌：
+ *   entry     自带面板：{ kind:'iframe', path:'ui/index.html' }，宿主在沙箱里加载
+ *   services  本地服务：启动命令／参数／环境／端口／健康检查／崩溃重启策略
+ *   mcp       外部 MCP 服务端：stdio 或 sse，挂进来的工具按 prefix 归命名空间
+ *   agentMd   载体自己的 AGENT.md（插件目录内相对路径）：运行时组上下文时并入
+ * v3 还收紧一条：pane 必须显式声明 kind（内容面词表），宿主不再按 id 前缀猜。
+ * 这四张牌只在 @3 上生效——@2／@1 写了就拒装，避免「声明了却不生效」。
  */
 export const CARRIER_SPEC_V1 = 'pinax-carrier@1'
 export const CARRIER_SPEC_V2 = 'pinax-carrier@2'
-export const CARRIER_SPEC = CARRIER_SPEC_V2
-export const SUPPORTED_CARRIER_SPECS = Object.freeze([CARRIER_SPEC_V1, CARRIER_SPEC_V2])
+export const CARRIER_SPEC_V3 = 'pinax-carrier@3'
+export const CARRIER_SPEC = CARRIER_SPEC_V3
+export const SUPPORTED_CARRIER_SPECS = Object.freeze([CARRIER_SPEC_V1, CARRIER_SPEC_V2, CARRIER_SPEC_V3])
+const SPEC_MANIFEST_VERSIONS = Object.freeze({
+  [CARRIER_SPEC_V1]: 1,
+  [CARRIER_SPEC_V2]: 2,
+  [CARRIER_SPEC_V3]: 3
+})
+/** 只有 @3 认的声明面：老版本写了就拒，不静默丢弃。 */
+export const V3_ONLY_FIELDS = Object.freeze(['entry', 'services', 'mcp', 'agentMd'])
+
+/** pane.kind：内容面词表（与 next/shell/viewRegistry.mjs 的宿主视图分工一一对应，测试会核）。 */
+export const PANE_KIND_WORDS = Object.freeze([
+  'chapter-editor',
+  'outline-editor',
+  'notes-editor',
+  'entry-detail',
+  'script-editor',
+  'rule-editor',
+  'document-detail',
+  'records-editor',
+  'proposal-review',
+  // 世界书工作区（批次44）：看板区（上：列表／表格／图谱）＋ 文档区（下：选中条目的正文）。
+  'entries-workspace',
+  // 类别导航树（批次44）：窄栏那块，只管「按类别找条目」。
+  'entries-categories',
+  // 应用面（批次44）：外部端口上的网页应用，宿主给一块内嵌浏览器。
+  'external-app',
+  // 自带面板（协议 v3）：内容面由插件自己的页面提供，宿主只给一块沙箱 iframe。
+  'custom-panel'
+])
+
+/** 应用面的视图类型（批次44）：与 custom 一样是「别人的页面，宿主只给一块地」，但走 http 地址。 */
+export const APP_VIEW_TYPE = 'pinax.view.app'
+export const APP_PANE_URL_MAX = 300
+
+/** 自带面板目前只认沙箱 iframe；webview 等更宽的形态留待后续版本。 */
+export const ENTRY_KINDS = Object.freeze(['iframe'])
+
+/** 服务崩溃后的重启策略：on-failure 只在下游非零退出时拉起，never 只记状态。 */
+export const SERVICE_RESTART_POLICIES = Object.freeze(['on-failure', 'never'])
+
+/** 外部 MCP 的传输方式：stdio 起子进程，sse 连已有 HTTP 端点。 */
+export const MCP_TRANSPORTS = Object.freeze(['stdio', 'sse'])
+
+const ENTRY_PATH_MAX = 200
+const AGENT_MD_PATH_MAX = 200
+const SERVICE_ID_PATTERN = /^[a-z][a-z0-9-]{0,31}$/u
+const MCP_PREFIX_PATTERN = /^[a-z][a-z0-9_]{0,31}$/u
+const SERVICE_COMMAND_MAX = 400
+const SERVICE_ARGS_MAX = 32
+const SERVICE_ARG_MAX = 400
+const SERVICE_ENV_MAX = 64
+const SERVICE_ENV_VALUE_MAX = 2000
+const SERVICE_HEALTH_PATH_MAX = 200
+const MCP_ALLOW_MAX = 256
+const MCP_URL_MAX = 2000
 export const KERNEL_CONTRACT_VERSION = '1'
 
 /** 宿主认得的事件订阅（A 批收尾时发 project.changed）。 */
@@ -60,14 +123,22 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   const m = input
 
   if (!SUPPORTED_CARRIER_SPECS.includes(m.spec)) {
-    return fail('INVALID_MANIFEST', `清单 spec 必须是 ${CARRIER_SPEC_V2}（旧版 ${CARRIER_SPEC_V1} 仍可读），收到 ${String(m.spec)}`, { got: m.spec })
+    return fail('INVALID_MANIFEST', `清单 spec 必须是 ${CARRIER_SPEC_V3}（旧版 ${CARRIER_SPEC_V2} / ${CARRIER_SPEC_V1} 仍可读），收到 ${String(m.spec)}`, { got: m.spec })
   }
-  if (m.spec === CARRIER_SPEC_V2) {
-    if (m.manifestVersion !== 2) {
-      return fail('INVALID_MANIFEST', `${CARRIER_SPEC_V2} 必须显式写 manifestVersion: 2`, { manifestVersion: m.manifestVersion })
+  if (m.spec === CARRIER_SPEC_V1) {
+    if (m.manifestVersion !== undefined && m.manifestVersion !== 1) {
+      return fail('INVALID_MANIFEST', `${CARRIER_SPEC_V1} 的 manifestVersion 只能是 1，收到 ${String(m.manifestVersion)}`)
     }
-  } else if (m.manifestVersion !== undefined && m.manifestVersion !== 1) {
-    return fail('INVALID_MANIFEST', `${CARRIER_SPEC_V1} 的 manifestVersion 只能是 1，收到 ${String(m.manifestVersion)}`)
+  } else if (m.manifestVersion !== SPEC_MANIFEST_VERSIONS[m.spec]) {
+    return fail('INVALID_MANIFEST', `${m.spec} 必须显式写 manifestVersion: ${SPEC_MANIFEST_VERSIONS[m.spec]}`, { manifestVersion: m.manifestVersion })
+  }
+  // v3 才认的四张牌：老清单写了就拒，避免「声明了却不生效」重演。
+  if (m.spec !== CARRIER_SPEC_V3) {
+    for (const field of V3_ONLY_FIELDS) {
+      if (m[field] !== undefined) {
+        return fail('INVALID_MANIFEST', `${m.id} 声明了 ${field}：这是 ${CARRIER_SPEC_V3} 的字段，请把清单 spec 与 manifestVersion 一并升级`, { pluginId: m.id, field })
+      }
+    }
   }
   if (typeof m.id !== 'string' || !PLUGIN_ID_PATTERN.test(m.id)) {
     return fail('INVALID_MANIFEST', '插件 id 须匹配 ^[a-z][a-z0-9.-]{0,79}$', { id: m.id })
@@ -97,8 +168,26 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (Array.isArray(m.panes) && Array.isArray(m.contributes?.panes)) {
     return fail('INVALID_MANIFEST', `${m.id} 同时写了 panes 与 contributes.panes：一份清单只能有一个来源`)
   }
-  const panes = validatePanes(contributes.value.panes ?? m.panes, m.id)
+  const panes = validatePanes(contributes.value.panes ?? m.panes, m.id, { requireKind: m.spec === CARRIER_SPEC_V3 })
   if (!panes.ok) return panes
+  const entry = validateEntry(m.entry, m.id)
+  if (!entry.ok) return entry
+  const services = validateServices(m.services, m.id)
+  if (!services.ok) return services
+  const mcp = validateMcp(m.mcp, m.id)
+  if (!mcp.ok) return mcp
+  const agentMd = validateAgentMd(m.agentMd, m.id)
+  if (!agentMd.ok) return agentMd
+  // 自带面板与 pane 必须成对：只写 pane 得占位，只写 entry 没人挂——两种都是「声明了却不生效」。
+  if (m.spec === CARRIER_SPEC_V3) {
+    const customPanes = panes.value.filter((pane) => pane.view === CARRIER_VIEW_TYPES[0])
+    if (entry.value && customPanes.length === 0) {
+      return fail('INVALID_ENTRY', `${m.id} 声明了 entry，但没有 pane 用 ${CARRIER_VIEW_TYPES[0]} 挂它`, { pluginId: m.id })
+    }
+    if (!entry.value && customPanes.length > 0) {
+      return fail('INVALID_ENTRY', `${m.id} 的 pane「${customPanes[0].id}」用了 ${CARRIER_VIEW_TYPES[0]}，却没有声明 entry——宿主只能出占位`, { pluginId: m.id })
+    }
+  }
   // provides 是 capabilities 的新名字：两个都写必须一致，写时只认 v2 那个。
   if (m.provides !== undefined && m.capabilities !== undefined && !sameStringSet(m.provides, m.capabilities)) {
     return fail('INVALID_MANIFEST', `${m.id} 的 provides 与 capabilities 不一致：v2 只写 provides`, { provides: m.provides, capabilities: m.capabilities })
@@ -122,8 +211,8 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (!subscriptions.ok) return subscriptions
 
   return ok({
-    spec: CARRIER_SPEC_V2,
-    manifestVersion: 2,
+    spec: m.spec === CARRIER_SPEC_V3 ? CARRIER_SPEC_V3 : CARRIER_SPEC_V2,
+    manifestVersion: m.spec === CARRIER_SPEC_V3 ? 3 : 2,
     id: m.id,
     title: m.title.trim(),
     version: m.version,
@@ -142,7 +231,11 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
     settings: settings.value,
     commands: contributes.value.commands,
     renderers: contributes.value.renderers,
-    subscriptions: subscriptions.value
+    subscriptions: subscriptions.value,
+    entry: entry.value,
+    services: services.value,
+    mcp: mcp.value,
+    agentMd: agentMd.value
   })
 }
 
@@ -342,7 +435,40 @@ function validateDataDirs(value, pluginId) {
   return ok(out)
 }
 
-function validatePanes(value, pluginId) {
+/**
+ * 应用面的地址（批次44）：{ url } —— 一台外部服务自己的网页地址。
+ * 只接本机回环：http://127.0.0.1:8188/、http://localhost:3000/ 这类。
+ * 远端地址本批不接：宿主的内容安全策略只放开回环端口，别处塞进去 iframe 只会白屏。
+ */
+function validateAppPane(value, pluginId, paneId) {
+  if (!isPlainObject(value)) {
+    return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${paneId}」kind 是 external-app 时必须声明 app: { url }（外部服务自己的网页地址）`, { pluginId, paneId })
+  }
+  const raw = String(value.url ?? '').trim()
+  if (!raw) {
+    return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${paneId}」的 app.url 不能为空`, { pluginId, paneId })
+  }
+  if (raw.length > APP_PANE_URL_MAX) {
+    return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${paneId}」的 app.url 过长（上限 ${APP_PANE_URL_MAX} 字）`, { pluginId, paneId })
+  }
+  let url = null
+  try {
+    url = new URL(raw)
+  } catch {
+    return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${paneId}」的 app.url 不是合法地址：${raw}`, { pluginId, paneId })
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${paneId}」的 app.url 只认 http/https，收到 ${url.protocol}`, { pluginId, paneId })
+  }
+  const host = url.hostname.toLowerCase()
+  const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]'
+  if (!loopback) {
+    return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${paneId}」的 app.url 本批只接本机回环（127.0.0.1 / localhost / ::1），收到 ${url.hostname}`, { pluginId, paneId })
+  }
+  return ok({ url: raw })
+}
+
+function validatePanes(value, pluginId, { requireKind = false } = {}) {
   if (!Array.isArray(value) || value.length === 0) {
     return fail('INVALID_MANIFEST', `${pluginId} 必须声明至少一个 pane（C5）`)
   }
@@ -376,6 +502,42 @@ function validatePanes(value, pluginId) {
         return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」view 须匹配 ${VIEW_TYPE_PATTERN}`, { pluginId, paneId: pane.id, view: pane.view })
       }
       normalized.view = pane.view
+    } else if (requireKind) {
+      return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」必须声明 view（${CARRIER_SPEC_V3} 不再按 id 前缀回落渲染器）`, { pluginId, paneId: pane.id })
+    }
+    // 协议 v3：内容面显式声明，前缀猜测彻底退场（v1/v2 仍可省略，走外壳的兼容对照表）。
+    if (pane.kind !== undefined) {
+      if (typeof pane.kind !== 'string' || !PANE_KIND_WORDS.includes(pane.kind)) {
+        return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」kind 须是 ${PANE_KIND_WORDS.join(' / ')}，收到 ${String(pane.kind)}`, { pluginId, paneId: pane.id, kind: pane.kind })
+      }
+      normalized.kind = pane.kind
+    } else if (requireKind) {
+      return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」必须声明 kind（${PANE_KIND_WORDS.join(' / ')}）：${CARRIER_SPEC_V3} 不再按 id 前缀猜内容面`, { pluginId, paneId: pane.id })
+    }
+    // 自带面板与视图类型必须成对：view=pinax.view.custom 的 pane 内容面只能是 custom-panel，
+    // 反过来也一样——写一半会让宿主不知道该挂 iframe 还是宿主视图。
+    const isCustomView = normalized.view === CARRIER_VIEW_TYPES[0]
+    if (isCustomView && normalized.kind !== 'custom-panel') {
+      return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」用 ${CARRIER_VIEW_TYPES[0]} 时 kind 必须是 custom-panel，收到 ${String(normalized.kind)}`, { pluginId, paneId: pane.id, kind: normalized.kind })
+    }
+    if (normalized.kind === 'custom-panel' && !isCustomView) {
+      return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」kind 是 custom-panel 时 view 必须是 ${CARRIER_VIEW_TYPES[0]}`, { pluginId, paneId: pane.id, view: normalized.view ?? null })
+    }
+    // 应用面（批次44）：外部端口上的网页应用——地址必须声明，且只能是本机 http 地址。
+    // 两条边界：① view 与 kind 必须成对（宿主据此决定给 iframe 还是给宿主视图）；
+    // ② 地址只接本机回环（ComfyUI 那种 http://127.0.0.1:8188/）——
+    // 远端地址本批不接：宿主的内容安全策略只放开回环端口，塞别的地址进去 iframe 只会白屏。
+    const isAppView = normalized.view === APP_VIEW_TYPE
+    if (isAppView && normalized.kind !== 'external-app') {
+      return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」用 ${APP_VIEW_TYPE} 时 kind 必须是 external-app，收到 ${String(normalized.kind)}`, { pluginId, paneId: pane.id, kind: normalized.kind })
+    }
+    if (normalized.kind === 'external-app') {
+      if (!isAppView) {
+        return fail('INVALID_MANIFEST', `${pluginId} 的 pane「${pane.id}」kind 是 external-app 时 view 必须是 ${APP_VIEW_TYPE}`, { pluginId, paneId: pane.id, view: normalized.view ?? null })
+      }
+      const app = validateAppPane(pane.app, pluginId, pane.id)
+      if (!app.ok) return app
+      normalized.app = app.value
     }
     // forms：这块 pane 允许被摆到哪些位置（可空＝宿主四轴全开）。
     if (pane.forms !== undefined) {
@@ -408,6 +570,257 @@ function validatePanes(value, pluginId) {
         })
       }
       normalized.width = width
+    }
+    out.push(normalized)
+  }
+  return ok(out)
+}
+
+/**
+ * 插件目录内的相对路径（entry / agentMd / service cwd）：不得越出插件自己的目录。
+ * 与项目内相对路径不同：这里解析基准是插件根，不是项目根，所以不收 `.pinax` 之类项目语义，
+ * 只守八条——非空、小于上限、正斜杠、非绝对、非盘符、无 `.`/`..`/空段、不以点开头、扩展名对得上。
+ */
+function validatePluginRelativePath(value, { pluginId, field, ext = null, max = 200, code = 'INVALID_MANIFEST' } = {}) {
+  if (typeof value !== 'string' || !value.trim()) {
+    return fail(code, `${pluginId} 的 ${field} 必须是非空字符串`, { pluginId, field })
+  }
+  const raw = value.trim()
+  if (raw.length > max) {
+    return fail(code, `${pluginId} 的 ${field} 过长（上限 ${max} 字）：${raw}`, { pluginId, field })
+  }
+  if (raw.includes('\\')) {
+    return fail(code, `${pluginId} 的 ${field} 请用正斜杠：${raw}`, { pluginId, field })
+  }
+  if (raw.includes(':') || raw.startsWith('/')) {
+    return fail(code, `${pluginId} 的 ${field} 必须是插件目录内的相对路径：${raw}`, { pluginId, field })
+  }
+  const segments = raw.split('/')
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment.startsWith('.'))) {
+    return fail(code, `${pluginId} 的 ${field} 含非法路径段：${raw}`, { pluginId, field })
+  }
+  if (ext && !raw.toLowerCase().endsWith(ext)) {
+    return fail(code, `${pluginId} 的 ${field} 必须以 ${ext} 结尾：${raw}`, { pluginId, field })
+  }
+  return ok(raw)
+}
+
+/** entry：自带面板的入口声明（v3）。今天只认沙箱 iframe，路径相对插件目录。 */
+function validateEntry(value, pluginId) {
+  if (value === undefined || value === null) return ok(null)
+  if (!isPlainObject(value)) return fail('INVALID_ENTRY', `${pluginId} 的 entry 必须是对象`)
+  for (const key of Object.keys(value)) {
+    if (!['kind', 'path'].includes(key)) {
+      return fail('INVALID_ENTRY', `${pluginId} 的 entry 含未知字段 "${key}"：可声明 kind / path`, { pluginId, key })
+    }
+  }
+  const kind = value.kind === undefined ? ENTRY_KINDS[0] : value.kind
+  if (!ENTRY_KINDS.includes(kind)) {
+    return fail('INVALID_ENTRY', `${pluginId} 的 entry.kind 目前只支持 ${ENTRY_KINDS.join(' / ')}，收到 ${String(kind)}`, { pluginId })
+  }
+  const path = validatePluginRelativePath(value.path, { pluginId, field: 'entry.path', ext: '.html', max: ENTRY_PATH_MAX, code: 'INVALID_ENTRY' })
+  if (!path.ok) return path
+  return ok({ kind, path: path.value })
+}
+
+/** agentMd：载体自己的 AGENT.md，插件目录内相对路径；内容读取在运行时侧，这里只守路径。 */
+function validateAgentMd(value, pluginId) {
+  if (value === undefined || value === null) return ok(null)
+  const path = validatePluginRelativePath(value, { pluginId, field: 'agentMd', ext: '.md', max: AGENT_MD_PATH_MAX })
+  if (!path.ok) return path
+  return ok(path.value)
+}
+
+/** env：字面量键值（不接受函数／变量展开），键守 POSIX 环境变量名，值只收字符串。 */
+function validateEnvMap(value, pluginId, field, code) {
+  if (value === undefined || value === null) return ok({})
+  if (!isPlainObject(value)) return fail(code, `${pluginId} 的 ${field} 必须是对象`, { pluginId, field })
+  const keys = Object.keys(value)
+  if (keys.length > SERVICE_ENV_MAX) {
+    return fail(code, `${pluginId} 的 ${field} 最多 ${SERVICE_ENV_MAX} 项，收到 ${keys.length}`, { pluginId, field })
+  }
+  const out = {}
+  for (const key of keys) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]{0,63}$/u.test(key)) {
+      return fail(code, `${pluginId} 的 ${field} 键不合法：${key}（须匹配 ^[A-Za-z_][A-Za-z0-9_]*$）`, { pluginId, field, key })
+    }
+    if (typeof value[key] !== 'string' || value[key].length > SERVICE_ENV_VALUE_MAX) {
+      return fail(code, `${pluginId} 的 ${field}.${key} 必须是 ≤${SERVICE_ENV_VALUE_MAX} 字的字符串`, { pluginId, field, key })
+    }
+    out[key] = value[key]
+  }
+  return ok(out)
+}
+
+function validateStringArgs(value, pluginId, field, code) {
+  if (value === undefined || value === null) return ok([])
+  if (!Array.isArray(value)) return fail(code, `${pluginId} 的 ${field} 必须是字符串数组`, { pluginId, field })
+  if (value.length > SERVICE_ARGS_MAX) {
+    return fail(code, `${pluginId} 的 ${field} 最多 ${SERVICE_ARGS_MAX} 项，收到 ${value.length}`, { pluginId, field })
+  }
+  const out = []
+  for (const item of value) {
+    if (typeof item !== 'string' || item.length > SERVICE_ARG_MAX) {
+      return fail(code, `${pluginId} 的 ${field} 只收 ≤${SERVICE_ARG_MAX} 字的字符串`, { pluginId, field })
+    }
+    out.push(item)
+  }
+  return ok(out)
+}
+
+/**
+ * services：插件自带的本地服务（v3）。
+ * 缺省 autostart:true、restart:'on-failure'；healthPath 必须配 port（HTTP 健康检查才有靶子）。
+ */
+function validateServices(value, pluginId) {
+  if (value === undefined || value === null) return ok([])
+  if (!Array.isArray(value)) return fail('INVALID_SERVICE', `${pluginId} 的 services 必须是数组`, { pluginId })
+  const fields = ['id', 'command', 'args', 'env', 'cwd', 'port', 'healthPath', 'restart', 'autostart']
+  const seen = new Set()
+  const out = []
+  for (const item of value) {
+    if (!isPlainObject(item)) return fail('INVALID_SERVICE', `${pluginId} 的 service 项必须是对象`, { pluginId })
+    for (const key of Object.keys(item)) {
+      if (!fields.includes(key)) {
+        return fail('INVALID_SERVICE', `${pluginId} 的 service 含未知字段 "${key}"：可声明 ${fields.join(' / ')}`, { pluginId, key })
+      }
+    }
+    if (typeof item.id !== 'string' || !SERVICE_ID_PATTERN.test(item.id)) {
+      return fail('INVALID_SERVICE', `${pluginId} 的 service id 须匹配 ${SERVICE_ID_PATTERN}`, { id: item.id })
+    }
+    if (seen.has(item.id)) return fail('INVALID_SERVICE', `${pluginId} 的 service id 重复：${item.id}`, { pluginId, id: item.id })
+    seen.add(item.id)
+    if (typeof item.command !== 'string' || !item.command.trim() || item.command.trim().length > SERVICE_COMMAND_MAX) {
+      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) command 必填（≤${SERVICE_COMMAND_MAX} 字）`, { pluginId, id: item.id })
+    }
+    const args = validateStringArgs(item.args, pluginId, `service(${item.id}).args`, 'INVALID_SERVICE')
+    if (!args.ok) return args
+    const env = validateEnvMap(item.env, pluginId, `service(${item.id}).env`, 'INVALID_SERVICE')
+    if (!env.ok) return env
+    let cwd = null
+    if (item.cwd !== undefined && item.cwd !== null) {
+      const path = validatePluginRelativePath(item.cwd, { pluginId, field: `service(${item.id}).cwd`, code: 'INVALID_SERVICE', max: ENTRY_PATH_MAX })
+      if (!path.ok) return path
+      cwd = path.value
+    }
+    let port = null
+    if (item.port !== undefined && item.port !== null) {
+      if (!Number.isSafeInteger(item.port) || item.port < 1 || item.port > 65535) {
+        return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).port 须是 1–65535 的整数`, { pluginId, id: item.id, port: item.port })
+      }
+      port = item.port
+    }
+    let healthPath = null
+    if (item.healthPath !== undefined && item.healthPath !== null) {
+      const raw = item.healthPath
+      if (typeof raw !== 'string' || !raw.startsWith('/') || raw.includes('..') || raw.length > SERVICE_HEALTH_PATH_MAX) {
+        return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).healthPath 须是以 / 开头且不含 .. 的路径（≤${SERVICE_HEALTH_PATH_MAX} 字）`, { pluginId, id: item.id })
+      }
+      if (!port) {
+        return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) 声明了 healthPath 却没给 port：健康检查没有靶子`, { pluginId, id: item.id })
+      }
+      healthPath = raw
+    }
+    const restart = item.restart === undefined ? 'on-failure' : item.restart
+    if (!SERVICE_RESTART_POLICIES.includes(restart)) {
+      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).restart 须是 ${SERVICE_RESTART_POLICIES.join(' / ')}`, { pluginId, id: item.id })
+    }
+    if (item.autostart !== undefined && typeof item.autostart !== 'boolean') {
+      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).autostart 必须是布尔`, { pluginId, id: item.id })
+    }
+    out.push({
+      id: item.id,
+      command: item.command.trim(),
+      args: args.value,
+      env: env.value,
+      cwd,
+      port,
+      healthPath,
+      restart,
+      autostart: item.autostart ?? true
+    })
+  }
+  return ok(out)
+}
+
+/**
+ * mcp：外部 MCP 服务端（v3）。stdio 起子进程、sse 连已有端点；
+ * prefix 是挂进聚合工具面时的命名空间（安装期由注册表仲裁，跨载体不得撞名）。
+ */
+function validateMcp(value, pluginId) {
+  if (value === undefined || value === null) return ok([])
+  if (!Array.isArray(value)) return fail('INVALID_MCP', `${pluginId} 的 mcp 必须是数组`, { pluginId })
+  const fields = ['id', 'transport', 'prefix', 'command', 'args', 'env', 'url', 'allow']
+  const seenIds = new Set()
+  const seenPrefixes = new Set()
+  const out = []
+  for (const item of value) {
+    if (!isPlainObject(item)) return fail('INVALID_MCP', `${pluginId} 的 mcp 项必须是对象`, { pluginId })
+    for (const key of Object.keys(item)) {
+      if (!fields.includes(key)) {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp 项含未知字段 "${key}"：可声明 ${fields.join(' / ')}`, { pluginId, key })
+      }
+    }
+    if (typeof item.id !== 'string' || !SERVICE_ID_PATTERN.test(item.id)) {
+      return fail('INVALID_MCP', `${pluginId} 的 mcp id 须匹配 ${SERVICE_ID_PATTERN}`, { id: item.id })
+    }
+    if (seenIds.has(item.id)) return fail('INVALID_MCP', `${pluginId} 的 mcp id 重复：${item.id}`, { pluginId, id: item.id })
+    seenIds.add(item.id)
+    if (!MCP_TRANSPORTS.includes(item.transport)) {
+      return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}).transport 须是 ${MCP_TRANSPORTS.join(' / ')}`, { pluginId, id: item.id })
+    }
+    if (typeof item.prefix !== 'string' || !MCP_PREFIX_PATTERN.test(item.prefix)) {
+      return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}).prefix 须匹配 ${MCP_PREFIX_PATTERN}`, { pluginId, id: item.id })
+    }
+    if (seenPrefixes.has(item.prefix)) {
+      return fail('INVALID_MCP', `${pluginId} 的两份 mcp 声明共用命名空间 ${item.prefix}`, { pluginId, prefix: item.prefix })
+    }
+    seenPrefixes.add(item.prefix)
+    const normalized = { id: item.id, transport: item.transport, prefix: item.prefix, command: null, args: [], env: {}, url: null, allow: [] }
+    if (item.transport === 'stdio') {
+      if (item.url !== undefined) {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}) 是 stdio，不该声明 url`, { pluginId, id: item.id })
+      }
+      if (typeof item.command !== 'string' || !item.command.trim() || item.command.trim().length > SERVICE_COMMAND_MAX) {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}) 是 stdio，command 必填（≤${SERVICE_COMMAND_MAX} 字）`, { pluginId, id: item.id })
+      }
+      const args = validateStringArgs(item.args, pluginId, `mcp(${item.id}).args`, 'INVALID_MCP')
+      if (!args.ok) return args
+      const env = validateEnvMap(item.env, pluginId, `mcp(${item.id}).env`, 'INVALID_MCP')
+      if (!env.ok) return env
+      normalized.command = item.command.trim()
+      normalized.args = args.value
+      normalized.env = env.value
+    } else {
+      if (item.command !== undefined || item.args !== undefined || item.env !== undefined) {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}) 是 sse，只收 url／allow`, { pluginId, id: item.id })
+      }
+      if (typeof item.url !== 'string' || !item.url.trim() || item.url.length > MCP_URL_MAX) {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}) 是 sse，url 必填（≤${MCP_URL_MAX} 字）`, { pluginId, id: item.id })
+      }
+      let parsed
+      try {
+        parsed = new URL(item.url.trim())
+      } catch {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}).url 不是合法 URL：${item.url}`, { pluginId, id: item.id })
+      }
+      if (!['http:', 'https:'].includes(parsed.protocol)) {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}).url 只支持 http/https`, { pluginId, id: item.id })
+      }
+      normalized.url = item.url.trim()
+    }
+    if (item.allow !== undefined) {
+      if (!Array.isArray(item.allow) || item.allow.length > MCP_ALLOW_MAX) {
+        return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}).allow 必须是不超过 ${MCP_ALLOW_MAX} 项的数组`, { pluginId, id: item.id })
+      }
+      const allow = []
+      for (const name of item.allow) {
+        if (typeof name !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(name)) {
+          return fail('INVALID_MCP', `${pluginId} 的 mcp(${item.id}).allow 含不合法工具名：${String(name)}`, { pluginId, id: item.id })
+        }
+        if (!allow.includes(name)) allow.push(name)
+      }
+      normalized.allow = allow
     }
     out.push(normalized)
   }

@@ -5,7 +5,12 @@
     <!-- 手机上不声明这一条，浏览器会拿 980px 当布局宽度再整页缩小：字小、点不准、横向拖。
          声明成设备宽度，窄屏那套排布（next-shell.css 的 max-width: 860px）才生效。 -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+    <!-- 协议 v3 的自带面板：frame-src 放开 pinax-plugin:（面板页从插件目录经自定义协议取）。
+         批次44 的应用面（外部端口上的网页应用，ComfyUI 那种）：frame-src 再放开本机回环
+         （http://127.0.0.1:* 与 http://localhost:*）——只放开回环，外网地址不接
+         （内嵌浏览器能把本机文件面整个敞给页面；这条边界在载体清单校验里也拒一次）。
+         其余一律不放——面板页自己另有一份更严的 CSP（见 pluginFileServer 提供的响应头）。 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; frame-src 'self' pinax-plugin: http://127.0.0.1:* http://localhost:*" />
     <title>Pinax · Next</title>
   </head>
   <body>
