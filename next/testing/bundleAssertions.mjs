@@ -8,6 +8,7 @@ import { build } from 'vite'
 import { loadSkills } from '../skills/loadSkills.mjs'
 import { SKILL_READ_TOOL } from '../runtime/skillTools.mjs'
 import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
+import { checkHostDescriptor } from './exportHostDescriptor.mjs'
 
 /**
  * 打包侧门禁（M1 · WP6 断言 a/b/c/d）。依据 2026-10-27 的四个桩，改动前先跑 npm run verify:next。
@@ -297,6 +298,17 @@ check('n3 载体作者须知进产物：.build/<载体>/AGENT.md 与源码逐一
   carrierDirsInSource.length > 0 && missingAgentMd.length === 0,
   missingAgentMd.length ? `缺 ${missingAgentMd.join(', ')}` : `${carrierDirsInSource.length} 份`)
 
+// 批次57（门禁 n3b）：作者须知里最值钱的是「已知边界」——模型读到它就知道哪些事这一栏做不到。
+// 十二份 AGENT.md 任何一份缺这一段，模型就会把「没做」当「能做」；所以逐份核段标题，不抽样。
+const missingKnownLimits = []
+for (const name of carrierDirsInSource) {
+  const text = await readFile(join(CARRIERS_SOURCE, name, 'AGENT.md'), 'utf-8')
+  if (!/^## 已知边界\s*$/mu.test(text)) missingKnownLimits.push(name)
+}
+check('n3b 载体作者须知含「已知边界」段：12 份 AGENT.md 逐一核',
+  carrierDirsInSource.length === 12 && missingKnownLimits.length === 0,
+  missingKnownLimits.length ? `缺 ${missingKnownLimits.join(', ')}` : `${carrierDirsInSource.length}/12 都有「## 已知边界」`)
+
 // 批次48（门禁 o）：services／mcp 牌声明的 .mjs 运行期脚本必须随载体进产物。
 // 理由：宿主按清单以插件目录为 cwd 起这些脚本（node preview-server.mjs／comfy-mcp-bridge.mjs）；
 // 脚本没拷进 .build，装机后就是「声明在、进程永远起不来」——预览白页、桥连不上，
@@ -556,6 +568,18 @@ const missingOutputMarkers = outputMarkers.filter((marker) => !bundle.includes(m
 check('u 批次56 工具输出合同进产物：主进程 bundle 带 output.schema／presentationMeta 的校验文案与 _meta 透出键 pinax/output',
   missingOutputMarkers.length === 0,
   missingOutputMarkers.length ? `缺 ${missingOutputMarkers.join(' ')}` : `${outputMarkers.length} 个标记齐`)
+
+// 批次57（门禁 v）：宿主描述符不再手填——它必须等于 exportHostDescriptor 从注册表现算的那一份。
+// 病根是 doctor 只核字段在不在：新增一个宿主视图却忘了改 descriptor，doctor 仍报 ok，
+// 但载体声明那块视图就会被判「宿主没有」。这条 gate 是反向断言：改错任一字段，这里必红。
+const descriptorReport = await checkHostDescriptor()
+check('v 宿主描述符与注册表一致：views／forms／slots／uiLayers 等逐字段等于 exportHostDescriptor 的导出',
+  descriptorReport.ok === true,
+  descriptorReport.error
+    ? descriptorReport.error.message
+    : descriptorReport.ok
+      ? `${Object.keys(descriptorReport.generated).length} 个字段、views ${descriptorReport.generated.views.length}／forms ${descriptorReport.generated.forms.length}`
+      : descriptorReport.differences.map((item) => `${item.field}:${item.reason}`).join(', '))
 
 if (failures.length) {
   console.log(`\n打包门禁：${failures.length} 项不合格 → ${failures.join(' / ')}`)

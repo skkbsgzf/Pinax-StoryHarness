@@ -33,6 +33,8 @@
 | **`mcp`**（v3） | `[{id,transport: stdio\|sse,prefix,command,args,url,allow}]` | 外部 MCP 工具以 `<prefix>.<remote>` 进聚合面；allow 白名单 ≤256；样板＝comic 的 comfy 桥（批次48） |
 | **`agentMd`**（v3） | 单个 `.md` 相对路径 | 作者须知，组信封时以最高优先级注入（单份 1200 字/合计 8000 字封顶）；**12 块内置载体每块都有** |
 
+> 本表是手写速查；宿主能力全表以 `next/testing/exportHostDescriptor.mjs` 的输出与 `next/kernel/carrierManifest.mjs` 的词表为权威，手写表漂移以门禁为准。
+
 ## 2. 五步接入
 
 1. **建目录** `next/carriers/<名>/`：`manifest.mjs`＋`tools.mjs`（`impl.tools()` 工厂）＋`AGENT.md`；要进信封再写 `context.mjs`（`blocks()` 工厂，样板 `next/carriers/novel/context.mjs`）。
