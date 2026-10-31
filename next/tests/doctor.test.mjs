@@ -24,8 +24,8 @@ const DESCRIPTOR = {
   descriptorVersion: 1,
   host: 'pinax-next-shell',
   kernelContract: '1',
-  // 白名单照抄真实的 next/host-descriptor.json：外壳明确认 @1/@2/@3 三份合同。
-  carrierSpecs: ['pinax-carrier@1', 'pinax-carrier@2', 'pinax-carrier@3'],
+  // 白名单照抄真实的 next/host-descriptor.json：批次52 起外壳认 @1/@2/@3/@4 四份合同。
+  carrierSpecs: ['pinax-carrier@1', 'pinax-carrier@2', 'pinax-carrier@3', 'pinax-carrier@4'],
   trustMode: 'same-process',
   slots: ['left-dock', 'center', 'overlay'],
   reservedSlots: ['right', 'top-menu'],
@@ -48,7 +48,8 @@ test('描述符：真实文件可读，字段齐全；不支持真多窗口如�
   // 批次45：描述符 forms 加 immersive；七个文档面载体声明它，五个记录型载体不声明。
   assert.deepEqual(descriptor.forms, ['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
   assert.ok(descriptor.views.includes('pinax.view.custom'))
-  assert.deepEqual(DOCTOR_STATES, ['ok', 'needs-host-upgrade', 'missing-capability', 'permission-denied', 'incompatible-form'])
+  // 批次52：六态——adopted-external 是「合法清单，但服务由外部进程自管」的事实，不是故障。
+  assert.deepEqual(DOCTOR_STATES, ['ok', 'adopted-external', 'needs-host-upgrade', 'missing-capability', 'permission-denied', 'incompatible-form'])
 })
 
 test('ok：真清单对得上宿主', () => {

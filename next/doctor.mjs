@@ -8,24 +8,28 @@ import {
   RESERVED_SLOTS,
   validateCarrierManifest
 } from './kernel/carrierManifest.mjs'
+import { kernelRangeAllows, parseKernelVersion } from './kernel/carrierManifest.contract.mjs'
 
 /**
  * 宿主描述符 + 载体体检（工单 C4）。
  *
  * 描述符是「这台外壳今天是什么」的机器可读事实：能开哪些槽、认哪几种形态、认哪几种视图、
  * 有没有真多窗口（supportsPopout:false——今天的 FloatingWidget 是应用内 absolute 卡片）。
- * doctor 拿它和任意一份载体清单对表，产出五态之一，每种都带一句能照着做的修复：
+ * doctor 拿它和任意一份载体清单对表，产出六态之一，每种都带一句能照着做的修复：
  *
  *   ok                 清单与宿主对得上
+ *   adopted-external   清单合法，但声明了 adopt 服务：外部进程自管，宿主只探活（不是错误）
  *   needs-host-upgrade 载体要的新合同／新内核，这台外壳还没有（升级外壳，或调低 minKernel）
  *   missing-capability 依赖的能力在已安装集合里凑不齐（装对应载体，或去掉 requires）
  *   permission-denied  要了宿主不给的东西：保留槽、别人的目录、网络（换槽／换目录／去掉申请）
- *   incompatible-form  形态／视图宿主不认（改用宿主支持的 forms／views）
+ *   incompatible-form  形态／视图宿主不认（改用宿主支持的 forms／views；single pane 多实例也落这里）
  *
  * 纯函数为主：诊断不读盘也可以（descriptor 可注入）；CLI 只在被直接执行时才读文件。
  */
 export const DOCTOR_STATES = Object.freeze([
   'ok',
+  // 批次52：adopt 服务不是故障，是一个需要作者知道的事实（外部进程自管，宿主只探活）。
+  'adopted-external',
   'needs-host-upgrade',
   'missing-capability',
   'permission-denied',
@@ -56,8 +60,8 @@ export function loadHostDescriptor(file = HOST_DESCRIPTOR_FILE) {
   return { ok: true, value: parsed }
 }
 
-/** 诊断一次：返回 { state, manifestId, message, fix, checks }。state 不在五态里就是 doctor 自身的 bug。 */
-export function diagnoseCarrier(manifestInput, { descriptor, installed = [], kinds = null } = {}) {
+/** 诊断一次：返回 { state, manifestId, message, fix, checks }。state 不在六态里就是 doctor 自身的 bug。 */
+export function diagnoseCarrier(manifestInput, { descriptor, installed = [], kinds = null, workspace = null } = {}) {
   const host = descriptor ?? loadHostDescriptor()
   if (host?.ok === false) {
     return result('needs-host-upgrade', manifestInput, '宿主描述符不可读，无法判定兼容性', `先修好 ${HOST_DESCRIPTOR_FILE}（${host.error.message}）`, [])
@@ -72,8 +76,14 @@ export function diagnoseCarrier(manifestInput, { descriptor, installed = [], kin
   if (typeof spec === 'string' && spec !== CARRIER_SPEC_V1 && !descSupportsSpec(desc, spec)) {
     return result('needs-host-upgrade', { id: manifestId }, `外壳合同 ${desc.kernelContract} 还不认 ${spec}`, `把外壳升到认 ${spec} 的版本（描述符 carrierSpecs 里登记它），或让载体暂时写 ${CARRIER_SPEC_V1}`, checks)
   }
-  if (!compatibleKernelFor(manifestInput?.minKernel, desc)) {
-    return result('needs-host-upgrade', { id: manifestId }, `载体要求 minKernel=${String(manifestInput?.minKernel)}，外壳合同是 ${desc.kernelContract}`, '升级外壳，或把 minKernel 调到外壳合同版本以内', checks)
+  // 内核区间：minKernel 是下限，maxKernel 缺省＝不设上界；粒度 major.minor（批次52）。
+  const minKernel = manifestInput?.minKernel
+  const maxKernel = manifestInput?.maxKernel
+  if (!compatibleKernelFor(minKernel, maxKernel, desc)) {
+    const requested = maxKernel === undefined || maxKernel === null ? String(minKernel) : `${String(minKernel)}–${String(maxKernel)}`
+    return result('needs-host-upgrade', { id: manifestId }, `载体要求外壳合同 ${requested}，外壳合同是 ${desc.kernelContract}`, maxKernel === undefined || maxKernel === null
+      ? '升级外壳，或把 minKernel 调到外壳合同版本以内'
+      : '升级或降级外壳，或把 maxKernel 调到当前合同版本以上（上界与 minKernel 成对生效）', checks)
   }
   checks.push({ name: 'kernel', state: 'ok' })
 
@@ -105,6 +115,38 @@ export function diagnoseCarrier(manifestInput, { descriptor, installed = [], kin
     return result(mapped.state, { id: manifestId }, validation.error.message, mapped.fix, checks)
   }
   checks.push({ name: 'manifest', state: 'ok' })
+  const normalized = validation.value
+
+  // 6) @4 槽语义：single 的 pane 在工作区里被开成多份 → 报错，不静默复用。
+  const multiplicity = checkPaneMultiplicity(normalized.panes, workspace)
+  if (multiplicity) return result('incompatible-form', { id: manifestId }, multiplicity.message, multiplicity.fix, checks)
+  // multiplicity／scope／keyField 的宿主读取点：诊断把每块 pane 的槽语义摊开，批次53 的实例裁决吃这一份。
+  checks.push({ name: 'pane-multiplicity', state: 'ok', panes: paneSemanticsSummary(normalized.panes) })
+
+  // 认领四件套的宿主读取点：批次53 据此裁决争用；这里先把声明摊进诊断。
+  checks.push({ name: 'claims', state: 'ok', panes: claimSummary(normalized.panes) })
+
+  // preview.register 的 loading 档归批次55 消费，license 的展示／鉴权归批次54；
+  // 本批先把两份声明读进诊断，保证字段不是死声明。
+  if (normalized.preview) {
+    checks.push({
+      name: 'preview',
+      state: 'ok',
+      registrations: normalized.preview.register.map((item) => ({
+        id: item.id, extensions: [...item.extensions], loading: item.loading, maxBytes: item.maxBytes
+      }))
+    })
+  }
+  if (normalized.license) {
+    checks.push({ name: 'license', state: 'ok', mode: normalized.license.mode, agreement: normalized.license.agreement })
+  }
+
+  // adopt：合法清单，但服务由外部进程自管——宿主只探活与池记账，不 spawn。
+  const adopted = normalized.services.filter((service) => service.adopt === true)
+  if (adopted.length) {
+    checks.push({ name: 'adopt', state: 'ok', services: adopted.map((service) => service.id) })
+    return result('adopted-external', { id: manifestId }, `声明了 ${adopted.length} 个外部服务（adopt）：宿主只探活，不启动进程`, '外部服务请由外部进程自行启动；要宿主管理请去掉 adopt 并提供 command', checks)
+  }
   return result('ok', { id: manifestId }, '清单与宿主对得上', '', checks)
 }
 
@@ -125,12 +167,84 @@ function descSupportsSpec(desc, spec) {
   return version >= 1 && (spec === CARRIER_SPEC_V1 || spec === CARRIER_SPEC_V2)
 }
 
-function compatibleKernelFor(minKernel, desc) {
-  const raw = String(minKernel ?? '').trim()
-  if (!/^\d+(\.\d+){0,2}$/.test(raw)) return false
-  const wanted = Number.parseInt(raw.split('.')[0], 10)
-  const host = Number.parseInt(String(desc.kernelContract ?? KERNEL_CONTRACT_VERSION).split('.')[0], 10)
-  return wanted <= host
+/** 与内核校验器同一份区间比较（major.minor；maxKernel 缺省＝不设上界）。 */
+function compatibleKernelFor(minKernel, maxKernel, desc) {
+  const host = desc.kernelContract ?? KERNEL_CONTRACT_VERSION
+  if (!parseKernelVersion(minKernel)) return false
+  return kernelRangeAllows(minKernel, maxKernel ?? null, host)
+}
+
+/**
+ * 工作区实例计数（批次52）：接受 workspace 快照（{ entries }）、实例记录数组或实例 id 数组。
+ * 只数 pane id，不碰位置／最小化——doctor 要判的是「single 有没有被开成多份」。
+ */
+function paneInstanceCounts(workspace) {
+  const counts = new Map()
+  const bump = (paneId) => {
+    const id = String(paneId ?? '').trim()
+    if (id) counts.set(id, (counts.get(id) ?? 0) + 1)
+  }
+  const items = Array.isArray(workspace)
+    ? workspace
+    : workspace && typeof workspace === 'object' && workspace.entries && typeof workspace.entries === 'object'
+      ? Object.entries(workspace.entries).map(([key, value]) => (
+        value && typeof value === 'object' ? { ...value, instance: value.instance ?? key } : key
+      ))
+      : []
+  for (const item of items) {
+    if (typeof item === 'string') {
+      bump(item.split('#')[0])
+      continue
+    }
+    if (!item || typeof item !== 'object') continue
+    if (typeof item.pane === 'string') {
+      bump(item.pane)
+      continue
+    }
+    if (typeof item.instance === 'string') bump(item.instance.split('#')[0])
+  }
+  return counts
+}
+
+function checkPaneMultiplicity(panes, workspace) {
+  if (!workspace) return null
+  const counts = paneInstanceCounts(workspace)
+  for (const pane of Array.isArray(panes) ? panes : []) {
+    if (pane?.multiplicity !== 'single') continue
+    const count = counts.get(pane.id) ?? 0
+    if (count > 1) {
+      return {
+        message: `pane「${pane.id}」声明 multiplicity=single，工作区却开了 ${count} 份实例`,
+        fix: '关掉多余实例，或把 multiplicity 改成 list／keyed（多实例要显式声明）'
+      }
+    }
+  }
+  return null
+}
+
+/** multiplicity／scope／keyField 的宿主读取点（批次53 的实例裁决吃这一份）。 */
+function paneSemanticsSummary(panes) {
+  return (Array.isArray(panes) ? panes : [])
+    .filter((pane) => pane?.multiplicity !== undefined)
+    .map((pane) => ({
+      id: pane.id,
+      multiplicity: pane.multiplicity,
+      scope: pane.scope ?? null,
+      keyField: pane.keyField ?? null
+    }))
+}
+
+/** claims／priority／canOpen／takes 的宿主读取点（批次53 的争用裁决吃这一份）。 */
+function claimSummary(panes) {
+  return (Array.isArray(panes) ? panes : [])
+    .filter((pane) => Array.isArray(pane?.claims) && pane.claims.length > 0)
+    .map((pane) => ({
+      id: pane.id,
+      claims: [...pane.claims],
+      priority: pane.priority ?? 0,
+      canOpen: pane.canOpen ?? null,
+      takes: pane.takes ?? null
+    }))
 }
 
 function checkPermissions(manifest, desc) {
@@ -232,7 +346,7 @@ function checkCapabilities(manifest, installed, kinds) {
 function mapValidationError(error) {
   const code = String(error?.code ?? '').replace(/^PINAX_/, '')
   if (code === 'KERNEL_INCOMPATIBLE') {
-    return { state: 'needs-host-upgrade', fix: '升级外壳，或把 minKernel 调到外壳合同版本以内' }
+    return { state: 'needs-host-upgrade', fix: '升级或降级外壳，或把 minKernel／maxKernel 调到能覆盖外壳合同版本（上下界成对生效）' }
   }
   if (code === 'SCOPE_OUTSIDE_OWNER' || code === 'RESERVED_SLOT') {
     return { state: 'permission-denied', fix: '只占用开放槽与自己的 dataDirs；跨载体请走对方声明的 tools' }
@@ -243,7 +357,7 @@ function mapValidationError(error) {
   return { state: 'incompatible-form', fix: '按错误文案修清单：字段名、取值域或声明位置不对' }
 }
 
-/** CLI：node next/doctor.mjs <manifest.mjs 导出的路径> —— 打印五态诊断，供作者自查。 */
+/** CLI：node next/doctor.mjs <manifest.mjs 导出的路径> —— 打印六态诊断，供作者自查。 */
 const invokedDirectly = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 // CLI 是终端工具，没有渲染层可报：用法／装载失败只能走 stdout/stderr。
 /* eslint-disable no-console */
@@ -262,7 +376,8 @@ if (invokedDirectly) {
         const manifest = mod.default ?? Object.values(mod).find((item) => item && item.spec)
         const report = diagnoseCarrier(manifest, { descriptor })
         console.log(JSON.stringify(report, null, 2))
-        if (report.state !== 'ok') process.exitCode = 1
+        // adopted-external 是事实不是故障：合法清单，只是服务由外部进程自管，退出码仍为 0。
+        if (report.state !== 'ok' && report.state !== 'adopted-external') process.exitCode = 1
       })
       .catch((error) => {
         console.error(`装载清单失败：${String(error?.message ?? error)}`)

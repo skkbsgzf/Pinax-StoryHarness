@@ -347,6 +347,16 @@ check('p2 画布接入面：comic.canvas 是 app 档 pane（pinax.view.app／ext
     && comicCanvas?.app?.url === 'http://127.0.0.1:3010',
   comicCanvas ? `${comicCanvas.view}/${comicCanvas.kind} ${comicCanvas.app?.url ?? '(无地址)'}` : '(缺 comic.canvas)')
 
+// 批次52（门禁 q）：@4 合同与 adopt 分支真的进了产物——字段不是死声明。
+//   主进程 bundle 里必须找得到 @4 词表、maxKernel、预览 loading 两档（批次55 直接消费），
+//   以及 adopt 分支的失败文案（supervisor 随运行时进包；装机后外部服务探不通要能说清楚）。
+const v4Markers = ['pinax-carrier@4', 'maxKernel', 'text-pages', 'bytes-complete']
+const adoptMarkers = ['外部服务端口', 'adopt 服务必须声明 port']
+const missingV4Markers = [...v4Markers, ...adoptMarkers].filter((marker) => !bundle.includes(marker))
+check('q @4 合同与 adopt 分支进产物：清单词表（@4／maxKernel／预览两档）与「adopt 只探活」的失败文案都在主进程 bundle',
+  missingV4Markers.length === 0,
+  missingV4Markers.length ? `缺 ${missingV4Markers.join(' ')}` : `${v4Markers.length + adoptMarkers.length} 个标记齐`)
+
 // prod 那条加载路径是窗口有没有内容的唯一入口：曾经写成 bundle 的上一级，装机起来是白屏而门禁全绿。
 // 只认「join 的实参」不认函数名：D1 起多个模块都 import node:path，rollup 会把 join 重命名成 join$1，
 // 旧正则 join\\(currentDir… 会被标识符改名误伤（门禁该守路径，不该守压缩后的变量名）。

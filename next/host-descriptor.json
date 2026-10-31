@@ -2,7 +2,7 @@
   "descriptorVersion": 1,
   "host": "pinax-next-shell",
   "kernelContract": "1",
-  "carrierSpecs": ["pinax-carrier@1", "pinax-carrier@2", "pinax-carrier@3"],
+  "carrierSpecs": ["pinax-carrier@1", "pinax-carrier@2", "pinax-carrier@3", "pinax-carrier@4"],
   "trustMode": "same-process",
   "slots": ["left-dock", "center", "overlay"],
   "reservedSlots": ["right", "top-menu"],

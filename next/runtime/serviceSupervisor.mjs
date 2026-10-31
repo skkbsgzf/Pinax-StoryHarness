@@ -37,6 +37,8 @@ function publicStatus(entry) {
     id: entry.id,
     pluginId: entry.pluginId,
     status: entry.status,
+    // adopt（批次52）：外部进程自管，宿主只探活／状态灯／池记账，不 spawn。界面据这面区分两种服务。
+    adopt: entry.adopt === true,
     pid: entry.pid,
     port: entry.port,
     restarts: entry.restarts,
@@ -62,8 +64,8 @@ const SERVICE_EVENT_LEVEL = Object.freeze({
 function serviceEventMessage(type, entry) {
   const name = `服务「${entry.id}」`
   switch (type) {
-    case 'service-starting': return `${name}启动中`
-    case 'service-ready': return entry.port ? `${name}就绪（端口 ${entry.port}）` : `${name}就绪`
+    case 'service-starting': return entry.adopt ? `${name}探活中（外部进程，宿主不启动）` : `${name}启动中`
+    case 'service-ready': return entry.port ? `${name}就绪（${entry.adopt ? '外部进程，' : ''}端口 ${entry.port}）` : `${name}就绪`
     case 'service-unhealthy': return `${name}健康检查未通过：${entry.error ?? '未知原因'}`
     case 'service-crashed': return `${name}进程崩溃：${entry.error ?? '未知原因'}`
     case 'service-failed': return `${name}失败：${entry.error ?? '未知原因'}`
@@ -212,6 +214,29 @@ export function createServiceSupervisor(options = {}) {
 
   async function launch(entry) {
     if (stopping) return false
+    // adopt（批次52）：外部进程已经不归宿主，这里只探活与记账——绝不 spawn，也绝不重试拉起。
+    if (entry.adopt) {
+      entry.status = SERVICE_STATUS.STARTING
+      entry.error = null
+      entry.startedAt = new Date().toISOString()
+      emit('service-starting', entry)
+      if (!entry.port) {
+        entry.status = SERVICE_STATUS.FAILED
+        entry.error = 'adopt 服务必须声明 port：宿主只有端口可探，没有进程可看'
+        emit('service-failed', entry)
+        return false
+      }
+      const external = await waitHealthy(entry)
+      if (external) {
+        entry.status = SERVICE_STATUS.READY
+        emit('service-ready', entry)
+        return true
+      }
+      entry.status = SERVICE_STATUS.UNHEALTHY
+      entry.error = `外部服务端口 ${entry.port} 在 ${healthTimeoutMs}ms 内没有应答（进程不归宿主，无法重启）`
+      emit('service-unhealthy', entry)
+      return false
+    }
     entry.status = SERVICE_STATUS.STARTING
     entry.error = null
     entry.startedAt = new Date().toISOString()
@@ -243,7 +268,8 @@ export function createServiceSupervisor(options = {}) {
     const deadline = Date.now() + healthTimeoutMs
     while (Date.now() < deadline) {
       if (stopping) return false
-      if (!entry.child) return false
+      // adopt 没有子进程可盯：判据只有端口应答，不能因为 entry.child 为空就提前判死。
+      if (!entry.adopt && !entry.child) return false
       const answer = await probe({ port: entry.port, path: entry.healthPath ?? '/', timeoutMs: 2_000 })
       if (answer?.ok) {
         entry.health = { ok: true, statusCode: answer.statusCode ?? null, checkedAt: new Date().toISOString() }
@@ -279,17 +305,20 @@ export function createServiceSupervisor(options = {}) {
   for (const spec of specs) {
     const id = String(spec?.id ?? spec?.pluginId ?? 'service')
     if (entries.has(id)) continue
+    const adopt = spec?.adopt === true
     entries.set(id, {
       id,
       pluginId: String(spec?.pluginId ?? ''),
-      command: String(spec?.command ?? ''),
-      args: Array.isArray(spec?.args) ? spec.args.map(String) : [],
-      env: spec?.env && typeof spec.env === 'object' ? { ...spec.env } : {},
-      cwd: spec?.cwd ? String(spec.cwd) : null,
+      adopt,
+      command: adopt ? null : String(spec?.command ?? ''),
+      args: adopt || !Array.isArray(spec?.args) ? [] : spec.args.map(String),
+      env: adopt || !spec?.env || typeof spec.env !== 'object' ? {} : { ...spec.env },
+      cwd: adopt || !spec?.cwd ? null : String(spec.cwd),
       dir: spec?.dir ? String(spec.dir) : null,
       port: Number.isSafeInteger(spec?.port) ? spec.port : null,
       healthPath: spec?.healthPath ? String(spec.healthPath) : null,
-      restart: spec?.restart === 'never' ? 'never' : 'on-failure',
+      // adopt 的进程不在宿主手里：没有可重启的东西，重试只会白白探一个外部端口。
+      restart: adopt || spec?.restart === 'never' ? 'never' : 'on-failure',
       autostart: spec?.autostart !== false,
       status: SERVICE_STATUS.STOPPED,
       pid: null,

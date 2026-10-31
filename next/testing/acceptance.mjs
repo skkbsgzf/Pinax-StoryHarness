@@ -5,6 +5,8 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
+import { validateCarrierManifest } from '../kernel/carrierManifest.mjs'
+import { createServiceSupervisor } from '../runtime/serviceSupervisor.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
 import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { createProject, initBareProject } from '../project/createProject.mjs'
@@ -305,6 +307,35 @@ try {
   record('M4/M5 收尸：运行时 stop() 后预览端口不再监听、comfy 桥子进程一并关闭',
     (await probePort(previewPort)) === false,
     `port=${previewPort}`)
+
+  // ── 批次52：@4 合同收口与 services.adopt ────────────────────────────────────
+  // @4 校验器升级（合同上界改 major.minor、四组新字段）不许回头咬既有载体：
+  // 12 份清单仍写 @3 / minKernel:'1'，全部必须原样通过。这是回归闸，不是新功能计数。
+  const v4Regressions = BUILT_IN_CARRIER_PLUGINS
+    .map((plugin) => ({ id: plugin.manifest.id, result: validateCarrierManifest(plugin.manifest) }))
+    .filter((entry) => !entry.result.ok)
+  record('批次52 @4 收口：12 份现有载体清单（@3 / minKernel:1）全部通过新校验器，零误拒',
+    BUILT_IN_CARRIER_PLUGINS.length === 12 && v4Regressions.length === 0,
+    v4Regressions.length ? v4Regressions.map((entry) => `${entry.id}:${entry.result.error.code}`).join(',') : '12/12')
+
+  // adopt 服务的正身（批次58 三独立体端口管理）：宿主只探活／状态灯／池记账，绝不 spawn。
+  // 这里注入探针，锁住「start 会成功、pid 为空、spawnImpl 从未被调用」；真端口探活由
+  // carrier-v4-adopt-supervisor 测试用真 http server 覆盖。
+  let adoptSpawnCalls = 0
+  const adoptSupervisor = createServiceSupervisor({
+    services: [{ id: 'external-v4', pluginId: 'fixture.v4', adopt: true, port: 9103, healthPath: '/health' }],
+    spawnImpl: () => { adoptSpawnCalls += 1; throw new Error('adopt 不得 spawn') },
+    probeHealth: async () => ({ ok: true, statusCode: 200 }),
+    healthTimeoutMs: 500,
+    healthIntervalMs: 50
+  })
+  const adoptStarted = await adoptSupervisor.start()
+  const adoptStatus = adoptSupervisor.status()[0]
+  await adoptSupervisor.stop()
+  record('批次52 adopt 服务：宿主只探活、不 spawn（状态面标 adopt，pid 为空）',
+    adoptStarted.value.started.includes('external-v4')
+      && adoptStatus.adopt === true && adoptStatus.pid === null && adoptSpawnCalls === 0,
+    `started=${adoptStarted.value.started.join(',')} spawn=${adoptSpawnCalls}`)
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

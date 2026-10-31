@@ -1,9 +1,19 @@
 import { fail, ok } from './errors.mjs'
 import { isKnownCapability } from './capabilities.vocab.mjs'
 import { isKnownKind, validatePhysicalDir } from './projectSkeleton.mjs'
+import { isPlainObject, validatePluginRelativePath } from './carrierManifest.shared.mjs'
+import { validatePaneSemantics } from './carrierManifest.paneSemantics.mjs'
+import { validatePaneClaims } from './carrierManifest.claims.mjs'
+import { validatePreview } from './carrierManifest.previews.mjs'
+import {
+  KERNEL_CONTRACT_VERSION,
+  kernelRangeAllows,
+  validateLicense,
+  validateMaxKernel
+} from './carrierManifest.contract.mjs'
 
 /**
- * 载体清单校验器：`pinax-carrier@3`（写）＋ `@2`／`@1`（读，保留兼容）。
+ * 载体清单校验器：`pinax-carrier@4`（写）＋ `@3`／`@2`／`@1`（读，保留兼容）。
  * 纯函数、无 IO：主进程、渲染进程、门禁脚本都能同一份调用。
  *
  * v2 的五个声明面（工单 C §3）：
@@ -21,20 +31,47 @@ import { isKnownKind, validatePhysicalDir } from './projectSkeleton.mjs'
  *   mcp       外部 MCP 服务端：stdio 或 sse，挂进来的工具按 prefix 归命名空间
  *   agentMd   载体自己的 AGENT.md（插件目录内相对路径）：运行时组上下文时并入
  * v3 还收紧一条：pane 必须显式声明 kind（内容面词表），宿主不再按 id 前缀猜。
- * 这四张牌只在 @3 上生效——@2／@1 写了就拒装，避免「声明了却不生效」。
+ * 这四张牌只在 @3 及以上生效——@2／@1 写了就拒装，避免「声明了却不生效」。
+ *
+ * v4（批次52，一次收口）再补四组声明面，每组各有一个独立模块：
+ *   槽语义     pane.multiplicity／scope／keyField（carrierManifest.paneSemantics.mjs）
+ *   资源认领   pane.claims／priority／canOpen／takes（carrierManifest.claims.mjs）
+ *   渲染器注册 preview.register（carrierManifest.previews.mjs）
+ *   合同上界   maxKernel 与 license（carrierManifest.contract.mjs）
+ * 老版本（@3／@2／@1）写了任何 @4 字段都拒装——沿用 V3_ONLY_FIELDS 的纪律。
  */
 export const CARRIER_SPEC_V1 = 'pinax-carrier@1'
 export const CARRIER_SPEC_V2 = 'pinax-carrier@2'
 export const CARRIER_SPEC_V3 = 'pinax-carrier@3'
-export const CARRIER_SPEC = CARRIER_SPEC_V3
-export const SUPPORTED_CARRIER_SPECS = Object.freeze([CARRIER_SPEC_V1, CARRIER_SPEC_V2, CARRIER_SPEC_V3])
+export const CARRIER_SPEC_V4 = 'pinax-carrier@4'
+export const CARRIER_SPEC = CARRIER_SPEC_V4
+export const SUPPORTED_CARRIER_SPECS = Object.freeze([CARRIER_SPEC_V1, CARRIER_SPEC_V2, CARRIER_SPEC_V3, CARRIER_SPEC_V4])
 const SPEC_MANIFEST_VERSIONS = Object.freeze({
   [CARRIER_SPEC_V1]: 1,
   [CARRIER_SPEC_V2]: 2,
-  [CARRIER_SPEC_V3]: 3
+  [CARRIER_SPEC_V3]: 3,
+  [CARRIER_SPEC_V4]: 4
 })
-/** 只有 @3 认的声明面：老版本写了就拒，不静默丢弃。 */
+/** 只有 @3 及以上认的声明面：老版本写了就拒，不静默丢弃。 */
 export const V3_ONLY_FIELDS = Object.freeze(['entry', 'services', 'mcp', 'agentMd'])
+/**
+ * 只有 @4 认的 pane 字段（七个）：老版本写任一即拒。
+ * `chain` 没有出现在这里——它不是字段，是 multiplicity 的未采用取值（登记在 paneSemantics）。
+ */
+export const V4_ONLY_FIELDS = Object.freeze([
+  'multiplicity',
+  'scope',
+  'keyField',
+  'claims',
+  'priority',
+  'canOpen',
+  'takes'
+])
+/** @4 顶层字段：老版本写了即拒。 */
+export const V4_ONLY_TOP_FIELDS = Object.freeze(['maxKernel', 'license', 'preview'])
+/** @4 的 service 字段：老版本写了即拒（adopt 只探活不 spawn）。 */
+export const V4_ONLY_SERVICE_FIELDS = Object.freeze(['adopt'])
+export { KERNEL_CONTRACT_VERSION }
 
 /** pane.kind：内容面词表（与 next/shell/viewRegistry.mjs 的宿主视图分工一一对应，测试会核）。 */
 export const PANE_KIND_WORDS = Object.freeze([
@@ -82,7 +119,6 @@ const SERVICE_ENV_VALUE_MAX = 2000
 const SERVICE_HEALTH_PATH_MAX = 200
 const MCP_ALLOW_MAX = 256
 const MCP_URL_MAX = 2000
-export const KERNEL_CONTRACT_VERSION = '1'
 
 /** 宿主认得的事件订阅（A 批收尾时发 project.changed）。 */
 export const CARRIER_SUBSCRIPTIONS = Object.freeze(['project.changed'])
@@ -123,7 +159,7 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   const m = input
 
   if (!SUPPORTED_CARRIER_SPECS.includes(m.spec)) {
-    return fail('INVALID_MANIFEST', `清单 spec 必须是 ${CARRIER_SPEC_V3}（旧版 ${CARRIER_SPEC_V2} / ${CARRIER_SPEC_V1} 仍可读），收到 ${String(m.spec)}`, { got: m.spec })
+    return fail('INVALID_MANIFEST', `清单 spec 必须是 ${CARRIER_SPEC_V4}（旧版 ${CARRIER_SPEC_V3} / ${CARRIER_SPEC_V2} / ${CARRIER_SPEC_V1} 仍可读），收到 ${String(m.spec)}`, { got: m.spec })
   }
   if (m.spec === CARRIER_SPEC_V1) {
     if (m.manifestVersion !== undefined && m.manifestVersion !== 1) {
@@ -132,12 +168,19 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   } else if (m.manifestVersion !== SPEC_MANIFEST_VERSIONS[m.spec]) {
     return fail('INVALID_MANIFEST', `${m.spec} 必须显式写 manifestVersion: ${SPEC_MANIFEST_VERSIONS[m.spec]}`, { manifestVersion: m.manifestVersion })
   }
-  // v3 才认的四张牌：老清单写了就拒，避免「声明了却不生效」重演。
-  if (m.spec !== CARRIER_SPEC_V3) {
+  // v3 才认的四张牌：老清单写了就拒，避免「声明了却不生效」重演；v4 是超集，一并放行。
+  if (m.spec !== CARRIER_SPEC_V3 && m.spec !== CARRIER_SPEC_V4) {
     for (const field of V3_ONLY_FIELDS) {
       if (m[field] !== undefined) {
         return fail('INVALID_MANIFEST', `${m.id} 声明了 ${field}：这是 ${CARRIER_SPEC_V3} 的字段，请把清单 spec 与 manifestVersion 一并升级`, { pluginId: m.id, field })
       }
+    }
+  }
+  // v4 的字段：老清单写了任何一处都拒（沿用「声明了却不生效就拒装」的纪律）。
+  if (m.spec !== CARRIER_SPEC_V4) {
+    const legacy = firstV4Field(m)
+    if (legacy) {
+      return fail('INVALID_MANIFEST', `${m.id} 声明了 ${legacy.field}：这是 ${CARRIER_SPEC_V4} 的字段，请把 spec 与 manifestVersion 一并升级到 4`, { pluginId: m.id, field: legacy.field, where: legacy.where })
     }
   }
   if (typeof m.id !== 'string' || !PLUGIN_ID_PATTERN.test(m.id)) {
@@ -149,9 +192,12 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (typeof m.version !== 'string' || !SEMVER_PATTERN.test(m.version)) {
     return fail('INVALID_MANIFEST', '插件 version 须是 x.y.z', { version: m.version })
   }
-  if (!compatibleKernel(m.minKernel)) {
-    return fail('KERNEL_INCOMPATIBLE', `插件要求外壳合同 minKernel=${String(m.minKernel)}，当前内核为 ${KERNEL_CONTRACT_VERSION}`, {
-      pluginId: m.id, minKernel: m.minKernel, kernel: KERNEL_CONTRACT_VERSION
+  const maxKernel = validateMaxKernel(m.maxKernel, { pluginId: m.id, minKernel: m.minKernel })
+  if (!maxKernel.ok) return maxKernel
+  if (!compatibleKernel(m.minKernel, maxKernel.value)) {
+    const requested = maxKernel.value ? `${String(m.minKernel)}–${maxKernel.value}` : String(m.minKernel)
+    return fail('KERNEL_INCOMPATIBLE', `插件要求外壳合同 ${requested}，当前内核为 ${KERNEL_CONTRACT_VERSION}`, {
+      pluginId: m.id, minKernel: m.minKernel, maxKernel: maxKernel.value, kernel: KERNEL_CONTRACT_VERSION
     })
   }
   if (m.tier !== 'carrier') {
@@ -168,7 +214,10 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (Array.isArray(m.panes) && Array.isArray(m.contributes?.panes)) {
     return fail('INVALID_MANIFEST', `${m.id} 同时写了 panes 与 contributes.panes：一份清单只能有一个来源`)
   }
-  const panes = validatePanes(contributes.value.panes ?? m.panes, m.id, { requireKind: m.spec === CARRIER_SPEC_V3 })
+  const panes = validatePanes(contributes.value.panes ?? m.panes, m.id, {
+    requireKind: m.spec === CARRIER_SPEC_V3 || m.spec === CARRIER_SPEC_V4,
+    v4: m.spec === CARRIER_SPEC_V4
+  })
   if (!panes.ok) return panes
   const entry = validateEntry(m.entry, m.id)
   if (!entry.ok) return entry
@@ -178,8 +227,12 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (!mcp.ok) return mcp
   const agentMd = validateAgentMd(m.agentMd, m.id)
   if (!agentMd.ok) return agentMd
+  const preview = validatePreview(m.preview, m.id)
+  if (!preview.ok) return preview
+  const license = validateLicense(m.license, m.id)
+  if (!license.ok) return license
   // 自带面板与 pane 必须成对：只写 pane 得占位，只写 entry 没人挂——两种都是「声明了却不生效」。
-  if (m.spec === CARRIER_SPEC_V3) {
+  if (m.spec === CARRIER_SPEC_V3 || m.spec === CARRIER_SPEC_V4) {
     const customPanes = panes.value.filter((pane) => pane.view === CARRIER_VIEW_TYPES[0])
     if (entry.value && customPanes.length === 0) {
       return fail('INVALID_ENTRY', `${m.id} 声明了 entry，但没有 pane 用 ${CARRIER_VIEW_TYPES[0]} 挂它`, { pluginId: m.id })
@@ -211,12 +264,13 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
   if (!subscriptions.ok) return subscriptions
 
   return ok({
-    spec: m.spec === CARRIER_SPEC_V3 ? CARRIER_SPEC_V3 : CARRIER_SPEC_V2,
-    manifestVersion: m.spec === CARRIER_SPEC_V3 ? 3 : 2,
+    spec: m.spec === CARRIER_SPEC_V4 ? CARRIER_SPEC_V4 : m.spec === CARRIER_SPEC_V3 ? CARRIER_SPEC_V3 : CARRIER_SPEC_V2,
+    manifestVersion: m.spec === CARRIER_SPEC_V4 ? 4 : m.spec === CARRIER_SPEC_V3 ? 3 : 2,
     id: m.id,
     title: m.title.trim(),
     version: m.version,
     minKernel: String(m.minKernel),
+    maxKernel: maxKernel.value,
     tier: 'carrier',
     primary: primary.value,
     dataDirs: dataDirs.value,
@@ -235,8 +289,38 @@ export function validateCarrierManifest(input, { kinds = null } = {}) {
     entry: entry.value,
     services: services.value,
     mcp: mcp.value,
-    agentMd: agentMd.value
+    agentMd: agentMd.value,
+    preview: preview.value,
+    license: license.value
   })
+}
+
+/**
+ * @4 字段的归属扫描：顶层（maxKernel／license／preview）、pane 七字段、service adopt。
+ * 只给「老版本写了新字段」的拒装用；@4 自己不走这条。
+ */
+function firstV4Field(manifest) {
+  for (const field of V4_ONLY_TOP_FIELDS) {
+    if (manifest[field] !== undefined) return { field, where: 'top' }
+  }
+  const panes = Array.isArray(manifest.contributes?.panes)
+    ? manifest.contributes.panes
+    : Array.isArray(manifest.panes) ? manifest.panes : []
+  for (const pane of panes) {
+    if (!isPlainObject(pane)) continue
+    for (const field of V4_ONLY_FIELDS) {
+      if (pane[field] !== undefined) return { field, where: `pane:${String(pane.id ?? '?')}` }
+    }
+  }
+  if (Array.isArray(manifest.services)) {
+    for (const service of manifest.services) {
+      if (!isPlainObject(service)) continue
+      for (const field of V4_ONLY_SERVICE_FIELDS) {
+        if (service[field] !== undefined) return { field, where: `service:${String(service.id ?? '?')}` }
+      }
+    }
+  }
+  return null
 }
 
 /** 同一组字符串（不看顺序）；两个都写时用来核 provides ↔ capabilities。 */
@@ -388,11 +472,13 @@ function validateSubscriptions(value, pluginId) {
   return ok(out)
 }
 
-/** 外壳合同兼容性：只认 major 版本，插件不得要求比自己更新的外壳。 */
-export function compatibleKernel(minKernel) {
-  const raw = String(minKernel ?? '').trim()
-  if (!/^\d+(\.\d+){0,2}$/.test(raw)) return false
-  return Number.parseInt(raw.split('.')[0], 10) <= Number.parseInt(KERNEL_CONTRACT_VERSION, 10)
+/**
+ * 外壳合同兼容性：比对粒度 major.minor（批次52 从 major 收紧）。
+ * minKernel 是下限；maxKernel 缺省＝不设上界（既有清单的 minKernel:'1' 对合同 '1'
+ * 仍按 1.0 <= 1.0 判兼容——收紧闸不误拒老清单）。
+ */
+export function compatibleKernel(minKernel, maxKernel = null) {
+  return kernelRangeAllows(minKernel, maxKernel, KERNEL_CONTRACT_VERSION)
 }
 
 function validatePrimary(value, pluginId, kinds) {
@@ -468,7 +554,7 @@ function validateAppPane(value, pluginId, paneId) {
   return ok({ url: raw })
 }
 
-function validatePanes(value, pluginId, { requireKind = false } = {}) {
+function validatePanes(value, pluginId, { requireKind = false, v4 = false } = {}) {
   if (!Array.isArray(value) || value.length === 0) {
     return fail('INVALID_MANIFEST', `${pluginId} 必须声明至少一个 pane（C5）`)
   }
@@ -539,6 +625,15 @@ function validatePanes(value, pluginId, { requireKind = false } = {}) {
       if (!app.ok) return app
       normalized.app = app.value
     }
+    // v4 槽语义与资源认领（批次52）：旧版本不经过这里，归一结果也不会多出这些字段。
+    if (v4) {
+      const semantics = validatePaneSemantics(pane, { pluginId })
+      if (!semantics.ok) return semantics
+      Object.assign(normalized, semantics.value)
+      const claims = validatePaneClaims(pane, { pluginId })
+      if (!claims.ok) return claims
+      Object.assign(normalized, claims.value)
+    }
     // forms：这块 pane 允许被摆到哪些位置（可空＝宿主打开位置全开）。
     if (pane.forms !== undefined) {
       if (!Array.isArray(pane.forms) || pane.forms.length === 0) {
@@ -574,35 +669,6 @@ function validatePanes(value, pluginId, { requireKind = false } = {}) {
     out.push(normalized)
   }
   return ok(out)
-}
-
-/**
- * 插件目录内的相对路径（entry / agentMd / service cwd）：不得越出插件自己的目录。
- * 与项目内相对路径不同：这里解析基准是插件根，不是项目根，所以不收 `.pinax` 之类项目语义，
- * 只守八条——非空、小于上限、正斜杠、非绝对、非盘符、无 `.`/`..`/空段、不以点开头、扩展名对得上。
- */
-function validatePluginRelativePath(value, { pluginId, field, ext = null, max = 200, code = 'INVALID_MANIFEST' } = {}) {
-  if (typeof value !== 'string' || !value.trim()) {
-    return fail(code, `${pluginId} 的 ${field} 必须是非空字符串`, { pluginId, field })
-  }
-  const raw = value.trim()
-  if (raw.length > max) {
-    return fail(code, `${pluginId} 的 ${field} 过长（上限 ${max} 字）：${raw}`, { pluginId, field })
-  }
-  if (raw.includes('\\')) {
-    return fail(code, `${pluginId} 的 ${field} 请用正斜杠：${raw}`, { pluginId, field })
-  }
-  if (raw.includes(':') || raw.startsWith('/')) {
-    return fail(code, `${pluginId} 的 ${field} 必须是插件目录内的相对路径：${raw}`, { pluginId, field })
-  }
-  const segments = raw.split('/')
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..' || segment.startsWith('.'))) {
-    return fail(code, `${pluginId} 的 ${field} 含非法路径段：${raw}`, { pluginId, field })
-  }
-  if (ext && !raw.toLowerCase().endsWith(ext)) {
-    return fail(code, `${pluginId} 的 ${field} 必须以 ${ext} 结尾：${raw}`, { pluginId, field })
-  }
-  return ok(raw)
 }
 
 /** entry：自带面板的入口声明（v3）。今天只认沙箱 iframe，路径相对插件目录。 */
@@ -675,7 +741,7 @@ function validateStringArgs(value, pluginId, field, code) {
 function validateServices(value, pluginId) {
   if (value === undefined || value === null) return ok([])
   if (!Array.isArray(value)) return fail('INVALID_SERVICE', `${pluginId} 的 services 必须是数组`, { pluginId })
-  const fields = ['id', 'command', 'args', 'env', 'cwd', 'port', 'healthPath', 'restart', 'autostart']
+  const fields = ['id', 'command', 'args', 'env', 'cwd', 'port', 'healthPath', 'restart', 'autostart', 'adopt']
   const seen = new Set()
   const out = []
   for (const item of value) {
@@ -690,18 +756,36 @@ function validateServices(value, pluginId) {
     }
     if (seen.has(item.id)) return fail('INVALID_SERVICE', `${pluginId} 的 service id 重复：${item.id}`, { pluginId, id: item.id })
     seen.add(item.id)
-    if (typeof item.command !== 'string' || !item.command.trim() || item.command.trim().length > SERVICE_COMMAND_MAX) {
-      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) command 必填（≤${SERVICE_COMMAND_MAX} 字）`, { pluginId, id: item.id })
+    if (item.adopt !== undefined && typeof item.adopt !== 'boolean') {
+      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).adopt 必须是布尔`, { pluginId, id: item.id })
     }
-    const args = validateStringArgs(item.args, pluginId, `service(${item.id}).args`, 'INVALID_SERVICE')
-    if (!args.ok) return args
-    const env = validateEnvMap(item.env, pluginId, `service(${item.id}).env`, 'INVALID_SERVICE')
-    if (!env.ok) return env
+    const adopt = item.adopt === true
+    if (adopt) {
+      // adopt 的语义是「外部进程自管，宿主只探活」，给了启动参数却不 spawn 就是死声明。
+      for (const key of ['command', 'args', 'env', 'cwd']) {
+        if (item[key] !== undefined && item[key] !== null) {
+          return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) 声明了 adopt:true，不能再给 ${key}：外部服务只探活，宿主不 spawn`, { pluginId, id: item.id, field: key })
+        }
+      }
+    }
+    let command = null
+    let args = { value: [] }
+    let env = { value: {} }
     let cwd = null
-    if (item.cwd !== undefined && item.cwd !== null) {
-      const path = validatePluginRelativePath(item.cwd, { pluginId, field: `service(${item.id}).cwd`, code: 'INVALID_SERVICE', max: ENTRY_PATH_MAX })
-      if (!path.ok) return path
-      cwd = path.value
+    if (!adopt) {
+      if (typeof item.command !== 'string' || !item.command.trim() || item.command.trim().length > SERVICE_COMMAND_MAX) {
+        return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) command 必填（≤${SERVICE_COMMAND_MAX} 字）`, { pluginId, id: item.id })
+      }
+      command = item.command.trim()
+      args = validateStringArgs(item.args, pluginId, `service(${item.id}).args`, 'INVALID_SERVICE')
+      if (!args.ok) return args
+      env = validateEnvMap(item.env, pluginId, `service(${item.id}).env`, 'INVALID_SERVICE')
+      if (!env.ok) return env
+      if (item.cwd !== undefined && item.cwd !== null) {
+        const path = validatePluginRelativePath(item.cwd, { pluginId, field: `service(${item.id}).cwd`, code: 'INVALID_SERVICE', max: ENTRY_PATH_MAX })
+        if (!path.ok) return path
+        cwd = path.value
+      }
     }
     let port = null
     if (item.port !== undefined && item.port !== null) {
@@ -721,16 +805,30 @@ function validateServices(value, pluginId) {
       }
       healthPath = raw
     }
-    const restart = item.restart === undefined ? 'on-failure' : item.restart
-    if (!SERVICE_RESTART_POLICIES.includes(restart)) {
-      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).restart 须是 ${SERVICE_RESTART_POLICIES.join(' / ')}`, { pluginId, id: item.id })
+    if (adopt && !port) {
+      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) 声明了 adopt:true：必须给 port（只探活，没有端口就没有靶子）`, { pluginId, id: item.id })
+    }
+    if (adopt && !healthPath) {
+      return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) 声明了 adopt:true：必须给 healthPath`, { pluginId, id: item.id })
+    }
+    let restart
+    if (adopt) {
+      if (item.restart !== undefined && item.restart !== 'never') {
+        return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}) 声明了 adopt:true：宿主不 spawn，restart 只能是 never（或省略）`, { pluginId, id: item.id })
+      }
+      restart = 'never'
+    } else {
+      restart = item.restart === undefined ? 'on-failure' : item.restart
+      if (!SERVICE_RESTART_POLICIES.includes(restart)) {
+        return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).restart 须是 ${SERVICE_RESTART_POLICIES.join(' / ')}`, { pluginId, id: item.id })
+      }
     }
     if (item.autostart !== undefined && typeof item.autostart !== 'boolean') {
       return fail('INVALID_SERVICE', `${pluginId} 的 service(${item.id}).autostart 必须是布尔`, { pluginId, id: item.id })
     }
-    out.push({
+    const normalized = {
       id: item.id,
-      command: item.command.trim(),
+      command,
       args: args.value,
       env: env.value,
       cwd,
@@ -738,7 +836,10 @@ function validateServices(value, pluginId) {
       healthPath,
       restart,
       autostart: item.autostart ?? true
-    })
+    }
+    // 只在 adopt 时带上这个字段：老清单的归一结果保持原样（不新增死键）。
+    if (adopt) normalized.adopt = true
+    out.push(normalized)
   }
   return ok(out)
 }
@@ -1010,8 +1111,4 @@ function validateScopes(value, dataDirs, pluginId) {
     out.push(scope)
   }
   return ok(out)
-}
-
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
