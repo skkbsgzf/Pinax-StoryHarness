@@ -484,8 +484,11 @@ test('批次37 主进程三件接线：单实例锁闸住装配、项目事件�
   // 项目事件：唯一的写盘钩子先发总线事件，再由历史是否就绪决定标脏；推送走 IPC_EVENT.projectEvent。
   assert.match(mainSource, /fileService\.setOnWrite\(async \(\{ relativePath \}\) => \{\s*const kind = projectEventKindForPath\(relativePath\)/s, '写盘钩子必须先做路径→事件映射')
   assert.match(mainSource, /if \(kind\) emitProjectEvent\(projectRoot, \{ kind \}\)/, '认得出的路径必须发事件')
-  assert.match(mainSource, /subscribeProjectEvents\(projectRoot, \(event\) => \{[\s\S]*?sendToRenderer\(IPC_EVENT\.projectEvent/, '当前项目根要有一份订阅并转成渲染层推送')
-  assert.match(mainSource, /onProjectClosed[\s\S]*?detachProjectEvents\(\)/, '关项目必须退订，旧根事件不得再推')
+  // 批次51：订阅不再靠手工 detach 变量，而是走 registerEffect 托管的效应栈（带 owner 可观测计数）。
+  assert.match(mainSource, /subscribeProjectEventsEffect\([\s\S]*?sendToRenderer\(IPC_EVENT\.projectEvent/, '当前项目根要有一份经 registerEffect 的订阅并转成渲染层推送')
+  assert.match(mainSource, /onProjectClosed[\s\S]*?disposeHostEffects\(HOST_EFFECT_OWNERS\.projectEvents\)/, '关项目必须回卷项目事件效应栈，旧根事件不得再推')
+  // 服务事件（supervisor push）同样是可逆效应，不许裸绑一个永不退订的推送。
+  assert.match(mainSource, /registerEffect\(HOST_EFFECT_OWNERS\.serviceEvents/, '服务事件推送要经 registerEffect 托管')
 
   // 工具循环：模型面、工具面、策略、提案店四件都要真接上，缺一件就是「循环空转」。
   assert.match(mainSource, /createToolLoop\(\{/, '主进程要真有工具循环工厂')

@@ -13,7 +13,7 @@ import { createWritePolicy } from '../runtime/writePolicy.mjs'
 import { createProposalStore } from '../runtime/proposalStore.mjs'
 import { CARRIER_WRITE_CLASS, KERNEL_WRITE_CLASS } from '../runtime/kernelWriteGuard.mjs'
 import { createInterceptorChain, createWriteAuditInterceptor, createWriteGuardInterceptor } from '../runtime/toolInterceptors.mjs'
-import { emitProjectEvent, projectEventKindForPath, subscribeProjectEvents } from '../runtime/eventBus.mjs'
+import { emitProjectEvent, projectEventKindForPath, subscribeProjectEventsEffect } from '../runtime/eventBus.mjs'
 import { createAppPreferences } from '../runtime/appPreferences.mjs'
 import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
@@ -207,8 +207,32 @@ let session = null
 let dispatcher = null
 let window_ = null
 
-/** 项目事件总线订阅（批次37）：换项目/关项目时退订，跨项目不串台。 */
-let detachProjectEvents = null
+/**
+ * 宿主级效应的 owner 名（批次51）。它们不是安装型插件，但同样要被「注册即负责拆掉」约束：
+ * 项目事件订阅与服务事件推送各占一条效应栈，换项目/关项目时整栈逆序回卷。
+ */
+const HOST_EFFECT_OWNERS = Object.freeze({
+  projectEvents: 'pinax.host.project-events',
+  serviceEvents: 'pinax.host.service-events'
+})
+
+/**
+ * 服务事件的分发点：运行时的 supervisor 在创建时就绑住这个回调，宿主在这之后
+ * 才可能登记「推到渲染层」的效应。所以回调只负责转给当前挂着的监听者，
+ * 真正的订阅生命周期归 registerEffect（见 bindRuntimeServicePush）。
+ */
+const serviceEventHandlers = new Set()
+
+function dispatchServiceEvent(payload) {
+  for (const handler of [...serviceEventHandlers]) {
+    try {
+      handler(payload)
+    } catch {
+      // 一个渲染层推送坏掉不拦别的订阅者，也不影响服务本身。
+    }
+  }
+}
+
 /** 历史仓库是否就绪：写入钩子同时服务总线与历史，只有就绪时才标脏（没仓时不刷错误日志）。 */
 let historyWired = false
 
@@ -401,21 +425,64 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   currentUiZoom = uiZoom
   currentScheme = stored.theme === 'dark' ? 'dark' : 'light'
 
+  /** 回卷一个宿主效应栈（换项目/关项目/重新接线前调用）；失败不静默。 */
+  function disposeHostEffects(ownerId) {
+    const registry = session?.registry
+    if (!registry?.disposeEffects) return
+    const rolledBack = registry.disposeEffects(ownerId)
+    if (!rolledBack.ok) {
+      // eslint-disable-next-line no-console -- 主进程没有渲染层可报；回卷失败必须留痕
+      console.error('[pinax-next] 宿主效应回卷失败：', rolledBack.error?.message ?? rolledBack.error)
+    }
+  }
+
   /**
-   * 项目事件接线（批次37）：同一时刻只认当前项目根的一份订阅。
+   * 项目事件接线（批次37 起）：同一时刻只认当前项目根的一份订阅。
    * 总线在进程内，渲染层看不到它——这里把每一次变更转成一条 IPC 推送（{ kind, at }），
-   * 设置页的大纲转换节与提案审阅节据此自动刷新。换项目先退旧订阅，跨项目不串台。
+   * 设置页的大纲转换节与提案审阅节据此自动刷新。
+   *
+   * 批次51：订阅改走 `registerEffect`（eventBus 的 effect 入口，带 owner 可观测计数），
+   * 换项目/关项目时整条效应栈逆序回卷——「注册了就要负责拆掉」不再靠手工 detach 变量。
    */
   function bindProjectEvents({ root: projectRoot } = {}) {
-    if (detachProjectEvents) {
-      detachProjectEvents()
-      detachProjectEvents = null
-    }
+    disposeHostEffects(HOST_EFFECT_OWNERS.projectEvents)
     historyWired = false
     if (!projectRoot) return
-    detachProjectEvents = subscribeProjectEvents(projectRoot, (event) => {
-      sendToRenderer(IPC_EVENT.projectEvent, { kind: event.kind, at: event.at })
-    })
+    const subscribed = subscribeProjectEventsEffect(
+      session?.registry,
+      HOST_EFFECT_OWNERS.projectEvents,
+      projectRoot,
+      (event) => {
+        sendToRenderer(IPC_EVENT.projectEvent, { kind: event.kind, at: event.at })
+      },
+      `project-events@${projectRoot}`
+    )
+    if (!subscribed.ok) {
+      // eslint-disable-next-line no-console -- 主进程没有渲染层可报；订阅没接上必须留痕
+      console.error('[pinax-next] 项目事件订阅失败：', subscribed.error?.message ?? subscribed.error)
+    }
+  }
+
+  /**
+   * 批次51：运行时服务事件（supervisor 的 push）同样是一条宿主效应。
+   * supervisor → dispatchServiceEvent 的静态回调在运行时创建时绑死；这里登记的效应只负责
+   * 「把推送转给渲染层」这一段可逆订阅——关项目时由 disposeHostEffects 回卷，不残留旧窗口推送。
+   */
+  function bindRuntimeServicePush() {
+    disposeHostEffects(HOST_EFFECT_OWNERS.serviceEvents)
+    const registry = session?.registry
+    if (!registry?.registerEffect) return
+    const registered = registry.registerEffect(HOST_EFFECT_OWNERS.serviceEvents, () => {
+      const handler = (payload) => sendToRenderer(IPC_PUSH.runtimeServiceEvent, payload)
+      serviceEventHandlers.add(handler)
+      return () => {
+        serviceEventHandlers.delete(handler)
+      }
+    }, 'runtime-service-event-push')
+    if (!registered.ok) {
+      // eslint-disable-next-line no-console -- 主进程没有渲染层可报；推送订阅没接上必须留痕
+      console.error('[pinax-next] 服务事件推送订阅失败：', registered.error?.message ?? registered.error)
+    }
   }
 
   /**
@@ -428,6 +495,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   async function beginHistory({ root: projectRoot, fileService } = {}) {
     if (!projectRoot) return
     bindProjectEvents({ root: projectRoot })
+    // 批次51：服务事件推送也是项目级订阅——换项目先回卷旧的，再按新项目挂上。
+    bindRuntimeServicePush()
     if (fileService?.setOnWrite) {
       fileService.setOnWrite(async ({ relativePath }) => {
         const kind = projectEventKindForPath(relativePath)
@@ -504,11 +573,14 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     runtimeOptions: {
       runner: createAdvisorRunner({ toolLoop: createProjectToolLoop({ serviceLogPool }) }),
       // 协议 v3 的 services 面：服务状态变化推给渲染层（起停／崩溃／就绪），右栏不必轮询。
-      onServiceEvent: (payload) => sendToRenderer(IPC_PUSH.runtimeServiceEvent, payload),
+      // 批次51：这里只留静态分发点；「推到渲染层」的可逆订阅由 bindRuntimeServicePush 走 registerEffect。
+      onServiceEvent: dispatchServiceEvent,
       // 批次49：同一个池交给运行时——声明与实时状态由它同步，日志由监督器／MCP 客户端写入。
       serviceLogPool
     }
   })
+  // 批次51：回卷失败也要进公共池留痕——注册表建在会话里，池在会话外，创建后交进去。
+  session.registry?.setServiceLogPool?.(serviceLogPool)
   dispatcher = createIpcDispatcher({
     session,
     prefs,
@@ -611,14 +683,13 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     onProjectOpened: beginHistory,
     // 工单E3：关项目即停历史定时器。session.close 不清 projectRoot，停表只能在外壳这一层做；
     // 不重启窗口也能让「关掉项目后不再有新快照」成立。
-    // 批次37：同时退订项目事件并摘掉写入钩子（关项目后旧根的事件不该再推给渲染层）。
+    // 批次37/51：项目事件与服务事件推送的宿主效应整栈逆序回卷，并摘掉写入钩子——
+    // 关项目后旧根的订阅与服务事件不该再推给渲染层。
     onProjectClosed: async () => {
       historyScheduler.stop()
       historyWired = false
-      if (detachProjectEvents) {
-        detachProjectEvents()
-        detachProjectEvents = null
-      }
+      disposeHostEffects(HOST_EFFECT_OWNERS.projectEvents)
+      disposeHostEffects(HOST_EFFECT_OWNERS.serviceEvents)
       session?.project?.value?.fileService?.setOnWrite?.(null)
     },
     onPrefsApplied: async (value) => {

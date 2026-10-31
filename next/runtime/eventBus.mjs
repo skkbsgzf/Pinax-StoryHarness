@@ -1,4 +1,5 @@
 import { resolve as resolvePath } from 'node:path'
+import { fail } from '../kernel/errors.mjs'
 
 /**
  * 项目事件总线（批次37 · 任务一）。
@@ -41,7 +42,11 @@ const DIRECTORY_KINDS = Object.freeze({
   '资料': 'entries-changed'
 })
 
-/** 监听表：root 归一后作键；没有订阅者的 root 不占位（退订后即删）。 */
+/**
+ * 监听表：root 归一后作键；没有订阅者的 root 不占位（退订后即删）。
+ * 值从 Set<handler> 升级为 Map<handler, owner>（批次51）：可观测计数要能回答
+ * 「这个插件在总线上还剩几个监听器」，而不是只回答总数。
+ */
 const listeners = new Map()
 
 /** root 归一：同一根的不同写法（尾分隔符、相对路径）必须落到同一个键，否则同 root 广播会漏。 */
@@ -71,16 +76,19 @@ export function projectEventKindForPath(relativePath) {
 /**
  * 订阅一个项目的变更。返回退订函数（幂等）。
  * root 为空或 handler 不是函数时返回空退订——调用方不需要先判空。
+ * 第三个参数 `{ owner }` 是批次51 的可观测归属：传了之后 `projectEventSubscriberCount(root, owner)`
+ * 就能单独回答「这个插件还剩几个监听器」；老调用方不传，行为与以前一致。
  */
-export function subscribeProjectEvents(root, handler) {
+export function subscribeProjectEvents(root, handler, options = {}) {
   const key = rootKey(root)
   if (!key || typeof handler !== 'function') return () => {}
+  const owner = String(options?.owner ?? '').trim() || null
   let set = listeners.get(key)
   if (!set) {
-    set = new Set()
+    set = new Map()
     listeners.set(key, set)
   }
-  set.add(handler)
+  set.set(handler, owner)
   let active = true
   return () => {
     if (!active) return
@@ -90,6 +98,21 @@ export function subscribeProjectEvents(root, handler) {
     current.delete(handler)
     if (!current.size) listeners.delete(key)
   }
+}
+
+/**
+ * 批次51：经注册表效应注册总线订阅——setup 立即订阅并交回退订函数，
+ * 插件卸载/`disposeEffects(owner)` 时由注册表逆序回卷。返回注册表的 { ok } 信封。
+ */
+export function subscribeProjectEventsEffect(registry, pluginId, root, handler, label = null) {
+  if (!registry || typeof registry.registerEffect !== 'function') {
+    return fail('INVALID_INPUT', 'subscribeProjectEventsEffect 需要带 registerEffect 的注册表')
+  }
+  return registry.registerEffect(
+    pluginId,
+    () => subscribeProjectEvents(root, handler, { owner: pluginId }),
+    label ?? `projectEvents:${rootKey(root) || '(空根)'}`
+  )
 }
 
 /**
@@ -107,7 +130,7 @@ export function emitProjectEvent(root, event = {}) {
     at: typeof event?.at === 'string' && event.at ? event.at : new Date().toISOString()
   }
   let delivered = 0
-  for (const handler of [...current]) {
+  for (const handler of [...current.keys()]) {
     try {
       handler({ ...payload })
       delivered += 1
@@ -118,9 +141,19 @@ export function emitProjectEvent(root, event = {}) {
   return delivered
 }
 
-/** 诊断与测试用：这个 root 此刻有几个订阅者。 */
-export function projectEventSubscriberCount(root) {
-  return listeners.get(rootKey(root))?.size ?? 0
+/**
+ * 诊断与测试用的只读计数。
+ * - `projectEventSubscriberCount(root)`：这个 root 此刻有几个订阅者；
+ * - `projectEventSubscriberCount(root, owner)`：其中属于该 owner 的有几个（批次51 的硬断言用）。
+ */
+export function projectEventSubscriberCount(root, owner = null) {
+  const set = listeners.get(rootKey(root))
+  if (!set) return 0
+  if (owner === null || owner === undefined) return set.size
+  const wanted = String(owner)
+  let count = 0
+  for (const entryOwner of set.values()) if (entryOwner === wanted) count += 1
+  return count
 }
 
 /** 摘掉一个 root 的全部订阅（关项目／运行时 stop 时用；不传 root 就清空整张表，测试用）。 */

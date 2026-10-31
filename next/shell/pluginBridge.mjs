@@ -52,3 +52,47 @@ export function panelResult(id, result) {
 export function panelError(message, id = '') {
   return { type: PANEL_MESSAGE.error, id: String(id ?? ''), message: String(message ?? '') }
 }
+
+/**
+ * 批次51：面板桥监听的注册也走内核效应合同。
+ *
+ * `window.addEventListener('message', …)` 是典型的「注册了就要拆」的资源；以前靠组件
+ * onBeforeUnmount 手工 remove（批次37 的假桥旧函数引用不退订就出在这类资源上）。
+ * 这个工厂把「加监听 → 返回移除函数」做成一个 setup，交给 `registerEffect` 托管：
+ * 插件卸载 / `disposeEffects(owner)` 时由注册表逆序回卷。
+ *
+ * `accept(event)` 管来源判定（面板宿主必须要求 event.source === iframe.contentWindow），
+ * `onRequest(request, event)` 拿到形状校验通过的请求；形状不对时可选 `onInvalid(event)`。
+ */
+export function attachPanelBridgeEffect({
+  kernelRegistry,
+  pluginId,
+  target = globalThis,
+  accept = () => true,
+  onRequest,
+  onInvalid = null,
+  label = null
+} = {}) {
+  if (!kernelRegistry || typeof kernelRegistry.registerEffect !== 'function') {
+    return { ok: false, error: { code: 'INVALID_INPUT', message: 'attachPanelBridgeEffect 需要带 registerEffect 的内核注册表' } }
+  }
+  if (!target || typeof target.addEventListener !== 'function' || typeof target.removeEventListener !== 'function') {
+    return { ok: false, error: { code: 'INVALID_INPUT', message: 'attachPanelBridgeEffect 需要一个能加/移除事件监听的目标（window）' } }
+  }
+  if (typeof onRequest !== 'function') {
+    return { ok: false, error: { code: 'INVALID_INPUT', message: 'attachPanelBridgeEffect 需要 onRequest 回调' } }
+  }
+  return kernelRegistry.registerEffect(String(pluginId ?? ''), () => {
+    const listener = (event) => {
+      if (!accept(event)) return
+      const request = parsePanelRequest(event?.data)
+      if (!request) {
+        if (typeof onInvalid === 'function') onInvalid(event)
+        return
+      }
+      onRequest(request, event)
+    }
+    target.addEventListener('message', listener)
+    return () => target.removeEventListener('message', listener)
+  }, label ?? `panel-bridge:${pluginId}`)
+}

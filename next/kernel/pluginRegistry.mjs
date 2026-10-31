@@ -21,13 +21,71 @@ export function createRegistry(options = {}) {
   /** 每插件的清理钩子（视图实例、订阅、定时器）；uninstall 时统一跑，跑完即弃。 */
   const disposers = new Map()
   const uninstallListeners = new Set()
+  /**
+   * 批次51：效应栈。owner → 注册顺序的 [{ label, disposers[] }]。
+   * 与 onDispose 的区别是「接口强制」：setup 必须交回 disposer，没交回就拒收。
+   */
+  const effectStacks = new Map()
+  /** 已卸载过的 owner：再往里注册效应直接抛（EFFECT_ON_DISPOSED）。重新 install 时清掉。 */
+  const disposedOwners = new Set()
+  /** 回卷失败的去处：必须留痕。测试/验收可注入独立池，主进程用批次49 的公共池。 */
+  let serviceLogPool = options.serviceLogPool ?? null
 
   function releaseClaims(pluginId) {
     for (const [tool, owner] of [...toolOwners]) if (owner === pluginId) toolOwners.delete(tool)
     for (const [namespace, owner] of [...namespaceOwners]) if (owner === pluginId) namespaceOwners.delete(namespace)
   }
 
-  /** 先跑 impl.dispose()，再跑注册期挂上的钩子；单个抛错不阻断其余，但要记下来。 */
+  /**
+   * 效应回卷失败的留痕：池在就进池（level:'error'），不在就退到 console——
+   * 不许静默，卸载残留最难查的就是「本来该报却没人看见」。
+   */
+  function recordDisposerFailure(ownerId, source, label, index, error) {
+    const detail = String(error?.message ?? error)
+    const message = `[pinax-next] 效应回卷失败：${ownerId} · ${label ?? source} #${index + 1} — ${detail}`
+    if (serviceLogPool?.append) {
+      try {
+        serviceLogPool.append({
+          source: { kind: 'service', id: `effect:${ownerId}`, carrierId: ownerId },
+          level: 'error',
+          message,
+          data: { ownerId, source, label: label ?? null, index }
+        })
+        return
+      } catch {
+        // 池自己坏掉也要把话说到 stderr，不吞。
+      }
+    }
+    // eslint-disable-next-line no-console -- 主进程没有渲染层可报；回卷失败必须留痕
+    console.error(message)
+  }
+
+  /**
+   * 跑完并清空一个 owner 的效应栈：**整体逆序**（后注册先拆），单个抛错记一条 error 继续拆，
+   * 全部跑完才删栈——失败不中断，也不留半截状态。
+   */
+  function disposeEffects(ownerId) {
+    const owner = String(ownerId ?? '')
+    if (!owner) return fail('INVALID_INPUT', 'disposeEffects 需要 owner id')
+    const stack = effectStacks.get(owner) ?? []
+    const disposed = []
+    for (let i = stack.length - 1; i >= 0; i -= 1) {
+      const record = stack[i]
+      for (let j = record.disposers.length - 1; j >= 0; j -= 1) {
+        try {
+          record.disposers[j]()
+          disposed.push({ source: 'effect', label: record.label, index: j })
+        } catch (error) {
+          recordDisposerFailure(owner, 'effect', record.label, j, error)
+          disposed.push({ source: 'effect', label: record.label, index: j, error: String(error?.message ?? error) })
+        }
+      }
+    }
+    effectStacks.delete(owner)
+    return ok({ ownerId: owner, disposed })
+  }
+
+  /** 先跑 impl.dispose()，再跑注册期钩子，最后逆序回卷效应栈；单个抛错不阻断其余，但要留痕。 */
   function disposePlugin(pluginId) {
     const disposed = []
     const impl = impls.get(pluginId)
@@ -36,6 +94,7 @@ export function createRegistry(options = {}) {
         impl.dispose()
         disposed.push({ source: 'impl' })
       } catch (error) {
+        recordDisposerFailure(pluginId, 'impl', 'impl.dispose', 0, error)
         disposed.push({ source: 'impl', error: String(error?.message ?? error) })
       }
     }
@@ -44,10 +103,13 @@ export function createRegistry(options = {}) {
         fn()
         disposed.push({ source: 'hook', index })
       } catch (error) {
+        recordDisposerFailure(pluginId, 'hook', 'onDispose', index, error)
         disposed.push({ source: 'hook', index, error: String(error?.message ?? error) })
       }
     }
     disposers.delete(pluginId)
+    const rolledBack = disposeEffects(pluginId)
+    if (rolledBack.ok) disposed.push(...rolledBack.value.disposed)
     return disposed
   }
 
@@ -91,18 +153,21 @@ export function createRegistry(options = {}) {
       manifests.set(manifest.id, manifest)
       impls.set(manifest.id, { ...impl, trust: meta.trust ?? 't1' })
       if (meta.dir) pluginDirs.set(manifest.id, String(meta.dir))
+      // 重新安装＝新的生命周期：上一轮卸掉的标记不能把这一轮的效应注册也挡掉。
+      disposedOwners.delete(manifest.id)
       return ok({ manifest, trust: meta.trust ?? 't1', scopeSummary: summarizeScopes(manifest) })
     },
 
     uninstall(pluginId) {
       if (!manifests.has(pluginId)) return fail('INVALID_INPUT', `未安装的插件：${pluginId}`)
-      // 顺序：先跑清理（视图实例、订阅、定时器），再释放工具/目录名claims，最后除名——
+      // 顺序：先跑清理（视图实例、订阅、定时器、效应栈），再释放工具/目录名claims，最后除名——
       // 清理钩子里若还读得到清单，不算是「卸载后再动已消失的插件」。
       const disposed = disposePlugin(pluginId)
       releaseClaims(pluginId)
       manifests.delete(pluginId)
       impls.delete(pluginId)
       pluginDirs.delete(pluginId)
+      disposedOwners.add(pluginId)
       for (const listener of [...uninstallListeners]) {
         try {
           listener({ pluginId })
@@ -111,6 +176,66 @@ export function createRegistry(options = {}) {
         }
       }
       return ok({ pluginId, removed: true, disposed })
+    },
+
+    /**
+     * 批次51 · 效应合同：`setup(ctx)` 立即执行，且**必须**返回 disposer 或 disposer 数组。
+     * 返回 undefined／空数组／非函数一律 INVALID_EFFECT 拒收——与「声明了不生效就拒装」同一条哲学：
+     * 注册一个东西就得负责拆掉它，交不出拆法就不许注册。
+     *
+     * 与 onDispose 的分工：onDispose 是兼容旧调用方的手工钩子；registerEffect 是新接口，
+     * 可被 `disposeEffects(owner)` 单独回卷，也会随插件 uninstall 一起逆序拆掉。
+     * 向已卸载的 owner 注册直接抛 EFFECT_ON_DISPOSED（等价 Cordis INACTIVE_EFFECT）；
+     * 重新 install 同一 id 会清掉这个标记。
+     */
+    registerEffect(pluginId, setup, label = null) {
+      const owner = String(pluginId ?? '')
+      if (!owner) return fail('INVALID_INPUT', 'registerEffect 需要插件 id')
+      if (disposedOwners.has(owner)) {
+        const error = new Error(`插件 ${owner} 已卸载，不能再注册效应（EFFECT_ON_DISPOSED）`)
+        error.code = NEXT_ERROR_CODES.EFFECT_ON_DISPOSED
+        error.details = { pluginId: owner, label: label ?? null }
+        throw error
+      }
+      if (typeof setup !== 'function') return fail('INVALID_EFFECT', 'registerEffect 需要 setup 函数', { pluginId: owner })
+      let returned
+      try {
+        returned = setup(Object.freeze({
+          pluginId: owner,
+          label: label ?? null,
+          registry,
+          serviceLogPool
+        }))
+      } catch (error) {
+        return fail('INVALID_EFFECT', `效应 setup 失败：${String(error?.message ?? error)}`, { pluginId: owner, label: label ?? null })
+      }
+      const disposersForEffect = returned === undefined || returned === null
+        ? []
+        : Array.isArray(returned) ? returned : [returned]
+      if (!disposersForEffect.length || disposersForEffect.some((fn) => typeof fn !== 'function')) {
+        return fail('INVALID_EFFECT', `效应「${label ?? owner}」没有返回可用的 disposer：注册了但没法拆（registerEffect 合同）`, {
+          pluginId: owner,
+          label: label ?? null,
+          received: returned === undefined ? 'undefined' : returned === null ? 'null' : typeof returned
+        })
+      }
+      if (!effectStacks.has(owner)) effectStacks.set(owner, [])
+      const stack = effectStacks.get(owner)
+      stack.push({ label: label ?? null, disposers: [...disposersForEffect] })
+      return ok({ ownerId: owner, label: label ?? null, disposers: disposersForEffect.length, effectCount: stack.length })
+    },
+
+    /** 单独回卷一个 owner 的效应栈（宿主级订阅用；插件卸载走 uninstall）。 */
+    disposeEffects,
+
+    /** 当前挂在这个 owner 下的效应条数（诊断/门禁用，不改状态）。 */
+    effectCount(pluginId) {
+      return (effectStacks.get(String(pluginId ?? '')) ?? []).length
+    },
+
+    /** 主进程在创建会话后把公共日志池交给注册表：回卷失败要能进池留痕。 */
+    setServiceLogPool(pool) {
+      serviceLogPool = pool ?? null
     },
 
     /** 注册期清理钩子：返回释放句柄；插件卸载时统一调用（幂等，重复调用只跑一次）。 */

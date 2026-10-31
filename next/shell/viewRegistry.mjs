@@ -165,6 +165,48 @@ export function createViewRegistry() {
 }
 
 /**
+ * 批次51：把「注册一个视图」纳入内核效应合同。
+ *
+ * 以前第三方视图靠 `disposeOwner(owner)` 手工扫尾（批次45–48 挂账的「零调用方」）；
+ * 现在注册视图的同时登记一条内核效应，插件卸载或 `disposeEffects(owner)` 时由注册表
+ * 逆序跑 disposer 自动解注册。`disposeOwner` 保留，作为宿主对历史注册的兜底扫帚。
+ *
+ * 返回：视图注册成功的 { ok:true, value }；任一步失败都是 { ok:false, error }。
+ * 内核注册表拒绝（例如 EFFECT_ON_DISPOSED 抛出）时先把已注册的视图撤掉，不留半截状态。
+ */
+export function registerViewEffect({
+  kernelRegistry,
+  pluginId,
+  type,
+  factory,
+  builtin = false,
+  label = null,
+  viewRegistry = hostViewRegistry
+} = {}) {
+  if (!kernelRegistry || typeof kernelRegistry.registerEffect !== 'function') {
+    return { ok: false, error: { code: 'INVALID_INPUT', message: 'registerViewEffect 需要带 registerEffect 的内核注册表' } }
+  }
+  const owner = String(pluginId ?? '')
+  if (!owner) return { ok: false, error: { code: 'INVALID_INPUT', message: 'registerViewEffect 需要插件 id' } }
+  const installed = viewRegistry.registerView(type, factory, { owner, builtin })
+  if (!installed.ok) return installed
+  let registered
+  try {
+    registered = kernelRegistry.registerEffect(owner, () => () => {
+      viewRegistry.unregister(type)
+    }, label ?? `view:${type}`)
+  } catch (error) {
+    viewRegistry.unregister(type)
+    throw error
+  }
+  if (!registered?.ok) {
+    viewRegistry.unregister(type)
+    return registered
+  }
+  return installed
+}
+
+/**
  * 自带面板（协议 v3 的 `entry` 面）：内容面是插件自己的页面，宿主只给一块沙箱 iframe。
  * 所以这个类型名的渲染器只回答一件事——「这块 pane 的内容面是 custom-panel」。
  */
