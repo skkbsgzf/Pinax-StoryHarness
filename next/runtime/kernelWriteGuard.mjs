@@ -44,11 +44,20 @@ const KERNEL_NAME_SET = new Set(kernelTools.map((tool) => tool.name))
  * 这条启发式只用于「要不要把这次调用送进审阅策略」，不是权限裁决——真正的权限仍在各自的
  * 服务端与 scope 上；内建写族（KERNEL_WRITE_CLASS／CARRIER_WRITE_CLASS）仍以落点表为准。
  * 名字带前缀（`<prefix>.<name>`）也照后缀匹配。
+ *
+ * 批次50 起这条后缀只作**最后兜底**：写族判定先看工具自带的 annotations
+ * （readOnlyHint／destructiveHint），两者都未声明时才回落这里，并由 writePolicy 记一条 warn。
  */
 export const EXTERNAL_WRITE_HINT = /_(save|write|import|delete|create|update)$/u
 
 export function isExternalWriteToolName(name) {
   return EXTERNAL_WRITE_HINT.test(String(name ?? '').trim())
+}
+
+/** 工具是否显式声明了读／写（annotations 的 readOnlyHint 或 destructiveHint 至少一个为布尔）。 */
+export function hasWriteDeclaration(annotations) {
+  if (!annotations || typeof annotations !== 'object') return false
+  return typeof annotations.readOnlyHint === 'boolean' || typeof annotations.destructiveHint === 'boolean'
 }
 
 /** 每把写工具的落点定性：dir＝受「一目录一主人」约束，structural＝结构动作，derived＝只出产物的只读盘点族。 */

@@ -1,4 +1,5 @@
 import { forwardComplete } from '../../server/services/kitModelGateway.js'
+import { createInterceptorChain } from './toolInterceptors.mjs'
 
 /**
  * 模型回合适配（M2.5-A 任务五）。
@@ -66,9 +67,16 @@ function toGatewayTool(tool) {
  * @param {Function} [input.complete] 默认 forwardComplete；测试注假函数
  * @param {number} [input.timeoutMs]
  * @param {number} [input.maxTools]
+ * @param {object|Array|null} [input.interceptors] 拦截点链（批次50）：回合级 before/after 也走同一条链
  */
-export function createKitToolTurn({ complete = forwardComplete, timeoutMs = 100_000, maxTools = TOOL_TURN_MAX_TOOLS } = {}) {
-  return async function kitToolTurn({ messages = [], tools = [], options = {} } = {}) {
+export function createKitToolTurn({ complete = forwardComplete, timeoutMs = 100_000, maxTools = TOOL_TURN_MAX_TOOLS, interceptors = null } = {}) {
+  const chain = interceptors && typeof interceptors.runBefore === 'function'
+    ? interceptors
+    : Array.isArray(interceptors) && interceptors.length
+      ? createInterceptorChain({ interceptors })
+      : null
+
+  return async function kitToolTurn({ messages = [], tools = [], options = {}, writeMode = null, runId = null } = {}) {
     if (!Array.isArray(tools) || !tools.length) {
       throw Object.assign(new Error('工具回合至少要带一把工具'), { code: 'PINAX_TOOL_TURN_NO_TOOLS' })
     }
@@ -78,7 +86,16 @@ export function createKitToolTurn({ complete = forwardComplete, timeoutMs = 100_
       toolChoice: options.toolChoice ?? 'auto',
       ...(Number.isFinite(Number(options.maxTokens)) ? { maxTokens: Number(options.maxTokens) } : {})
     }
-    const result = await complete(payload, { timeoutMs })
+    // 回合级也过链：写族闸按 ctx.kind 自己跳过模型回合，审计环只认以「.」分命名空间的工具名。
+    const ctx = { kind: 'model-turn', tools, options, writeMode, runId }
+    const decided = chain ? await chain.runBefore('model.turn', payload, ctx) : { veto: false, args: payload }
+    if (decided?.veto) {
+      throw Object.assign(new Error(String(decided.reason ?? '模型回合被拦截')), {
+        code: String(decided.code ?? 'TURN_VETOED')
+      })
+    }
+    const result = await complete(decided?.args ?? payload, { timeoutMs })
+    if (chain) await chain.runAfter('model.turn', result, ctx)
     const calls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((call, index) => ({
       id: String(call?.id ?? `call_${index + 1}`),
       name: String(call?.name ?? ''),

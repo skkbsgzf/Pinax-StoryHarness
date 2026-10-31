@@ -78,7 +78,9 @@ test('acknowledge：确认水位只前进；之后未确认通知清零，橙回
   const pool = createServiceLogPool({ onAckPersist: (at) => persisted.push(at) })
   pool.setDeclarations([{ carrierId: 'pinax.carrier.comic', carrierTitle: '漫画', kind: 'service', id: 'comic-preview', port: 8191 }])
   pool.setServiceStatuses([{ id: 'comic-preview', status: 'ready', health: { ok: true } }])
-  pool.append(serviceEntry({ level: 'error', message: '起不来：无 node', confirm: true }))
+  // 固定为早于确认水位的时刻：池的 append 默认取系统时钟，跨过 10:00Z 后这条用例会按时间
+  // 先后误判成「未确认」，与确认语义无关（批次50 跑门禁时踩到，顺手钉成确定值）。
+  pool.append(serviceEntry({ level: 'error', message: '起不来：无 node', confirm: true, at: '2026-10-31T09:00:00.000Z' }))
   assert.equal(pool.statusByCarrier()[0].color, 'orange')
 
   const acked = pool.acknowledge('2026-10-31T10:00:00.000Z')

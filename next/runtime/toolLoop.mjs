@@ -14,7 +14,12 @@
  *      产出好几份重复提案；提案按成功回，模型才知道「已经交出去了，等作者」。
  *   3) 一次坏调用不炸整轮：策略或执行抛错都转成 isError 工具结果继续；只有 turn 抛错才上抛。
  *   4) 步数用尽返回 step-budget 且 text 为空——不编一段总结冒充模型没说过的话。
+ *
+ * 批次50：执行前的策略判定与执行后的审计记账统一走拦截点链（toolInterceptors.mjs），
+ * 本模块仍是唯一执行处。只给 policy 的老调用方自动包成一条写族闸链，行为与之前一致。
  */
+import { createInterceptorChain, createWriteGuardInterceptor } from './toolInterceptors.mjs'
+
 export const DEFAULT_MAX_STEPS = 8
 export const DEFAULT_MAX_MESSAGES = 26
 
@@ -94,6 +99,7 @@ export function createToolLoop({
   callTool,
   selectTools = null,
   policy = null,
+  interceptors = null,
   buildUserMessage = null,
   onEvent = null,
   maxSteps = DEFAULT_MAX_STEPS,
@@ -102,6 +108,23 @@ export function createToolLoop({
 } = {}) {
   if (typeof turn !== 'function') throw new TypeError('createToolLoop 需要 turn')
   if (typeof callTool !== 'function') throw new TypeError('createToolLoop 需要 callTool')
+
+  /**
+   * 拦截点链的三种来源：现成链 / 拦截器数组 / 只有 policy 时自动包一条写族闸。
+   * 链是每问现造的（policy 可能是工厂，写模式随问而变），但自动包装只在没有链时发生。
+   */
+  function chainFor(activePolicy) {
+    if (interceptors && typeof interceptors.runBefore === 'function' && typeof interceptors.runAfter === 'function') {
+      return interceptors
+    }
+    if (Array.isArray(interceptors)) {
+      return interceptors.length ? createInterceptorChain({ interceptors }) : null
+    }
+    if (activePolicy && typeof activePolicy.beforeTool === 'function') {
+      return createInterceptorChain({ interceptors: [createWriteGuardInterceptor({ policy: activePolicy })] })
+    }
+    return null
+  }
 
   return {
     /**
@@ -118,6 +141,7 @@ export function createToolLoop({
       const emit = safeEmitter(typeof perRunEvent === 'function' ? perRunEvent : onEvent)
       // policy 既可以是现成对象（单测），也可以是工厂（真实链：每一问的写模式不同，不能共用一份）。
       const activePolicy = typeof policy === 'function' ? policy({ writeMode }) : policy
+      const chain = chainFor(activePolicy)
       const selected = typeof selectTools === 'function'
         ? selectTools({ tools, intent: question, skill })
         : { names: (Array.isArray(tools) ? tools : []).map(nameOf).filter(Boolean), tools, dropped: [] }
@@ -136,7 +160,7 @@ export function createToolLoop({
 
       for (let step = 1; step <= maxSteps; step += 1) {
         emit({ stage: 'step', step, tools: [...declared], runId })
-        const response = await turn({ messages: buildMessages(base, rounds, maxMessages), tools: toolDefs, options: {} })
+        const response = await turn({ messages: buildMessages(base, rounds, maxMessages), tools: toolDefs, options: {}, writeMode, runId })
         const rawCalls = Array.isArray(response?.calls) ? response.calls : []
         const kind = response?.kind ?? (rawCalls.length ? 'tool_calls' : 'final_ready')
         if (kind !== 'tool_calls' || !rawCalls.length) {
@@ -176,36 +200,47 @@ export function createToolLoop({
           callsLog.push({ id: call.id, name: call.name })
           let output = ''
           let isError = false
+          const ctx = { call, step, tools: toolDefs, writeMode, runId }
           try {
-            const decided = activePolicy && typeof activePolicy.beforeTool === 'function'
-              ? await activePolicy.beforeTool(call)
-              : { kind: 'allow', args: call.arguments }
-            if (decided?.kind === 'deny') {
-              isError = true
-              output = clampOutput(JSON.stringify({
-                ok: false,
-                code: String(decided.code ?? 'TOOL_DENIED'),
-                message: String(decided.message ?? '这次调用被策略拒绝')
-              }), maxToolResultChars)
-              emit({ stage: 'tool-denied', callId: call.id, name: call.name, code: String(decided.code ?? 'TOOL_DENIED'), runId })
-            } else if (decided?.kind === 'proposal') {
-              const proposal = decided.proposal ?? {}
-              output = clampOutput(JSON.stringify({
-                ok: true,
-                proposalId: String(proposal.id ?? proposal.name ?? ''),
-                message: `已生成提案 ${proposal.id ?? proposal.name ?? ''}，等待作者采纳；不要重复调用同一把工具`
-              }), maxToolResultChars)
-              emit({
-                stage: 'proposal-created',
-                callId: call.id,
-                name: call.name,
-                proposalId: String(proposal.id ?? proposal.name ?? ''),
-                runId
-              })
+            const decided = chain
+              ? await chain.runBefore(call.name, call.arguments, ctx)
+              : { veto: false, args: call.arguments, guardDecision: null }
+            const afterCtx = { ...ctx, guardDecision: decided?.guardDecision ?? null }
+            if (decided?.veto) {
+              if (decided.decision === 'proposal') {
+                const proposal = decided.proposal ?? {}
+                output = clampOutput(JSON.stringify({
+                  ok: true,
+                  proposalId: String(proposal.id ?? proposal.name ?? ''),
+                  message: `已生成提案 ${proposal.id ?? proposal.name ?? ''}，等待作者采纳；不要重复调用同一把工具`
+                }), maxToolResultChars)
+                emit({
+                  stage: 'proposal-created',
+                  callId: call.id,
+                  name: call.name,
+                  proposalId: String(proposal.id ?? proposal.name ?? ''),
+                  runId
+                })
+              } else {
+                isError = true
+                output = clampOutput(JSON.stringify({
+                  ok: false,
+                  code: String(decided.code ?? 'TOOL_DENIED'),
+                  message: String(decided.reason ?? '这次调用被策略拒绝')
+                }), maxToolResultChars)
+                emit({ stage: 'tool-denied', callId: call.id, name: call.name, code: String(decided.code ?? 'TOOL_DENIED'), runId })
+              }
             } else {
-              const result = await callTool(call.name, decided?.args ?? call.arguments)
-              output = clampOutput(serializeToolOutput(result), maxToolResultChars)
-              isError = Boolean(result && typeof result === 'object' && result.ok === false)
+              try {
+                const result = await callTool(call.name, decided?.args ?? call.arguments)
+                output = clampOutput(serializeToolOutput(result), maxToolResultChars)
+                isError = Boolean(result && typeof result === 'object' && result.ok === false)
+                if (chain) await chain.runAfter(call.name, result, afterCtx)
+              } catch (error) {
+                // 执行失败也要过审计环：提交类工具「已发出但失败」同样要留痕。
+                if (chain) await chain.runAfter(call.name, { ok: false, error: String(error?.message ?? error) }, afterCtx)
+                throw error
+              }
             }
           } catch (error) {
             isError = true

@@ -463,7 +463,8 @@ test('外壳引旧轨叶子件只引这三个：一个都不许多', async () =>
 test('真模型这条链在主进程里接线：外壳必须注入进程内 advisor 运行器（否则「运行时能问」永远答不了）', async () => {
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
   // 批次37：运行器不再裸装——工具循环是它的可选接线，缺了这一句等于「有模型、不会用工具」。
-  assert.match(mainSource, /createAdvisorRunner\(\{\s*toolLoop:\s*createProjectToolLoop\(\)\s*\}\)/, '外壳主进程必须装进程内 advisor 运行器并接上工具循环')
+  // 批次50：工具循环工厂多收一份公共池（后缀兜底 warn／提交审计要落进 serviceLogPool）。
+  assert.match(mainSource, /createAdvisorRunner\(\{\s*toolLoop:\s*createProjectToolLoop\(\{ serviceLogPool \}\)\s*\}\)/, '外壳主进程必须装进程内 advisor 运行器并接上工具循环')
   assert.match(mainSource, /runtimeOptions:\s*\{\s*runner:/, '运行器必须经 runtimeOptions 注入（测试与验收刻意不注入，好留住那条如实失败路径）')
 
   // 模型面端点必须可被 env 覆写：默认端点写死在 8451，装机到别的机器就只能得到那句「未检测到可用模型」。
@@ -488,7 +489,9 @@ test('批次37 主进程三件接线：单实例锁闸住装配、项目事件�
 
   // 工具循环：模型面、工具面、策略、提案店四件都要真接上，缺一件就是「循环空转」。
   assert.match(mainSource, /createToolLoop\(\{/, '主进程要真有工具循环工厂')
-  assert.match(mainSource, /createKitToolTurn\(\)/, '模型回合走 kit 任务面')
+  // 批次50：模型回合与工具循环共用一条拦截点链（写族闸／提交审计），模型回合不再是裸调。
+  assert.match(mainSource, /createKitToolTurn\(\{ interceptors: toolInterceptors \}\)/, '模型回合走 kit 任务面，并过同一条拦截点链')
+  assert.match(mainSource, /createInterceptorChain\(\{[\s\S]*?createWriteGuardInterceptor[\s\S]*?createWriteAuditInterceptor/, '写族闸与审计环要接进同一条链')
   assert.match(mainSource, /selectTools\(/, '工具面按意图/技能/写模式筛选')
   assert.match(mainSource, /createWritePolicy\(\{\s*mode: writeMode,/, '写模式来自会话真值，不写死')
   assert.match(mainSource, /landing: \{ \.\.\.KERNEL_WRITE_CLASS, \.\.\.CARRIER_WRITE_CLASS \}/, '落点表必须是内核＋载体两份写类')

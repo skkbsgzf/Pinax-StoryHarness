@@ -12,6 +12,7 @@ import { selectTools } from '../runtime/toolSelect.mjs'
 import { createWritePolicy } from '../runtime/writePolicy.mjs'
 import { createProposalStore } from '../runtime/proposalStore.mjs'
 import { CARRIER_WRITE_CLASS, KERNEL_WRITE_CLASS } from '../runtime/kernelWriteGuard.mjs'
+import { createInterceptorChain, createWriteAuditInterceptor, createWriteGuardInterceptor } from '../runtime/toolInterceptors.mjs'
 import { emitProjectEvent, projectEventKindForPath, subscribeProjectEvents } from '../runtime/eventBus.mjs'
 import { createAppPreferences } from '../runtime/appPreferences.mjs'
 import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
@@ -293,8 +294,11 @@ async function loadRenderer(win, env) {
  *
  * callTool 与提案出口都按「此刻的会话」现取：工具循环在应用生命周期里只建一次，
  * 而项目会被换掉（session.refresh 会重建 runtime），把 runtime/fileService 绑死在工厂里就会写错项目。
+ *
+ * 批次50：执行前的写族判定与执行后的提交审计收进同一条拦截点链（toolInterceptors）——
+ * 工具循环仍是唯一执行处；策略按写模式缓存，后缀兜底的 warn 进公共池（serviceLogPool）。
  */
-function createProjectToolLoop() {
+function createProjectToolLoop({ serviceLogPool = null } = {}) {
   const proposals = createProposalStore({
     fileService: {
       async writeProposal(request) {
@@ -306,31 +310,48 @@ function createProjectToolLoop() {
       }
     }
   })
+  // 写策略按写模式缓存：同一模式共享一份（后缀兜底的 warn 只记一次），换模式换一份。
+  const policies = new Map()
+  const policyFor = ({ writeMode }) => {
+    const key = String(writeMode ?? '')
+    if (!policies.has(key)) {
+      policies.set(key, createWritePolicy({
+        mode: writeMode,
+        // 落点事实源只有一个：内核写族 ＋ 载体写工具，不在这里复制第三张表。
+        landing: { ...KERNEL_WRITE_CLASS, ...CARRIER_WRITE_CLASS },
+        serviceLogPool,
+        createProposal: async ({ tool, args = {}, dir }) => {
+          // baseRevision 取模型当次看到的修订号（写工具的 expectedRevision）：重放时按它判 STALE，
+          // 不静默合并。没有修订号的写工具不做这层判定（applyProposal 自会如实说明）。
+          const baseRevision = Number.isSafeInteger(args?.expectedRevision) ? args.expectedRevision : null
+          const label = String(args?.title ?? args?.file ?? args?.name ?? '').slice(0, 80)
+          return proposals.create({
+            tool,
+            args,
+            baseRevision,
+            summary: label ? `${tool}：${label}` : tool,
+            target: dir ? { dir, file: typeof args?.file === 'string' ? args.file : null } : null
+          })
+        }
+      }))
+    }
+    return policies.get(key)
+  }
+  const toolInterceptors = createInterceptorChain({
+    interceptors: [
+      createWriteGuardInterceptor({ policyFor }),
+      // 审阅档下直接执行的提交类外部工具（先例 comfy_submit）在这里留痕，替代零散 console 记账。
+      createWriteAuditInterceptor({ pool: () => serviceLogPool })
+    ]
+  })
   return createToolLoop({
-    turn: createKitToolTurn(),
+    turn: createKitToolTurn({ interceptors: toolInterceptors }),
     selectTools: ({ tools, intent, skill }) => selectTools({ tools, intent, skill }),
     callTool: async (name, args) => {
       if (!session?.runtime) return fail('INVALID_INPUT', '运行时尚未就绪：这一轮工具调用没有执行')
       return session.runtime.callTool(name, args)
     },
-    policy: ({ writeMode }) => createWritePolicy({
-      mode: writeMode,
-      // 落点事实源只有一个：内核写族 ＋ 载体写工具，不在这里复制第三张表。
-      landing: { ...KERNEL_WRITE_CLASS, ...CARRIER_WRITE_CLASS },
-      createProposal: async ({ tool, args = {}, dir }) => {
-        // baseRevision 取模型当次看到的修订号（写工具的 expectedRevision）：重放时按它判 STALE，
-        // 不静默合并。没有修订号的写工具不做这层判定（applyProposal 自会如实说明）。
-        const baseRevision = Number.isSafeInteger(args?.expectedRevision) ? args.expectedRevision : null
-        const label = String(args?.title ?? args?.file ?? args?.name ?? '').slice(0, 80)
-        return proposals.create({
-          tool,
-          args,
-          baseRevision,
-          summary: label ? `${tool}：${label}` : tool,
-          target: dir ? { dir, file: typeof args?.file === 'string' ? args.file : null } : null
-        })
-      }
-    })
+    interceptors: toolInterceptors
   })
 }
 
@@ -481,7 +502,7 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     // 批次37：工具循环接上真链。默认档是会话的 writeMode（review 时写工具只转提案），
     // 这一层不替作者猜档位——review/auto 的真值在会话 JSONL 与界面开关里。
     runtimeOptions: {
-      runner: createAdvisorRunner({ toolLoop: createProjectToolLoop() }),
+      runner: createAdvisorRunner({ toolLoop: createProjectToolLoop({ serviceLogPool }) }),
       // 协议 v3 的 services 面：服务状态变化推给渲染层（起停／崩溃／就绪），右栏不必轮询。
       onServiceEvent: (payload) => sendToRenderer(IPC_PUSH.runtimeServiceEvent, payload),
       // 批次49：同一个池交给运行时——声明与实时状态由它同步，日志由监督器／MCP 客户端写入。

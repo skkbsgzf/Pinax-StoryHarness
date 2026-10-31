@@ -19,6 +19,26 @@ const DEFAULT_TIMEOUT_MS = 15_000
 const MAX_TOOLS = 200
 const REMOTE_NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/u
 const MAX_BACKOFF_MS = 30_000
+/** 写族判定只认这四个布尔声明（批次50）：其余键原样丢弃，避免把服务端的自由字段当证据。 */
+const ANNOTATION_HINT_KEYS = ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint']
+
+/**
+ * 工具注解归一：只留已知布尔键。没有任何可认的声明就返回 null——
+ * 「没声明」与「声明了空对象」在写族判定里是两条路（后者不该冒充有声明）。
+ */
+export function normalizeAnnotations(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const normalized = {}
+  let declared = false
+  for (const key of ANNOTATION_HINT_KEYS) {
+    if (typeof raw[key] === 'boolean') {
+      normalized[key] = raw[key]
+      declared = true
+    }
+  }
+  if (typeof raw.title === 'string' && raw.title.trim()) normalized.title = raw.title.trim()
+  return declared ? normalized : null
+}
 
 /** 暴露给聚合面的名字：`<prefix>.<remote>`，与本地工具的命名家族同一张表。 */
 export function exposedToolName(prefix, remoteName) {
@@ -115,7 +135,7 @@ export async function connectMcpServer(spec = {}, options = {}) {
   function snapshot() {
     return {
       ...state,
-      tools: state.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+      tools: state.tools.map((tool) => ({ name: tool.name, description: tool.description, ...(tool.annotations ? { annotations: { ...tool.annotations } } : {}) })),
       skipped: [...state.skipped],
       stderrTail: [...stderrTail]
     }
@@ -214,10 +234,12 @@ export async function connectMcpServer(spec = {}, options = {}) {
           skipped.push({ name, reason: 'over-limit' })
           continue
         }
+        const annotations = normalizeAnnotations(tool.annotations)
         tools.push({
           name,
           description: String(tool.description ?? tool.title ?? name),
-          inputSchema: tool.inputSchema ?? { type: 'object', properties: {} }
+          inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
+          ...(annotations ? { annotations } : {})
         })
       }
       client = nextClient
