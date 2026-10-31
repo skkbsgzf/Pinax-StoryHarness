@@ -63,16 +63,67 @@ npm run verify:next        # 五段全绿；acceptance 计数维持 39/24 不变
 ## §7 执行方回填（执行完成后填写）
 
 ### 交付清单
-（改了什么文件、每项任务落点、新增测试清单）
+
+**任务① 查找替换**
+- `next/fs/fileService.mjs`：`searchChapters(query,{caseSensitive,maxHits})`——按章节树顺序（卷→卷内文件→平铺章）扫 `正文/`，命中 `{file,chapterTitle,line,snippet,matchIndex}`，±40 字上下文、上限 500、`chaptersScanned` 如实记账；`replaceInCurrentChapter` 走 `service.read`＋`service.write` 与 expectedRevision 闸（STALE 原样拒），`all` 语义照旧，空替换串明确拒绝（否则等于一键清空整章）。新增 `dirRelative` 归一「正文/」前缀（章节树给的 file 路径此前会让读取拼成 `正文/正文/…`）。
+- `next/shell/ipcContract.mjs`：`book:search`／`book:replace-current` 两通道（只读＋单章替换；无全书一键替换）。
+- `next/shell/useBoardData.mjs`：`bookSearch` 状态、`searchBook`／`clearBookSearch`／`replaceInCurrentChapter`／`importBookDocument`／`exportBookFile` 包装；换板／清瞬时提示时收起查找结果。
+- `next/shell/IndexWindow.vue`：章节区标题行查找钮＋Ctrl/Cmd+F（仅章节栏、capture 抢在浏览器查找前）；查找条含输入、命中计数、上一处／下一处、按章分组结果、点击跳转；当前章替换两步确认（第一下只换文案）、未打开章时置灰；Esc／收起钮关条并清结果。
+
+**任务② 快捷词＋取名**
+- `next/shell/quickWords.mjs`（新）：世界书 name/keys/keysSecondary/aliases＋正文 n-gram（引号词×4、英文专名×3、中文 4/3/2 字片段×1，加权 ≥2 才收，滤停用字），目录项 `{id,text,label,summary,sourceKind}`；分组/过滤/最近使用/启用项全在模块内存，关应用即失，不落盘。
+- `next/shell/nameGenerator.mjs`（新）：中文／西式／日式人名（字长、性别）与地名／组织／能力／器物词池；批次内按核心名去重；世界书已有名字标 `duplicate`、不替作者换掉。
+- `next/shell/CarrierPaneHost.vue`：标题行「快捷词」钮→按需弹层（两 tab：快捷词／取名）；快捷词搜索＋角色／设定／正文提取三组，点击插入光标处并收起；取名页一批 8 个、重名行摆灰且插入禁用、复制给提示或如实报失败。
+
+**任务③ 导入导出**
+- `next/shell/exportService.mjs`：`listBookChapters`／`composeBookText`／`composeBookHtml`／`exportBook`——整本按章节树顺序聚合，txt 逐章分隔线、doc 走同一清洗档；`parseDocumentTitle`／`nextChapterName`（NNN 取最大+1、撞名加 -2/-3）。
+- `next/shell/bookText.mjs`（新，见「偏离」）：整本导出的纯文本口径（常量＋命名／标题函数），供渲染层安全引用。
+- `next/shell/main.mjs`：`book:export` 系统 saveDialog＋`book:import-doc` 选 .txt/.md（注入文件服务写 `正文/NNN-标题.md`，expectedRevision 0）。
+- `next/shell/IndexWindow.vue`：标题行「导入文档」钮与「导出整本」菜单（txt／doc）；导入成功后刷新正文树并打开新章。
+
+**任务④ 排版偏好**
+- `next/shell/settings/WritingPrefsSection.vue`：段距（0–2 步 0.1，默认 0.8）、首行缩进（0–2 步 0.5，默认 2）、打字机（默认关）、段落聚焦（默认关）。
+- `next/runtime/appPreferences.mjs`：四字段归一（数值范围/步进、布尔只收布尔；`true` 不被 `Number()` 当成 1）。
+- `next/shell/ipcContract.mjs`：prefsSet 白名单四字段（带了才写）。
+- `next/shell/AppNext.vue`＋`next/shell/styles/next-shell.css`：根节点写 `--writing-font-size/--writing-line-height/--writing-paragraph-spacing/--writing-text-indent` 与 `dataset.writingTypewriter/writingFocus`；`.editor-area` 消费缩进与行高字号，阅读态 `.doc-reading p` 消费段距＋缩进。
+- `next/shell/CarrierPaneHost.vue`：打字机滚动（隐藏镜像量 caret 纵坐标，保持在视口约 40%）、段落聚焦（上下遮罩近似），均按 rAF 节流、只在编辑事件时读一次开关。
+
+**新增／扩展测试**
+- 新：`next/tests/book-search.test.mjs`（5）、`next/tests/quick-words.test.mjs`（7）、`next/tests/index-book-tools.spec.mjs`（6）、`next/tests/writing-tools.spec.mjs`（5）。
+- 扩：`next/tests/export-service.test.mjs`（逐章顺序／txt 与 doc／空书与坏目标／标题解析／NNN 顺延）、`next/tests/app-preferences.test.mjs`（四字段范围/步进/布尔/写读回环/patch）、`next/tests/shell-ui.spec.mjs`（四控件＋CSS 变量＋dataset）。
 
 ### 门禁自报
-（build 体积、verify:next 五段计数）
+
+- `npm run next:build:main && npm run next:build:shell`：通过。主进程 1738.5 kB、外壳 1986.9 kB、preload 4.9 kB、渲染层 1053.9 kB（bundleAssertions 记账）。
+- `npm run verify:next`：五段全绿。
+  - acceptance：M1 空框架＋M2 真载体验收 **20/20**，工具面 **39 / 24**（维持不变）。
+  - `node --test next/tests/*.test.mjs`：**548 通过 / 0 失败**。
+  - `vitest next`：**12 文件 / 179 测试全过**。
+  - `eslint next --max-warnings 0`：0 警告。
+  - bundleAssertions：构建参数、裸导入白名单、无 Express、产物可执行、渲染层薄、技能与载体资产等全部通过（含新增 `f` 渲染层 1053.9 kB）。
+- acceptance.mjs／bundleAssertions.mjs 本批未改动。
 
 ### 偏离
-（与工单不一致处，逐条给理由；没写＝无偏离）
+
+1. `next/shell/useBoardData.mjs`（未在允许清单）：查找/替换/导入/导出必须经数据层落到 IPC 与章节树状态，否则 UI 无法接线；只加状态与薄包装，未改既有保存/修订号语义。
+2. `next/runtime/appPreferences.mjs`（未在清单）：任务④要求四字段写读回环与校验，偏好归一必须在此处加白名单/范围，否则 prefsSet 白名单会丢字段。
+3. `next/shell/AppNext.vue`（未在清单）：任务④要求「`.editor-area` 消费 CSS 变量」与行为开关；变量与 dataset 写在根节点（应用级），只增四变量与两 dataset，不动沉浸渲染与既有主题逻辑。
+4. `next/shell/bookText.mjs`（新、未在清单）：`ipcContract`（渲染层也加载）需要 `BOOK_DIR` 等纯常量；从 `exportService` 直接引会把 `node:fs/node:path` 带进渲染层 bundle（bundleAssertions 首轮实际报 `isAbsolute` 缺失）。纯函数拆出后 `exportService` 重新导出，既有测试与调用方不变。
+5. 查找跳转是「打开命中章」，不滚动到命中行（textarea 无按行滚动接口，见 limitations）；命中列表的每行 `title` 给出文件与行号。
+6. 导入入口放在章节区标题行（导入／导出／新建三枚图标钮并列），并非严格「＋旁」；交互等价。
+7. 空替换串被拒绝：工单未写，但放行等于一键清空当前章，与「逐处手动删改」的收窄相冲突。
 
 ### limitations
-（没做的、没验证的，如实列）
+
+- 正文编辑区是 `<textarea>`，无法逐段排版：段距只作用于阅读态 `.doc-reading p`；编辑态只消费首行缩进（整块缩进）与字号/行高。
+- 段落聚焦用上下两层遮罩近似「非当前段落压暗」，不是真正的逐段透明度；textarea 拿不到段落 DOM，只能到这一档。
+- 打字机滚动靠隐藏镜像测 caret 纵坐标，测试在 jsdom 里用桩测高度验证滚动目标；真实字体/换行下的精度未做端到端实机验证。
+- 全书查找只扫 `正文/`、纯子串（无正则）、上限 500，超出记 `truncated`；大小写开关默认不敏感。
+- 导入只支持系统对话框选单个 `.txt/.md`，不做文件夹批量导入；导入正文原样落盘，不做 md 渲染或章节切分。
+- 整本 doc 导出按纯文本转义＋`<br>` 生成（主进程不引 md 渲染器），不是带标题层级的富文本；与单篇导出共用清洗档。
+- 复制名字在无剪贴板权限的环境会显示「复制失败，请手动选中」，不假装成功（自动化测试用桩验证成功路径）。
+- 未做 dameng-px 真数据端到端（工单划归调度方）。
+
 
 ## §8 调度方验收（Zcode 填，执行方不要动本节）
 

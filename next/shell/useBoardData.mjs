@@ -53,6 +53,10 @@ export function useBoardData(bridge) {
      *  （name:''，IndexWindow 不画卷标题，渲染与旧版平铺列表一致）。chapters 仍是扁平全集，
      *  openChapter／修订号推进／提案采纳都按 file 定位，不依赖分组。 */
     chapterGroups: [],
+    /** 全书查找（批次46B · 任务①）：结果只活在这一格，换板／清空即收。
+     *  hits 是主进程按章节顺序扫出来的原样列表（file／chapterTitle／line／snippet／matchIndex）；
+     *  busy／error 分开记，界面据此摆「查找中」「没命中」「读不到」。 */
+    bookSearch: { query: '', hits: [], total: 0, truncated: false, busy: false, error: null, caseSensitive: false, warnings: [] },
     chapter: null,
     draft: '',
     /** 光标／选区（批次41）：正文面每次 select/keyup 报一次，写作动作据此知道「给哪一段写」。
@@ -378,6 +382,123 @@ export function useBoardData(bridge) {
     await loadChapters({ keep: false })
     const made = state.chapters.find((item) => item.file === saved.value.file)
     if (made) await openChapter(made)
+  }
+
+  /* —— 标杆1 周边工具（批次46B）：查找／替换／导入／整本导出 ————————————————
+   * 四条通道都只碰当前项目：查找只读，替换带修订号走文件服务闸，导入与整本导出是
+   * 主进程的结构动作（系统对话框）。渲染层不拿 fs，也不拼路径。
+   */
+  async function callBookChannel(channel, payload = {}) {
+    if (!bridge?.request) return { ok: false, message: '渲染层未接主进程桥（preload 的 pinaxNext 通道）。' }
+    const result = await bridge.request(channel, payload)
+    if (!result?.ok) return { ok: false, message: result?.error?.message ?? '通道调用失败', code: result?.error?.code, details: result?.error?.details }
+    return { ok: true, value: result.value ?? {} }
+  }
+
+  /** 全书查找：结果进 state.bookSearch；晚到的旧请求不覆盖新一次（按 query 认）。 */
+  let bookSearchCallId = 0
+  async function searchBook(query, { caseSensitive = false } = {}) {
+    const needle = String(query ?? '').trim()
+    if (!needle) {
+      clearBookSearch()
+      return
+    }
+    const callId = ++bookSearchCallId
+    state.bookSearch = { ...state.bookSearch, query: needle, caseSensitive, busy: true, error: null }
+    const result = await callBookChannel(IPC_CHANNELS.bookSearch, { query: needle, caseSensitive })
+    if (callId !== bookSearchCallId) return
+    if (!result.ok) {
+      state.bookSearch = { query: needle, hits: [], total: 0, truncated: false, busy: false, error: result.message, caseSensitive, warnings: [] }
+      return
+    }
+    const value = result.value ?? {}
+    state.bookSearch = {
+      query: needle,
+      hits: Array.isArray(value.hits) ? value.hits : [],
+      total: Number.isSafeInteger(value.total) ? value.total : (value.hits?.length ?? 0),
+      truncated: value.truncated === true,
+      busy: false,
+      error: null,
+      caseSensitive,
+      warnings: Array.isArray(value.warnings) ? value.warnings : []
+    }
+  }
+
+  /** 清空查找（换板／收起查找条）：不碰正文，也不碰打开中的章。 */
+  function clearBookSearch() {
+    bookSearchCallId += 1
+    state.bookSearch = { query: '', hits: [], total: 0, truncated: false, busy: false, error: null, caseSensitive: false, warnings: [] }
+  }
+
+  /**
+   * 当前章替换：范围只有打开中的那一章，expectedRevision 取 chapter.revision。
+   * 成功后重读该章（结果以盘上那份为准），冲突由文件服务如实拒绝，不静默合并。
+   */
+  async function replaceInCurrentChapter(find, replaceText, { all = true } = {}) {
+    if (!state.chapter) {
+      state.error = '先打开一章，再替换。'
+      return { ok: false }
+    }
+    state.busy = true
+    state.error = null
+    const result = await callBookChannel(IPC_CHANNELS.bookReplaceCurrent, {
+      file: state.chapter.file,
+      find,
+      replace: replaceText,
+      expectedRevision: state.chapter.revision,
+      all
+    })
+    state.busy = false
+    if (!result.ok) {
+      state.error = result.message
+      return { ok: false, message: result.message, code: result.code }
+    }
+    const value = result.value ?? {}
+    if (value.changed) {
+      state.notice = `已替换 ${value.replaced} 处`
+      await openChapter({ ...state.chapter, revision: value.revision })
+      // 替换会改变命中位置：查询过就把结果重扫一遍（同一关键词）。
+      if (state.bookSearch.query) await searchBook(state.bookSearch.query, { caseSensitive: state.bookSearch.caseSensitive })
+    } else {
+      state.notice = '这一章里没有可替换的匹配。'
+    }
+    return { ok: true, ...value }
+  }
+
+  /** 单篇导入：主进程选文件 → 正文/NNN-标题.md；成功后重列章节并打开新章。 */
+  async function importBookDocument() {
+    state.busy = true
+    state.error = null
+    state.notice = ''
+    const result = await callBookChannel(IPC_CHANNELS.bookImportDoc, {})
+    state.busy = false
+    if (!result.ok) {
+      state.error = result.message
+      return { ok: false, message: result.message, code: result.code }
+    }
+    const value = result.value ?? {}
+    if (value.canceled) return { ok: true, canceled: true }
+    state.notice = `已导入「${value.title ?? value.file}」`
+    await loadChapters({ keep: false })
+    const made = state.chapters.find((item) => item.file === value.file)
+    if (made) await openChapter(made)
+    return { ok: true, ...value }
+  }
+
+  /** 整本导出：主进程另存为对话框 + exportService.exportBook；渲染层只给格式。 */
+  async function exportBookFile(format = 'txt') {
+    state.busy = true
+    state.error = null
+    const result = await callBookChannel(IPC_CHANNELS.bookExport, { format: format === 'doc' ? 'doc' : 'txt' })
+    state.busy = false
+    if (!result.ok) {
+      state.error = result.message
+      return { ok: false, message: result.message, code: result.code }
+    }
+    const value = result.value ?? {}
+    if (value.canceled) return { ok: true, canceled: true }
+    state.notice = `已导出整本（${value.chapters ?? 0} 章）`
+    return { ok: true, ...value }
   }
 
   /**
@@ -1973,6 +2094,8 @@ export function useBoardData(bridge) {
     state.saveFeedback = null
     state.treeError = null
     state.listWarnings = []
+    // 查找结果是「这一栏这一刻想看的东西」，换板就收（批次46B）。
+    clearBookSearch()
     clearKnowledgeSearch()
   }
 
@@ -1987,6 +2110,11 @@ export function useBoardData(bridge) {
     openChapter,
     save,
     createChapter,
+    searchBook,
+    clearBookSearch,
+    replaceInCurrentChapter,
+    importBookDocument,
+    exportBookFile,
     deleteChapter,
     renameChapter,
     moveChapter,

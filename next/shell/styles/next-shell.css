@@ -700,6 +700,9 @@ body {
      （17px＝--nx-fs-lg、1.9），与 next/runtime/appPreferences.mjs 的 PREFS_DEFAULTS 一致。 */
   font-size: var(--writing-font-size, var(--nx-fs-lg));
   line-height: var(--writing-line-height, 1.9);
+  /* 批次46B 排版偏好：首行缩进由偏好写进 --writing-text-indent（em 刻度）。
+     textarea 没有逐段 margin，段距在这里落不下去——阅读态 .doc-reading 的段落才逐段生效。 */
+  text-indent: var(--writing-text-indent, 2em);
   resize: vertical;
 }
 /* 文档标题（批次33 · P18 头部归一）：头部的展示体与大纲节点标题共用一套字——一行大字，
@@ -1413,3 +1416,254 @@ input.doc-title {
 .nx-review-rewrite { flex: 0 0 auto; padding: 0 6px; color: var(--text-secondary); }
 .nx-review-rewrite:hover { color: var(--archive-ink); }
 .nx-review-error { margin-left: 0; }
+
+/* —— 写作工具（批次46B）：编辑面外壳／段落聚焦遮罩／快捷词与取名弹层 ————————————
+   编辑面外壳只负责给遮罩一块定位基准；textarea 自己仍是那页纸（无框、满幅、留白不变）。
+   段落聚焦用上下遮罩近似（textarea 没有段落 DOM）：遮罩用半透明窗格底色压暗——
+   它压的是「画面」，文字仍看得见轮廓；pointer-events: none 保证点哪里都落回正文。 */
+.nx-editor-wrap {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.nx-editor-wrap > .editor-area {
+  flex: 1 1 auto;
+}
+.nx-focus-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--surface-workbench) 74%, transparent);
+  transition: height 120ms ease;
+}
+.nx-focus-mask.is-top { top: 0; }
+.nx-focus-mask.is-bottom { bottom: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .nx-focus-mask { transition: none; }
+}
+
+/* 快捷词／取名共用一个按需浮现的弹层：入口是文档头的一枚 quiet 钮，
+   弹层贴在它下面右对齐。它是「面板」不是正文（P18 第 5 条豁免），所以有边界与底色。 */
+.nx-tools-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.nx-tools-toggle {
+  padding: 3px 8px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-secondary);
+}
+.nx-tools-toggle:hover,
+.nx-tools-toggle[aria-expanded="true"] { color: var(--archive-ink); }
+.nx-tools {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  max-height: min(60vh, 460px);
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+.nx-tools-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--hairline-soft);
+  padding-bottom: 4px;
+}
+.nx-tools-tab {
+  padding: 2px 8px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-tools-tab:hover { color: var(--archive-ink); }
+.nx-tools-tab.is-active {
+  color: var(--archive-ink);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-radius: var(--nx-radius-xs);
+}
+.nx-tools-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.nx-tools-search {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: var(--nx-fs-2xs);
+}
+.nx-tools-empty {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.nx-tools-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nx-tools-group-label {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-tools-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.nx-tools-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--nx-fs-2xs);
+  cursor: pointer;
+}
+.nx-tools-chip:hover {
+  color: var(--archive-ink);
+  border-color: var(--workbench-selected);
+}
+.nx-tools-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.nx-tools-form .nx-field {
+  flex: 1 1 84px;
+  width: auto;
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 6px;
+  font-size: var(--nx-fs-2xs);
+}
+.nx-tools-roll {
+  flex: none;
+  padding: 2px 8px;
+  font-size: var(--nx-fs-2xs);
+}
+.nx-tools-names {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nx-tools-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: var(--nx-radius-xs);
+}
+.nx-tools-name:hover { background: var(--nav-hover); }
+.nx-tools-name-text {
+  font-family: var(--font-writing);
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink);
+}
+/* 世界书里已有这个名字：摆灰但不藏——作者自己决定用不用（插入禁用，复制仍可）。 */
+.nx-tools-name.is-duplicate .nx-tools-name-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-muted) 60%, transparent);
+}
+.nx-tools-name-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.nx-tools-name-insert,
+.nx-tools-name-copy {
+  padding: 1px 6px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-tools-name-insert:hover:not(:disabled),
+.nx-tools-name-copy:hover { color: var(--archive-ink); }
+
+/* —— 弹层与查找条里的命令钮（批次46B） ————————————————————————
+   它们挂在共享词汇上（按钮门禁要求 control-*），但老版命令钮按 36px 的行高做，
+   塞进 340px 弹层与窄查找条会把整条撑爆。老版规则特异性 (0,4,0) 高于 scoped 的
+   (0,2,0)，所以度量与颜色在这里同特异性覆盖；本文件在 legacy.mjs 里最后加载，胜出。 */
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-toggle, .nx-tools-tab, .nx-tools-roll, .nx-tools-chip,
+  .nx-tools-name-insert, .nx-tools-name-copy,
+  .nx-find-submit, .nx-find-step, .nx-find-close, .nx-find-hit,
+  .nx-find-replace, .nx-export-item
+) {
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: var(--nx-radius-xs);
+  font-size: var(--nx-fs-2xs);
+  font-weight: 500;
+  line-height: 1.6;
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-chip {
+  padding: 3px 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-find-hit {
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--nx-radius-xs);
+  color: var(--text-secondary);
+  background: transparent;
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-toggle, .nx-find-submit, .nx-find-step, .nx-find-close, .nx-find-hit,
+  .nx-export-item
+) {
+  color: var(--text-secondary);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-tab, .nx-tools-name-insert, .nx-tools-name-copy
+) {
+  color: var(--text-muted);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-toggle:hover,
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-toggle[aria-expanded='true'],
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-tab:hover, .nx-tools-name-insert:hover:not(:disabled), .nx-tools-name-copy:hover,
+  .nx-find-submit:hover:not(:disabled), .nx-find-step:hover:not(:disabled), .nx-find-close:hover
+) {
+  color: var(--archive-ink);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-tab.is-active {
+  color: var(--archive-ink);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-chip:hover {
+  color: var(--archive-ink);
+  border-color: var(--workbench-selected);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-find-hit:hover,
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-export-item:hover {
+  background: var(--nav-hover);
+  color: var(--archive-ink);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-find-hit.is-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--archive-ink);
+}

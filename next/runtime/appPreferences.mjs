@@ -17,6 +17,10 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   historyIntervalMinutes：5（默认）或 0–120 的整数，0＝关闭定时快照（D1）；
  *   writingFontSize：17（默认，＝--nx-fs-lg）或 14–22 的整数——正文字号（工单B 写作偏好节）；
  *   writingLineHeight：1.9（默认）或 1.6–2.4、步进 0.05——正文行高（工单B 写作偏好节）；
+ *   writingParagraphSpacing：0.8（默认）或 0–2、步进 0.1——段距（批次46B 排版偏好）；
+ *   writingTextIndent：2（默认）或 0–2、步进 0.5——首行缩进（批次46B 排版偏好）；
+ *   writingTypewriter：false（默认）或 true——打字机滚动开关（批次46B）；
+ *   writingFocusMode：false（默认）或 true——段落聚焦开关（批次46B）；
  *   theme：可选迁移字段（D2）——'light' / 'dark' / null；缺省表示「还没迁过」，
  *     渲染层用老 localStorage 的值兜底并一次性迁入（老前端退役后删掉那条兜底）。
  */
@@ -28,7 +32,13 @@ export const PREFS_DEFAULTS = Object.freeze({
   // 工单B（novel.writing 写作偏好节）：正文字号与行高的应用级默认；
   // 与 next-shell.css 里 .editor-area 的 var() 回退值（--nx-fs-lg / 1.9）保持一致。
   writingFontSize: 17,
-  writingLineHeight: 1.9
+  writingLineHeight: 1.9,
+  // 批次46B（排版偏好补齐）：段距／首行缩进是排版量，打字机滚动／段落聚焦是行为开关。
+  // 默认值与 next-shell.css 的 var() 回退值同一档（0.8em／2em／关／关）。
+  writingParagraphSpacing: 0.8,
+  writingTextIndent: 2,
+  writingTypewriter: false,
+  writingFocusMode: false
 })
 
 const ZOOM_MIN = 0.5
@@ -41,6 +51,14 @@ const WRITING_LINE_HEIGHT_MIN = 1.6
 const WRITING_LINE_HEIGHT_MAX = 2.4
 /** 行高步进 0.05：用百分数判整，绕开 1.9 * 100 = 190.00000000000003 这类浮点尾巴。 */
 const WRITING_LINE_HEIGHT_STEP_HUNDREDTHS = 5
+const WRITING_PARAGRAPH_SPACING_MIN = 0
+const WRITING_PARAGRAPH_SPACING_MAX = 2
+/** 段距步进 0.1：同样按百分数判整（0.8em → 80）。 */
+const WRITING_PARAGRAPH_SPACING_STEP_HUNDREDTHS = 10
+const WRITING_TEXT_INDENT_MIN = 0
+const WRITING_TEXT_INDENT_MAX = 2
+/** 首行缩进步进 0.5：按半 em 判整（0／0.5／1／1.5／2）。 */
+const WRITING_TEXT_INDENT_STEP_TENTHS = 5
 const THEMES = new Set(['light', 'dark'])
 
 export function isValidEndpoint(value) {
@@ -111,6 +129,52 @@ export function normalizePrefs(raw) {
       }
       out.writingLineHeight = hundredths / 100
     }
+  }
+  if ('writingParagraphSpacing' in source) {
+    const value = source.writingParagraphSpacing
+    if (value === null || value === undefined || value === '') {
+      out.writingParagraphSpacing = PREFS_DEFAULTS.writingParagraphSpacing
+    } else {
+      // 布尔不许被 Number() 悄悄转成 0／1——true 不是「1em」。
+      const num = typeof value === 'boolean' ? Number.NaN : Number(value)
+      if (!Number.isFinite(num) || num < WRITING_PARAGRAPH_SPACING_MIN || num > WRITING_PARAGRAPH_SPACING_MAX) {
+        return { ok: false, error: `writingParagraphSpacing 必须在 ${WRITING_PARAGRAPH_SPACING_MIN}–${WRITING_PARAGRAPH_SPACING_MAX}em 之间，收到：${JSON.stringify(value ?? null)}` }
+      }
+      const hundredths = Math.round(num * 100)
+      if (hundredths % WRITING_PARAGRAPH_SPACING_STEP_HUNDREDTHS !== 0) {
+        return { ok: false, error: `writingParagraphSpacing 必须以 0.1 为步进（0.8／0.9／…），收到：${JSON.stringify(value ?? null)}` }
+      }
+      out.writingParagraphSpacing = hundredths / 100
+    }
+  }
+  if ('writingTextIndent' in source) {
+    const value = source.writingTextIndent
+    if (value === null || value === undefined || value === '') {
+      out.writingTextIndent = PREFS_DEFAULTS.writingTextIndent
+    } else {
+      // 同上：true／false 不是缩进量。
+      const num = typeof value === 'boolean' ? Number.NaN : Number(value)
+      if (!Number.isFinite(num) || num < WRITING_TEXT_INDENT_MIN || num > WRITING_TEXT_INDENT_MAX) {
+        return { ok: false, error: `writingTextIndent 必须在 ${WRITING_TEXT_INDENT_MIN}–${WRITING_TEXT_INDENT_MAX}em 之间，收到：${JSON.stringify(value ?? null)}` }
+      }
+      const tenths = Math.round(num * 10)
+      if (tenths % WRITING_TEXT_INDENT_STEP_TENTHS !== 0) {
+        return { ok: false, error: `writingTextIndent 必须以 0.5 为步进（0／0.5／1／1.5／2），收到：${JSON.stringify(value ?? null)}` }
+      }
+      out.writingTextIndent = tenths / 10
+    }
+  }
+  for (const field of ['writingTypewriter', 'writingFocusMode']) {
+    if (!(field in source)) continue
+    const value = source[field]
+    if (value === null || value === undefined || value === '') {
+      out[field] = PREFS_DEFAULTS[field]
+      continue
+    }
+    if (typeof value !== 'boolean') {
+      return { ok: false, error: `${field} 必须是 true／false，收到：${JSON.stringify(value)}` }
+    }
+    out[field] = value
   }
   if ('theme' in source) {
     // D2 主题迁移：null / 空串表示「还没迁过」，渲染层用老 localStorage 的值兜底。

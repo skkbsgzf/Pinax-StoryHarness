@@ -2,6 +2,7 @@ import { fail, ok, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { MENU_TEMPLATE, flattenMenuIds } from './menus.mjs'
 import { RESERVED_SLOTS, orderActivityItems } from './slots.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
+import { BOOK_DIR, BOOK_MAX_CHARS, nextChapterName, parseDocumentTitle } from './bookText.mjs'
 
 /**
  * 渲染进程 ↔ 主进程的唯一通道合同（WP4）。
@@ -83,6 +84,12 @@ export const IPC_CHANNELS = Object.freeze({
   // 批次26：导出当前文档（txt／doc）。真正的「另存为」对话框与写盘都在主进程（注入的 exportFile），
   // 渲染层只递交正文与格式——它拿不到 fs，也决定不了落点。
   documentExport: 'pinax:agent:document:export',
+  // 批次46B：标杆1 的周边工具。查找／替换是只读与单章写（替换仍走 expectedRevision 闸）；
+  // 整本导出与单篇导入都是主进程的结构动作（系统对话框＋写盘），渲染层只给格式与触发。
+  bookSearch: 'pinax:agent:book:search',
+  bookReplaceCurrent: 'pinax:agent:book:replace-current',
+  bookImportDoc: 'pinax:agent:book:import-doc',
+  bookExport: 'pinax:agent:book:export',
   menuInvoke: 'pinax:agent:menu:invoke'
 })
 
@@ -291,7 +298,7 @@ export function shellView(session) {
  *                       `.pinax/settings.json` 的读写器；声明白名单随注册表现取。
  *                       不注入时 settings:* 两条通道如实报缺。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null }) {
   const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
   // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
   // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
@@ -520,6 +527,11 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         // 与上面四个字段同一套「带了才写」语义——漏抄就等于保存链路在 IPC 层断掉。
         if ('writingFontSize' in input) patch.writingFontSize = input.writingFontSize
         if ('writingLineHeight' in input) patch.writingLineHeight = input.writingLineHeight
+        // 批次46B 排版偏好补齐：段距／首行缩进／打字机／段落聚焦同属写作偏好，同一套「带了才写」。
+        if ('writingParagraphSpacing' in input) patch.writingParagraphSpacing = input.writingParagraphSpacing
+        if ('writingTextIndent' in input) patch.writingTextIndent = input.writingTextIndent
+        if ('writingTypewriter' in input) patch.writingTypewriter = input.writingTypewriter
+        if ('writingFocusMode' in input) patch.writingFocusMode = input.writingFocusMode
         if ('theme' in input) patch.theme = input.theme
         const written = await prefs.write(patch)
         if (!written.ok) return written
@@ -589,6 +601,86 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
           // html 是渲染层（mdRender.mjs）渲染好的片段：只给 doc 用，txt 始终写源文本。
           html: typeof input.html === 'string' ? input.html : null
         })
+      }
+      case IPC_CHANNELS.bookSearch: {
+        // 全书查找是只读手：只扫当前项目的 正文/，不换目录、不写盘。
+        if (!session.projectRoot) return fail('INVALID_INPUT', '全书查找需要先打开一个项目')
+        const fileService = session.project?.value?.fileService ?? null
+        if (!fileService?.searchChapters) return fail('INVALID_INPUT', '文件服务未就绪（项目还没完整打开）：这条通道现在只报缺')
+        return fileService.searchChapters(input.query, {
+          caseSensitive: input.caseSensitive === true,
+          maxHits: input.maxHits
+        })
+      }
+      case IPC_CHANNELS.bookReplaceCurrent: {
+        // 单章替换：范围只有 input.file 这一章，仍走 expectedRevision 闸；不做全书一键替换。
+        if (!session.projectRoot) return fail('INVALID_INPUT', '替换需要先打开一个项目')
+        const fileService = session.project?.value?.fileService ?? null
+        if (!fileService?.replaceInChapter) return fail('INVALID_INPUT', '文件服务未就绪（项目还没完整打开）：这条通道现在只报缺')
+        return fileService.replaceInChapter({
+          file: input.file,
+          find: input.find,
+          replace: input.replace,
+          expectedRevision: input.expectedRevision,
+          caseSensitive: input.caseSensitive === true,
+          all: input.all !== false
+        })
+      }
+      case IPC_CHANNELS.bookImportDoc: {
+        // 单篇导入：系统对话框选 .txt／.md → 标题解析 → 正文/NNN-标题.md（expectedRevision 0）。
+        if (!pickBookDocument) return fail('INVALID_INPUT', '导入服务未接入（主进程未注入文档选择器）：这条通道现在只报缺，不写任何文件')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '导入需要先打开一个项目')
+        const fileService = session.project?.value?.fileService ?? null
+        if (!fileService?.write) return fail('INVALID_INPUT', '文件服务未就绪（项目还没完整打开）：这条通道现在只报缺，不写任何文件')
+        const owner = fileService.ownerOfDir?.(BOOK_DIR) ?? null
+        if (!owner) return fail('INVALID_INPUT', `没有板块认领「${BOOK_DIR}/」：这本书没有可导入的章节目录`, { dir: BOOK_DIR })
+        const picked = await pickBookDocument(input)
+        if (!picked?.ok) return picked ?? fail('IO_FAILED', '文档选择失败')
+        const source = picked.value ?? {}
+        if (source.canceled) return ok({ canceled: true, file: null, title: null })
+        const text = typeof source.text === 'string' ? source.text : ''
+        if (!text.length) return fail('INVALID_INPUT', `「${source.name ?? '所选文件'}」是空文件，没有可导入的内容`)
+        if (text.length > BOOK_MAX_CHARS) return fail('INVALID_INPUT', `导入的文档超出上限 ${BOOK_MAX_CHARS} 字符`, { chars: text.length })
+        const listed = await fileService.list({ pluginId: owner, dir: BOOK_DIR })
+        if (!listed.ok) return listed
+        // NNN 顺延要看见卷子目录里的章（卷章两级，批次23）：顶层散章＋一级子目录里的章，
+        // 带相对路径喂给 nextChapterName（它自己取 basename）——只数顶层会在卷结构书里
+        // 导出与卷内重号的顶层 001（调度方验收补刀，评审员发现）。
+        const existing = []
+        for (const entry of listed.value.entries ?? []) {
+          if (entry.kind === 'file' && /\.md$/iu.test(entry.name)) existing.push(entry.name)
+          else if (entry.kind === 'dir') {
+            const nested = await fileService.list({ pluginId: owner, dir: `${BOOK_DIR}/${entry.name}` })
+            if (!nested.ok) continue
+            for (const nestedEntry of nested.value.entries ?? []) {
+              if (nestedEntry.kind === 'file' && /\.md$/iu.test(nestedEntry.name)) existing.push(`${entry.name}/${nestedEntry.name}`)
+            }
+          }
+        }
+        const title = parseDocumentTitle({ text, fileName: source.name })
+        const planned = nextChapterName({ title, existing })
+        const written = await fileService.write({
+          pluginId: owner,
+          dir: BOOK_DIR,
+          file: planned.name,
+          text,
+          expectedRevision: 0
+        })
+        if (!written.ok) return written
+        return ok({
+          canceled: false,
+          file: written.value.relativePath,
+          title: planned.title,
+          revision: written.value.revision,
+          chars: text.length
+        })
+      }
+      case IPC_CHANNELS.bookExport: {
+        // 整本导出：对话框与写盘都在主进程（注入的 exportBookFile），渲染层只给格式。
+        if (!exportBookFile) return fail('INVALID_INPUT', '整本导出未接入（主进程未注入导出器）：这条通道现在只报缺，不写任何文件')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '整本导出需要先打开一个项目')
+        const format = input.format === 'doc' ? 'doc' : 'txt'
+        return exportBookFile({ root: session.projectRoot, format, title: input.title ?? null })
       }
       case IPC_CHANNELS.menuInvoke: {
         if (!menuIds.has(input.id)) {

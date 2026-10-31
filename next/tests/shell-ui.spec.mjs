@@ -878,7 +878,7 @@ describe('偏好与模型面板（批次8①）', () => {
     wrapper.unmount()
   })
 
-  it('写作偏好节（工单B · P14 第一个真内容）：改字号／行高保存时偏好载荷带 writingFontSize／writingLineHeight，根节点变量跟着变', async () => {
+  it('写作偏好节（工单B＋批次46B）：六项保存时偏好载荷带全部 writing* 字段，根节点变量与开关数据集跟着变', async () => {
     const handlers = new Map()
     const save = vi.fn(async (patch) => ({
       ok: true,
@@ -887,14 +887,28 @@ describe('偏好与模型面板（批次8①）', () => {
     handlers.set(IPC_CHANNELS.prefsSet, save)
     const bridge = prefsBridge({
       handlers,
-      prefsValue: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light', writingFontSize: 18, writingLineHeight: 2 }
+      prefsValue: {
+        modelPlaneEndpoint: null,
+        uiZoom: 0.85,
+        theme: 'light',
+        writingFontSize: 18,
+        writingLineHeight: 2,
+        writingParagraphSpacing: 1,
+        writingTextIndent: 1.5,
+        writingTypewriter: true,
+        writingFocusMode: true
+      }
     })
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 挂载即读偏好在根节点写 CSS 变量（.editor-area 的 font-size／line-height 只读这两个变量）。
+    // 挂载即读偏好：排版量写根节点 CSS 变量，两个行为开关写 dataset（不是 CSS 变量）。
     expect(document.documentElement.style.getPropertyValue('--writing-font-size')).toBe('18px')
     expect(document.documentElement.style.getPropertyValue('--writing-line-height')).toBe('2')
+    expect(document.documentElement.style.getPropertyValue('--writing-paragraph-spacing')).toBe('1em')
+    expect(document.documentElement.style.getPropertyValue('--writing-text-indent')).toBe('1.5em')
+    expect(document.documentElement.dataset.writingTypewriter).toBe('on')
+    expect(document.documentElement.dataset.writingFocus).toBe('on')
 
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
     await flushPromises()
@@ -907,22 +921,45 @@ describe('偏好与模型面板（批次8①）', () => {
     expect(panel.exists()).toBe(true)
     const fontInput = panel.find('.writing-font-size')
     const lineInput = panel.find('.writing-line-height')
+    const spacingInput = panel.find('.writing-paragraph-spacing')
     expect(Number(fontInput.element.value)).toBe(18)
     expect(Number(lineInput.element.value)).toBe(2)
+    expect(Number(spacingInput.element.value)).toBe(1)
+    expect(Number(panel.find('.writing-text-indent').element.value)).toBe(1.5)
+    expect(panel.find('.writing-typewriter').element.checked).toBe(true)
+    expect(panel.find('.writing-focus-mode').element.checked).toBe(true)
 
     await fontInput.setValue('20')
     await lineInput.setValue('2.1')
+    await spacingInput.setValue('1.2')
+    await panel.find('.writing-text-indent').setValue('1')
+    await panel.find('.writing-typewriter').setValue(false)
     await panel.find('.control-primary').trigger('click')
     await flushPromises()
 
-    expect(save).toHaveBeenCalledWith({ writingFontSize: 20, writingLineHeight: 2.1 })
+    expect(save).toHaveBeenCalledWith({
+      writingFontSize: 20,
+      writingLineHeight: 2.1,
+      writingParagraphSpacing: 1.2,
+      writingTextIndent: 1,
+      writingTypewriter: false,
+      writingFocusMode: true
+    })
     expect(panel.find('.prefs-state.is-ready').text()).toContain('已保存并生效')
-    // 保存后的生效路径：偏好回写 → 外壳写根节点变量（不重开窗口、不重读偏好）。
+    // 保存后的生效路径：偏好回写 → 外壳写根节点变量／dataset（不重开窗口、不重读偏好）。
     expect(document.documentElement.style.getPropertyValue('--writing-font-size')).toBe('20px')
     expect(document.documentElement.style.getPropertyValue('--writing-line-height')).toBe('2.1')
+    expect(document.documentElement.style.getPropertyValue('--writing-paragraph-spacing')).toBe('1.2em')
+    expect(document.documentElement.style.getPropertyValue('--writing-text-indent')).toBe('1em')
+    expect(document.documentElement.dataset.writingTypewriter).toBe('off')
+    expect(document.documentElement.dataset.writingFocus).toBe('on')
     wrapper.unmount()
     document.documentElement.style.removeProperty('--writing-font-size')
     document.documentElement.style.removeProperty('--writing-line-height')
+    document.documentElement.style.removeProperty('--writing-paragraph-spacing')
+    document.documentElement.style.removeProperty('--writing-text-indent')
+    delete document.documentElement.dataset.writingTypewriter
+    delete document.documentElement.dataset.writingFocus
   })
 
   it('新建项目走「选目录」：未选目录时新建钮禁用，选后载荷带 root 与名字', async () => {

@@ -4,6 +4,13 @@ import { renderMarkdown } from './mdRender.mjs'
 import { resolvePaneView } from './viewRegistry.mjs'
 import { recordCarrierOfPaneId } from './recordCarriers.mjs'
 import { availableWritingActions, referenceLabel } from './writingActions.mjs'
+import {
+  buildQuickWordCatalog,
+  filterQuickWords,
+  groupQuickWords,
+  markQuickWordUsed
+} from './quickWords.mjs'
+import { generateNameSuggestions } from './nameGenerator.mjs'
 import PluginPanelHost from './PluginPanelHost.vue'
 import EntryDetailPanel from './EntryDetailPanel.vue'
 import EntriesBoard from './EntriesBoard.vue'
@@ -111,7 +118,11 @@ const ruleEditing = ref(false)
 
 // 换一份稿子＝换一篇文：编辑态随之收掉（别把上一份的编辑姿势带到下一份上）。
 // 大纲按节点 id 判：把节点上下挪一挪，编辑的还是同一篇，不该把编辑区收走。
-watch(() => props.data.chapter?.file ?? null, () => { chapterEditing.value = false })
+watch(() => props.data.chapter?.file ?? null, () => {
+  chapterEditing.value = false
+  toolsOpen.value = false
+  copiedName.value = ''
+})
 watch(() => props.data.note?.file ?? null, () => { noteEditing.value = false })
 watch(() => props.data.rule?.file ?? null, () => { ruleEditing.value = false })
 watch(() => props.data.outlineDraft?.nodes?.[props.data.outlineNodeIndex]?.id ?? null, () => { outlineEditing.value = false })
@@ -156,7 +167,227 @@ const writingBusy = computed(() => Boolean(props.data.writingBusy))
 const reviewBusy = computed(() => Boolean(props.data.reviewBusy))
 const chapterArea = ref(null)
 
-/** 选区上报：正文面每次 select／keyup／mouseup 报一次，动作带据此决定出哪几个按钮。 */
+/* —— 写作工具（批次46B · 任务②）：快捷词与取名 ——————————————————————
+ * 两页共用一个 hover／点击才浮出的 quiet 弹层（P18 第 2 条：常驻按钮行取消）。
+ * 词表是派生物：世界书条目＋当前正文 n-gram（quickWords.mjs），启用与最近使用只活在模块内存里，
+ * 不落盘、不进偏好、不进 .pinax/——关掉应用就没了，这是有意的。
+ * 取名是纯本地名字池（nameGenerator.mjs）：批次内不重名，与世界书重名的摆灰但不替作者换掉。
+ */
+const toolsOpen = ref(false)
+const toolsTab = ref('words')
+const quickQuery = ref('')
+const quickCatalog = ref([])
+const nameForm = ref({ category: 'person', language: 'chinese', length: 'three', gender: 'neutral' })
+const nameBatch = ref([])
+const copiedName = ref('')
+let copiedTimer = null
+
+const quickGroups = computed(() => groupQuickWords(filterQuickWords(quickCatalog.value, quickQuery.value)))
+const quickGroupsVisible = computed(() => ['character', 'setting', 'extracted']
+  .map((key) => ({ key, label: quickGroupLabel(key), items: quickGroups.value[key] ?? [] }))
+  .filter((group) => group.items.length))
+
+function quickGroupLabel(key) {
+  if (key === 'character') return '角色'
+  if (key === 'setting') return '设定'
+  return '正文提取'
+}
+
+/** 打开弹层时现抽一次词表（正文可能刚改过）；开着的时候不随每次按键重算。 */
+function refreshQuickWords() {
+  quickCatalog.value = buildQuickWordCatalog({
+    entries: Array.isArray(props.data.entries) ? props.data.entries : [],
+    text: String(props.data.draft ?? ''),
+    limit: 16
+  })
+}
+
+function toggleTools(tab = 'words') {
+  if (toolsOpen.value && toolsTab.value === tab) {
+    toolsOpen.value = false
+    return
+  }
+  toolsOpen.value = true
+  toolsTab.value = tab
+  if (tab === 'words') refreshQuickWords()
+  else if (!nameBatch.value.length) generateNames()
+}
+
+function closeTools() {
+  toolsOpen.value = false
+}
+
+function generateNames() {
+  const form = nameForm.value
+  nameBatch.value = generateNameSuggestions({
+    entries: Array.isArray(props.data.entries) ? props.data.entries : [],
+    count: 8,
+    category: form.category,
+    language: form.language,
+    length: form.length,
+    gender: form.gender
+  })
+  copiedName.value = ''
+}
+
+/**
+ * 插入到正文光标处：阅读态先切编辑态，再按 textarea 的选区落字。
+ * 落完把光标移到片段之后——作者接着往下写，不用再点一下。
+ */
+async function insertAtCaret(snippet) {
+  const value = String(snippet ?? '')
+  if (!value) return
+  if (!chapterEditing.value) chapterEditing.value = true
+  await nextTick()
+  const el = chapterArea.value
+  const current = String(props.data.draft ?? '')
+  const start = typeof el?.selectionStart === 'number' ? el.selectionStart : current.length
+  const end = typeof el?.selectionEnd === 'number' ? el.selectionEnd : start
+  const next = current.slice(0, start) + value + current.slice(end)
+  props.data.setDraft(next)
+  await nextTick()
+  const caret = start + value.length
+  el?.focus?.()
+  el?.setSelectionRange?.(caret, caret)
+  props.data.setDraftSelection?.(caret, caret)
+  closeTools()
+}
+
+function useQuickWord(item) {
+  markQuickWordUsed(item?.id)
+  void insertAtCaret(item?.text ?? '')
+}
+
+async function copyName(name) {
+  const text = String(name ?? '')
+  if (!text) return
+  try {
+    await globalThis.navigator?.clipboard?.writeText?.(text)
+  } catch {
+    // 没有剪贴板权限（或测试环境）：下面的提示照旧给，不假装复制成功。
+    copiedName.value = '复制失败，请手动选中'
+    return
+  }
+  copiedName.value = `已复制「${text}」`
+  if (copiedTimer) clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => {
+    copiedName.value = ''
+    copiedTimer = null
+  }, 1600)
+}
+
+function onToolsKeydown(event) {
+  if (event.key !== 'Escape' || !toolsOpen.value) return
+  event.preventDefault()
+  closeTools()
+}
+
+/* —— 编辑器行为（批次46B · 任务④）：打字机滚动与段落聚焦 ——————————————————
+ * 偏好由 AppNext 写到根节点 data 属性上（dataset.writingTypewriter／writingFocus），
+ * 这里只在编辑事件发生时读一次——行为开关不是响应式的常驻循环。
+ * textarea 拿不到「当前段落的 DOM」，段落聚焦用上下两层遮罩近似：光标所在行亮，其余压暗。
+ * 打字机滚动要算光标的纵坐标，用一个与 textarea 同度量的隐藏镜像来量（textarea 自身没有 caret 坐标 API）。
+ */
+const focusModeActive = ref(false)
+const focusBand = ref({ top: 0, bottom: 0 })
+let effectFrame = 0
+
+function datasetFlag(name) {
+  return globalThis.document?.documentElement?.dataset?.[name] === 'on'
+}
+
+function caretTopIn(el) {
+  if (typeof globalThis.document?.createElement !== 'function') return 0
+  const mirror = globalThis.document.createElement('div')
+  const computed = globalThis.getComputedStyle?.(el)
+  mirror.style.position = 'absolute'
+  mirror.style.visibility = 'hidden'
+  mirror.style.pointerEvents = 'none'
+  mirror.style.top = '0'
+  mirror.style.left = '-9999px'
+  mirror.style.width = `${el.clientWidth}px`
+  mirror.style.height = 'auto'
+  if (computed) {
+    const props = ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing',
+      'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+      'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+      'box-sizing', 'text-indent', 'tab-size']
+    for (const name of props) {
+      const value = computed.getPropertyValue(name)
+      if (value) mirror.style.setProperty(name, value)
+    }
+  }
+  mirror.style.whiteSpace = 'pre-wrap'
+  mirror.style.wordWrap = 'break-word'
+  mirror.style.overflowWrap = 'break-word'
+  mirror.textContent = `${el.value.slice(0, el.selectionStart ?? 0)}\u200b`
+  globalThis.document.body.appendChild(mirror)
+  const top = mirror.getBoundingClientRect().height
+  mirror.remove()
+  return top
+}
+
+function applyEditorEffects(el) {
+  focusModeActive.value = datasetFlag('writingFocus')
+  if (!el || !editorFocused.value) {
+    focusBand.value = { top: 0, bottom: 0 }
+    return
+  }
+  const caretTop = caretTopIn(el)
+  const line = Number.parseFloat(globalThis.getComputedStyle?.(el)?.lineHeight ?? '') || 30
+  if (datasetFlag('writingTypewriter')) {
+    const target = Math.max(0, caretTop - el.clientHeight * 0.4)
+    if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target
+  }
+  if (focusModeActive.value) {
+    const viewTop = caretTop - el.scrollTop
+    focusBand.value = {
+      top: Math.max(0, viewTop - line * 0.9),
+      bottom: Math.max(0, el.clientHeight - viewTop - line * 1.6)
+    }
+  } else {
+    focusBand.value = { top: 0, bottom: 0 }
+  }
+}
+
+function scheduleEditorEffects(el) {
+  if (effectFrame) return
+  const schedule = typeof globalThis.requestAnimationFrame === 'function'
+    ? globalThis.requestAnimationFrame.bind(globalThis)
+    : (fn) => globalThis.setTimeout(fn, 16)
+  effectFrame = schedule(() => {
+    effectFrame = 0
+    applyEditorEffects(el ?? chapterArea.value)
+  })
+}
+
+function onEditorFocus(event) {
+  editorFocused.value = true
+  scheduleEditorEffects(event?.target)
+}
+
+function onEditorBlur() {
+  editorFocused.value = false
+  focusBand.value = { top: 0, bottom: 0 }
+}
+
+function onEditorInput(event) {
+  props.data.setDraft(event.target.value)
+  scheduleEditorEffects(event.target)
+}
+
+function onEditorSelect(event) {
+  onDraftSelect(event)
+  scheduleEditorEffects(event?.target)
+}
+
+watch(() => props.data.draft, () => {
+  if (!editorFocused.value) return
+  // 落位／插入也会改 draft：光标位置随下一帧的选区一起量，不在这里抢滚动。
+  if (toolsOpen.value && toolsTab.value === 'words') return
+  scheduleEditorEffects()
+})
+
 function onDraftSelect(event) {
   const el = event?.target
   if (!el || typeof el.selectionStart !== 'number') return
@@ -369,6 +600,12 @@ watch(() => props.data.saveFeedback, (feedback) => {
 
 onBeforeUnmount(() => {
   if (chipTimer) clearTimeout(chipTimer)
+  if (copiedTimer) clearTimeout(copiedTimer)
+  if (effectFrame) {
+    if (typeof globalThis.cancelAnimationFrame === 'function') globalThis.cancelAnimationFrame(effectFrame)
+    else globalThis.clearTimeout(effectFrame)
+    effectFrame = 0
+  }
 })
 
 /** 编辑器聚焦时的 Ctrl+S／Cmd+S：只认编辑区里的事件，别处按快捷键不抢。 */
@@ -476,6 +713,129 @@ function actOnSaveChip() {
               <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
               <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
             </span>
+            <!-- 写作工具（批次46B）：快捷词与取名共用一个按需浮现的弹层，不占常驻按钮行。 -->
+            <span class="nx-tools-anchor" @keydown="onToolsKeydown">
+              <button
+                type="button"
+                class="control-quiet nx-tools-toggle"
+                data-test="writing-tools-toggle"
+                :aria-expanded="toolsOpen.toString()"
+                @mousedown.prevent
+                @click="toggleTools('words')"
+              >快捷词</button>
+              <div v-if="toolsOpen" class="nx-tools" data-test="writing-tools" role="dialog" aria-label="写作工具">
+                <div class="nx-tools-tabs">
+                  <button
+                    type="button"
+                    class="control-quiet nx-tools-tab"
+                    :class="{ 'is-active': toolsTab === 'words' }"
+                    data-test="tools-tab-words"
+                    @mousedown.prevent
+                    @click="toolsTab = 'words'; refreshQuickWords()"
+                  >快捷词</button>
+                  <button
+                    type="button"
+                    class="control-quiet nx-tools-tab"
+                    :class="{ 'is-active': toolsTab === 'names' }"
+                    data-test="tools-tab-names"
+                    @mousedown.prevent
+                    @click="toolsTab = 'names'; if (!nameBatch.length) generateNames()"
+                  >取名</button>
+                </div>
+                <div v-if="toolsTab === 'words'" class="nx-tools-body">
+                  <input
+                    v-model="quickQuery"
+                    class="nx-field is-tiny nx-tools-search"
+                    data-test="quick-word-search"
+                    placeholder="搜索快捷词"
+                    aria-label="搜索快捷词"
+                    spellcheck="false"
+                  >
+                  <p v-if="!quickGroupsVisible.length" class="nx-tools-empty">还没有可用的词：世界书条目，以及正文里出现两次以上的词，会自动收进来。</p>
+                  <template v-else>
+                    <div
+                      v-for="group in quickGroupsVisible"
+                      :key="group.key"
+                      class="nx-tools-group"
+                      :data-test="`quick-group-${group.key}`"
+                    >
+                      <p class="nx-tools-group-label">{{ group.label }}</p>
+                      <div class="nx-tools-chips">
+                        <button
+                          v-for="item in group.items"
+                          :key="item.id"
+                          type="button"
+                          class="control-quiet nx-tools-chip"
+                          :title="item.summary"
+                          data-test="quick-word"
+                          @mousedown.prevent
+                          @click="useQuickWord(item)"
+                        >{{ item.text }}</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <div v-else class="nx-tools-body">
+                  <div class="nx-tools-form">
+                    <select v-model="nameForm.category" class="nx-field is-tiny" aria-label="取名类别" data-test="name-category">
+                      <option value="person">人名</option>
+                      <option value="place">地名</option>
+                      <option value="organization">组织</option>
+                      <option value="ability">能力</option>
+                      <option value="item">器物</option>
+                    </select>
+                    <template v-if="nameForm.category === 'person'">
+                      <select v-model="nameForm.language" class="nx-field is-tiny" aria-label="取名语言" data-test="name-language">
+                        <option value="chinese">中文</option>
+                        <option value="western">西式</option>
+                        <option value="japanese">日式</option>
+                      </select>
+                      <select v-model="nameForm.length" class="nx-field is-tiny" aria-label="名字长度" data-test="name-length">
+                        <option value="two">双字</option>
+                        <option value="three">三字</option>
+                        <option value="multi">多字</option>
+                      </select>
+                      <select v-model="nameForm.gender" class="nx-field is-tiny" aria-label="取名性别" data-test="name-gender">
+                        <option value="neutral">中性</option>
+                        <option value="male">男</option>
+                        <option value="female">女</option>
+                      </select>
+                    </template>
+                    <button type="button" class="control-quiet nx-tools-roll" data-test="names-generate" @mousedown.prevent @click="generateNames">换一批</button>
+                  </div>
+                  <ul class="nx-tools-names">
+                    <li
+                      v-for="item in nameBatch"
+                      :key="item.name"
+                      class="nx-tools-name"
+                      :class="{ 'is-duplicate': item.duplicate }"
+                      data-test="name-suggestion"
+                    >
+                      <span class="nx-tools-name-text">{{ item.name }}</span>
+                      <span class="nx-tools-name-actions">
+                        <button
+                          type="button"
+                          class="control-quiet nx-tools-name-insert"
+                          :disabled="item.duplicate"
+                          :title="item.duplicate ? '世界书里已有这个名字' : '插入到光标处'"
+                          data-test="name-insert"
+                          @mousedown.prevent
+                          @click="insertAtCaret(item.name)"
+                        >插入</button>
+                        <button
+                          type="button"
+                          class="control-quiet nx-tools-name-copy"
+                          data-test="name-copy"
+                          @mousedown.prevent
+                          @click="copyName(item.name)"
+                        >复制</button>
+                      </span>
+                    </li>
+                  </ul>
+                  <p v-if="copiedName" class="nx-tools-empty" data-test="name-copied">{{ copiedName }}</p>
+                </div>
+              </div>
+            </span>
             <!-- 阅读态／编辑态（批次43）：默认是读（md 渲染过的一篇文），要改就按这一枚「编辑」。 -->
             <button v-if="!chapterEditing" type="button" class="control-secondary chapter-edit" data-test="chapter-edit" @click="chapterEditing = true">编辑</button>
             <button v-else type="button" class="control-quiet chapter-cancel" data-test="chapter-cancel" @click="chapterEditing = false">取消</button>
@@ -483,20 +843,36 @@ function actOnSaveChip() {
         </div>
         <!-- 阅读态（批次43）：正文是 md 稿子，默认渲染出来（标题／粗体／列表…），不再是裸源码。 -->
         <div v-if="!chapterEditing" class="entry-text nx-rendered-md doc-reading chapter-reading" data-test="chapter-rendered" v-html="chapterHtml" />
-        <textarea
-          v-else
-          ref="chapterArea"
-          class="editor-area"
-          :value="data.draft"
-          spellcheck="false"
-          aria-label="正文编辑器"
-          @input="data.setDraft($event.target.value)"
-          @focus="editorFocused = true"
-          @blur="editorFocused = false"
-          @select="onDraftSelect"
-          @keyup="onDraftSelect"
-          @mouseup="onDraftSelect"
-        />
+        <div v-else class="nx-editor-wrap">
+          <textarea
+            ref="chapterArea"
+            class="editor-area"
+            :value="data.draft"
+            spellcheck="false"
+            aria-label="正文编辑器"
+            @input="onEditorInput"
+            @focus="onEditorFocus"
+            @blur="onEditorBlur"
+            @select="onEditorSelect"
+            @keyup="onEditorSelect"
+            @mouseup="onEditorSelect"
+            @scroll="scheduleEditorEffects(chapterArea)"
+          />
+          <!-- 段落聚焦（批次46B）：textarea 拿不到段落 DOM，用上下两层遮罩近似——
+               光标所在行亮着，其余压暗；遮罩不吃指针事件，点哪里都落回正文。 -->
+          <div
+            v-if="focusModeActive && editorFocused"
+            class="nx-focus-mask is-top"
+            :style="{ height: `${focusBand.top}px` }"
+            aria-hidden="true"
+          />
+          <div
+            v-if="focusModeActive && editorFocused"
+            class="nx-focus-mask is-bottom"
+            :style="{ height: `${focusBand.bottom}px` }"
+            aria-hidden="true"
+          />
+        </div>
         <!-- 写作动作带（批次41）：正文一聚焦就浮现，离开就收起。按钮不抢焦点（mousedown.prevent），
              所以「选中一段 → 按改写」之后光标与选区都还在原处。 -->
         <div v-if="writingBarVisible" class="nx-writing-bar" data-test="writing-bar">
@@ -1322,6 +1698,13 @@ function actOnSaveChip() {
 }
 .nx-rendered-md :deep(p) {
   margin: 0 0 0.9em;
+}
+/* 批次46B 排版偏好：阅读态才是逐段生效的载体（textarea 没有逐段 margin）。
+   段距／首行缩进读根节点的 --writing-* 变量；没写偏好时回退到默认（0.8em／2em）。
+   选择器比上面那条多一档（.doc-reading 前缀），所以它在文档里覆盖正文通用的 0.9em。 */
+.doc-reading :deep(p) {
+  margin: 0 0 var(--writing-paragraph-spacing, 0.8em);
+  text-indent: var(--writing-text-indent, 2em);
 }
 .nx-rendered-md :deep(h1),
 .nx-rendered-md :deep(h2),

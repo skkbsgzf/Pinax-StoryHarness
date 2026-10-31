@@ -7,7 +7,8 @@ import { createAppPreferences, normalizePrefs, PREFS_DEFAULTS } from '../runtime
 
 /**
  * 应用级偏好存储（批次8①＋D1 历史间隔＋工单B 写作偏好）。三条合同：
- *   1) 字段只认 modelPlaneEndpoint / uiZoom / historyIntervalMinutes / writingFontSize / writingLineHeight，
+ *   1) 字段只认 modelPlaneEndpoint / uiZoom / historyIntervalMinutes / writingFontSize / writingLineHeight /
+ *      writingParagraphSpacing / writingTextIndent / writingTypewriter / writingFocusMode，
  *      值域在校验层挡住（写坏文件＝外壳起不来的事不能发生）；
  *   2) 文件损坏/缺失按默认值继续，不崩；
  *   3) 写入是原子的（复用 fs/atomicWrite），落盘内容可被下一次 read 读回。
@@ -39,7 +40,12 @@ test('写入往返：合法端点与缩放落盘并可读回；尾部斜杠归�
     historyIntervalMinutes: 5,
     // 工单B：写作偏好未写时按默认值补全（17／1.9）。
     writingFontSize: 17,
-    writingLineHeight: 1.9
+    writingLineHeight: 1.9,
+    // 批次46B：排版偏好与行为开关同样按默认补全（0.8em／2em／关／关）。
+    writingParagraphSpacing: 0.8,
+    writingTextIndent: 2,
+    writingTypewriter: false,
+    writingFocusMode: false
   })
   const onDisk = JSON.parse(await readFile(file, 'utf-8'))
   assert.equal(onDisk.modelPlaneEndpoint, 'http://127.0.0.1:8461')
@@ -157,6 +163,81 @@ test('写作偏好（工单B）：字号 14–22 整数、行高 1.6–2.4 步�
     assert.equal(rejected.ok, false)
     assert.match(String(rejected.error?.message), /14–22/)
     assert.equal((await prefs.read()).value.writingFontSize, 20)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('排版偏好（批次46B）：段距 0–2 步进 0.1、缩进 0–2 步进 0.5、两个开关是布尔，可往返', async () => {
+  assert.equal(PREFS_DEFAULTS.writingParagraphSpacing, 0.8)
+  assert.equal(PREFS_DEFAULTS.writingTextIndent, 2)
+  assert.equal(PREFS_DEFAULTS.writingTypewriter, false)
+  assert.equal(PREFS_DEFAULTS.writingFocusMode, false)
+  // null／空串＝回默认（与字号／行高同一口径）。
+  const empty = normalizePrefs({ writingParagraphSpacing: null, writingTextIndent: '', writingTypewriter: null, writingFocusMode: '' })
+  assert.equal(empty.ok, true)
+  assert.deepEqual(
+    { spacing: empty.value.writingParagraphSpacing, indent: empty.value.writingTextIndent, typewriter: empty.value.writingTypewriter, focus: empty.value.writingFocusMode },
+    { spacing: 0.8, indent: 2, typewriter: false, focus: false }
+  )
+
+  // 段距：0／0.8／1.5／2 合法（步进 0.1）；越界与非步进值一律拒。
+  for (const spacing of [0, 0.8, 1.5, 2, '1.2']) {
+    assert.equal(normalizePrefs({ writingParagraphSpacing: spacing }).value.writingParagraphSpacing, Number(spacing), `应接受段距 ${spacing}`)
+  }
+  for (const bad of [-0.1, 2.1, 0.85, '大', true]) {
+    assert.equal(normalizePrefs({ writingParagraphSpacing: bad }).ok, false, `应拒绝段距 ${JSON.stringify(bad)}`)
+  }
+  // 缩进：0／0.5／1.5／2 合法（步进 0.5，0＝不缩进）；越界与非步进值一律拒。
+  for (const indent of [0, 0.5, 1.5, 2, '1']) {
+    assert.equal(normalizePrefs({ writingTextIndent: indent }).value.writingTextIndent, Number(indent), `应接受缩进 ${indent}`)
+  }
+  for (const bad of [-0.5, 2.5, 0.3, '大', true]) {
+    assert.equal(normalizePrefs({ writingTextIndent: bad }).ok, false, `应拒绝缩进 ${JSON.stringify(bad)}`)
+  }
+  // 开关只收布尔：字符串和数字都不算（避免 'false' 被当真）。
+  for (const field of ['writingTypewriter', 'writingFocusMode']) {
+    assert.equal(normalizePrefs({ [field]: true }).value[field], true)
+    assert.equal(normalizePrefs({ [field]: false }).value[field], false)
+    for (const bad of ['true', 'false', 1, 0]) {
+      assert.equal(normalizePrefs({ [field]: bad }).ok, false, `${field} 应拒绝 ${JSON.stringify(bad)}`)
+    }
+  }
+
+  const dir = await mkdtemp(join(tmpdir(), 'pinax-prefs-'))
+  const file = join(dir, 'next-preferences.json')
+  try {
+    const prefs = createAppPreferences({ file })
+    const written = await prefs.write({
+      writingParagraphSpacing: 1.4,
+      writingTextIndent: 0,
+      writingTypewriter: true,
+      writingFocusMode: true
+    })
+    assert.equal(written.ok, true, JSON.stringify(written.error ?? {}))
+    assert.equal(written.value.writingParagraphSpacing, 1.4)
+    assert.equal(written.value.writingTextIndent, 0)
+    assert.equal(written.value.writingTypewriter, true)
+    assert.equal(written.value.writingFocusMode, true)
+    // patch 语义：没写到的字号／行高仍是默认值。
+    assert.equal(written.value.writingFontSize, 17)
+    assert.equal(written.value.writingLineHeight, 1.9)
+
+    const reread = await createAppPreferences({ file }).read()
+    assert.equal(reread.value.writingParagraphSpacing, 1.4)
+    assert.equal(reread.value.writingTextIndent, 0)
+    assert.equal(reread.value.writingTypewriter, true)
+    assert.equal(reread.value.writingFocusMode, true)
+    const onDisk = JSON.parse(await readFile(file, 'utf-8'))
+    assert.equal(onDisk.writingParagraphSpacing, 1.4)
+    assert.equal(onDisk.writingTextIndent, 0)
+    assert.equal(onDisk.writingTypewriter, true)
+    assert.equal(onDisk.writingFocusMode, true)
+
+    // 越界写入被拒且不污染已存值。
+    const rejected = await prefs.write({ writingParagraphSpacing: 3 })
+    assert.equal(rejected.ok, false)
+    assert.equal((await prefs.read()).value.writingParagraphSpacing, 1.4)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

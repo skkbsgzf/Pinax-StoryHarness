@@ -88,10 +88,20 @@ const dragging = ref(null)
 const extraEnabled = ref([])
 /** 明暗主题：键与 class 契约跟老前端 themeStore 一致，两边共用一份偏好。 */
 const scheme = ref(readScheme())
-/** 写作偏好（工单B）：字号／行高的兜底值与 appPreferences.PREFS_DEFAULTS 一致（17／1.9）。 */
+/** 写作偏好（工单B）：字号／行高的兜底值与 appPreferences.PREFS_DEFAULTS 一致（17／1.9）。
+ *  批次46B 补齐段距／首行缩进（0.8／2）与两个行为开关（打字机／段落聚焦，默认关）。 */
 const WRITING_FONT_SIZE_DEFAULT = 17
 const WRITING_LINE_HEIGHT_DEFAULT = 1.9
-const writingPrefs = ref({ fontSize: WRITING_FONT_SIZE_DEFAULT, lineHeight: WRITING_LINE_HEIGHT_DEFAULT })
+const WRITING_PARAGRAPH_SPACING_DEFAULT = 0.8
+const WRITING_TEXT_INDENT_DEFAULT = 2
+const writingPrefs = ref({
+  fontSize: WRITING_FONT_SIZE_DEFAULT,
+  lineHeight: WRITING_LINE_HEIGHT_DEFAULT,
+  paragraphSpacing: WRITING_PARAGRAPH_SPACING_DEFAULT,
+  textIndent: WRITING_TEXT_INDENT_DEFAULT,
+  typewriter: false,
+  focusMode: false
+})
 
 /**
  * 多形态打开（协议 v1.2 P18–P21 → M2.5-C 四轴）：宿主一份工作区状态，AppNext 只订阅快照。
@@ -280,7 +290,11 @@ const carrierSectionComponents = computed(() => ({
     props: {
       bridge: props.bridge,
       fontSize: writingPrefs.value.fontSize,
-      lineHeight: writingPrefs.value.lineHeight
+      lineHeight: writingPrefs.value.lineHeight,
+      paragraphSpacing: writingPrefs.value.paragraphSpacing,
+      textIndent: writingPrefs.value.textIndent,
+      typewriter: writingPrefs.value.typewriter,
+      focusMode: writingPrefs.value.focusMode
     }
   }
 }))
@@ -1350,13 +1364,21 @@ async function syncThemeFromPrefs() {
  * 没写变量时用 var() 回退（--nx-fs-lg／1.9）——首帧与「桥不在」都不空。
  * 变量名与 .editor-area 的 var() 一一对应，改一边必须改另一边（视觉/界面测试钉着）。
  */
-function applyWritingPrefs({ fontSize, lineHeight } = {}) {
+function applyWritingPrefs({ fontSize, lineHeight, paragraphSpacing, textIndent, typewriter, focusMode } = {}) {
   const root = globalThis.document?.documentElement
   if (!root?.style?.setProperty) return
   const size = Number.isFinite(fontSize) ? fontSize : WRITING_FONT_SIZE_DEFAULT
   const height = Number.isFinite(lineHeight) ? lineHeight : WRITING_LINE_HEIGHT_DEFAULT
+  const spacing = Number.isFinite(paragraphSpacing) ? paragraphSpacing : WRITING_PARAGRAPH_SPACING_DEFAULT
+  const indent = Number.isFinite(textIndent) ? textIndent : WRITING_TEXT_INDENT_DEFAULT
   root.style.setProperty('--writing-font-size', `${size}px`)
   root.style.setProperty('--writing-line-height', String(height))
+  root.style.setProperty('--writing-paragraph-spacing', `${spacing}em`)
+  root.style.setProperty('--writing-text-indent', `${indent}em`)
+  // 两个行为开关走 dataset（不是 CSS 变量）：打字机滚动与段落聚焦由编辑面读它决定做不做事；
+  // CSS 侧也用 [data-writing-focus="on"] 挑段落变暗的规则。
+  root.dataset.writingTypewriter = typewriter === true ? 'on' : 'off'
+  root.dataset.writingFocus = focusMode === true ? 'on' : 'off'
 }
 
 /** 挂载时读一次偏好（应用级、不随项目走），把写作偏好落到根节点。读不到就保留默认值。 */
@@ -1367,7 +1389,11 @@ async function loadWritingPrefs() {
     if (!stored?.ok) return
     writingPrefs.value = {
       fontSize: Number.isFinite(stored.value?.writingFontSize) ? stored.value.writingFontSize : WRITING_FONT_SIZE_DEFAULT,
-      lineHeight: Number.isFinite(stored.value?.writingLineHeight) ? stored.value.writingLineHeight : WRITING_LINE_HEIGHT_DEFAULT
+      lineHeight: Number.isFinite(stored.value?.writingLineHeight) ? stored.value.writingLineHeight : WRITING_LINE_HEIGHT_DEFAULT,
+      paragraphSpacing: Number.isFinite(stored.value?.writingParagraphSpacing) ? stored.value.writingParagraphSpacing : WRITING_PARAGRAPH_SPACING_DEFAULT,
+      textIndent: Number.isFinite(stored.value?.writingTextIndent) ? stored.value.writingTextIndent : WRITING_TEXT_INDENT_DEFAULT,
+      typewriter: stored.value?.writingTypewriter === true,
+      focusMode: stored.value?.writingFocusMode === true
     }
     applyWritingPrefs(writingPrefs.value)
   } catch {
@@ -1379,9 +1405,15 @@ async function loadWritingPrefs() {
 function applyWritingPrefsFromSection(value) {
   const fontSize = Number(value?.fontSize)
   const lineHeight = Number(value?.lineHeight)
+  const paragraphSpacing = Number(value?.paragraphSpacing)
+  const textIndent = Number(value?.textIndent)
   writingPrefs.value = {
     fontSize: Number.isFinite(fontSize) ? fontSize : WRITING_FONT_SIZE_DEFAULT,
-    lineHeight: Number.isFinite(lineHeight) ? lineHeight : WRITING_LINE_HEIGHT_DEFAULT
+    lineHeight: Number.isFinite(lineHeight) ? lineHeight : WRITING_LINE_HEIGHT_DEFAULT,
+    paragraphSpacing: Number.isFinite(paragraphSpacing) ? paragraphSpacing : WRITING_PARAGRAPH_SPACING_DEFAULT,
+    textIndent: Number.isFinite(textIndent) ? textIndent : WRITING_TEXT_INDENT_DEFAULT,
+    typewriter: value?.typewriter === true,
+    focusMode: value?.focusMode === true
   }
   applyWritingPrefs(writingPrefs.value)
 }

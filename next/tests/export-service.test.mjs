@@ -1,13 +1,19 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import {
   EXPORT_FORMATS,
   buildDocumentHtml,
+  chapterSeparator,
+  composeBookText,
+  exportBook,
   exportDocument,
+  listBookChapters,
+  nextChapterName,
+  parseDocumentTitle,
   resolveExportTarget
 } from '../shell/exportService.mjs'
 import { renderMarkdown } from '../shell/mdRender.mjs'
@@ -153,6 +159,132 @@ test('buildDocumentHtml：标题转义、空标题回落、换行进 <br>', () =
   assert.match(html, /第一行<br>第二行/u)
   const untitled = buildDocumentHtml({ content: 'x' })
   assert.match(untitled, /<title>导出文档<\/title>/u)
+})
+
+/* —— 批次46B · 任务③：整本导出与单篇导入 ————————————————————————————— */
+
+async function seedBook(root) {
+  await mkdir(join(root, '正文', '甲卷'), { recursive: true })
+  await mkdir(join(root, '正文', '乙卷'), { recursive: true })
+  await writeFile(join(root, '正文', '甲卷', '第001章-雨夜.md'), '雨夜。\n', 'utf-8')
+  await writeFile(join(root, '正文', '甲卷', '第010章-归来.md'), '归来。\n', 'utf-8')
+  await writeFile(join(root, '正文', '乙卷', '第002章-雪夜.md'), '雪夜。\n', 'utf-8')
+  await writeFile(join(root, '正文', '第000章-序.md'), '序。\n', 'utf-8')
+  await writeFile(join(root, '正文', '外传.md'), '外传。\n', 'utf-8')
+  await writeFile(join(root, '正文', 'notes.txt'), '不是章节。\n', 'utf-8')
+}
+
+test('整本导出（txt）：章节树顺序（卷在前、平铺在后），逐章原文＋分隔线，不夹非 md 文件', async () => {
+  const dir = await tempDir('book-txt')
+  try {
+    const root = join(dir, '项目')
+    await mkdir(root, { recursive: true })
+    await seedBook(root)
+
+    const listed = await listBookChapters({ root })
+    assert.equal(listed.ok, true, JSON.stringify(listed.error ?? {}))
+    assert.deepEqual(listed.value.chapters.map((chapter) => chapter.file), [
+      '正文/甲卷/第001章-雨夜.md',
+      '正文/甲卷/第010章-归来.md',
+      '正文/乙卷/第002章-雪夜.md',
+      '正文/第000章-序.md',
+      '正文/外传.md'
+    ])
+    assert.equal(listed.value.total, 5)
+    assert.equal(listed.value.chars, listed.value.chapters.reduce((sum, chapter) => sum + chapter.chars, 0))
+
+    const target = join(dir, '整本.txt')
+    const result = await exportBook({ root, format: 'txt', targetPath: target })
+    assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
+    assert.equal(result.value.chapters, 5)
+    const written = await readFile(target, 'utf-8')
+    // 第一行就是分隔线（composeBookText 去掉开头的空行），章与章之间各一行。
+    assert.ok(written.startsWith('========== 第001章-雨夜 =========='), '整本 txt 从第一章的标题行开始（开头没有空行）')
+    assert.equal(chapterSeparator('第001章-雨夜'), '\n\n========== 第001章-雨夜 ==========\n\n')
+    assert.equal(written, composeBookText(listed.value.chapters))
+    assert.ok(written.indexOf('雨夜。') < written.indexOf('归来。'))
+    assert.ok(written.indexOf('归来。') < written.indexOf('雪夜。'))
+    assert.ok(written.indexOf('雪夜。') < written.indexOf('序。'))
+    assert.ok(written.indexOf('序。') < written.indexOf('外传。'))
+    assert.ok(!written.includes('不是章节'), '非 md 文件不是章节')
+    assert.match(written, /========== 第010章-归来 ==========/u)
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3 })
+  }
+})
+
+test('整本导出（doc）：同一顺序的 HTML 包裹，章节标题成 h2，正文转义后换行进 <br>', async () => {
+  const dir = await tempDir('book-doc')
+  try {
+    const root = join(dir, '项目')
+    await mkdir(root, { recursive: true })
+    await mkdir(join(root, '正文'), { recursive: true })
+    await writeFile(join(root, '正文', '001-雨夜.md'), '雨<夜> & 风。\n第二行。\n', 'utf-8')
+    await writeFile(join(root, '正文', '002-雪夜.md'), '雪夜。\n', 'utf-8')
+    const target = join(dir, '整本.doc')
+    const result = await exportBook({ root, format: 'doc', targetPath: target, title: '大梦' })
+    assert.equal(result.ok, true, JSON.stringify(result.error ?? {}))
+    const written = await readFile(target, 'utf-8')
+    assert.match(written, /<html>/u)
+    assert.match(written, /<title>大梦<\/title>/u)
+    assert.match(written, /<h2>雨夜<\/h2>/u)
+    assert.match(written, /<h2>雪夜<\/h2>/u)
+    assert.match(written, /雨&lt;夜&gt; &amp; 风。<br>第二行。/u)
+    assert.ok(written.indexOf('<h2>雨夜</h2>') < written.indexOf('<h2>雪夜</h2>'))
+    assert.doesNotMatch(written, /<script/u)
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3 })
+  }
+})
+
+test('整本导出拦截：空书、坏格式、坏目标都不落半份文件', async () => {
+  const dir = await tempDir('book-guard')
+  try {
+    const root = join(dir, '项目')
+    await mkdir(join(root, '正文'), { recursive: true })
+    let writes = 0
+    const write = async () => { writes += 1 }
+
+    const empty = await exportBook({ root, format: 'txt', targetPath: join(dir, '空.txt'), write })
+    assert.equal(empty.ok, false)
+    assert.match(empty.error.message, /还没有章节/)
+
+    const badFormat = await exportBook({ root, format: 'pdf', targetPath: join(dir, 'x.pdf'), write })
+    assert.equal(badFormat.ok, false)
+    assert.match(badFormat.error.message, /导出格式只支持/)
+
+    const badTarget = await exportBook({ root, format: 'txt', targetPath: '相对.txt', write })
+    assert.equal(badTarget.ok, false)
+    assert.match(badTarget.error.message, /绝对路径/)
+    assert.equal(writes, 0, '校验不过就不许调用写盘')
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3 })
+  }
+})
+
+test('导入标题解析：首个 H1 优先，回退文件名；禁用字符清洗；全空有兜底', () => {
+  assert.equal(parseDocumentTitle({ text: '# 雨夜\n\n正文', fileName: '随便.txt' }), '雨夜')
+  assert.equal(parseDocumentTitle({ text: '没有标题\n正文', fileName: '无题.md' }), '无题')
+  assert.equal(parseDocumentTitle({ text: '# 雨/夜:试*稿?', fileName: 'x.txt' }), '雨 夜 试 稿')
+  assert.equal(parseDocumentTitle({ text: '', fileName: '' }), '未导入的稿子')
+  assert.equal(parseDocumentTitle({ text: '   ', fileName: '   ' }), '未导入的稿子')
+})
+
+test('导入文件名：正文目录最大序号 +1（三位补零），标题清洗，不撞既有章', () => {
+  const planned = nextChapterName({ title: '雪夜', existing: ['001-雨.md', '012-雪夜.md'] })
+  assert.deepEqual(planned, { name: '013-雪夜.md', sequence: 13, title: '雪夜' })
+
+  const nested = nextChapterName({ title: '新章', existing: ['正文/甲卷/007-旧章.md', '正文/说明.txt'] })
+  assert.equal(nested.name, '008-新章.md')
+
+  // 标题里的路径分隔符与禁用字符清洗成空格；空标题有兜底。
+  assert.equal(nextChapterName({ title: '雨/夜:迷', existing: [] }).name, '001-雨 夜 迷.md')
+  assert.equal(nextChapterName({ title: '  ', existing: [] }).name, '001-未命名.md')
+
+  // 候选名永远不是既有章（不覆盖作者的稿子）。
+  const existing = ['001-雨.md', '002-雪夜.md']
+  const candidate = nextChapterName({ title: '雪夜', existing })
+  assert.equal(existing.includes(candidate.name), false)
 })
 
 test('doc 走 mdRender（批次32 换 marked 内核）：表格／标题进 .doc，危险内容仍被剥', async () => {

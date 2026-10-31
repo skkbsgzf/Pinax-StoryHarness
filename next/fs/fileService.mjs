@@ -427,6 +427,115 @@ export function createFileService({ root, registry, fsImpl, onWrite, snapshot = 
       })
     },
 
+    /** 目录的认领者（批次46B）：导入按认领者的 pluginId 走文件服务的三道闸。 */
+    ownerOfDir(dir) {
+      return resolveOwner(null, String(dir ?? '正文'))
+    },
+
+    /**
+     * 全书查找（批次46B · 任务①）：按章节顺序扫正文，命中的每一处带行号、上下文与序号。
+     *
+     * 只读：不写盘、不动修订号；目录范围仍是「插件认领的 正文/」——
+     * 归属／作用域闸照旧走 list／read，不另开一条读文件的路。
+     * 顺序与章节树一致：一级子目录（卷）按目录名、卷内按文件名，平铺章排在卷后。
+     * 命中超过 maxHits（默认 500、上限 1000）即停并标 truncated——不静默截断。
+     */
+    async searchChapters(query, { caseSensitive = false, maxHits = 500, dir = '正文', pluginId = null } = {}) {
+      const needle = String(query ?? '')
+      if (!needle.trim()) return fail('INVALID_INPUT', '查找需要关键词（不能是空白）', { query })
+      if (needle.length > 200) return fail('INVALID_INPUT', '查找关键词过长（上限 200 字）', { length: needle.length })
+      const cap = Number.isSafeInteger(maxHits) ? Math.min(Math.max(maxHits, 1), 1000) : 500
+      const owner = resolveOwner(pluginId, dir)
+      if (!owner) return fail('DIR_CONFLICT', `没有插件认领目录「${dir}」：这本书没有可查找的正文`, { dir })
+      const files = await listChapterFiles(owner, dir)
+      if (!files.ok) return files
+      const pattern = new RegExp(escapeRegExp(needle), caseSensitive ? 'gu' : 'giu')
+      const hits = []
+      const warnings = []
+      let truncated = false
+      for (const chapter of files.value) {
+        if (hits.length >= cap) {
+          truncated = true
+          break
+        }
+        const read = await service.read({ pluginId: owner, dir, file: dirRelative(dir, chapter.file) })
+        if (!read.ok) {
+          warnings.push(`「${chapter.file}」读失败，已跳过：${read.error.message}`)
+          continue
+        }
+        const text = read.value.text
+        let matchIndex = 0
+        // 行号按命中顺序增量推进：一处一处往后数，不从头重算（大章里命中多也不做 O(n×m)）。
+        let lineCursor = 0
+        let line = 1
+        for (const match of text.matchAll(pattern)) {
+          if (hits.length >= cap) {
+            truncated = true
+            break
+          }
+          for (; lineCursor < match.index; lineCursor += 1) {
+            if (text.charCodeAt(lineCursor) === 10) line += 1
+          }
+          hits.push({
+            file: chapter.file,
+            chapterTitle: chapter.title,
+            line,
+            snippet: hitSnippet(text, match.index, match.index + match[0].length),
+            matchIndex
+          })
+          matchIndex += 1
+        }
+        if (truncated) break
+      }
+      return ok({
+        query: needle,
+        caseSensitive: Boolean(caseSensitive),
+        total: hits.length,
+        truncated,
+        chaptersScanned: files.value.length,
+        hits,
+        warnings
+      })
+    },
+
+    /**
+     * 当前章替换（批次46B · 任务①）：替换范围只有一章，仍走同一条修订号闸。
+     * 先读（adoptRevision）拿到盘上修订号并核对 expectedRevision，再算替换文本，
+     * 最后交 service.write 在写链里再核一次——两次之间有人改了这一章也一样被 STALE 拒掉。
+     * all=false 只换第一处；replace 不许为空串（那等于一键删掉所有命中，不做静默清空）。
+     */
+    async replaceInChapter({ file, find, replace: replacement = '', expectedRevision, caseSensitive = false, all = true, dir = '正文', pluginId = null } = {}) {
+      const needle = String(find ?? '')
+      if (!needle) return fail('INVALID_INPUT', '替换需要查找词（不能为空）', { find })
+      if (needle.length > 200) return fail('INVALID_INPUT', '查找词过长（上限 200 字）', { length: needle.length })
+      if (typeof replacement !== 'string') return fail('INVALID_INPUT', '替换内容必须是字符串')
+      if (!replacement) return fail('INVALID_INPUT', '替换内容不能为空：那会一键删掉所有命中，请逐处手动删改', { find })
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+        return fail('INVALID_INPUT', '替换必须带 expectedRevision（新建传 0）')
+      }
+      const owner = resolveOwner(pluginId, dir)
+      if (!owner) return fail('DIR_CONFLICT', `没有插件认领目录「${dir}」：这本书没有可替换的正文`, { dir })
+      // 章节树给的 file 带「正文/」前缀（如 正文/第一卷/第003章.md）；file 服务要的是相对 dir 的路径。
+      const relativeFile = dirRelative(dir, file)
+      if (!relativeFile) return fail('INVALID_INPUT', '替换需要指出是哪一章', { file })
+      const read = await service.read({ pluginId: owner, dir, file: relativeFile })
+      if (!read.ok) return read
+      if (read.value.revision !== expectedRevision) {
+        return fail('STALE_REVISION', `「${read.value.relativePath}」已被改动（第 ${read.value.revision} 版），本次基于第 ${expectedRevision} 版的替换被拒绝：不静默合并，请重新载入该章`, {
+          path: read.value.relativePath,
+          expected: expectedRevision,
+          actual: read.value.revision
+        })
+      }
+      const replaced = replaceOccurrences(read.value.text, needle, replacement, { caseSensitive, all })
+      if (!replaced.count) {
+        return ok({ file: read.value.relativePath, replaced: 0, revision: read.value.revision, changed: false })
+      }
+      const written = await service.write({ pluginId: owner, dir, file: relativeFile, text: replaced.text, expectedRevision })
+      if (!written.ok) return written
+      return ok({ file: written.value.relativePath, replaced: replaced.count, revision: written.value.revision, changed: true })
+    },
+
     /** 对外取修订号：与 read/write 同一套采纳规则，异步（可能要 stat 磁盘）。 */
     async revisionOf(relativePath) {
       return adoptRevision(String(relativePath).replaceAll('\\', '/'))
@@ -478,6 +587,46 @@ export function createFileService({ root, registry, fsImpl, onWrite, snapshot = 
     const ownerDir = physical.find((name) => raw.startsWith(`${name}/`))
     if (!ownerDir) return null
     return { ownerDir, subPath: raw.slice(ownerDir.length + 1) }
+  }
+
+  /**
+   * 「谁来读这本书的正文」（批次46B）：显式给了 pluginId 就用它（仍要校验已安装），
+   * 没给就按注册表查这块目录的认领者，多个认领者时取 id 排序第一个——
+   * 顺序固定，不随 Map 插入顺序漂移。
+   */
+  function resolveOwner(pluginId, dir) {
+    if (pluginId) return registry.get(pluginId) ? String(pluginId) : null
+    const claims = typeof registry.dirClaims === 'function' ? registry.dirClaims().get(String(dir)) : null
+    const owners = claims ? [...claims].sort() : []
+    return owners[0] ?? null
+  }
+
+  /**
+   * 章节文件顺序（批次46B）：与章节树同一口径——卷（一级子目录）按目录名、卷内按文件名，
+   * 平铺章排在卷后；更深的层级不展开（两级封顶）。每项带 { file, title }。
+   */
+  async function listChapterFiles(pluginId, dir) {
+    const listed = await service.list({ pluginId, dir })
+    if (!listed.ok) return listed
+    if (listed.value.missing) return ok([])
+    const entries = listed.value.entries ?? []
+    const volumes = entries.filter((entry) => entry.kind === 'dir').map((entry) => entry.name).sort(compareChapterNames)
+    const files = []
+    for (const volume of volumes) {
+      const nested = await service.list({ pluginId, dir: `${dir}/${volume}` })
+      if (!nested.ok) return nested
+      const names = (nested.value.entries ?? [])
+        .filter((entry) => entry.kind === 'file' && /\.md$/iu.test(entry.name))
+        .map((entry) => entry.name)
+        .sort(compareChapterNames)
+      for (const name of names) files.push({ file: `${dir}/${volume}/${name}`, title: chapterTitleOf(name) })
+    }
+    const loose = entries
+      .filter((entry) => entry.kind === 'file' && /\.md$/iu.test(entry.name))
+      .map((entry) => entry.name)
+      .sort(compareChapterNames)
+    for (const name of loose) files.push({ file: `${dir}/${name}`, title: chapterTitleOf(name) })
+    return ok(files)
   }
 
   /** 崩溃恢复：半成品临时文件落在目标文件同目录，所以根目录＋每个一级板块目录都要扫一遍。 */
@@ -615,6 +764,60 @@ export function createFileService({ root, registry, fsImpl, onWrite, snapshot = 
 function sha256(text) {
   return createHash('sha256').update(text, 'utf-8').digest('hex')
 }
+
+/** 章节排序（批次46B）：数字前缀按数值比（2 排在 10 前面），其余按中文口径。 */
+const CHAPTER_COLLATOR = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+function compareChapterNames(left, right) {
+  return CHAPTER_COLLATOR.compare(left, right)
+}
+
+/** 「003-倒带.md」→「倒带」：与小说载体的标题口径一致（只剥 .md 与数字前缀）。 */
+function chapterTitleOf(name) {
+  return String(name ?? '').replace(/\.md$/iu, '').replace(/^\d{1,3}-/u, '')
+}
+
+/** 章节树／搜索命中给的路径带「正文/」前缀；file 服务的 file 是相对 dir 的那一段。 */
+function dirRelative(dir, file) {
+  const normalized = String(file ?? '').replaceAll('\\', '/')
+  return normalized.startsWith(`${dir}/`) ? normalized.slice(dir.length + 1) : normalized
+}
+
+/** 上下文 ±40 字，空白折叠成单个空格；被裁掉的一端补省略号。 */
+function hitSnippet(text, start, end) {
+  const before = text.slice(Math.max(0, start - 40), start)
+  const after = text.slice(end, Math.min(text.length, end + 40))
+  const head = before ? `${before.length < 40 || start === 0 ? '' : '…'}${before}` : ''
+  const tail = after ? `${after}${after.length < 40 || end === text.length ? '' : '…'}` : ''
+  return `${head}${text.slice(start, end)}${tail}`.replace(/\s+/gu, ' ').trim()
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+/**
+ * 字面量替换（批次46B）：不是正则——作者找的就是这几个字。
+ * 大小写不敏感时用小写对照定位，但保留原文切片，不改变未命中部分的大小写。
+ */
+function replaceOccurrences(text, find, replacement, { caseSensitive = false, all = true } = {}) {
+  const haystack = caseSensitive ? text : text.toLowerCase()
+  const needle = caseSensitive ? find : find.toLowerCase()
+  let cursor = 0
+  let count = 0
+  let output = ''
+  while (cursor <= text.length) {
+    const index = haystack.indexOf(needle, cursor)
+    if (index < 0) break
+    output += text.slice(cursor, index) + replacement
+    cursor = index + find.length
+    count += 1
+    if (!all) break
+  }
+  if (!count) return { text, count: 0 }
+  output += text.slice(cursor)
+  return { text: output, count }
+}
+
 
 /** 待审提案拦下删除/改名时的统一失败载荷（点名提案文件名，作者知道该先处理哪几份）。 */
 function proposalBlocked(relativePath, names, verb) {

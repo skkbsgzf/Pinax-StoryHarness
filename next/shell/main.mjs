@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { readFile } from 'node:fs/promises'
 import * as gitHistory from '../history/gitHistory.mjs'
 import { createNextSession } from '../index.mjs'
 import { fail } from '../kernel/errors.mjs'
@@ -22,7 +23,7 @@ import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/kn
 import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
-import { EXPORT_EXTENSIONS, exportDocument } from './exportService.mjs'
+import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 import { PLUGIN_PROTOCOL } from './pluginProtocol.mjs'
 import { createPluginFileHandler } from './pluginFileServer.mjs'
@@ -511,6 +512,42 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
         ? result.filePath
         : `${result.filePath}${extension}`
       return exportDocument({ content, format: kind, targetPath, title: title ?? '', html })
+    },
+    // 单篇导入（批次46B · 任务③）：系统对话框选 .txt／.md，读成文本交给通道。
+    // 解析标题、排顺序号、落盘都在通道／文件服务那侧——这里只负责「从磁盘取一份文本」。
+    pickBookDocument: async () => {
+      const result = await dialog.showOpenDialog(window_, {
+        title: '选择要导入的文稿（.txt / .md，导入后并入当前书的正文）',
+        properties: ['openFile'],
+        filters: [
+          { name: '文稿', extensions: ['txt', 'md'] },
+          { name: '所有文件', extensions: ['*'] }
+        ]
+      })
+      if (result.canceled || !result.filePaths?.length) return { ok: true, value: { canceled: true, path: null, name: null, text: null } }
+      const filePath = result.filePaths[0]
+      try {
+        const text = await readFile(filePath, 'utf-8')
+        return { ok: true, value: { canceled: false, path: filePath, name: basename(filePath), text } }
+      } catch (error) {
+        return { ok: false, error: { code: 'PINAX_IO_FAILED', message: `读取「${basename(filePath)}」失败：${String(error?.message || error)}` } }
+      }
+    },
+    // 整本导出（批次46B · 任务③）：另存为对话框 → exportService.exportBook 聚合 正文/ 全部章节。
+    exportBookFile: async ({ root: projectRoot, format = 'txt', title = null } = {}) => {
+      const kind = format === 'doc' ? 'doc' : 'txt'
+      const extension = EXPORT_EXTENSIONS[kind]
+      const bookTitle = title || session?.project?.value?.name || '整本书'
+      const result = await dialog.showSaveDialog(window_, {
+        title: kind === 'doc' ? '导出整本为 Word 文档（.doc）' : '导出整本为纯文本（.txt）',
+        defaultPath: `${exportFileName(`${bookTitle}-${kind === 'doc' ? '整本' : '全文'}`)}${extension}`,
+        filters: [{ name: kind === 'doc' ? 'Word 文档' : '纯文本', extensions: [kind] }]
+      })
+      if (result.canceled || !result.filePath) return { ok: true, value: { canceled: true, path: null, format: kind } }
+      const targetPath = result.filePath.toLowerCase().endsWith(extension)
+        ? result.filePath
+        : `${result.filePath}${extension}`
+      return exportBook({ root: projectRoot, format: kind, targetPath, title: bookTitle })
     },
     // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
     knowledgeService,

@@ -1,7 +1,21 @@
-import { writeFile } from 'node:fs/promises'
-import { isAbsolute } from 'node:path'
+import { readFile, readdir, writeFile } from 'node:fs/promises'
+import { isAbsolute, join } from 'node:path'
 import { fail, ok } from '../kernel/errors.mjs'
 import { sanitizeHtml } from './sanitizeFallback.mjs'
+import {
+  BOOK_DIR,
+  BOOK_MAX_CHARS,
+  CHAPTER_FILE,
+  CHAPTER_ORDER,
+  chapterSeparator,
+  chapterTitleOf,
+  composeBookText,
+  nextChapterName,
+  parseDocumentTitle
+} from './bookText.mjs'
+
+// 纯文本口径单独放在 bookText.mjs（渲染层也要引那几条常量与命名函数，不能把 node:fs 带过去）。
+export { BOOK_DIR, BOOK_MAX_CHARS, chapterSeparator, chapterTitleOf, composeBookText, nextChapterName, parseDocumentTitle }
 
 /**
  * 导出当前文档（批次26 · 任务三）。
@@ -120,3 +134,100 @@ export async function exportDocument({ content, format = 'txt', targetPath, titl
 }
 
 export default exportDocument
+
+/* —— 整本导出与单篇导入（批次46B · 任务③）——————————————————————————————
+ * exportBook：把 正文/ 里的章节按章节树顺序（卷按目录名、卷内按文件名、平铺章在卷后）
+ * 聚成一份：txt 逐章原文＋一行章节分隔线，doc 是同一份内容的 HTML 包裹（沿用 buildDocumentHtml
+ * 的清洗档）。主进程只读当前项目根，不换目录、不写项目内文件。
+ *
+ * 导入侧只给两个纯函数：标题解析与顺序号选择（在 bookText.mjs）。真正的落盘仍走文件服务
+ * （expectedRevision 0），归属／作用域／并发三道闸一个不绕。
+ */
+
+/**
+ * 按章节树顺序读出整本（只读）。返回 { chapters: [{ file, title, text, chars }], total, chars }。
+ * 正文目录不存在视为空书（不是错误）；读单个文件失败如实中止，不静默跳过一章。
+ */
+export async function listBookChapters({ root, dir = BOOK_DIR, readFileImpl = readFile, readdirImpl = readdir } = {}) {
+  if (!root) return fail('INVALID_INPUT', '整本导出需要项目根目录')
+  const base = join(root, dir)
+  let entries
+  try {
+    entries = await readdirImpl(base, { withFileTypes: true })
+  } catch (error) {
+    if (error?.code === 'ENOENT') return ok({ chapters: [], total: 0, chars: 0 })
+    return fail('IO_FAILED', `读取「${dir}/」失败：${String(error?.message || error)}`)
+  }
+  const volumes = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((a, b) => CHAPTER_ORDER.compare(a, b))
+  const plan = []
+  for (const volume of volumes) {
+    let nested
+    try {
+      nested = await readdirImpl(join(base, volume), { withFileTypes: true })
+    } catch (error) {
+      return fail('IO_FAILED', `读取「${dir}/${volume}/」失败：${String(error?.message || error)}`)
+    }
+    const names = nested.filter((entry) => entry.isFile() && CHAPTER_FILE.test(entry.name)).map((entry) => entry.name)
+      .sort((a, b) => CHAPTER_ORDER.compare(a, b))
+    for (const name of names) plan.push({ file: `${dir}/${volume}/${name}`, title: chapterTitleOf(name) })
+  }
+  const loose = entries.filter((entry) => entry.isFile() && CHAPTER_FILE.test(entry.name)).map((entry) => entry.name)
+    .sort((a, b) => CHAPTER_ORDER.compare(a, b))
+  for (const name of loose) plan.push({ file: `${dir}/${name}`, title: chapterTitleOf(name) })
+
+  const chapters = []
+  let chars = 0
+  for (const item of plan) {
+    let text
+    try {
+      text = await readFileImpl(join(root, item.file), 'utf-8')
+    } catch (error) {
+      return fail('IO_FAILED', `读取「${item.file}」失败：${String(error?.message || error)}`, { file: item.file })
+    }
+    chapters.push({ ...item, text, chars: text.length })
+    chars += text.length
+  }
+  return ok({ chapters, total: chapters.length, chars })
+}
+
+/** 整本 doc：章节标题用 h2，正文按纯文本转义成 <br>（主进程不引 md 渲染器）。 */
+export function composeBookHtml(chapters = [], { title = '' } = {}) {
+  const body = chapters.map((chapter) => [
+    `<h2>${escapeHtml(String(chapter.title ?? '').trim())}</h2>`,
+    escapeHtml(chapter.text ?? '').replace(/\r\n?/gu, '\n').replaceAll('\n', '<br>')
+  ].join('\n')).join('\n')
+  return buildDocumentHtml({ content: '', html: body, title })
+}
+
+/**
+ * 整本导出落盘：format 只认 txt／doc；目标路径照单篇同一套校验（绝对路径、后缀、不许 .pinax）。
+ * 空书不写空文件——如实报「没有可导出的章节」。
+ */
+export async function exportBook({ root, format = 'txt', targetPath, title = '', write = writeFile, readFileImpl = readFile, readdirImpl = readdir } = {}) {
+  const kind = String(format ?? 'txt').trim().toLowerCase()
+  if (!EXPORT_FORMATS.includes(kind)) return fail('INVALID_INPUT', `导出格式只支持 ${EXPORT_FORMATS.join(' / ')}`, { format })
+  const target = resolveExportTarget({ format: kind, targetPath })
+  if (!target.ok) return target
+  const listed = await listBookChapters({ root, readFileImpl, readdirImpl })
+  if (!listed.ok) return listed
+  const { chapters } = listed.value
+  if (!chapters.length) return fail('INVALID_INPUT', `「${BOOK_DIR}/」里还没有章节，没有可导出的内容`)
+  if (listed.value.chars > BOOK_MAX_CHARS) {
+    return fail('INVALID_INPUT', `整本正文超出导出上限 ${BOOK_MAX_CHARS} 字符`, { chars: listed.value.chars })
+  }
+  const payload = kind === 'doc'
+    ? composeBookHtml(chapters, { title: title || '整本导出' })
+    : composeBookText(chapters)
+  try {
+    await write(target.value.path, payload, 'utf-8')
+  } catch (error) {
+    return fail('IO_FAILED', `导出失败：${String(error?.message || error)}`, { path: target.value.path })
+  }
+  return ok({
+    path: target.value.path,
+    format: kind,
+    extension: target.value.extension,
+    chapters: chapters.length,
+    bytes: Buffer.byteLength(payload, 'utf-8')
+  })
+}

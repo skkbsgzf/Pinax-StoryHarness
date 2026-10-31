@@ -19,12 +19,20 @@ import { IPC_CHANNELS } from '../ipcContract.mjs'
 const props = defineProps({
   bridge: { type: Object, default: null },
   fontSize: { type: Number, default: 17 },
-  lineHeight: { type: Number, default: 1.9 }
+  lineHeight: { type: Number, default: 1.9 },
+  paragraphSpacing: { type: Number, default: 0.8 },
+  textIndent: { type: Number, default: 2 },
+  typewriter: { type: Boolean, default: false },
+  focusMode: { type: Boolean, default: false }
 })
 const emit = defineEmits(['writing-prefs'])
 
 const fontSizeDraft = ref(props.fontSize)
 const lineHeightDraft = ref(props.lineHeight)
+const paragraphSpacingDraft = ref(props.paragraphSpacing)
+const textIndentDraft = ref(props.textIndent)
+const typewriterDraft = ref(props.typewriter)
+const focusModeDraft = ref(props.focusMode)
 const busy = ref(false)
 const feedback = ref(null)
 
@@ -35,6 +43,18 @@ watch(() => props.fontSize, (value) => {
 watch(() => props.lineHeight, (value) => {
   if (Number.isFinite(value)) lineHeightDraft.value = value
 })
+watch(() => props.paragraphSpacing, (value) => {
+  if (Number.isFinite(value)) paragraphSpacingDraft.value = value
+})
+watch(() => props.textIndent, (value) => {
+  if (Number.isFinite(value)) textIndentDraft.value = value
+})
+watch(() => props.typewriter, (value) => {
+  typewriterDraft.value = value === true
+})
+watch(() => props.focusMode, (value) => {
+  focusModeDraft.value = value === true
+})
 
 async function save() {
   if (!props.bridge?.request || busy.value) return
@@ -42,11 +62,19 @@ async function save() {
   feedback.value = null
   const fontSize = Number(fontSizeDraft.value)
   const lineHeight = Number(lineHeightDraft.value)
+  const paragraphSpacing = Number(paragraphSpacingDraft.value)
+  const textIndent = Number(textIndentDraft.value)
+  const typewriter = typewriterDraft.value === true
+  const focusMode = focusModeDraft.value === true
   let result
   try {
     result = await props.bridge.request(IPC_CHANNELS.prefsSet, {
       writingFontSize: fontSize,
-      writingLineHeight: lineHeight
+      writingLineHeight: lineHeight,
+      writingParagraphSpacing: paragraphSpacing,
+      writingTextIndent: textIndent,
+      writingTypewriter: typewriter,
+      writingFocusMode: focusMode
     })
   } catch (error) {
     result = { ok: false, error: { message: String(error?.message || error) } }
@@ -61,16 +89,31 @@ async function save() {
   const value = result.value ?? {}
   const appliedFontSize = Number.isFinite(value.writingFontSize) ? value.writingFontSize : fontSize
   const appliedLineHeight = Number.isFinite(value.writingLineHeight) ? value.writingLineHeight : lineHeight
+  const appliedParagraphSpacing = Number.isFinite(value.writingParagraphSpacing) ? value.writingParagraphSpacing : paragraphSpacing
+  const appliedTextIndent = Number.isFinite(value.writingTextIndent) ? value.writingTextIndent : textIndent
+  const appliedTypewriter = typeof value.writingTypewriter === 'boolean' ? value.writingTypewriter : typewriter
+  const appliedFocusMode = typeof value.writingFocusMode === 'boolean' ? value.writingFocusMode : focusMode
   fontSizeDraft.value = appliedFontSize
   lineHeightDraft.value = appliedLineHeight
-  feedback.value = { kind: 'ok', text: `已保存并生效：正文 ${appliedFontSize} 号字 · 行高 ${appliedLineHeight}。` }
-  emit('writing-prefs', { fontSize: appliedFontSize, lineHeight: appliedLineHeight })
+  paragraphSpacingDraft.value = appliedParagraphSpacing
+  textIndentDraft.value = appliedTextIndent
+  typewriterDraft.value = appliedTypewriter
+  focusModeDraft.value = appliedFocusMode
+  feedback.value = { kind: 'ok', text: `已保存并生效：正文 ${appliedFontSize} 号字 · 行高 ${appliedLineHeight} · 段距 ${appliedParagraphSpacing}em · 缩进 ${appliedTextIndent}em。` }
+  emit('writing-prefs', {
+    fontSize: appliedFontSize,
+    lineHeight: appliedLineHeight,
+    paragraphSpacing: appliedParagraphSpacing,
+    textIndent: appliedTextIndent,
+    typewriter: appliedTypewriter,
+    focusMode: appliedFocusMode
+  })
 }
 </script>
 
 <template>
   <div>
-    <p class="wizard-note">应用级偏好，不随项目走。只改正文编辑区的字号与行高；正文字体固定为自托管的霞鹜文楷。</p>
+    <p class="wizard-note">应用级偏好，不随项目走。只改正文编辑区的排版；正文字体固定为自托管的霞鹜文楷。</p>
     <div class="prefs-grid">
       <div class="prefs-row">
         <span class="prefs-row-label">正文字号</span>
@@ -97,6 +140,52 @@ async function save() {
           aria-label="正文行高（1.6–2.4，步进 0.05）"
         >
         <span class="prefs-row-hint">1.6–2.4，步进 0.05（默认 1.9）</span>
+      </div>
+      <div class="prefs-row">
+        <span class="prefs-row-label">段落间距</span>
+        <input
+          v-model.number="paragraphSpacingDraft"
+          class="nx-field writing-number writing-paragraph-spacing"
+          type="number"
+          min="0"
+          max="2"
+          step="0.1"
+          aria-label="段落间距（0–2em，步进 0.1）"
+        >
+        <span class="prefs-row-hint">0–2em，步进 0.1（默认 0.8）</span>
+      </div>
+      <div class="prefs-row">
+        <span class="prefs-row-label">首行缩进</span>
+        <input
+          v-model.number="textIndentDraft"
+          class="nx-field writing-number writing-text-indent"
+          type="number"
+          min="0"
+          max="2"
+          step="0.5"
+          aria-label="首行缩进（0–2em，步进 0.5）"
+        >
+        <span class="prefs-row-hint">0–2em，步进 0.5（默认 2）</span>
+      </div>
+      <div class="prefs-row">
+        <span class="prefs-row-label">打字机滚动</span>
+        <input
+          v-model="typewriterDraft"
+          class="writing-checkbox writing-typewriter"
+          type="checkbox"
+          aria-label="打字机滚动（光标保持在视口约 40% 高度）"
+        >
+        <span class="prefs-row-hint">开：光标始终停在视口偏上，写作时视线不追着屏幕跑</span>
+      </div>
+      <div class="prefs-row">
+        <span class="prefs-row-label">段落聚焦</span>
+        <input
+          v-model="focusModeDraft"
+          class="writing-checkbox writing-focus-mode"
+          type="checkbox"
+          aria-label="段落聚焦（非当前段落变暗）"
+        >
+        <span class="prefs-row-hint">开：只突出光标所在段落，其余段落退到背景</span>
       </div>
       <div class="prefs-actions">
         <button type="button" class="control-primary" :disabled="busy" @click="save">保存并生效</button>
