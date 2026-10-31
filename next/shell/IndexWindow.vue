@@ -42,22 +42,17 @@ const props = defineProps({
   archive: { type: Array, default: () => [] },
   width: { type: Number, default: 256 }
 })
-const emit = defineEmits(['collapse', 'history', 'overlay', 'context-menu'])
+const emit = defineEmits(['collapse', 'history', 'overlay'])
 
 /**
- * 协议 v1.2 P19：索引窗树行的右键也是「打开方式」入口（统一二级页目录项后续批同法）。
- * 这一栏只显示当前板，所以只上报坐标；菜单条目（哪些形态）由宿主按当前载体的 forms 声明列。
- * 批次31：大纲行例外——右键先开「节点」菜单（上移／下移／删除／加同级／加子节点），
- * 那些操作原先是大纲编辑面底部那排常驻按钮。打开方式在竖条右键照旧可达。
+ * 批次59：窗口形态菜单随四轴一起退役——窗口动作只在 PaneWindow 的统一 chrome 里。
+ * 索引窗树行的右键只剩内容自己的节点／章节菜单（批次31／46A），不再上报宿主形态菜单。
  */
-function onRowContextMenu(event) {
-  emit('context-menu', { x: event.clientX, y: event.clientY })
-}
 
 /**
  * 大纲行右键菜单（批次31 · P18 第 2 条）：节点操作退到「按需浮现」——
  * 右键先选中这一行（操作都作用在所选节点上），再在同一位置开出节点菜单。
- * 样式与通路照批次24 的打开方式菜单：同一套 .nx-context-* 词汇、同样 Esc／点外收起、
+ * 样式与通路照批次24 的同一套 .nx-context-* 词汇：同样 Esc／点外收起、
  * 同样按视口钳住坐标；不另起一套菜单皮。
  */
 const nodeMenu = ref(null)
@@ -821,8 +816,7 @@ watch(() => props.board?.id, () => {
               :aria-current="isNoteOpen(item) ? 'page' : null"
               :title="rowHint(item)"
               @click="data.openNote(item)"
-              @contextmenu.prevent.stop="onRowContextMenu"
-            >
+                          >
               <span class="workspace-nav-label">{{ item.title }}</span>
             </button>
             <button
@@ -930,8 +924,7 @@ watch(() => props.board?.id, () => {
               :aria-current="isRuleOpen(item) ? 'page' : null"
               :title="rowHint(item)"
               @click="data.openRule(item)"
-              @contextmenu.prevent.stop="onRowContextMenu"
-            >
+                          >
               <span class="workspace-nav-label">{{ item.title }}</span>
             </button>
           </li>
@@ -981,8 +974,7 @@ watch(() => props.board?.id, () => {
               :aria-current="isDocumentOpen(item) ? 'page' : null"
               :title="rowHint(item)"
               @click="data.openDocument(item)"
-              @contextmenu.prevent.stop="onRowContextMenu"
-            >
+                          >
               <span class="workspace-nav-label">{{ item.title }}</span>
             </button>
           </li>
@@ -1032,8 +1024,7 @@ watch(() => props.board?.id, () => {
               :aria-current="isScriptOpen(item) ? 'page' : null"
               :title="rowHint(item)"
               @click="data.openScript(item)"
-              @contextmenu.prevent.stop="onRowContextMenu"
-            >
+                          >
               <span class="workspace-nav-label">{{ item.title }}</span>
             </button>
           </li>
@@ -1082,8 +1073,7 @@ watch(() => props.board?.id, () => {
               :aria-current="isRecordOpen(item) ? 'page' : null"
               :title="recordRowHint(item)"
               @click="data.openRecord(recordCarrier.key, item)"
-              @contextmenu.prevent.stop="onRowContextMenu"
-            >
+                          >
               <span class="workspace-nav-label">{{ item.title || item.id }}</span>
             </button>
           </li>
@@ -1101,7 +1091,7 @@ watch(() => props.board?.id, () => {
     </div>
 
     <!-- 大纲节点菜单（批次31 · P18 第 2 条）：右键才出现，默认不可见——节点操作退到按需浮现。
-         词汇与行为照批次24 的「打开方式」菜单：.nx-context-* 同一套样式（next-shell.css），
+         词汇与行为照批次24 的宿主菜单：.nx-context-* 同一套样式（next-shell.css），
          Esc／点菜单外收起，坐标按视口钳住。首行上移／末行下移禁用（no-op 不给假动作）。 -->
     <div
       v-if="nodeMenu"

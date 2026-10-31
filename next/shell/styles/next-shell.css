@@ -922,50 +922,47 @@ input.doc-title {
   }
 }
 
-/* —— 悬浮小工具窗（协议 v1.1-C · 工单C）———————————————————————
-   宿主容器 FloatingWidget.vue 的形态全部在这里：载体只声明 overlay pane 与宽度，
-   定位/拖动/收起/位置记忆归宿主。z-index 高于编辑器（chrome 90 / overlay 180）、
-   低于统一二级页（popover 400 / modal 800）——取 --z-floating-dock（240）。
+/* —— 文档窗（批次59 · 铁律一／二）———————————————————————————
+   中间 doc 区＝窗口管理器：任何打开的内容都是一扇 PaneWindow，chrome（标题条＋
+   收起／分屏／×）只此一份。浮窗可拖标题条移动、四角缩放；分屏＝两窗共用同一矩形
+   对半贴；收起＝右缘一枚竖排标签。z-index 走窗口记录的叠序（低于统一二级页）。
    颜色、字号、圆角一律走 token；尺寸是布局 px（允许）。 */
-.nx-overlay-widget {
+.nx-window-layer {
+  position: relative;
+  z-index: 0;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.nx-pane-window {
   position: absolute;
-  top: 16px;
-  right: 24px;
-  z-index: var(--z-floating-dock);
   display: flex;
   flex-direction: column;
-  max-height: calc(100% - 32px);
   border: 1px solid var(--hairline-soft);
   border-radius: var(--radius-control);
   background: var(--surface-workbench-raised);
-  box-shadow: 0 12px 30px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--archive-ink) 16%, transparent);
   overflow: hidden;
 }
-.nx-overlay-widget.is-dragging {
-  box-shadow: 0 16px 36px color-mix(in srgb, var(--archive-ink) 24%, transparent);
+.nx-pane-window.is-maximized {
+  border-radius: 0;
+  box-shadow: none;
 }
-/* 吸附（协议 v1.2 P20）：拖到左右边缘 → 半屏 dock。吸附是 overlay 形态的子状态，
-   宽度走 50%（不再吃内联 width），贴边一侧去掉圆角；拖离即回浮动态（FloatingWidget 解除类名）。 */
-.nx-overlay-widget.is-snapped-left,
-.nx-overlay-widget.is-snapped-right {
-  top: 16px;
-  width: 50%;
-  max-height: calc(100% - 32px);
+.nx-pane-window.is-tiled {
+  border-radius: 0;
+  box-shadow: none;
 }
-.nx-overlay-widget.is-snapped-left {
-  left: 0;
-  right: auto;
-  border-radius: 0 var(--radius-control) var(--radius-control) 0;
+.nx-pane-window.is-dragging {
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--archive-ink) 22%, transparent);
 }
-.nx-overlay-widget.is-snapped-right {
-  right: 0;
-  left: auto;
-  border-radius: var(--radius-control) 0 0 var(--radius-control);
+.nx-pane-window.is-resizing {
+  user-select: none;
 }
-.nx-overlay-head {
+.nx-pane-window-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   flex: none;
   padding: 6px 6px 6px 12px;
@@ -976,10 +973,10 @@ input.doc-title {
   user-select: none;
   touch-action: none;
 }
-.nx-overlay-widget.is-dragging .nx-overlay-head {
+.nx-pane-window.is-dragging .nx-pane-window-head {
   cursor: grabbing;
 }
-.nx-overlay-title {
+.nx-pane-window-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -987,22 +984,21 @@ input.doc-title {
   font-size: var(--nx-fs-md);
   font-weight: 500;
 }
-.nx-overlay-actions {
+/* 铁律一：右上角只有三枚钮（收起／分屏／×），不再有每 pane 定制的窗口按钮。 */
+.nx-pane-window-actions {
   display: flex;
   align-items: center;
   gap: 2px;
   flex: none;
-  /* 批次35：标题条常驻的是这组小钮——hover 前弱化，hover／键盘聚焦才显形。 */
+  margin-left: auto;
   opacity: 0.55;
   transition: opacity 120ms ease;
 }
-.nx-overlay-widget:hover .nx-overlay-actions,
-.nx-overlay-widget:focus-within .nx-overlay-actions {
+.nx-pane-window:hover .nx-pane-window-actions,
+.nx-pane-window:focus-within .nx-pane-window-actions {
   opacity: 1;
 }
-/* 一枚钮一件事（放大／缩小／吸附／分屏／固定／再开一份／关闭）：尺寸统一，状态只用
-   颜色与底色（is-active＝这条轴此刻成立），不再用「全屏」「+1」这种会变的文案。 */
-.nx-overlay-btn {
+.nx-pane-window-btn {
   flex: none;
   width: 24px;
   min-height: 24px;
@@ -1010,42 +1006,25 @@ input.doc-title {
   justify-content: center;
   color: var(--text-muted);
 }
-.nx-overlay-btn:hover:not(:disabled) {
+.nx-pane-window-btn:hover:not(:disabled) {
   color: var(--archive-ink);
   background: var(--workbench-selected);
 }
-.nx-overlay-btn.is-active {
+.nx-pane-window-btn.is-active {
   color: var(--archive-ink);
   background: var(--workbench-selected);
 }
-.nx-overlay-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-/* 缩小（气泡）用一枚实心点：与旁边的线性图标同视觉重量，不额外引图标名。 */
-.nx-overlay-dot {
-  display: block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: currentColor;
-}
-/* 钉住：位置锁定，标题条不再给「可以拖」的手势暗示。 */
-.nx-overlay-widget.is-pinned .nx-overlay-head {
-  cursor: default;
-}
-.nx-overlay-body {
+.nx-pane-window-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding: 8px;
   scrollbar-width: thin;
 }
-/* 收起态：右侧缘一枚小标签（竖排），点它展开。 */
-.nx-overlay-tab {
+/* 收起态：右侧缘一枚竖排小标签，点它还原（几何不动）。 */
+.nx-pane-window-tab {
   position: absolute;
   right: 0;
-  top: 120px;
   z-index: var(--z-floating-dock);
   writing-mode: vertical-rl;
   padding: 10px 4px;
@@ -1057,6 +1036,33 @@ input.doc-title {
   font-size: var(--nx-fs-2xs);
   letter-spacing: 0.08em;
   box-shadow: 0 6px 18px color-mix(in srgb, var(--archive-ink) 14%, transparent);
+}
+/* 浮窗四角缩放把手：只在浮窗态渲染（分屏／最大化不吃这个手势）。 */
+.nx-pane-window-resize {
+  position: absolute;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+}
+.nx-pane-window-resize.is-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.nx-pane-window-resize.is-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.nx-pane-window-resize.is-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.nx-pane-window-resize.is-se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
 }
 /* 迷你大纲列表：与索引窗同一套行词汇，点一行跳大纲编辑。 */
 .nx-overlay-tree {
@@ -1082,65 +1088,8 @@ input.doc-title {
   line-height: 1.6;
 }
 
-/* —— 多形态打开（协议 v1.2 P18–P21）——————————————————————————————
-   split：中栏左右分屏（主 pane ＋ 副 pane ≥420px，拖拽分界复用 .resizer 手势）；
-   fullscreen：宿主形态条 ＋ CenterSlotHost 占满中栏；
-   右键「打开方式」：宿主菜单，颜色/字号/圆角全走 token，Esc/点外收起（AppNext 统一管）。 */
-.nx-split {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-}
-.nx-split-main {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-}
-.nx-split-main > .center,
-.nx-split-side > .center {
-  flex: 1 1 auto;
-}
-.nx-split-side {
-  display: flex;
-  flex: 0 0 auto;
-  min-width: 420px;
-  min-height: 0;
-  border-left: 1px solid var(--hairline-soft);
-  background: var(--surface-workbench);
-  overflow: hidden;
-}
-/* 分界本体与三栏 .resizer 同形：默认透明（发丝线由 .nx-split-side 的 border-left 给），悬停/拖拽高亮。 */
-.nx-split-divider:hover,
-.next-shell[data-dragging='split'] .nx-split-divider {
-  background: var(--workbench-selected);
-}
-.nx-form-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  flex: none;
-  margin: 0 24px;
-  padding: 6px 12px;
-  border: 1px solid var(--hairline-soft);
-  border-radius: var(--radius-control);
-  background: var(--surface-workbench-muted);
-  color: var(--text-muted);
-  font-size: var(--nx-fs-2xs);
-}
-.nx-form-bar-label {
-  min-width: 0;
-  font-size: var(--nx-fs-md);
-  color: var(--archive-ink);
-}
-.nx-form-bar-action {
-  margin-left: auto;
-  min-height: 28px;
-  padding: 0 10px;
-  font-size: var(--nx-fs-md);
-}
+/* —— 右键菜单（索引窗大纲节点／章节）————————————————————————————
+   颜色/字号/圆角全走 token，Esc／点外收起（IndexWindow 自己管）。 */
 .nx-context-menu {
   position: fixed;
   z-index: var(--z-popover);

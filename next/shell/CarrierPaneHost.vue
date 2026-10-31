@@ -1433,6 +1433,11 @@ function actOnSaveChip() {
          窄栏退成类别导航树，点类别＝给这块看板区加一道筛选（同一格状态）。 -->
     <template v-else-if="viewKind === 'entries-workspace'">
       <div class="nx-entries-workspace" data-test="entries-workspace">
+        <!-- web 模板没有左树（批次59 铁律四）：列举层的错误与契约警告跟着看板走。 -->
+        <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
+        <ul v-if="data.listWarnings?.length" class="nx-index-warn">
+          <li v-for="(warning, index) in data.listWarnings" :key="`entries-warning-${index}`">{{ warning }}</li>
+        </ul>
         <div class="nx-entries-workspace-board">
           <EntriesBoard
             :data="data"

@@ -15,7 +15,9 @@ import { join } from 'node:path'
 
 export const WORKSPACE_DIR = '.pinax'
 export const WORKSPACE_FILENAME = 'workspace.json'
-export const WORKSPACE_VERSION = 1
+export const WORKSPACE_VERSION = 2
+/** 读侧仍收 version:1 的旧档：逐条迁移归渲染层（next/shell/workspace.mjs），这里只放行。 */
+export const READABLE_VERSIONS = Object.freeze([1, 2])
 
 export function workspacePath(root) {
   return join(String(root ?? ''), WORKSPACE_DIR, WORKSPACE_FILENAME)
@@ -53,10 +55,12 @@ function parseStored(raw) {
     return { ...emptyValue(true), warnings: ['WORKSPACE_NOT_OBJECT'] }
   }
   const warnings = []
-  if (parsed.version !== WORKSPACE_VERSION) warnings.push(`WORKSPACE_VERSION_${String(parsed.version)}`)
+  // version:1 原样交给渲染层迁移（不能在这里改写成 2——旧条目还得按四轴读）。
+  const readable = READABLE_VERSIONS.includes(Number(parsed.version))
+  if (!readable) warnings.push(`WORKSPACE_VERSION_${String(parsed.version)}`)
   const entries = parsed.entries && typeof parsed.entries === 'object' && !Array.isArray(parsed.entries) ? parsed.entries : {}
   if (!parsed.entries) warnings.push('WORKSPACE_ENTRIES_MISSING')
-  return { version: WORKSPACE_VERSION, entries, warnings, exists: true }
+  return { version: readable ? Number(parsed.version) : WORKSPACE_VERSION, entries, warnings, exists: true }
 }
 
 export function createFileWorkspaceStore({ root } = {}) {

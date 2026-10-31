@@ -1,23 +1,23 @@
 /**
- * 宿主形态词表（协议 v1.2 P18–P21）。M2.5-C 起这里只剩「词」——状态机与持久化搬去了
- * next/shell/workspace.mjs（四轴：placement／minimized／geometry／restore）。
+ * 协议 v1.2 的位置词表——批次59 起只作兼容读：渲染层不再有位置菜单，
+ * 任何打开的内容都是同一扇 PaneWindow（状态机在 next/shell/workspace.mjs v2）。
  *
- * 为什么保留这个文件：正文里「打开方式」的菜单顺序与文案是宿主词汇，被 AppNext、设置页与
- * 后续命令面共用；把它们和状态机拆开，词表改文案不会牵动状态。PANE_FORMS 与 workspace 的
- * PLACEMENTS 必须逐项相等（workspace.test.mjs 有一条断言钉住这件事）。
+ * 保留文件的原因：宿主描述导出（next/testing/exportHostDescriptor.mjs）仍要给出
+ * manifest.panes[].forms 的词表，12 份清单本身不动。新代码不要再 import 这里的
+ * 词表来驱动界面；状态只认 geometry／z／minimized／maximized／tiledWith／tileSide。
  */
 
-/** 宿主支持的打开位置（P18 词表 ＋ 批次45 沉浸态）。顺序即右键菜单的展示顺序。 */
+/** 旧词表（仅兼容导出用；界面不再据此列入口）。 */
 export const PANE_FORMS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
 
-/** 缺省位置：左键点竖条格＝回到停靠栏（P19「左键默认行为＝defaultForm，缺省 dock」）。 */
+/** 旧缺省位置（兼容读；批次59 后不存在「缺省位置」这一说）。 */
 export const DEFAULT_PANE_FORM = 'dock'
 
-/** 右键「打开方式」菜单的文案（宿主词汇，载体不自带文案）。 */
+/** 旧词表文案（兼容导出用）。 */
 export const PANE_FORM_LABELS = Object.freeze({
   dock: '停靠栏',
-  split: '在分屏中打开',
-  overlay: '在浮窗中打开',
+  split: '分屏',
+  overlay: '浮窗',
   fullscreen: '全屏',
   immersive: '沉浸'
 })

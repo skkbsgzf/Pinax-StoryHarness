@@ -433,41 +433,52 @@ test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双�
 })
 
 /**
- * 协议 v1.1-C（工单C）→ M2.5-C：悬浮小工具窗＝宿主容器＋载体声明。
+ * 批次59 · 铁律一／二：任何打开的内容＝一扇 PaneWindow；chrome 归宿主一个组件。
  * 三条边界都可机读：
- *   1) FloatingWidget 是唯一宿主——拖动句柄、Esc、位置回传（emit geometry）都在它身上；
- *      位置与最小化的真相在 workspace 四轴（.pinax/workspace.json），组件自己不落盘；
- *   2) AppNext 只接线开合与内容，不许维护悬浮窗的硬编码坐标表（位置归宿主）；
- *   3) outline manifest 声明 overlay pane，层序 token 必须低于统一二级页。
+ *   1) PaneWindow 是唯一窗口壳——拖动／四角缩放／收起／分屏／×／最大化都在它身上；
+ *      窗口状态（geometry／z／minimized／maximized／贴靠）的真相在 workspace.json v2；
+ *   2) 中间 doc 区＝窗口管理器：AppNext 只接线内容，不维护硬编码坐标表；
+ *   3) 旧宿主容器 FloatingWidget 已并入 PaneWindow（文件不存在）。
  */
-test('协议 v1.1-C：FloatingWidget 是悬浮窗宿主容器（拖动／气泡／几何回传／Esc 都在宿主）', async () => {
-  const widgetPath = join(shellDir, 'FloatingWidget.vue')
-  assert.equal(await exists(widgetPath), true, 'next/shell/FloatingWidget.vue 必须存在（悬浮窗宿主容器）')
-  const widget = await readFile(widgetPath, 'utf-8')
+test('批次59：PaneWindow 是唯一窗口壳（拖动／缩放／收起／分屏／×／最大化都在宿主）', async () => {
+  const windowPath = join(shellDir, 'PaneWindow.vue')
+  assert.equal(await exists(windowPath), true, 'next/shell/PaneWindow.vue 必须存在（统一窗口）')
+  const widget = await readFile(windowPath, 'utf-8')
   for (const needle of [
     'startDrag',
+    'startResize',
     'pointerdown',
-    'Escape',
     "emit('close')",
-    "emit('toggle')",
-    "emit('bubble')",
-    "emit('restore')",
+    "emit('collapse')",
+    "emit('split')",
+    "emit('expand')",
+    "emit('maximize')",
     "emit('geometry',",
     'getBoundingClientRect',
-    'data-overlay-instance',
-    'props.geometry'
+    'data-window-instance',
+    'data-window-state',
+    'props.geometry',
+    'nx-pane-window-tab'
   ]) {
-    assert.ok(widget.includes(needle), `FloatingWidget 缺宿主职责：${needle}`)
+    assert.ok(widget.includes(needle), `PaneWindow 缺窗口职责：${needle}`)
   }
-  assert.ok(widget.includes('nx-overlay-tab'), '收起态要有侧缘小标签（点击展开）')
-  assert.ok(widget.includes('nx-overlay-bubble'), '气泡态要有气泡球（点击展开）')
   assert.ok(widget.includes('<slot />'), '内容经插槽由外壳注入，宿主不自造载体内容')
+  // 铁律一／五：右上角只有三枚钮（收起／分屏／×），不再有每 pane 定制的窗口按钮。
+  const actions = [...widget.matchAll(/data-window-action="([^"]+)"/gu)].map((match) => match[1])
+  assert.deepEqual(actions, ['collapse', 'split', 'close'], '窗口动作只此三枚，别的一律不进 chrome')
+  const corners = [...widget.matchAll(/data-window-resize="([^"]+)"/gu)].map((match) => match[1])
+  assert.deepEqual(corners, ['corner'], '四角把手用 v-for 生成（模板里不应硬列四枚）')
+  assert.ok(widget.includes("['nw', 'ne', 'sw', 'se']"), '浮窗要有四角缩放把手')
 })
 
-test('协议 v1.1-C：载体 SFC 不许自带拖拽／定位逻辑（P16：宿主管渲染）', async () => {
+test('批次59：旧宿主容器 FloatingWidget 已并入 PaneWindow（文件删除）', async () => {
+  assert.equal(await exists(join(shellDir, 'FloatingWidget.vue')), false, 'FloatingWidget.vue 应已删除；窗口壳只剩 PaneWindow')
+})
+
+test('批次59：载体 SFC 不许自带拖拽／定位逻辑（宿主 PaneWindow 负责）', async () => {
   const carriersDir = join(repoRoot, 'next', 'carriers')
   // 今天 next/carriers/ 里还没有 SFC（载体工具/清单都是 .mjs）；这条断言是给后续载体声明
-  // overlay pane 时立的钉子——谁把拖拽/定位写进载体 SFC，这里直接红。
+  // pane 时立的钉子——谁把拖拽/定位写进载体 SFC，这里直接红。
   const carrierSfcs = (await walk(carriersDir)).filter((file) => file.endsWith('.vue'))
   const offenders = []
   for (const file of carrierSfcs) {
@@ -476,31 +487,50 @@ test('协议 v1.1-C：载体 SFC 不许自带拖拽／定位逻辑（P16：宿�
       if (text.includes(needle)) offenders.push(`${file}: ${needle}`)
     }
   }
-  assert.deepEqual(offenders, [], `载体 SFC 不许自带拖拽/定位（宿主 FloatingWidget 负责）：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `载体 SFC 不许自带拖拽/定位（宿主 PaneWindow 负责）：\n${offenders.join('\n')}`)
 })
 
-test('协议 v1.1-C：AppNext 不含悬浮窗硬编码坐标表；位置记忆键 overlay.<paneId> 只在宿主里拼', async () => {
+test('批次59：AppNext 挂窗口层与 PaneWindow，不含旧形态入口与硬编码坐标', async () => {
   const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
-  assert.ok(app.includes('<FloatingWidget'), '外壳要挂宿主容器')
-  assert.ok(app.includes(':id="pane.paneId"'), '宿主按 paneId 区分实例（位置记忆键 overlay.<paneId>）')
-  assert.doesNotMatch(app, /\boverlay[_-]?positions?\b/iu, 'AppNext 不许维护 overlay 的硬编码坐标表')
-  assert.doesNotMatch(app, /(?:left|top|right)\s*:\s*['"]?\d+px/u, 'AppNext 不许写悬浮窗的硬编码坐标（定位归 FloatingWidget）')
-  assert.doesNotMatch(app, /\.localStorage/u, '位置记忆归宿主 FloatingWidget，AppNext 不碰 localStorage')
+  assert.ok(app.includes('<PaneWindow'), '外壳要挂统一窗口')
+  assert.ok(app.includes('class="nx-window-layer"'), '中间 doc 区是窗口层')
+  assert.ok(app.includes(':geometry="win.entry.geometry"'), '几何来自工作区记录（不是外壳的坐标表）')
+  assert.ok(app.includes('@collapse="collapseWindow'), '收起接到工作区状态机')
+  assert.ok(app.includes('@split="splitWindow'), '分屏接到工作区状态机')
+  assert.ok(app.includes('@close="closeWindow'), '关窗接到工作区状态机')
+
+  assert.equal(app.includes('<FloatingWidget'), false, '旧宿主容器已并入 PaneWindow')
+  assert.equal(app.includes('CenterSlotHost'), false, '中栏不再走旧的单槽宿主')
+  assert.equal(app.includes('nx-split'), false, '独立分屏外壳已退役（分屏＝同一扇窗的窗态）')
+  assert.equal(app.includes('nx-form-bar'), false, '形态条已退役（窗态切换零菜单零模式切换）')
+  assert.equal(app.includes('data-form='), false, '旧形态条数据属性不再出现')
+  assert.doesNotMatch(app, /\boverlay[_-]?positions?\b/iu, 'AppNext 不许维护窗口的硬编码坐标表')
+  assert.doesNotMatch(app, /(?:left|top|right)\s*:\s*['"]?\d+px/u, 'AppNext 不许写窗口的硬编码坐标（定位归 PaneWindow）')
+  assert.doesNotMatch(app, /\.localStorage/u, '位置记忆归工作区，AppNext 不碰 localStorage')
 })
 
-test('协议 v1.1-C：outline manifest 声明 overlay pane；层序高于编辑器、低于统一二级页', async () => {
-  const manifest = await readFile(join(repoRoot, 'next', 'carriers', 'outline', 'manifest.mjs'), 'utf-8')
-  assert.match(manifest, /slot: 'overlay'/u, '大纲载体要声明 overlay pane')
-  assert.match(manifest, /id: 'outline\.widget'/u, 'overlay pane id 固定 outline.widget')
+test('批次59：窗口层与窗口壳的样式就位；层序低于统一二级页', async () => {
   const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
-  const rule = ruleBody(layout, '.nx-overlay-widget')
-  assert.ok(rule, 'next-shell.css 里没有 .nx-overlay-widget 规则')
-  assert.match(rule, /position:\s*absolute/u, '悬浮窗是 absolute 定位卡片')
-  assert.match(rule, /z-index:\s*var\(--z-floating-dock\)/u, '层序走 --z-floating-dock（高于编辑器、低于统一二级页）')
+  const layer = ruleBody(layout, '.nx-window-layer {')
+  assert.ok(layer, 'next-shell.css 里没有 .nx-window-layer 规则')
+  assert.match(layer, /position:\s*relative/u, '窗口层是窗口的定位父级')
+  assert.match(layer, /z-index:\s*0/u, '窗口层自成叠层，内联 z 不会和弹窗抢层')
+  const rule = ruleBody(layout, '.nx-pane-window {')
+  assert.ok(rule, 'next-shell.css 里没有 .nx-pane-window 规则')
+  assert.match(rule, /position:\s*absolute/u, '窗口是 absolute 定位卡片')
+  const tab = ruleBody(layout, '.nx-pane-window-tab {')
+  assert.ok(tab, '收起态要有侧缘小标签（点击还原）')
+  assert.match(tab, /z-index:\s*var\(--z-floating-dock\)/u, '标签层序走 --z-floating-dock（低于统一二级页）')
   const tokens = await readFile(join(repoRoot, 'src', 'styles', 'main.css'), 'utf-8')
   const overlayZ = Number(/--z-floating-dock:\s*(\d+)/u.exec(tokens)?.[1])
   const modalZ = Number(/--z-modal:\s*(\d+)/u.exec(tokens)?.[1])
-  assert.ok(Number.isFinite(overlayZ) && Number.isFinite(modalZ) && overlayZ < modalZ, `悬浮层 z(${overlayZ}) 必须低于统一二级页 z(${modalZ})`)
+  assert.ok(Number.isFinite(overlayZ) && Number.isFinite(modalZ) && overlayZ < modalZ, `窗口层 z(${overlayZ}) 必须低于统一二级页 z(${modalZ})`)
+})
+
+test('批次59：outline manifest 仍声明 overlay pane；打开后走同一扇 PaneWindow', async () => {
+  const manifest = await readFile(join(repoRoot, 'next', 'carriers', 'outline', 'manifest.mjs'), 'utf-8')
+  assert.match(manifest, /slot: 'overlay'/u, '大纲载体要声明 overlay pane')
+  assert.match(manifest, /id: 'outline\.widget'/u, 'overlay pane id 固定 outline.widget')
 })
 
 /**
@@ -651,71 +681,75 @@ test('批次33 索引窗 IDE 化：行＝名字、版本进 title、历史与新
 })
 
 /**
- * 协议 v1.2 P18–P21（工单A）：多形态打开的机器钉子。
- *   - 形态词表与状态机只在宿主 paneForms.mjs（P18/P21），载体 SFC 不许出现形态切换逻辑；
- *   - 右键「打开方式」是宿主菜单，条目只来自 manifest.panes 的 forms 声明；
- *   - 浮窗吸附/扩屏是宿主容器职责（P20），分屏副栏 ≥420px（P10/P11）。
+ * 批次59 · 协议 v1.3：位置四轴退役，窗口态收敛成 workspace v2；
+ * 旧形态入口（七钮、竖条右键菜单、分屏外壳、形态条）全部删除；左树只属于 folder 模板。
  */
-test('协议 v1.2 P18–P21 → M2.5-C：形态词表归宿主，状态在 workspace 四轴；浮窗吸附/扩屏与分屏副栏就位', async () => {
-  const formsPath = join(shellDir, 'paneForms.mjs')
-  assert.equal(await exists(formsPath), true, 'next/shell/paneForms.mjs 必须存在（宿主形态词表）')
-  const forms = await readFile(formsPath, 'utf-8')
-  assert.match(forms, /PANE_FORMS = Object\.freeze\(\['dock', 'split', 'overlay', 'fullscreen', 'immersive'\]\)/u,
-    'P18 词表是 dock/split/overlay/fullscreen；批次45 加 immersive（与 PLACEMENTS 同一份）')
-  assert.match(forms, /PANE_FORM_STORAGE_PREFIX = 'paneForm\.'/u, '老键前缀 paneForm.（迁移只用一次）')
-  assert.doesNotMatch(forms, /\.localStorage/u, '形态记忆归 workspace（主进程通道），词表模块不碰浏览器缓存')
-
-  // M2.5-C：状态机在 workspace.mjs，四轴一个不少：placement / minimized / geometry / restore。
-  // 批次35 起另有加法轴 pinned（钉住）：setPinned 是唯一写口。
+test('批次59：workspace v2 窗态轴就位，旧位置四轴与七钮零残留', async () => {
   const workspace = await readFile(join(shellDir, 'workspace.mjs'), 'utf-8')
   for (const needle of [
-    "PLACEMENTS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])",
-    "MINIMIZED_MODES = Object.freeze(['none', 'bubble', 'collapsed'])",
+    'WORKSPACE_VERSION = 2',
+    "MINIMIZED_MODES = Object.freeze(['none', 'tab'])",
     'export function createWorkspaceStore',
     'export function instanceIdFor',
-    'restorePlacement',
     'setGeometry',
-    'setPinned'
+    'minimize',
+    'setMaximized',
+    'tile(',
+    'untile',
+    'removePanes'
   ]) {
-    assert.ok(workspace.includes(needle), `工作区四轴缺：${needle}`)
+    assert.ok(workspace.includes(needle), `工作区 v2 缺窗口轴：${needle}`)
+  }
+  for (const gone of ['PLACEMENTS', 'restorePlacement', 'setPinned', 'dockPane', 'place(']) {
+    assert.equal(workspace.includes(gone), false, `旧位置四轴残留：${gone}`)
   }
   assert.doesNotMatch(workspace, /\.localStorage/u, '工作区状态只经主进程通道读写，渲染层不写 localStorage')
 
-  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
-  for (const needle of ['nx-context-menu', '打开方式', 'setPaneForm', 'hostWorkspace', 'nx-split', 'nx-split-side', 'data-split="side"']) {
-    assert.ok(app.includes(needle), `AppNext 缺多形态打开的落点：${needle}`)
-  }
-  assert.match(app, /sanitizePaneForms\(pane\.forms\)/u, '右键菜单必须按 manifest.panes 的 forms 声明列（P18）')
+  const forms = await readFile(join(shellDir, 'paneForms.mjs'), 'utf-8')
+  assert.match(forms, /PANE_FORMS = Object\.freeze\(\['dock', 'split', 'overlay', 'fullscreen', 'immersive'\]\)/u,
+    '旧词表只作兼容读（host descriptor 与 12 份清单核对用）')
+  assert.match(forms, /PANE_FORM_STORAGE_PREFIX = 'paneForm\.'/u, '老键前缀 paneForm.（迁移只用一次）')
+  assert.doesNotMatch(forms, /\.localStorage/u, '词表模块不碰浏览器缓存')
 
-  const widget = await readFile(join(shellDir, 'FloatingWidget.vue'), 'utf-8')
-  // 批次35：放大/还原是同一个钮的两面（toggleExpand），按钮组七钮各带 data-action。
-  for (const needle of [
-    'is-snapped-left',
-    'is-snapped-right',
-    'toggleExpand',
-    "emit('expand')",
-    'detectSnap',
-    'data-action="pin"',
-    "emit('pin'",
-    "emit('split')",
-    "emit('close')"
-  ]) {
-    assert.ok(widget.includes(needle), `FloatingWidget 缺 P20 动作：${needle}`)
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  for (const needle of ['hostWorkspace', '<PaneWindow', 'layoutTemplateForBoard', 'data-test="window-layer"']) {
+    assert.ok(app.includes(needle), `AppNext 缺窗口管理器落点：${needle}`)
+  }
+  for (const gone of ['sanitizePaneForms', 'setPaneForm', 'nx-context-menu', 'nx-split', 'nx-form-bar', 'CenterSlotHost', 'FloatingWidget', '打开方式']) {
+    assert.equal(app.includes(gone), false, `AppNext 仍有退役的形态入口：${gone}`)
   }
 
   const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
-  const sideRule = ruleBody(layout, '.nx-split-side {')
-  assert.ok(sideRule, 'next-shell.css 里没有 .nx-split-side 规则（分屏副栏）')
-  assert.match(sideRule, /min-width:\s*420px/u, '分屏副栏必须 ≥420px（协议 P10/P11）')
+  for (const gone of ['.nx-overlay-widget', '.nx-overlay-bubble', '.nx-split-side', '.nx-split-main', '.nx-form-bar']) {
+    assert.equal(layout.includes(gone), false, `next-shell.css 还留着退役形态的规则：${gone}`)
+  }
 
-  // P21/P18：载体 SFC 不感知形态——出现宿主状态词即红（今日 next/carriers 里没有 SFC，这条是给后续载体立的钉子）。
+  // 载体 SFC 不感知窗口状态（今日 next/carriers 里没有 SFC，这条是给后续载体立的钉子）。
   const carrierSfcs = (await walk(join(repoRoot, 'next', 'carriers'))).filter((file) => file.endsWith('.vue'))
   const offenders = []
   for (const file of carrierSfcs) {
     const text = stripComments(await readFile(file, 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
-    for (const needle of ['setPaneForm', 'paneForm.', 'paneForms.mjs', 'is-snapped']) {
+    for (const needle of ['setPaneForm', 'paneForm.', 'paneForms.mjs', 'hostWorkspace', 'nx-pane-window']) {
       if (text.includes(needle)) offenders.push(`${file}: ${needle}`)
     }
   }
-  assert.deepEqual(offenders, [], `载体 SFC 不许自带形态切换逻辑（P21：宿主管）：\n${offenders.join('\n')}`)
+  assert.deepEqual(offenders, [], `载体 SFC 不许自带窗口状态逻辑（宿主 PaneWindow 管）：\n${offenders.join('\n')}`)
+})
+
+test('批次59：布局模板是宿主词汇；folder 有树，web／gallery 没有硬编码左栏', async () => {
+  const templates = await readFile(join(shellDir, 'layoutTemplates.mjs'), 'utf-8')
+  for (const needle of ['LAYOUT_TEMPLATES', "'folder'", "'web'", "'gallery'", 'templateHasTree', 'layoutTemplateForBoard']) {
+    assert.ok(templates.includes(needle), `布局模板注册表缺：${needle}`)
+  }
+  assert.match(templates, /entries-workspace/u, 'web 模板按 pane kind 推断，不靠改清单')
+  assert.match(templates, /worldbook\./u, '世界书按 id 前缀认 web（批次60 前先跑起来）')
+
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  assert.match(app, /v-if="showIndexWindow"/u, '索引窗是 folder 模板的一个 pane，不再无条件渲染')
+  assert.match(app, /templateHasTree\(layoutTemplateForBoard\(board\)\)/u, '竖条点击也按模板决定是否开树')
+
+  const index = await readFile(join(shellDir, 'IndexWindow.vue'), 'utf-8')
+  assert.equal(index.includes('打开方式'), false, '索引窗不再上报宿主形态菜单')
+  assert.equal(index.includes("'context-menu'"), false, '索引窗不再有形态菜单事件')
+  assert.ok(index.includes('nx-context-menu'), '大纲／章节自己的右键菜单仍在（内容操作，不是窗口动作）')
 })

@@ -1104,30 +1104,33 @@ describe('小说载体', () => {
 })
 
 describe('世界书与设定两栏（协议 v1.1-A：世界书独立成栏，设定只剩约束）', () => {
-  it('世界书条目在索引窗里列，核心区读得到；未建档的条目在两头都标出来', async () => {
+  it('世界书是 web 模板（批次59）：不渲染左树，条目在看板区读得到；未建档标在行 title', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 切到「世界书」那块板：索引窗换成条目树，核心区换成条目详情（协议 v1.1-A：世界书独立一栏）。
+    // 切到「世界书」那块板：web 模板只有中栏看板，不再有「条目树」左栏。
     await openBoard(wrapper, '世界书')
 
     expect(tools.calls.some((call) => call.tool === 'pinax_worldbook_list')).toBe(true)
-    // 批次44：条目行搬进了核心区的看板区（上＝图表列，下＝详情），窄栏退成类别导航树。
+    expect(wrapper.find('.nx-index-window').exists()).toBe(false)
+    // 批次44：条目行在看板区（上＝图表列，下＝详情）。
     const rows = wrapper.findAll('[data-test="entries-board"] .nx-tree-item')
     expect(rows).toHaveLength(2)
     // 批次33：行上只剩名字，「N 字 · 未建档」退到行的 title。
     expect(rows[1].text()).toBe('随手记')
     expect(rows[1].attributes('title')).toContain('未建档')
-    // 契约警告是「列举」层的事，仍由索引窗底部的警告行摊开（那一段对所有板通用）。
-    expect(wrapper.find('.nx-index-window').text()).toContain('不符合文件契约')
+    // 契约警告是「列举」层的事：web 模板没有索引窗，警告跟着看板走（批次59）。
+    expect(wrapper.find('[data-test="entries-workspace"]').text()).toContain('不符合文件契约')
 
-    expect(wrapper.find('.entry-text').text()).toContain('醒来在雪夜')
+    // 批次59 窗口模型：中栏换面语义退役，改为窗口在册/聚焦断言。
+    // 多载体共存后 .entry-text 会先命中仍在场的正文窗，限定到世界书看板区（批次59 记录 §10.4-1）。
+    expect(wrapper.find('[data-test="entries-workspace"] .entry-text').text()).toContain('醒来在雪夜')
     await rows[1].trigger('click')
     await flushPromises()
-    expect(wrapper.find('.entry-text').text()).toContain('设定碎句')
-    expect(wrapper.find('.center').text()).toContain('未建档')
+    expect(wrapper.find('[data-test="entries-workspace"] .entry-text').text()).toContain('设定碎句')
+    expect(wrapper.find('[data-test="entries-workspace"]').text()).toContain('未建档')
     wrapper.unmount()
   })
 
@@ -1623,7 +1626,7 @@ describe('资料载体', () => {
 })
 
 describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯粹的本域内容树）', () => {
-  it('竖条七格；每栏索引窗只列本载体的树，中栏按 paneId 前缀换面', async () => {
+  it('竖条七格；每栏索引窗只列本载体的树，开窗后在册且聚焦', async () => {
     const tools = fakeTools({
       notes: [{ index: 0, title: '雨夜的表', file: '构思/雨夜的表.md', name: '雨夜的表.md', revision: 1, text: '袖口的表停在十二点差三分。', totalChars: 14, truncated: false }],
       rules: [{ index: 0, title: '纪律', file: '约束/纪律.md', name: '纪律.md', revision: 1, text: '- 不许出现现代词\n', totalChars: 10, truncated: false }],
@@ -1640,7 +1643,10 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
     }
 
     const sections = () => wrapper.find('.nx-index-window .nx-index-body').findAll('.workspace-nav-section').map((node) => node.text())
-    const activePane = () => wrapper.find('.pane[data-pane-id]').attributes('data-pane-id')
+    // 批次59 窗口模型：中栏换面语义退役，改为窗口在册/聚焦断言。
+    // 窗层按叠序从低到高渲染，末尾那扇＝叠序最高＝当前聚焦的窗口。
+    const activeWindow = () => wrapper.findAll('.nx-pane-window').at(-1)
+    const activePane = () => activeWindow().find('.pane[data-pane-id]').attributes('data-pane-id')
 
     // ① 小说：只有正文这一棵树；大纲/构思/世界书/约束/资料一棵都不在旁边，也一个都不取数。
     expect(sections()).toEqual(['正文'])
@@ -1649,31 +1655,36 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
       expect(tools.calls.some((call) => call.tool === tool), `小说栏不该取 ${tool}`).toBe(false)
     }
 
-    // ② 大纲：索引窗只有大纲树；中栏换大纲编辑面，正文编辑器不在。
+    // ② 大纲：索引窗只有大纲树；开窗后 outline 窗在册，聚焦的是它，正文编辑器不在这一扇里。
     await openBoard(wrapper, '大纲')
     expect(sections()).toEqual(['大纲'])
+    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').exists()).toBe(true)
     expect(activePane()).toBe('outline.editor')
-    expect(wrapper.find('[aria-label="正文编辑器"]').exists()).toBe(false)
-    expect(wrapper.find('[aria-label="大纲节点标题"]').exists()).toBe(false, '没选节点前只是提示，不空造编辑面')
+    expect(activeWindow().find('[aria-label="正文编辑器"]').exists()).toBe(false)
+    expect(activeWindow().find('[aria-label="大纲节点标题"]').exists()).toBe(false, '没选节点前只是提示，不空造编辑面')
     expect(wrapper.text()).toContain('从左边索引窗里选一个大纲节点')
 
-    // ③ 构思：只有构思清单；中栏是构思编辑面。
+    // ③ 构思：只有构思清单；构思窗在册，聚焦的是它。
     await openBoard(wrapper, '构思')
     expect(sections()).toEqual(['构思'])
+    expect(wrapper.find('.nx-pane-window[data-window-pane="notes.editor"]').exists()).toBe(true)
     expect(activePane()).toBe('notes.editor')
-    expect(wrapper.find('[aria-label="正文编辑器"]').exists()).toBe(false)
+    expect(activeWindow().find('[aria-label="正文编辑器"]').exists()).toBe(false)
 
-    // ④ 世界书：只有条目树；中栏是条目阅读面。
+    // ④ 世界书：web 模板（批次59 铁律四）——左树不是标配，条目搬进看板区；世界书窗在册并聚焦。
     await openBoard(wrapper, '世界书')
-    expect(sections()).toEqual(['世界书'])
+    expect(wrapper.find('.nx-index-window').exists()).toBe(false)
+    expect(wrapper.find('.nx-pane-window[data-window-pane="worldbook.entries"]').exists()).toBe(true)
     expect(activePane()).toBe('worldbook.entries')
-    expect(wrapper.find('.entry-text').exists()).toBe(true)
+    expect(wrapper.find('[data-test="entries-board"]').exists()).toBe(true)
+    expect(activeWindow().find('.entry-text').exists()).toBe(true)
 
-    // ⑤ 设定：只有约束清单；中栏是约束编辑面（选中行后）。
+    // ⑤ 设定：只有约束清单；设定窗在册并聚焦（选中行后才是约束编辑面）。
     await openBoard(wrapper, '设定')
     expect(sections()).toEqual(['约束'])
+    expect(wrapper.find('.nx-pane-window[data-window-pane="setting.rules"]').exists()).toBe(true)
     expect(activePane()).toBe('setting.rules')
-    expect(wrapper.find('.entry-text').exists()).toBe(false)
+    expect(activeWindow().find('.entry-text').exists()).toBe(false)
     const ruleRow = wrapper.findAll('.nx-index-window .nx-tree-item').find((row) => row.text().includes('纪律'))
     await ruleRow.trigger('click')
     await flushPromises()
@@ -1681,9 +1692,10 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
     expect(wrapper.find('[data-test="rule-rendered"]').exists()).toBe(true)
     expect(wrapper.find('[aria-label="约束编辑器"]').exists()).toBe(false)
 
-    // ⑥ 资料：只有资料清单；中栏是资料阅读面。
+    // ⑥ 资料：只有资料清单；资料窗在册并聚焦。
     await openBoard(wrapper, '资料')
     expect(sections()).toEqual(['资料'])
+    expect(wrapper.find('.nx-pane-window[data-window-pane="reference.documents"]').exists()).toBe(true)
     expect(activePane()).toBe('reference.documents')
     expect(wrapper.find('[aria-label="资料检索"]').exists()).toBe(true, '资料阅读面的检索入口在')
     expect(wrapper.text()).toContain('从左边索引窗里选一篇资料')
@@ -1704,11 +1716,12 @@ describe('载体分栏（协议 v1.1-A：一个载体＝竖条一格＝一棵纯
     await flushPromises()
 
     await openBoard(wrapper, '世界书')
-    expect(wrapper.find('.nx-index-window .nx-index-error').text()).toContain('「世界书/」读失败')
+    // web 模板没有左树（批次59 铁律四）：列举层的错误跟着看板区摊开。
+    expect(wrapper.find('[data-test="entries-workspace"] .nx-index-error').text()).toContain('「世界书/」读失败')
 
     // 换回小说：世界书那一栏的错误不挂在正文树上。
     await openBoard(wrapper, '小说')
-    expect(wrapper.find('.nx-index-window .nx-index-error').exists()).toBe(false)
+    expect(wrapper.find('.nx-index-error').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('「世界书/」读失败')
     wrapper.unmount()
   })

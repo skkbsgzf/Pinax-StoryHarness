@@ -11,26 +11,19 @@ import {
 } from '../shell/paneForms.mjs'
 import {
   DEFAULT_MINIMIZED,
-  DEFAULT_PLACEMENT,
-  MINIMIZED_MODES,
-  PLACEMENTS
+  MINIMIZED_MODES
 } from '../shell/workspace.mjs'
 
 /**
- * 宿主形态词表单测（协议 v1.2 P18–P21 → M2.5-C 拆轴）。
- * M2.5-C 起 paneForms.mjs 只剩「词」：状态机与持久化搬去 workspace.mjs（四轴），
- * 这里核的是两句合同——词表与打开的落点一致、词表外形态不出现。
+ * 旧位置词表的兼容读单测（批次59）。
+ * 界面不再有位置菜单：这五档只留给宿主描述导出（12 份清单的 manifest.panes[].forms），
+ * 状态机（workspace.mjs v2）只认 geometry／z／minimized／maximized／tiledWith／tileSide。
  */
 
-test('P18 形态词表：五档（批次45 加沉浸），与 workspace 的 PLACEMENTS 逐项相等', () => {
-  // 批次45：PANE_FORMS 与 PLACEMENTS 必须继续同一份真相——第五档 immersive 两边一起加。
+test('旧词表仍可导出：五档顺序不变（供 host descriptor 与清单核对用）', () => {
   assert.deepEqual(PANE_FORMS, ['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
-  assert.deepEqual([...PLACEMENTS], [...PANE_FORMS], '词表与状态机的打开位置必须同一份（改一边就是两套真相）')
-  assert.equal(DEFAULT_PANE_FORM, DEFAULT_PLACEMENT)
   assert.equal(DEFAULT_PANE_FORM, 'dock')
-  assert.equal(DEFAULT_MINIMIZED, 'none')
   assert.deepEqual(Object.keys(PANE_FORM_LABELS), [...PANE_FORMS])
-  assert.equal(PANE_FORM_LABELS.immersive, '沉浸')
   assert.equal(PANE_FORM_STORAGE_PREFIX, 'paneForm.')
   assert.equal(paneFormStorageKey('novel.editor'), 'paneForm.novel.editor')
 
@@ -40,17 +33,17 @@ test('P18 形态词表：五档（批次45 加沉浸），与 workspace 的 PLAC
   }
 })
 
-test('P18：气泡不是第五种形态（最小化是独立的轴）', () => {
+test('窗态只剩两档：none／tab；气泡与侧缘标签旧词都不再是窗口状态', () => {
+  assert.deepEqual([...MINIMIZED_MODES], ['none', 'tab'])
+  assert.equal(DEFAULT_MINIMIZED, 'none')
   for (const mode of MINIMIZED_MODES) {
-    assert.equal(PANE_FORMS.includes(mode), false, `最小化状态 ${mode} 不该混进打开位置词表`)
+    assert.equal(PANE_FORMS.includes(mode), false, '窗态不混进旧位置词表')
   }
-  assert.deepEqual([...MINIMIZED_MODES], ['none', 'bubble', 'collapsed'])
 })
 
-test('清单里的 forms 只留宿主认得的形态：去重 + 按词表顺序', () => {
+test('清单里的 forms 只留旧词表认得的形态：去重 + 按词表顺序', () => {
   assert.deepEqual(sanitizePaneForms(['split', 'window', 'dock', 'split']), ['dock', 'split'])
   assert.deepEqual(sanitizePaneForms(null), [])
   assert.deepEqual(sanitizePaneForms('split'), [])
-  // 载体声明顺序不影响菜单顺序：菜单按宿主词表走（P18）。
   assert.deepEqual(sanitizePaneForms(['fullscreen', 'overlay']), ['overlay', 'fullscreen'])
 })

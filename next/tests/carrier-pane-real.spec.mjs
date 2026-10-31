@@ -131,12 +131,14 @@ describe('载体面板接真会话', () => {
     const board = wrapper.find('.nx-ribbon-item[aria-label="世界书"]')
     expect(board.exists(), '图标竖条应有世界书板块的入口').toBe(true)
     await board.trigger('click')
-    await waitFor(() => wrapper.find('[data-pane-id="worldbook.entries"]').exists() && wrapper.findAll('[data-test="entries-board"] .nx-tree-item').length === 1 && wrapper.find('.entry-text').exists(), { note: '世界书面板没从磁盘读出条目' })
+    // 批次59 窗口模型：中栏换面语义退役，改为窗口在册/聚焦断言。
+    // 多载体共存后 .entry-text 会先命中仍在场的正文窗，等待条件与断言都限定到世界书看板区（批次59 记录 §10.4-3）。
+    await waitFor(() => wrapper.find('[data-pane-id="worldbook.entries"]').exists() && wrapper.findAll('[data-test="entries-board"] .nx-tree-item').length === 1 && wrapper.find('[data-test="entries-workspace"] .entry-text').exists(), { note: '世界书面板没从磁盘读出条目' })
 
     expect(wrapper.find('[data-pane-id="worldbook.entries"]').exists()).toBe(true)
     expect(wrapper.findAll('[data-test="entries-board"] .nx-tree-item')).toHaveLength(1)
     expect(wrapper.find('[data-test="entries-board"]').text()).toContain('人物·柯秒')
-    expect(wrapper.find('.entry-text').text()).toContain('醒来在雪夜')
+    expect(wrapper.find('[data-test="entries-workspace"] .entry-text').text()).toContain('醒来在雪夜')
 
     // 设定栏（约束）：世界书条目不在这一栏，只有 约束/文风.md 一行；中栏是约束编辑面（点开才进）。
     const settingBoard = wrapper.find('.nx-ribbon-item[aria-label="设定"]')
@@ -145,7 +147,8 @@ describe('载体面板接真会话', () => {
     await waitFor(() => wrapper.find('[data-pane-id="setting.rules"]').exists() && wrapper.find('.nx-index-window').text().includes('文风'), { note: '设定栏没从磁盘读出约束' })
     expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(1)
     expect(wrapper.find('.nx-index-window').text()).not.toContain('人物·柯秒')
-    expect(wrapper.find('.entry-text').exists()).toBe(false)
+    // 同一限定：世界书窗仍并存于窗层，这里只断言设定面里没有条目阅读态。
+    expect(wrapper.find('[data-pane-id="setting.rules"] .entry-text').exists()).toBe(false)
 
     // 界面上没有任何写入通道：面板存在前后，世界书目录的文件清单一个字都没变。
     expect((await readdir(join(root, '世界书'))).join()).toBe('人物·柯秒.md')
