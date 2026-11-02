@@ -21,6 +21,7 @@ import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import ServicesSection from './settings/ServicesSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import CommandPalette from './CommandPalette.vue'
+import StatusBar from './StatusBar.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
@@ -431,6 +432,60 @@ const serviceStatus = computed(() => {
 provide('pinaxServiceSnapshot', serviceSnapshot)
 
 /**
+ * 状态栏（批次63 任务1）的四要素读数。
+ *
+ * 一句话：状态栏只转述，不记账——四个数全从既有事实源现取，外壳不留第二份真相。
+ *   ① 服务灯＝serviceLogPool 那份快照（与竖条状态点、设置页「服务与通知」同一来源）；
+ *   ② 载体＝此刻那块板的标题；页组＝此刻那一页在 main 还是 side 组；
+ *   ③「1＋N 的 N」＝在册窗数（工单口径：openWindows，四种形态都算在册）；
+ *   ④ 字数＝此刻那一页装载的文档：有草稿读作者手上那份，没草稿读盘上那份的字数。
+ * 唯一可点件（服务灯）落的是既有那节：点开设置里的「服务与通知」，不新增任何动作。
+ */
+const statusLights = computed(() => (serviceSnapshot.value?.carriers ?? [])
+  .filter((carrier) => carrier?.carrierId && carrier?.color)
+  .map((carrier) => ({
+    id: carrier.carrierId,
+    title: carrier.carrierTitle ?? carrier.carrierId,
+    color: carrier.color,
+    notices: carrier.unackedNotices ?? 0
+  })))
+
+const STATUS_GROUP_LABELS = { main: '主组', side: '侧组' }
+
+/** 此刻站在哪块板（竖条那一格）；没开项目就没板。 */
+const statusCarrier = computed(() => activeBoard.value?.title ?? '')
+
+const statusPageGroup = computed(() => {
+  const instance = focusedInstance()
+  const group = instance ? workspaceSnapshot.value.entries[instance]?.group : null
+  return group ? STATUS_GROUP_LABELS[group] ?? String(group) : ''
+})
+
+/** 「1＋N 的 N」：此刻在册的窗数（页／浮窗／侧缘标签都算）。 */
+const statusWindows = computed(() => openWindows.value.length)
+
+/** 编辑面与草稿位的对照：草稿非空就读草稿（作者手上那份），否则读盘上那份的 totalChars。 */
+const STATUS_DOC_FIELDS = [
+  ['chapter', 'draft'], ['entry', 'entryDraft'], ['note', 'noteDraft'], ['rule', 'ruleDraft'],
+  ['document', 'documentDraft'], ['script', 'scriptDraft'], ['record', null]
+]
+
+/** 焦点文档：标题＋字数。没装可计字的文档就 chars=null，状态栏如实留一道破折号。 */
+const statusDoc = computed(() => {
+  const page = pageDataOf(focusedInstance())
+  for (const [key, draftKey] of STATUS_DOC_FIELDS) {
+    const doc = page?.[key]
+    if (!doc) continue
+    const draft = draftKey ? page?.[draftKey] : null
+    if (typeof draft === 'string' && draft) return { title: doc.title ?? doc.name ?? '', chars: draft.length }
+    const chars = Number.isFinite(doc.totalChars) ? doc.totalChars
+      : typeof doc.text === 'string' ? doc.text.length : null
+    return { title: doc.title ?? doc.name ?? '', chars }
+  }
+  return { title: '', chars: null }
+})
+
+/**
  * 载体声明节的内容组件表（工单B · P14 第三步）：键是「声明 id」（不是载体 id）。
  * 第一个真内容＝novel.writing → WritingPrefsSection；props 里是当前偏好值。
  * 合并（声明 → 目录项 → 组件）在 SettingsModal.carrierSections 里做：没有映射的声明仍出空态。
@@ -620,9 +675,24 @@ const menuActions = {
   'settings.carriers': () => void openCarriers()
 }
 
-function runMenuAction(id) {
+/**
+ * 批次63 收编b：载体的命令 id 也走到这里（主进程那条 menu:invoke 一直按「MENU_TEMPLATE ∪
+ * registry.commands()」放行并回 handled:true，但页面内没有它的落点，作者看到的成功是假的）。
+ * 现在按命令表里那条 run 走面板同一条执行通路——不新开第二条做事的路，
+ * 落点认不出就如实提示，与 runPaletteCommand 用的是同一句话。
+ */
+async function runMenuAction(id) {
   const action = menuActions[id]
-  if (action) action()
+  if (action) {
+    action()
+    return
+  }
+  // 只认 carrier 分组：菜单项的 run 是 `menu:<自己的 id>`，回到这里就是死循环。
+  const entry = commandEntries.value.find((item) => item.group === 'carrier' && item.id === id)
+  if (!entry) return
+  const ran = await resolveCommandRun(entry.run, entry)
+  if (ran) return
+  data.notice = `命令「${entry.title ?? entry.id}」未接线：落点 ${String(entry.run || '（空）')} 不是既有动作`
 }
 
 /**
@@ -632,7 +702,7 @@ function runMenuAction(id) {
 async function invokeMenu(item) {
   closeTopMenu()
   if (!item?.id) return
-  runMenuAction(item.id)
+  void runMenuAction(item.id)
   if (!props.bridge?.request) return
   try {
     await props.bridge.request(IPC_CHANNELS.menuInvoke, { id: item.id })
@@ -1675,8 +1745,10 @@ function collapseTopWindow() {
  * 快捷键总线（批次62 任务四）。收编的只有点名的高频项，词汇来自 next/shell/hotkeys.mjs 那张表：
  *   · palette.open          Ctrl+P   唤起命令面板
  *   · workspace.collapse-top Esc     收叠序最高的那一扇（本批第一次有实现落在这条键位串上）
- *   · project.reviewProposals Ctrl+Shift+R（Q3 裁定：Ctrl+Shift+P 让给面板）
- * 表里还有别的菜单 id，将来收编一条就自动生效，不必再改这个函数。
+ *   · project.reviewProposals Ctrl+Shift+R —— 批次63 收编c：这条**不在这里生效**。
+ *     原生菜单带着同一个 accelerator，Electron 直办后回一条 menuInvoked（见上面那条订阅）；
+ *     matchHotkey 按 nativeAcceleratedIds() 把它剔掉，一次按键只走一条路。表里留着它是让作者看得见键位。
+ * 表里将来再收编纯宿主动作（不在菜单里的）就自动生效，不必改这个函数。
  * 上层（面板／二级页／菜单下拉）开着就整体让位：Esc 同时是「关面板」和「收窗」时，先关面板。
  */
 function onWindowKeydown(event) {
@@ -1692,7 +1764,7 @@ function onWindowKeydown(event) {
     collapseTopWindow()
     return
   }
-  runMenuAction(id)
+  void runMenuAction(id)
 }
 
 /* —— 手势入口（批次62 任务五）——————————————————————————————————
@@ -2006,7 +2078,7 @@ onMounted(() => {
   })
   // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
   // 工单F：页内菜单行的点击也收敛到同一个 runMenuAction——两条入口，一份落点。
-  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => runMenuAction(payload?.id))
+  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => { void runMenuAction(payload?.id) })
   // 项目事件（批次39）：同一条桥，只接「有人消费」的 kind；退订在 onBeforeUnmount。
   if (typeof props.bridge?.onEvent === 'function') {
     offProjectEvent = props.bridge.onEvent(IPC_EVENT.projectEvent, onProjectEvent)
@@ -2330,6 +2402,18 @@ onBeforeUnmount(() => {
 
       <WorkbenchTooltip />
     </div>
+
+    <!-- 批次63 任务1：底栏常驻的状态栏。它是 .nx-shell-root 的最后一段（标题栏 → 三栏 → 状态栏），
+         四个读数全由上面那几格现取，组件自己不认识桥。 -->
+    <StatusBar
+      :lights="statusLights"
+      :carrier="statusCarrier"
+      :page-group="statusPageGroup"
+      :windows="statusWindows"
+      :doc-title="statusDoc.title"
+      :doc-chars="statusDoc.chars"
+      @open-services="openSection('services')"
+    />
   </div>
 </template>
 

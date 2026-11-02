@@ -2158,7 +2158,9 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
       settings: [],
       tools: ['pinax_outline_read', 'pinax_outline_save'],
       context: { providers: ['outline'], budgetChars: 20000 },
-      panes
+      panes,
+      // 协议 @4 的命令面（批次63 收编b 的夹具）：载体自己声明的那条命令，与真清单里那条同名同落点。
+      commands: [{ id: 'outline.open-editor', title: '打开大纲编辑', run: 'pane:outline.editor' }]
     }
     return {
       ...base,
@@ -2851,6 +2853,107 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
     expect(formOf('outline.widget#1')).toBe('tab')
+    wrapper.unmount()
+  })
+
+  /**
+   * 状态栏（批次63 任务1）。三条判据逐条落在 DOM 上：
+   *   · 四要素齐（服务灯／载体·页组／在册窗数／焦点文档字数），读数全从既有事实源现取；
+   *   · 不做死按钮（作者裁定③）：整条状态栏只有服务灯那一个 button，点它开的是既有那一节；
+   *   · 灯的颜色与未确认条数来自 serviceLogPool 快照（与竖条状态点同一来源，不是第二份账）。
+   */
+  it('状态栏：四要素读数、唯一可点件点开「服务与通知」，不新增任何动作（批次63 任务1）', async () => {
+    const handlers = new Map([[IPC_CHANNELS.runtimeServiceLog, () => ({
+      ok: true,
+      value: {
+        log: {
+          at: '2026-11-02T00:00:00.000Z', ackedAt: null, entries: [],
+          carriers: [
+            { carrierId: 'pinax.carrier.outline', carrierTitle: '大纲', color: 'green', unackedNotices: 0, items: [] },
+            { carrierId: 'fixture.novel', carrierTitle: '小说（夹具）', color: 'orange', unackedNotices: 2, items: [] }
+          ]
+        }
+      }
+    })]])
+    const bridge = pageBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    const bar = wrapper.find('[data-test="status-bar"]')
+    expect(bar.exists(), '底栏必须常驻（不是悬浮层）').toBe(true)
+    expect(bar.attributes('aria-label')).toBe('状态栏')
+    // 挂在三栏之后：标题栏 → 三栏 → 状态栏，它是根的最后一段。
+    expect(bar.element.previousElementSibling?.classList.contains('next-shell')).toBe(true)
+
+    // ① 服务灯：一盏一载体，颜色与非色读数（标题名＋未确认条数）都在文本里。
+    const lights = bar.findAll('.nx-status-light')
+    expect(lights).toHaveLength(2)
+    expect(lights[1].attributes('data-status')).toBe('orange')
+    expect(bar.find('[data-test="status-services"]').text()).toContain('小说（夹具）')
+    expect(bar.find('[data-test="status-services"]').text()).toContain('2')
+
+    // ② 载体：开局站在主载体那块板上。
+    expect(bar.find('[data-test="status-carrier"]').text()).toContain('小说（夹具）')
+
+    // ③「1＋N 的 N」＝在册窗数：开局只有宿主补出来的那一页，正文自动载入第一章（夹具那份 3 字）。
+    expect(bar.find('[data-test="status-windows"]').text()).toContain('1')
+    expect(bar.find('[data-test="status-chars"]').text()).toContain('3 字')
+
+    // ④ 焦点跟着走：切出大纲页＝在册两条，字数如实退回破折号（大纲不是可计字的文档）。
+    await openOutlineBoard(wrapper)
+    expect(bar.find('[data-test="status-windows"]').text()).toContain('2')
+    expect(bar.find('[data-test="status-carrier"]').text()).toContain('大纲')
+    expect(bar.find('[data-test="status-carrier"]').text()).toContain('主组')
+    expect(bar.find('[data-test="status-chars"]').text()).toContain('—')
+
+    // 回到正文那一页，读数又回来——同一个读数源（那一页自己的数据面），不是第二份账。
+    await wrapper.find('.nx-page-tab[data-page-instance="novel.editor#1"]').trigger('click')
+    await flushPromises()
+    expect(bar.find('[data-test="status-carrier"]').text()).toContain('小说（夹具）')
+    expect(bar.find('[data-test="status-chars"]').text()).toContain('3 字')
+
+    // 不做死按钮：整条状态栏只有服务灯那一个钮，且它落在共享控件词汇里。
+    const buttons = bar.findAll('button')
+    expect(buttons).toHaveLength(1)
+    expect(buttons[0].classes()).toContain('control-quiet')
+    expect(buttons[0].attributes('data-test')).toBe('status-services')
+
+    // 点它＝打开既有的「服务与通知」节（与右栏／竖条状态点同一个落点），不是新动作。
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+    await buttons[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists(), '状态灯点开的是统一弹窗').toBe(true)
+    expect(wrapper.find('[role="tabpanel"][aria-label="服务与通知"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  /**
+   * 收编b（批次63 任务4①）：菜单里的载体命令不再是「主进程答一声就完事」的假成功。
+   * 原生菜单／页内菜单行按下的那条 id 若是载体声明的命令，渲染层要用命令面板同一条执行通路
+   * 真的把 run 串跑掉——判据是工作区里确实多出了那一页。
+   */
+  it('菜单落载体命令＝真执行：走面板同款通路开出那一页，不报「未接线」（批次63 收编b）', async () => {
+    const handlers = new Map()
+    const bridge = pageBridge({ handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    expect(hostWorkspace.get('outline.editor#1'), '开局不该已经开着大纲页').toBeFalsy()
+
+    // 事件口径（原生菜单按下的那条路）：id 是载体命令，执行落点仍是渲染层。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'outline.open-editor' })
+    await flushPromises()
+    expect(formOf('outline.editor#1')).toBe('page')
+    expect(wrapper.text()).not.toContain('未接线')
+
+    // 应用菜单那条仍走原来的动作表（不经命令表回落），且不会把两者混起来。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    expect(wrapper.find('[role="tabpanel"][aria-label="偏好与模型"]').exists()).toBe(true)
+
+    // 表里没有的 id：什么都不做（不假装成功，也不误开别人的页）。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'nope.not-a-command' })
+    await flushPromises()
+    expect(hostWorkspace.list().filter((entry) => entry.pane === 'novel.editor')).toHaveLength(1)
     wrapper.unmount()
   })
 })
@@ -3769,6 +3872,110 @@ describe('大纲转换（批次30）', () => {
     expect(hint.exists()).toBe(true)
     expect(hint.text()).toContain('设置 → 大纲转换')
     expect(hint.findAll('button')).toHaveLength(0)
+    wrapper.unmount()
+  })
+})
+
+/**
+ * 故障隔离（批次63 任务2 · 框架规范 §9.3「单个载体失效不许拖垮宿主」的 UI 那一半）。
+ *
+ * 此前只写过内核侧的隔离，这一节补的是最狠的那一档：**把全部载体都停掉**。
+ * 判据三条，全是对着作者的日常说的：
+ *   1. 外壳不许白屏——三栏、右栏、状态栏照旧在，中栏给的是「没有已启用的载体」那句人话；
+ *   2. 竖条照旧画出来（哪怕一块板都没有）：它是宿主的地盘，不是载体的延伸；
+ *   3. 命令面照旧可用：Ctrl+P 唤得起、列得出应用菜单动作、Enter 真的执行得掉——
+ *      「先命令面板把载体重新启用，再回去设置」这条路不能被自己的故障堵死。
+ */
+describe('故障隔离：全部载体停用（批次63 任务2）', () => {
+  afterEach(() => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+  })
+
+  /** 停用了全部载体的视图：清单还在（设置页要能把它们重新打开），槽位一个都不出。 */
+  function disabledView() {
+    const base = carrierView()
+    return {
+      ...base,
+      carriers: base.carriers.map((carrier) => ({ ...carrier, isEnabled: false })),
+      left: [],
+      center: [],
+      primary: null
+    }
+  }
+
+  function disabledBridge() {
+    const handlers = new Map([
+      [IPC_CHANNELS.commandList, () => ({
+        ok: true,
+        value: {
+          total: 2,
+          commands: [
+            { id: 'settings.carriers', title: '载体管理…', owner: 'app.menu', ownerTitle: '应用菜单', group: 'menu', accelerator: '', run: 'menu:settings.carriers' },
+            { id: 'settings.preferences', title: '偏好与模型…', owner: 'app.menu', ownerTitle: '应用菜单', group: 'menu', accelerator: '', run: 'menu:settings.preferences' }
+          ]
+        }
+      })],
+      [IPC_CHANNELS.menuInvoke, () => ({ ok: true, value: { handled: true } })]
+    ])
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: disabledView() }
+      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      if (channel === IPC_CHANNELS.workspaceLoad) return { ok: true, value: { version: 3, entries: {}, active: null, focus: null } }
+      if (channel === IPC_CHANNELS.workspaceSave) return { ok: true, value: { version: 3, entries: {} } }
+      const handler = handlers.get(channel)
+      if (handler) return handler(payload)
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+    })
+    return { request, onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }, channels: IPC_CHANNELS, handlers }
+  }
+
+  it('一块板都没有：三栏不塌、竖条不没、话要说得出来，状态栏照旧报数', async () => {
+    const bridge = disabledBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 不白屏：骨架四件俱全。
+    expect(wrapper.find('.nx-ribbon').exists(), '竖条是宿主的，不随载体消失').toBe(true)
+    expect(wrapper.find('.nx-index-window').exists()).toBe(true)
+    expect(wrapper.find('.col-center').exists()).toBe(true)
+    expect(wrapper.find('.col-dock').exists(), '右栏运行时是公共池，与载体停用无关').toBe(true)
+    // 竖条上没有载体格（一块都没启用），但底部那枚主题钮还在——整条没被清空。
+    expect(wrapper.findAll('.nx-ribbon-item')).toHaveLength(1)
+    expect(wrapper.find('.nx-ribbon-item.is-bottom').exists()).toBe(true)
+    // 空态要说话，不是留一片白。
+    expect(wrapper.text()).toContain('当前没有已启用的载体板块')
+
+    // 状态栏照常挂载并报数：没有板就没有载体名，窗数为 0，字数留破折号。
+    const bar = wrapper.find('[data-test="status-bar"]')
+    expect(bar.exists(), '状态栏不依赖任何载体').toBe(true)
+    expect(bar.find('[data-test="status-carrier"]').text()).toContain('—')
+    expect(bar.find('[data-test="status-windows"]').text()).toContain('0')
+    expect(bar.find('[data-test="status-chars"]').text()).toContain('—')
+    wrapper.unmount()
+  })
+
+  it('命令面板照旧唤得起、列得出应用菜单动作、Enter 执行得掉（自救这条路不能堵）', async () => {
+    const bridge = disabledBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true }))
+    await flushPromises()
+    const palette = wrapper.find('[data-test="command-palette"]')
+    expect(palette.exists(), '全部载体停用后 Ctrl+P 仍要唤得起面板').toBe(true)
+    const listed = palette.findAll('.nx-palette-item').map((item) => item.attributes('data-palette-id'))
+    // 记账指标（不进闸）：此刻面板里剩的就是应用菜单那份——载体一条都不该在。
+    expect(listed).toEqual(['settings.carriers', 'settings.preferences'])
+
+    // 选「载体管理…」（重新启用载体的那一节），Enter 真的把它开出来。
+    await palette.find('[data-test="palette-input"]').setValue('载体管理')
+    expect(palette.findAll('.nx-palette-item').map((item) => item.attributes('data-palette-id'))).toEqual(['settings.carriers'])
+    palette.find('[data-test="palette-input"]').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="command-palette"]').exists(), '执行完就收面板').toBe(false)
+    expect(wrapper.find('[aria-label="载体管理"]').exists(), '应用菜单动作必须真执行：这里就是打开载体管理节').toBe(true)
+    expect(wrapper.text()).not.toContain('未接线')
     wrapper.unmount()
   })
 })

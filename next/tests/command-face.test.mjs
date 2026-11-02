@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
 import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
@@ -9,17 +11,23 @@ import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { IPC_CHANNELS, createIpcDispatcher } from '../shell/ipcContract.mjs'
 import { MENU_TEMPLATE, flattenMenuEntries, flattenMenuIds } from '../shell/menus.mjs'
 import {
+  HOTKEYS_DIR,
   HOTKEYS_FILE,
+  HOTKEYS_FILENAME,
   HOTKEYS_VERSION,
   HOTKEY_COLLAPSE_TOP,
   HOTKEY_PALETTE_OPEN,
+  STANDALONE_KEYS,
   acceleratorFromEvent,
   acceleratorLabel,
   applyBinding,
   bindableIds,
+  createHotkeysFileStore,
   defaultBindings,
   findHotkeyConflicts,
+  hotkeysFilePath,
   matchHotkey,
+  nativeAcceleratedIds,
   normalizeAccelerator,
   parseStoredHotkeys,
   serializeHotkeys
@@ -176,9 +184,9 @@ test('批次62 键位串规范化：作者手写的档收成同一套 Electron �
   }
   assert.equal(acceleratorFromEvent({ key: 'p', ctrlKey: true }), 'Ctrl+P')
   assert.equal(acceleratorFromEvent({ key: 'P', metaKey: true, shiftKey: true }), 'Cmd+Shift+P')
-  assert.equal(matchHotkey({ key: 'r', ctrlKey: true, shiftKey: true }, defaultBindings()), 'project.reviewProposals')
-  assert.equal(matchHotkey({ key: 'r', metaKey: true, shiftKey: true }, defaultBindings()), 'project.reviewProposals',
-    'CmdOrCtrl 在 mac 上就是 Cmd：不摊成等价类，这条键位在其中一侧永远按不响')
+  // 批次63 收编c 改了这三条的期望值：带原生 accelerator 的那条不再由总线命中（见下面那条单点化测试）。
+  assert.equal(matchHotkey({ key: 'r', ctrlKey: true, shiftKey: true }, defaultBindings()), '',
+    'Ctrl+Shift+R 归原生菜单直办，总线认一次就两次触发')
   assert.equal(matchHotkey({ key: 'p', ctrlKey: true }, defaultBindings()), HOTKEY_PALETTE_OPEN)
   assert.equal(matchHotkey({ key: 'Escape' }, defaultBindings()), HOTKEY_COLLAPSE_TOP)
   assert.equal(matchHotkey({ key: 'a', ctrlKey: true }, defaultBindings()), '', '没收编的键位回空串，不许落到任何一条命令上')
@@ -403,4 +411,183 @@ test('批次62 不新增行为：载体清单没有因为命令面多出别的�
     assert.equal(manifest.commands.length, (contributes.commands ?? []).length, `${manifest.id} 的命令条数与清单原话不符`)
     assert.ok(manifest.commands.length > 0, `${manifest.id} 没带命令`)
   }
+})
+
+/* —— 批次63：白名单收窄＋真盘落盘＋单点化＋收编b 的落点 ————————————————
+ * 四件事各自钉死一条：
+ *   ① 裸单字符（字母／数字）进不了表，独立键与组合键不受影响；
+ *   ② `.pinax/hotkeys.json` 在磁盘上真往返（写→读→重启再读），坏档不覆盖作者的原档；
+ *   ③ Ctrl+Shift+R 只有一个生效点（原生菜单），对照表来源仍是 MENU_TEMPLATE 一处；
+ *   ④ 载体命令 id 从 menu:invoke 回到渲染层后有真落点（不再假成功）。
+ */
+
+const HOTKEYS_FS = { readFile, writeFile, mkdir, rename }
+
+test('批次63 白名单收窄：不带修饰键的字母与数字一律不认，独立键与组合键照旧合法', () => {
+  for (const bare of ['P', 'p', 'a', 'R', 'Q', '1', '9']) {
+    assert.equal(normalizeAccelerator(bare), null, `裸键「${bare}」不该判成合法键位：它会顶掉一条能用的默认绑定，而作者敲下去的是输入框里的一个字符`)
+  }
+  for (const standalone of ['Esc', 'Enter', 'Tab', 'Space', 'space', 'Up', 'PageDown', 'Insert', 'F5', 'f12']) {
+    assert.notEqual(normalizeAccelerator(standalone), null, `独立键「${standalone}」必须仍然允许裸写：Esc 收窗就是这一档`)
+  }
+  assert.equal(normalizeAccelerator('Ctrl+A'), 'Ctrl+A', '带修饰的单字符照常合法：收窄只管裸写')
+  assert.equal(normalizeAccelerator('Alt+G'), 'Alt+G')
+  assert.equal(STANDALONE_KEYS.includes('Q'), false)
+  assert.equal(STANDALONE_KEYS.includes('F24'), true, '功能键到 F24 为止：Electron 词汇表的边界，不替作者猜一枚不存在的键')
+
+  // 存档里出现裸字母：逐条丢弃并记账，那条命令回默认键位（留空＝那条命令从此没有键）。
+  const polluted = parseStoredHotkeys(JSON.stringify({
+    version: HOTKEYS_VERSION,
+    bindings: { [HOTKEY_PALETTE_OPEN]: 'Q', [HOTKEY_COLLAPSE_TOP]: 'Esc' }
+  }))
+  assert.ok(polluted.warnings.includes('HOTKEYS_DROPPED_1'), `该丢一条裸字母，实得 ${polluted.warnings.join(',')}`)
+  assert.equal(polluted.bindings[HOTKEY_PALETTE_OPEN], 'CmdOrCtrl+P')
+  assert.equal(polluted.bindings[HOTKEY_COLLAPSE_TOP], 'Esc')
+
+  // 改键闸同一套口径：裸字母被拒，原因要说得出口。
+  const rejected = applyBinding(defaultBindings(), HOTKEY_COLLAPSE_TOP, 'Q')
+  assert.equal(rejected.ok, false)
+  assert.equal(rejected.code, 'HOTKEY_BAD_ACCELERATOR')
+  // 序列化侧也挡一次：非法串根本进不了文件（补默认是读侧那条 merged 的活，见下一句）。
+  const cleaned = JSON.parse(serializeHotkeys({ ...defaultBindings(), [HOTKEY_PALETTE_OPEN]: 'Q' }))
+  assert.equal(cleaned.bindings[HOTKEY_PALETTE_OPEN], undefined, '坏键位不许写进档：写侧丢下它，读侧再按默认补回来')
+  assert.equal(parseStoredHotkeys(JSON.stringify(cleaned)).bindings[HOTKEY_PALETTE_OPEN], 'CmdOrCtrl+P',
+    '作者那条命令不能因为一次坏输入就没有键了：读侧永远补回默认')
+})
+
+test('批次63 hotkeys.json 真盘往返：写→读→重启再读、内容没变不重写、坏档不覆盖、rename 后不留 .tmp', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'pinax-hotkeys-'))
+  const store = createHotkeysFileStore({ root: dir, fs: HOTKEYS_FS })
+  const target = hotkeysFilePath(dir)
+  const forward = (path) => String(path).replace(/\\/gu, '/')
+  assert.equal(forward(store.path), forward(target), '路径取 HOTKEYS_DIR＋HOTKEYS_FILENAME 两段拼，只有一处字面量')
+  // 落点本身也是合同的一部分：`.pinax/hotkeys.json`（工程档，跟着项目走，不进应用数据目录）。
+  assert.equal(forward(target), forward(join(dir, HOTKEYS_DIR, HOTKEYS_FILENAME)), '真盘落点必须是 <项目根>/.pinax/hotkeys.json')
+  assert.equal(`${HOTKEYS_DIR}/${HOTKEYS_FILENAME}`, HOTKEYS_FILE, '常量表与两段拼出来的路径同源')
+
+  // 没有文件是常态：exists:false，一条 warning 都不记（否则通道会把「第一次读」当成坏档记一条 warn）。
+  const fresh = await store.load()
+  assert.equal(fresh.ok, true)
+  assert.equal(fresh.value.exists, false)
+  assert.deepEqual(fresh.value.warnings, [])
+  assert.deepEqual(fresh.value.bindings, defaultBindings())
+
+  const saved = await store.save({ ...defaultBindings(), [HOTKEY_PALETTE_OPEN]: 'Ctrl+K' })
+  assert.equal(saved.ok, true)
+  assert.equal(saved.value.skipped, false)
+  const onDisk = JSON.parse(await readFile(target, 'utf-8'))
+  assert.equal(onDisk.version, HOTKEYS_VERSION)
+  assert.equal(onDisk.bindings[HOTKEY_PALETTE_OPEN], 'Ctrl+K')
+  assert.equal(await readFile(`${target}.tmp`, 'utf-8').catch(() => null), null, 'rename 之后磁盘上不许留 .tmp')
+
+  const again = await store.save({ ...defaultBindings(), [HOTKEY_PALETTE_OPEN]: 'Ctrl+K' })
+  assert.equal(again.ok, true)
+  assert.equal(again.value.skipped, true, '内容没变就不写：省掉每帧一次的磁盘写入与历史快照噪音')
+
+  // 跨实例＝重启一次外壳：新 store 读同一份档，改过的键位必须在。
+  const reopened = createHotkeysFileStore({ root: dir, fs: HOTKEYS_FS })
+  const loaded = await reopened.load()
+  assert.equal(loaded.value.exists, true)
+  assert.equal(loaded.value.bindings[HOTKEY_PALETTE_OPEN], 'Ctrl+K')
+  assert.equal(loaded.value.bindings[HOTKEY_COLLAPSE_TOP], 'Esc', '作者没改过的那条回默认，不许消失')
+  assert.deepEqual(loaded.value.warnings, [])
+
+  // 坏档：读侧回默认＋记账，但不许顺手把默认表写回磁盘（那是拿默认覆盖作者的档）。
+  await writeFile(target, '{ 这不是 JSON', 'utf-8')
+  const broken = await reopened.load()
+  assert.equal(broken.value.exists, true)
+  assert.ok(broken.value.warnings.includes('HOTKEYS_BAD_JSON'))
+  assert.equal(await readFile(target, 'utf-8'), '{ 这不是 JSON', 'load 不落盘')
+  const rewritten = await reopened.save(defaultBindings())
+  assert.equal(rewritten.value.skipped, false, '坏档之后第一次保存必须真的落盘，不能被「内容没变」判掉')
+
+  // 裸字母进不了盘：那一条整个不在文件里（丢下它是写侧的活），读回来仍是默认键位。
+  await reopened.save({ ...defaultBindings(), [HOTKEY_PALETTE_OPEN]: 'Q' })
+  assert.equal(JSON.parse(await readFile(target, 'utf-8')).bindings[HOTKEY_PALETTE_OPEN], undefined)
+  assert.equal((await reopened.load()).value.bindings[HOTKEY_PALETTE_OPEN], 'CmdOrCtrl+P')
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('批次63 主进程接线：main.mjs 建 hotkeysStore 注入 session，通道与真盘之间没有内存假货', async () => {
+  const mainSource = await readFile(new URL('../shell/main.mjs', shellDir), 'utf-8')
+  assert.match(mainSource, /createHotkeysFileStore\(\{/, '主进程必须真的建 store（批次62 那条通道一直只报缺）')
+  assert.match(mainSource, /session\.loadHotkeys = async/u, 'hotkeysLoad 读的是 session.loadHotkeys')
+  assert.match(mainSource, /session\.saveHotkeys = async/u, 'hotkeysSave 写的是 session.saveHotkeys')
+  assert.match(mainSource, /fs: \{ readFile, writeFile, mkdir, rename \}/u, 'fs 由主进程注入：渲染层共用的那份模块碰不到文件系统')
+  assert.match(mainSource, /join\(String\(projectRoot\), HOTKEYS_DIR, HOTKEYS_FILENAME\)/u, '路径取 hotkeys.mjs 那两段常量，不重打一遍字面量')
+  assert.match(mainSource, /if \(!hotkeysStore \|\| hotkeysStore\.root !== String\(projectRoot\)\)/u, '换项目就换一份：lastWritten 是本项目的内容指纹')
+
+  const hotkeysSource = await readFile(new URL('hotkeys.mjs', shellDir), 'utf-8')
+  assert.equal(/from ['"]node:fs/u.test(hotkeysSource), false, 'hotkeys.mjs 被渲染层共用：一处 import node:fs 就把整个模块变成主进程专属')
+
+  // 真盘走一遍通道：分发器拿到的 session 与 main.mjs 注入的是同一形状（load→store.load，save→store.save）。
+  const dir = await mkdtemp(join(tmpdir(), 'pinax-hotkeys-channel-'))
+  const makeDispatcher = (pool) => {
+    const store = createHotkeysFileStore({ root: dir, fs: HOTKEYS_FS })
+    const session = {
+      ...sessionWith(builtInRegistry()),
+      projectRoot: dir,
+      loadHotkeys: () => store.load(),
+      saveHotkeys: (bindings) => store.save(bindings)
+    }
+    return createIpcDispatcher({ session, serviceLogPool: pool })
+  }
+  const pool = createServiceLogPool()
+  const target = hotkeysFilePath(dir)
+  const first = makeDispatcher(pool)
+  const saved = await first.dispatch(IPC_CHANNELS.hotkeysSave, { bindings: { ...defaultBindings(), [HOTKEY_COLLAPSE_TOP]: 'F8' } })
+  assert.equal(saved.ok, true)
+  assert.equal(JSON.parse(await readFile(target, 'utf-8')).bindings[HOTKEY_COLLAPSE_TOP], 'F8', '独立功能键允许裸写，且真的在文件里')
+
+  // 换一个分发器＋新 store（＝重启一次外壳）：读回的是磁盘上那一份。
+  const loaded = await makeDispatcher(pool).dispatch(IPC_CHANNELS.hotkeysLoad, {})
+  assert.equal(loaded.ok, true)
+  assert.equal(loaded.value.exists, true)
+  assert.equal(loaded.value.bindings[HOTKEY_COLLAPSE_TOP], 'F8')
+  assert.equal(loaded.value.bindings[HOTKEY_PALETTE_OPEN], 'CmdOrCtrl+P')
+  assert.deepEqual(loaded.value.warnings, [], '正常档不该顺带记一条 warn：服务与通知池那一条要留给真出事的时候')
+
+  // 冲突照旧整份拒，且拒了就不落盘（批次62 用内存假 store 证的口径，现在在真盘上再核一次）。
+  const before = await readFile(target, 'utf-8')
+  const rejected = await makeDispatcher(pool).dispatch(IPC_CHANNELS.hotkeysSave, { bindings: { [HOTKEY_PALETTE_OPEN]: 'Esc', [HOTKEY_COLLAPSE_TOP]: 'Esc' } })
+  assert.equal(rejected.ok, false)
+  assert.equal(await readFile(target, 'utf-8'), before, '被拒的写入一个字节都不许落盘')
+  assert.ok(pool.list({ limit: 50 }).some((note) => note.source?.id === 'hotkeys' && note.level === 'warn'), '拒完还要在池里留一条 warn')
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('批次63 单点化：带原生 accelerator 的菜单项不再被总线命中，对照表只有 MENU_TEMPLATE 一处', () => {
+  const native = nativeAcceleratedIds()
+  assert.deepEqual([...native], ['project.reviewProposals'], '收编进总线的菜单项只有提案审阅这一条：其余键位仍只由总线负责')
+  for (const id of native) {
+    assert.ok(bindableIds().includes(id), `${id} 不在可绑定白名单里，不该出现在对照表中`)
+    assert.ok(flattenMenuEntries(MENU_TEMPLATE).some((entry) => entry.id === id && entry.accelerator), `${id} 对照表说有原生 accelerator，菜单模板里没有`)
+  }
+  const bindings = defaultBindings()
+  assert.equal(bindings['project.reviewProposals'], 'CmdOrCtrl+Shift+R', '表里仍留着那条：作者看得见键位、面板显示它，只是不在这儿命中')
+  assert.equal(matchHotkey({ key: 'r', ctrlKey: true, shiftKey: true }, bindings), '', '一次按键只走一条路：Electron 菜单吃掉这一下并回一条 menuInvoked')
+  assert.equal(matchHotkey({ key: 'r', metaKey: true, shiftKey: true }, bindings), '', 'mac 那一侧同理')
+  assert.equal(matchHotkey({ key: 'p', ctrlKey: true }, bindings), HOTKEY_PALETTE_OPEN, '面板唤起不在菜单里，照旧归总线')
+  assert.equal(matchHotkey({ key: 'Escape' }, bindings), HOTKEY_COLLAPSE_TOP, 'Esc 收窗不在菜单里，照旧归总线')
+  assert.equal(nativeAcceleratedIds(), native, '对照表算一次就够：matchHotkey 每一次按键都要跑')
+})
+
+test('批次63 收编b：载体命令 id 回到渲染层后有真落点（menu:invoke 不再只是假成功）', async () => {
+  const app = await readFile(new URL('AppNext.vue', shellDir), 'utf-8')
+  // runMenuAction 的 carrier 回落：数据源是那张命令表，执行通路是面板同一条 resolveCommandRun。
+  assert.match(app, /async function runMenuAction\(id\) \{[\s\S]{0,900}item\.group === 'carrier'[\s\S]{0,200}await resolveCommandRun\(entry\.run, entry\)/u,
+    '载体命令 id 必须按命令表里的 run 走面板那条执行通路')
+  assert.match(app, /命令「\$\{entry\.title \?\? entry\.id\}」未接线/u, '落点认不出要说得出为什么，与 runPaletteCommand 同一句话')
+  // 递归闸：菜单项的 run 是 `menu:<自己的 id>`，回落只认 carrier 分组才不会有死循环。
+  assert.match(app, /case 'menu':\s*\n\s*await invokeMenu\(\{ id: arg \}\)/u, 'menu 动词仍指向 invokeMenu（回落不许吃自己）')
+
+  // 主进程侧维持接受集（工单：不改协议、不缩集合）。
+  const registry = builtInRegistry()
+  const invoked = []
+  const dispatcher = createIpcDispatcher({ session: sessionWith(registry), onMenuInvoke: async (id) => { invoked.push(id) } })
+  const carrierCall = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: 'novel.export-book' })
+  assert.equal(carrierCall.ok, true, '接受集不动：载体命令仍走同一条分发通道')
+  assert.deepEqual(invoked, ['novel.export-book'])
+  const unknown = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: 'novel.self-destruct' })
+  assert.equal(unknown.ok, false, '未知 id 照旧拒')
 })

@@ -820,6 +820,9 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         if (!acceptedMenuIds().has(input.id)) {
           return fail('INVALID_INPUT', `指令 ${String(input.id)} 既不在应用菜单模板里，也不在任何已启用载体的命令表里：未知 id 一律拒绝（载体可以贡献命令，但不许注入顶层菜单——C5）`, { id: input.id })
         }
+        // 批次63 收编b：载体命令的执行落点在渲染层（AppNext.runMenuAction 按命令表的 run 走面板那条通路）。
+        // 主进程这一侧的职责没变：它管的是「这把 id 认不认」（接受集＝MENU_TEMPLATE ∪ registry.commands()），
+        // handled 说的就是这件事——不做载体命令的事，也不替渲染层假装做过。
         if (onMenuInvoke) await onMenuInvoke(input.id)
         return ok({ id: input.id, handled: true })
       }

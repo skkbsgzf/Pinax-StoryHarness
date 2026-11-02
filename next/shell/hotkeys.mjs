@@ -14,13 +14,19 @@
  * accelerator 用 Electron 那套写法（`CmdOrCtrl+Shift+R`），与应用菜单模板同一词表；
  * 默认键位直接从 MENU_TEMPLATE 取（menus.mjs 是唯一来源），这里不抄第二份数字。
  *
- * 本模块只碰纯数据：不 import node:fs（渲染层与主进程共用这一份），落盘走注入的 store。
+ * 本模块不 import node:fs／node:path（渲染层与主进程共用这一份）：纯函数在文件上半段，
+ * 落盘由 `createHotkeysFileStore({ root, fs })` 承担——fs 由调用方注入（主进程给
+ * node:fs/promises，单测给临时目录的真实 fs），批次63 起由 next/shell/main.mjs 建实例注入会话。
  */
 
 import { MENU_TEMPLATE, flattenMenuEntries } from './menus.mjs'
+import { fail, ok } from '../kernel/errors.mjs'
 
 export const HOTKEYS_VERSION = 1
-export const HOTKEYS_FILE = '.pinax/hotkeys.json'
+/** 存档目录与文件名分开两个常量：主进程用 node:path 拼真路径时取这两段，不重打一遍字面量。 */
+export const HOTKEYS_DIR = '.pinax'
+export const HOTKEYS_FILENAME = 'hotkeys.json'
+export const HOTKEYS_FILE = `${HOTKEYS_DIR}/${HOTKEYS_FILENAME}`
 
 /** 面板唤起是本批新登记的宿主命令 id——它不在应用菜单里，所以键位只能在这张表里有个家。 */
 export const HOTKEY_PALETTE_OPEN = 'palette.open'
@@ -81,6 +87,25 @@ export function bindableIds() {
   return Object.keys(defaultBindings())
 }
 
+/**
+ * 「原生菜单已经带着 accelerator」的那批可绑定命令 id（批次63 收编c，批次62 §7 第 4 条）。
+ * 原生菜单项的 accelerator 由 Electron 直办：菜单被触发时会发 menuInvoked 给渲染层。
+ * 渲染层的键位总线再吃同一下按键＝一次按键两条路都走（理论上两次触发）。
+ * 单点化的裁法是**保留原生菜单那一半**：总线把这批 id 剔掉，`Ctrl+Shift+R` 只由菜单生效一次。
+ * 只认「同时在可绑定白名单里」的 id——面板唤起与 Esc 收窗不在菜单模板里，照旧归总线。
+ *
+ * 对照表算一次就够：MENU_TEMPLATE 是静态声明，而 matchHotkey 每一次按键都要跑。
+ */
+let nativeAcceleratedCache = null
+export function nativeAcceleratedIds() {
+  if (nativeAcceleratedCache) return nativeAcceleratedCache
+  const bindable = new Set(bindableIds())
+  nativeAcceleratedCache = Object.freeze(flattenMenuEntries(MENU_TEMPLATE)
+    .filter((entry) => entry.accelerator && bindable.has(entry.id))
+    .map((entry) => entry.id))
+  return nativeAcceleratedCache
+}
+
 /** 修饰键别名：作者手写的档（Ctrl／Command／⌘）一律收成 Electron 词表。 */
 const MODIFIER_ALIASES = Object.freeze({
   cmdorctrl: 'CmdOrCtrl',
@@ -107,6 +132,7 @@ function canonicalKey(token) {
 
 /**
  * 主键名是否认得：单字符、功能键 F1–F24、或 SPECIAL_KEYS 里那批独立键。
+ * 这里判的是「作为组合键的主键」——`Ctrl+A` 的 A 合法；裸写一个 A 不合法，见 STANDALONE_KEYS。
  * 认不懂的多字符名字（`conrol+p` 里那种拼错的 `conrol`）必须回 null——
  * 它在表里会**顶掉**那条默认键位，而任何 KeyboardEvent 都按不出这个串，
  * 于是那条命令（面板唤起）就此静默失效，界面上一句解释都没有。宁可不写，也不要一把按不响的键。
@@ -119,9 +145,22 @@ function isKnownKey(name) {
 }
 
 /**
+ * 独立键白名单（批次63 收编a）：不带任何修饰键也能成立的那批键名。
+ * 只有「有名字的键」才允许裸写——SPECIAL_KEYS 那批（Esc／Enter／Tab／Space／方向键／Insert…）
+ * 与功能键 F1–F24。裸字母与裸数字一律不认：
+ * 它们在表里会顶掉一条能用的默认绑定，而作者敲下去的是输入框里的一个字母——
+ * 那条命令就此静默失效，界面上一句解释都没有（与上面 isKnownKey 挡拼错键名同一个理由）。
+ * 带修饰键的单字符照常合法（`Ctrl+P`／`Alt+G`）。
+ */
+export const STANDALONE_KEYS = Object.freeze([
+  ...new Set([...Object.values(SPECIAL_KEYS), ...Array.from({ length: 24 }, (_unused, index) => `F${index + 1}`)])
+])
+
+/**
  * accelerator 净化：`ctrl+shift+p` → `CmdOrCtrl+Shift+P`。
  * 只认「修饰键 + 恰好一枚主键」的形状，别的（空串、两枚主键、未知修饰键）返回 null 由调用方记账。
- * 独立键（Esc／Enter／Tab／Space）没有修饰键也合法——那是收编项里 Esc 的形状。
+ * 独立键（Esc／Enter／Tab／Space／方向键／功能键）没有修饰键也合法——那是收编项里 Esc 的形状；
+ * 裸字母与裸数字不在此列（批次63 收窄，见 STANDALONE_KEYS）。
  */
 export function normalizeAccelerator(value) {
   const raw = String(value ?? '').trim()
@@ -142,9 +181,8 @@ export function normalizeAccelerator(value) {
   }
   // 光有修饰键不成一个键位；独立键不许再挂修饰键（Esc＋Ctrl 是两条不同的东西，不替他猜）。
   if (key && !isKnownKey(key)) return null
-  if (!mods.length && !key) return null
-  if (mods.length && !key) return null
-  if (!mods.length && key) return key
+  if (!key) return null
+  if (!mods.length) return STANDALONE_KEYS.includes(key) ? key : null
   if (mods.includes('Cmd') && mods.includes('Ctrl')) mods[mods.indexOf('Cmd')] = 'CmdOrCtrl'
   const ordered = ['CmdOrCtrl', 'Cmd', 'Ctrl', 'Alt', 'Shift'].filter((mod) => mods.includes(mod))
   return [...ordered, key].join('+')
@@ -165,11 +203,17 @@ export function acceleratorFromEvent(event) {
   return [...mods, key].join('+')
 }
 
-/** 反查：给定事件，命中哪条命令（没命中回空串）。表里一个 accelerator 只归一条命令（冲突在写入时就拒了）。 */
+/**
+ * 反查：给定事件，命中哪条命令（没命中回空串）。表里一个 accelerator 只归一条命令（冲突在写入时就拒了）。
+ * 带原生 accelerator 的菜单项在这里被剔掉（批次63 收编c）：那把键由 Electron 菜单直办，
+ * 总线再认一次就是同一下按键走两条路。表里仍留着那条（作者能看见键位、面板能显示），只是不在这儿命中。
+ */
 export function matchHotkey(event, bindings = {}) {
   const pressed = acceleratorFromEvent(event)
   if (!pressed) return ''
+  const native = new Set(nativeAcceleratedIds())
   for (const [id, accelerator] of Object.entries(bindings)) {
+    if (native.has(id)) continue
     const canonical = normalizeAccelerator(accelerator)
     if (!canonical) continue
     if (equivalentsOf(canonical).includes(pressed)) return id
@@ -295,7 +339,9 @@ export function normalizeHotkeys(value) {
 
 /** 文本 → 结构：坏 JSON 回默认表并记账（读侧唯一入口，调用方不必自己 try/catch）。 */
 export function parseStoredHotkeys(raw) {
-  if (raw === null || raw === undefined) return { ...normalizeHotkeys(null), exists: false }
+  // 没有文件是常态（新项目还没存过键位）：给一张干净的默认表，一条 warning 都不记——
+  // 否则通道侧会把「第一次读」当成「坏档」往服务与通知池记一条 warn，那是误报。
+  if (raw === null || raw === undefined) return { version: HOTKEYS_VERSION, bindings: defaultBindings(), warnings: [], exists: false }
   const text = String(raw)
   if (!text.trim()) return { version: HOTKEYS_VERSION, bindings: defaultBindings(), warnings: [], exists: true }
   let parsed = null
@@ -316,6 +362,76 @@ export function serializeHotkeys(bindings) {
     if (canonical) cleaned[id] = canonical
   }
   return JSON.stringify({ version: HOTKEYS_VERSION, bindings: cleaned }, null, 2)
+}
+
+/** 项目根 → 存档路径（正斜杠在 Windows 的 fs 上同样可用；主进程可自己传 file 覆写）。 */
+export function hotkeysFilePath(root) {
+  return `${String(root ?? '').replace(/[\\/]+$/u, '')}/${HOTKEYS_FILE}`
+}
+
+/**
+ * 键位表的文件存储（批次63 收编a：`.pinax/hotkeys.json` 真落盘）。
+ *
+ * 放在本模块是因为「形状净化」与「落盘」必须是同一份口径——存档里的裸字母键、表外 id、
+ * 冲突键位，读侧与写侧判的要是同一套规则，分两处写迟早各说各话。
+ * 但本模块被渲染层共用，所以 **不 import node:fs**：文件系统由主进程注入
+ * （`{ readFile, writeFile, mkdir, rename }`，即 node:fs/promises 那四个）。
+ *
+ * 三条硬规矩照 next/settingsStore.mjs：
+ *   1) 坏文件不崩、不覆盖：净化不懂就回默认表并留 warning（作者下次保存整份重写）；
+ *   2) 写盘先写 `.tmp` 再 rename（同目录 rename 原子），半个文件不会被读成「空表」；
+ *   3) 内容没变就不写（省掉每帧一次的磁盘写入与历史快照噪音）。
+ */
+export function createHotkeysFileStore({ root, file = null, fs } = {}) {
+  if (!root) throw new Error('createHotkeysFileStore 需要项目根')
+  const path = file ? String(file) : hotkeysFilePath(root)
+  // 目录按「最后一个分隔符」切：主进程传的是 node:path.join 的结果（Windows 是反斜杠）。
+  const dir = path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')))
+  const tmpPath = `${path}.tmp`
+  const read = fs?.readFile
+  const write = fs?.writeFile
+  const makeDir = fs?.mkdir
+  const move = fs?.rename
+  for (const [name, fn] of [['readFile', read], ['writeFile', write], ['mkdir', makeDir], ['rename', move]]) {
+    if (typeof fn !== 'function') throw new Error(`createHotkeysFileStore 需要注入 fs.${name}`)
+  }
+  let lastWritten = null
+
+  /** 读盘：没有文件是常态（回默认表、exists:false，不记 warning）；读不动才是错误。 */
+  async function load() {
+    let raw = null
+    try {
+      raw = await read(path, 'utf-8')
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        lastWritten = null
+        return ok(parseStoredHotkeys(null))
+      }
+      return fail('INVALID_INPUT', `快捷键表读取失败：${String(error?.message ?? error)}`, { path })
+    }
+    const parsed = parseStoredHotkeys(raw)
+    // 只有「盘上那份就是整份重写的形状」才认领它做「内容没变不写」的指纹；
+    // 坏档／表外条目不认领——作者下一次保存要真的把整份重写下去，不能被判成没变化。
+    lastWritten = serializeHotkeys(parsed.bindings) === String(raw) ? String(raw) : null
+    return ok(parsed)
+  }
+
+  /** 整份写入：净化后再落盘；内容与上一次相同就跳过（回执如实标 skipped）。 */
+  async function save(bindings) {
+    const text = serializeHotkeys(bindings)
+    if (lastWritten === text) return ok({ path, skipped: true, bytes: text.length })
+    try {
+      await makeDir(dir, { recursive: true })
+      await write(tmpPath, text, 'utf-8')
+      await move(tmpPath, path)
+      lastWritten = text
+      return ok({ path, skipped: false, bytes: text.length })
+    } catch (error) {
+      return fail('INVALID_INPUT', `快捷键表写入失败：${String(error?.message ?? error)}`, { path })
+    }
+  }
+
+  return { root: String(root), path, load, save }
 }
 
 /**

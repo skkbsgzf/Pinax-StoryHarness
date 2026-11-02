@@ -42,6 +42,21 @@ function record(name, passed, note = '') {
   console.log(`${passed ? '✔' : '✘'} ${name}${note ? ` — ${note}` : ''}`)
 }
 
+/**
+ * WCAG 2.1 的文本对比度（审计 H 的判据口径）：L 用 sRGB 线性化后的 0.2126R+0.7152G+0.0722B，
+ * 比值 (L亮+0.05)/(L暗+0.05)。状态栏那一条底栏的读数要 ≥4.5:1，色值从主题层现读，这里不抄第二份。
+ */
+function contrastRatio(foreground, background) {
+  const channel = (hex, shift) => {
+    const raw = (parseInt(hex.slice(shift, shift + 2), 16) & 0xff) / 255
+    return raw <= 0.03928 ? raw / 12.92 : ((raw + 0.055) / 1.055) ** 2.4
+  }
+  const luminance = (hex) => 0.2126 * channel(hex, 1) + 0.7152 * channel(hex, 3) + 0.0722 * channel(hex, 5)
+  const light = luminance(foreground)
+  const dark = luminance(background)
+  return (Math.max(light, dark) + 0.05) / (Math.min(light, dark) + 0.05)
+}
+
 /** 临时空端口：漫画预览服务写死 8191，验收并行跑别的用例时不能去抢别人的口。 */
 function freePort() {
   return new Promise((resolvePromise, rejectPromise) => {
@@ -603,6 +618,34 @@ try {
   }, {})
   console.log(`〔批次62 记账〕载体命令 ${carrierEntries.length} 条，应用菜单动作 ${listed.length - carrierEntries.length} 条；逐载体分布：`
     + Object.entries(distribution).map(([key, count]) => `${key}=${count}`).join(' '))
+
+  // ── 批次63：状态栏（组件在位）＋两条记账指标（只留数，不打回）────────────────────
+  const statusBarSource = await readFile(new URL('../shell/StatusBar.vue', import.meta.url), 'utf-8')
+  const STATUS_ELEMENTS = ['status-services', 'status-carrier', 'status-windows', 'status-chars']
+  const hasAllElements = STATUS_ELEMENTS.every((marker) => statusBarSource.includes(`data-test="${marker}"`))
+  // 「不做死按钮」的可机器核对那一半：模板里 <button> 只许出现一次（服务灯那一枚）。
+  const statusButtonCount = (statusBarSource.match(/<button\b/gu) ?? []).length
+  record('批次63 状态栏在位：四要素齐、可点件只有一枚（其余全是读数）',
+    hasAllElements && statusButtonCount === 1,
+    `要素=${STATUS_ELEMENTS.filter((marker) => statusBarSource.includes(`data-test="${marker}"`)).join('/')} 按钮数=${statusButtonCount}`)
+
+  // 对比度实测（审计 H 的下限 4.5:1）：色值不在这里抄——从老前端主题层现读，
+  // 明/暗两段按出现顺序配成两对（文本 --text-secondary × 底 --surface-workbench-muted）。
+  const legacyTheme = await readFile(new URL('../../src/styles/themes/legacy.css', import.meta.url), 'utf-8')
+  const hexPairs = (token) => [...legacyTheme.matchAll(new RegExp(`--${token}:\\s*(#[0-9a-fA-F]{6})`, 'gu'))].map((match) => match[1])
+  const inkValues = hexPairs('text-secondary')
+  const surfaceValues = hexPairs('surface-workbench-muted')
+  const contrastPairs = inkValues.slice(0, surfaceValues.length).map((ink, index) => ({ ink, surface: surfaceValues[index] }))
+  const measured = contrastPairs.map((pair) => ({ ...pair, ratio: contrastRatio(pair.ink, pair.surface) }))
+  record('批次63 记账·状态栏文本对比实测（下限 4.5:1，两档都要过）',
+    measured.length >= 2 && measured.every((item) => item.ratio >= 4.5),
+    measured.map((item) => `${item.ink}/${item.surface}=${item.ratio.toFixed(2)}:1`).join(' '))
+
+  // 记账·停用全部载体后命令面还剩多少条：载体一条都不在视图里时，渲染层回落的那份表
+  // 只剩应用菜单拍平出来的动作（fromCarriers 为空）。这里给出实测数，供调度方判断
+  // 「全坏了还能不能自救」——判据本身钉在 next/tests/shell-ui.spec.mjs 的故障隔离一节。
+  const menuOnlyCount = listed.length - carrierEntries.length
+  console.log(`〔批次63 记账〕全部载体停用后面板枚举数≈${menuOnlyCount}（应用菜单动作；载体 ${carrierEntries.length} 条此刻不该出现）`)
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

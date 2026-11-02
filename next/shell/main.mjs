@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { basename, dirname, join, resolve } from 'node:path'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import * as gitHistory from '../history/gitHistory.mjs'
 import { createNextSession } from '../index.mjs'
 import { fail } from '../kernel/errors.mjs'
@@ -29,6 +29,7 @@ import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
+import { HOTKEYS_DIR, HOTKEYS_FILENAME, createHotkeysFileStore } from './hotkeys.mjs'
 import { PLUGIN_PROTOCOL } from './pluginProtocol.mjs'
 import { createPluginFileHandler } from './pluginFileServer.mjs'
 
@@ -606,6 +607,25 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     return carrierOverridesStore
   }
 
+  /**
+   * 键位表（批次63 收编a）：项目级 `.pinax/hotkeys.json`，与前两个 store 同款「换项目就换一份」
+   * 的缓存——lastWritten 是本项目的内容指纹，跨项目复用会把 A 项目的键位当成 B 项目的「没变化」。
+   * 路径取 hotkeys.mjs 的 HOTKEYS_DIR／HOTKEYS_FILENAME 两段拼（那份文件只有一个字面量来源），
+   * 文件系统由这里注入：净化与落盘同在那一模块，但 node:fs 只能出现在主进程。
+   */
+  let hotkeysStore = null
+  function hotkeysStoreFor(projectRoot) {
+    if (!projectRoot) return null
+    if (!hotkeysStore || hotkeysStore.root !== String(projectRoot)) {
+      hotkeysStore = createHotkeysFileStore({
+        root: projectRoot,
+        file: join(String(projectRoot), HOTKEYS_DIR, HOTKEYS_FILENAME),
+        fs: { readFile, writeFile, mkdir, rename }
+      })
+    }
+    return hotkeysStore
+  }
+
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
   session = await createNextSession({
@@ -624,6 +644,19 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   })
   // 批次51：回卷失败也要进公共池留痕——注册表建在会话里，池在会话外，创建后交进去。
   session.registry?.setServiceLogPool?.(serviceLogPool)
+  // 批次63 收编a：hotkeysLoad/Save 两通道落真盘。通道读的是 `session.loadHotkeys/saveHotkeys`
+  // （与 session.loadWorkspace 同一形状），存储实例由这一层建——渲染层与内核都碰不到 fs。
+  // 没有项目根时如实报缺（与工作区／配置的同一句口径），不回一张假默认表糊过去。
+  session.loadHotkeys = async () => {
+    const store = hotkeysStoreFor(session.projectRoot)
+    if (!store) return fail('INVALID_INPUT', '快捷键读取需要先打开一个项目')
+    return store.load()
+  }
+  session.saveHotkeys = async (bindings) => {
+    const store = hotkeysStoreFor(session.projectRoot)
+    if (!store) return fail('INVALID_INPUT', '快捷键落盘需要先打开一个项目')
+    return store.save(bindings)
+  }
   dispatcher = createIpcDispatcher({
     session,
     prefs,
