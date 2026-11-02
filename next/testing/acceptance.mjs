@@ -5,8 +5,10 @@ import { EventEmitter } from 'node:events'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { validateCarrierManifest } from '../kernel/carrierManifest.mjs'
+import { loadCarriersFromDir } from '../kernel/pluginLoader.mjs'
 import { createServiceSupervisor } from '../runtime/serviceSupervisor.mjs'
 import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { carrierOverridesPath, createFileCarrierOverridesStore } from '../carrierOverridesStore.mjs'
@@ -646,6 +648,25 @@ try {
   // 「全坏了还能不能自救」——判据本身钉在 next/tests/shell-ui.spec.mjs 的故障隔离一节。
   const menuOnlyCount = listed.length - carrierEntries.length
   console.log(`〔批次63 记账〕全部载体停用后面板枚举数≈${menuOnlyCount}（应用菜单动作；载体 ${carrierEntries.length} 条此刻不该出现）`)
+
+  // ── 批次64：装载原型打桩（桩2 前置可行性判定；按作者裁决只记账不打回）────────────
+  // 外部载体目录 <dir>/<载体id>/manifest.json 的发现装载：同一张 @4 校验闸 → registry.install →
+  // 卸载走批次51 效应合同（impl.dispose → onDispose 钩子 → 效应逆序回卷）。坏清单只跳过记账。
+  const loaderRoot = fileURLToPath(new URL('./fixtures/loader-fixture', import.meta.url))
+  const loaderRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+  const loaderRun = await loadCarriersFromDir(loaderRoot, { registry: loaderRegistry })
+  const loaderGoodId = 'fixture.loader.good'
+  const loaderVisible = loaderRegistry.get(loaderGoodId) !== null
+    && loaderRegistry.dirOf(loaderGoodId) === join(loaderRoot, 'fixture.loader.good')
+  const loaderRemoved = loaderRegistry.uninstall(loaderGoodId)
+  const loaderClean = loaderRemoved.ok === true
+    && loaderRegistry.get(loaderGoodId) === null
+    && loaderRegistry.effectCount(loaderGoodId) === 0
+    && ['impl', 'hook', 'effect'].every((source) => loaderRemoved.value.disposed.some((entry) => entry.source === source && !entry.error))
+  record('装载原型：fixture 装入→registry 可见→卸载干净',
+    loaderRun.loaded.length === 1 && loaderRun.skipped.length === 1 && loaderRun.skipped[0].stage === 'manifest'
+      && loaderVisible && loaderClean,
+    `装入=${loaderRun.loaded.length} 跳过=${loaderRun.skipped.length}(${loaderRun.skipped[0]?.code ?? '-'}) 可见=${loaderVisible} 卸载干净=${loaderClean}`)
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

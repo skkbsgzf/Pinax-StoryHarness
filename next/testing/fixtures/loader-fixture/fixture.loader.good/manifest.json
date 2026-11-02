@@ -1,0 +1,29 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "fixture.loader.good",
+  "title": "装载原型（合法夹具）",
+  "version": "1.0.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": {
+    "projectKind": "generic",
+    "defaultPane": "loader.pane",
+    "contextProfile": "authoring"
+  },
+  "dataDirs": { "notes": "构思" },
+  "panes": [
+    {
+      "slot": "center",
+      "id": "loader.pane",
+      "title": "装载",
+      "view": "pinax.view.notes",
+      "kind": "notes-editor"
+    }
+  ],
+  "provides": [],
+  "requires": [],
+  "tools": [],
+  "context": { "providers": [], "budgetChars": 2000 },
+  "scopes": ["file:构思:r"]
+}
