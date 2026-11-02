@@ -1,0 +1,18 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.clashb",
+  "title": "争用乙（与甲抢同一块地盘）",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "clashb.pane", "contextProfile": "clashb" },
+  "dataDirs": { "data": "争用地盘" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:争用地盘:r"],
+  "contributes": {
+    "panes": [{ "id": "clashb.pane", "slot": "left-dock", "title": "争用乙", "view": "pinax.view.list", "kind": "records-editor" }]
+  }
+}

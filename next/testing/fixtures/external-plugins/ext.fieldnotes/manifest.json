@@ -1,0 +1,29 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.fieldnotes",
+  "title": "采访笔记（外部声明型示例）",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "license": { "mode": "free" },
+  "primary": { "projectKind": "generic", "defaultPane": "fieldnotes.notes", "contextProfile": "fieldnotes" },
+  "dataDirs": { "notes": "采访笔记" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:采访笔记:rw"],
+  "context": { "providers": [], "budgetChars": 4000 },
+  "contributes": {
+    "panes": [
+      { "id": "fieldnotes.nav", "slot": "left-dock", "title": "采访笔记", "icon": "extensions", "view": "pinax.view.tree", "kind": "entries-categories" },
+      { "id": "fieldnotes.notes", "slot": "center", "title": "笔记正文", "view": "pinax.view.reader", "kind": "document-detail" }
+    ],
+    "settings": [
+      { "id": "general", "title": "采访笔记", "type": "section" },
+      { "id": "show_archived", "title": "显示归档笔记", "type": "boolean", "default": false, "volatile": true }
+    ],
+    "commands": []
+  },
+  "agentMd": "AGENT.md"
+}

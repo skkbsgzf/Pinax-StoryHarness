@@ -581,6 +581,27 @@ check('v 宿主描述符与注册表一致：views／forms／slots／uiLayers �
       ? `${Object.keys(descriptorReport.generated).length} 个字段、views ${descriptorReport.generated.views.length}／forms ${descriptorReport.generated.forms.length}`
       : descriptorReport.differences.map((item) => `${item.field}:${item.reason}`).join(', '))
 
+// 批次65a（门禁 w）：外部声明型装载链在装机轨里不是死代码。
+//   拒接闸的报错码与效应标签前缀必须随 kernel 进主进程 bundle（openProject→externalPlugins→pluginLoader→declarativeImpl 一条链）；
+//   五份「字段级拒绝」夹具是闸的靶子——夹具没了，闸就退回「只验好清单」的半瞎状态。
+// 计数不动：装载器多了一个但内置 11 块装载方式没变（65b 才动），工具面/清单计数零变化，故本门禁只查标记。
+const declarativeSource = await readFile(join(repoRoot, 'next', 'kernel', 'declarativeImpl.mjs'), 'utf-8').catch(() => '')
+const loaderChainSource = await readFile(join(repoRoot, 'next', 'kernel', 'pluginLoader.mjs'), 'utf-8').catch(() => '')
+const externalProjectSource = await readFile(join(repoRoot, 'next', 'project', 'externalPlugins.mjs'), 'utf-8').catch(() => '')
+const externalFixtureDir = join(repoRoot, 'next', 'testing', 'fixtures', 'external-plugins')
+const fixtureEntries = await readdir(externalFixtureDir).catch(() => [])
+const refusedFixtures = ['ext.bad.tools', 'ext.bad.services', 'ext.bad.mcp', 'ext.bad.entry', 'ext.bad.commands'].filter((name) => fixtureEntries.includes(name))
+const wMarkers = ['PINAX_DECLARATIVE_FIELD_REFUSED', 'declarative-load:', 'external-declarative']
+const missingWMarkers = wMarkers.filter((marker) => !bundle.includes(marker))
+check('w 批次65a 声明型装载链进产物：主进程 bundle 带拒接码／效应标签前缀／外部态标签，工厂与装载器导出在位，五份字段级拒接夹具在册',
+  declarativeSource.includes('export function gateDeclarativeManifest')
+    && declarativeSource.includes('export function createDeclarativeImpl')
+    && loaderChainSource.includes('export async function loadDeclarativeFromDir')
+    && externalProjectSource.includes("TRASH_DIRNAME = '.trash'")
+    && missingWMarkers.length === 0
+    && refusedFixtures.length === 5,
+  `markers=${missingWMarkers.join(',') || '齐'} 夹具=${refusedFixtures.length}/5 源码=${declarativeSource && loaderChainSource && externalProjectSource ? '在位' : '缺文件'}`)
+
 if (failures.length) {
   console.log(`\n打包门禁：${failures.length} 项不合格 → ${failures.join(' / ')}`)
   process.exitCode = 1

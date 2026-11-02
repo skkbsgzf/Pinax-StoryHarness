@@ -1,0 +1,19 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.bad.services",
+  "title": "坏例：声明了服务",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "bad.services.pane", "contextProfile": "bad.services" },
+  "dataDirs": { "data": "坏例乙数据" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:坏例乙数据:r"],
+  "services": [{ "id": "api", "command": "node server.mjs", "port": 3999 }],
+  "contributes": {
+    "panes": [{ "id": "bad.services.pane", "slot": "left-dock", "title": "坏例乙", "view": "pinax.view.list", "kind": "records-editor" }]
+  }
+}

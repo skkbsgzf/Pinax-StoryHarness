@@ -1,0 +1,19 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.bad.mcp",
+  "title": "坏例：声明了外部 MCP",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "bad.mcp.pane", "contextProfile": "bad.mcp" },
+  "dataDirs": { "data": "坏例丙数据" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:坏例丙数据:r"],
+  "mcp": [{ "id": "srv", "transport": "stdio", "prefix": "badmcp", "command": "node bridge.mjs" }],
+  "contributes": {
+    "panes": [{ "id": "bad.mcp.pane", "slot": "left-dock", "title": "坏例丙", "view": "pinax.view.list", "kind": "records-editor" }]
+  }
+}

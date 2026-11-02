@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, cp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { EventEmitter } from 'node:events'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
@@ -13,12 +13,14 @@ import { createServiceSupervisor } from '../runtime/serviceSupervisor.mjs'
 import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { carrierOverridesPath, createFileCarrierOverridesStore } from '../carrierOverridesStore.mjs'
 import { createFileSettingsStore } from '../settingsStore.mjs'
-import { diagnoseCarrier, loadHostDescriptor } from '../doctor.mjs'
+import { diagnoseCarrier, diagnoseExternalLoads, loadHostDescriptor } from '../doctor.mjs'
 import { COMIC_CARRIER } from '../carriers/comic/manifest.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
 import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { createProject, initBareProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
+import { externalPluginsDir, uninstallExternalPlugin } from '../project/externalPlugins.mjs'
+import { buildProjectDocument, writeProjectDocument } from '../project/projectManifest.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { buildRuntimeEnvelope } from '../runtime/contextProfiles.mjs'
 import { BUILT_IN_CARRIER_PLUGINS, COMIC_CARRIER_ID, DOSSIER_CARRIER_ID, EXPERIENCE_CARRIER_ID, MATERIAL_CARRIER_ID, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, ONLINE_CARRIER_ID, OUTLINE_CARRIER_ID, SCRIPT_CARRIER_ID, VIDEO_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
@@ -667,6 +669,59 @@ try {
     loaderRun.loaded.length === 1 && loaderRun.skipped.length === 1 && loaderRun.skipped[0].stage === 'manifest'
       && loaderVisible && loaderClean,
     `装入=${loaderRun.loaded.length} 跳过=${loaderRun.skipped.length}(${loaderRun.skipped[0]?.code ?? '-'}) 可见=${loaderVisible} 卸载干净=${loaderClean}`)
+
+  // ── 批次65a：外部声明型插件正式第一波（只有 manifest.json，宿主绝不执行第三方 JS）──────
+  // 场景照项目层测试收一遍主链：真项目目录里放 4 份声明型夹具（含一份带 throw 探针的 impl.mjs 目录）
+  // → openProject 装载 → 竖条可枚举 → 停用退出竖条 → 卸载只进回收站、效应栈清零。
+  // ext.implprobe 的探针一旦被执行，globalThis.__pinaxImplProbe 就 ≥1 且装载当场抛错——它必须一直是不存在。
+  const externalFixtureRoot = fileURLToPath(new URL('./fixtures/external-plugins', import.meta.url))
+  const extRoot = join(workspace, 'projects', '外部声明型装载')
+  await mkdir(externalPluginsDir(extRoot), { recursive: true })
+  for (const fixtureName of ['ext.fieldnotes', 'ext.quotes', 'ext.clasha', 'ext.implprobe']) {
+    await cp(join(externalFixtureRoot, fixtureName), join(externalPluginsDir(extRoot), fixtureName), { recursive: true })
+  }
+  const extDoc = buildProjectDocument({ projectId: 'p-65a-accept', name: '外部声明型装载', kind: 'generic', primaryCarrier: 'ext.fieldnotes', enabled: ['ext.fieldnotes'] })
+  if (!extDoc.ok) {
+    record('批次65a 外部声明型装载：fixture 装入→竖条可枚举→停用释放', false, `夹具项目文档建不出来：${JSON.stringify(extDoc.error)}`)
+  } else {
+    await writeProjectDocument(extRoot, extDoc.value)
+    const extRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+    const extOpened = await openProject({ root: extRoot, registry: extRegistry })
+    const extRail = extOpened.ok ? extOpened.value.view.panes['left-dock'].map((pane) => pane.id) : []
+    const extSkipped = extOpened.ok ? extOpened.value.external.skipped : []
+    const extAdded = extOpened.ok ? extOpened.value.external.addedToEnabled : []
+    // 停用 ext.quotes：setEnabled 链（carrierSetEnabled 走的就是它）→ 重新 activate → 竖条退出。
+    const extDisable = extOpened.ok
+      ? extRegistry.setEnabled('ext.quotes', extOpened.value.document.carriers, false)
+      : { ok: false }
+    const extRailAfterDisable = extDisable.ok
+      ? extRegistry.activate({ ...extOpened.value.document.carriers, enabled: extDisable.value.enabled }).value.panes['left-dock'].map((pane) => pane.id)
+      : extRail
+    // 卸载 ext.quotes：目录进 .pinax/plugins/.trash/<时间戳>/，注册表与效应栈清干净，原址消失。
+    const extUninstalled = await uninstallExternalPlugin(extRoot, extRegistry, 'ext.quotes')
+    const extProbeUntouched = (globalThis.__pinaxImplProbe ?? 0) === 0
+    const extTrashOk = extUninstalled.ok === true
+      && (await stat(join(extUninstalled.value.trashPath, 'manifest.json')).then(() => true, () => false))
+      && !(await stat(join(externalPluginsDir(extRoot), 'ext.quotes')).then(() => true, () => false))
+      && extRegistry.get('ext.quotes') === null
+      && extRegistry.effectCount('ext.quotes') === 0
+    record('批次65a 外部声明型装载：fixture 装入→竖条可枚举→停用释放',
+      extOpened.ok === true
+        && extAdded.join() === 'ext.clasha,ext.quotes'
+        && ['fieldnotes.nav', 'quotes.wall', 'clasha.pane'].every((id) => extRail.includes(id))
+        && extSkipped.length === 1 && extSkipped[0].carrierId === 'ext.implprobe' && extSkipped[0].stage === 'form'
+        && extProbeUntouched
+        && extRailAfterDisable.length === 2 && !extRailAfterDisable.includes('quotes.wall')
+        && extTrashOk,
+      extOpened.ok
+        ? `装入=${extOpened.value.external.loaded.length} 自动启用=${extAdded.join('/')} 拒=${extSkipped.map((item) => `${item.carrierId}:${item.stage}`).join(',')} 竖条=${extRail.length} 停用后=${extRailAfterDisable.length} 卸载=${extUninstalled.ok ? '进回收站' : String(extUninstalled.error?.code)} 探针=${extProbeUntouched ? '未执行' : '被执行了！'}`
+        : `打开失败 ${String(extOpened.error?.message ?? extOpened.error)}`)
+    const extDoctorReport = diagnoseExternalLoads({
+      loaded: extOpened.ok ? extOpened.value.external.loaded.map((carrierId) => ({ carrierId })) : [],
+      skipped: extSkipped
+    })
+    console.log(`〔批次65a 记账〕doctor 外部态读数：declarative=${extDoctorReport.filter((item) => item.state === 'external-declarative').length} rejected=${extDoctorReport.filter((item) => item.state === 'external-rejected').length}；卸载回收站路径=${extUninstalled.ok ? extUninstalled.value.trashPath.replace(extRoot, '.pinax/plugins') : '-'}`)
+  }
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

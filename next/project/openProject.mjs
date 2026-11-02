@@ -4,6 +4,7 @@ import { fail, ok } from '../kernel/errors.mjs'
 import { PROJECT_SPEC } from '../kernel/projectSkeleton.mjs'
 import { createFileService } from '../fs/fileService.mjs'
 import { buildArchiveView } from './carriers.mjs'
+import { registerExternalPluginsOnOpen } from './externalPlugins.mjs'
 import { readProjectDocument, writeProjectDocument } from './projectManifest.mjs'
 import { DOSSIER_LEGACY_IDS } from '../carriers/dossier/manifest.mjs'
 
@@ -60,6 +61,16 @@ export async function openProject({ root, registry, deps = {} }) {
     document.value = { ...document.value, carriers: migratedCarriers }
   }
 
+  // 批次65a · 外部声明型插件装载正式化：扫 `.pinax/plugins/` → 声明型闸 → 内核工厂 impl → registry.install；
+  // 从没进过账本的新插件自动登记进 carriers.enabled 并落盘（与批次16「@1 打开即升代」同一先例：
+  // 结构登记，不是猜默认值；ledger 让「作者停用过」与「新装」分得开）。坏清单只进 external.skipped 账，
+  // 不挡开项目——故障隔离口径不变。必须在 activate 之前：外部 pane 要随第一次 activate 进竖条。
+  const external = await registerExternalPluginsOnOpen(projectRoot, registry, document.value)
+  if (!external.ok) return external
+  if (external.value.carriers !== document.value.carriers) {
+    document.value = { ...document.value, carriers: external.value.carriers }
+  }
+
   const activation = registry.activate(document.value.carriers)
   if (!activation.ok) {
     return fail(activation.error.code, activation.error.message, { ...activation.error.details, root: projectRoot })
@@ -82,6 +93,7 @@ export async function openProject({ root, registry, deps = {} }) {
     view: activation.value,
     fileService,
     archive: archive.value,
+    external: external.value.external,
     rejectedPlugins: activation.value.rejected
   })
 }

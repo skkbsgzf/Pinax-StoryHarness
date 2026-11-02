@@ -70,10 +70,15 @@ test('④ 卸载 → dispose 链跑完：impl.dispose → onDispose 钩子 → �
   assert.equal(registry.effectCount(GOOD_ID), 0, '效应栈不许留残')
 })
 
-test('⑤ 守卫：pluginLoader 存在且 ≤60 行，acceptance 的「装载原型」记账条在链上', async () => {
+test('⑤ 守卫：pluginLoader 存在且 ≤150 行，acceptance 的「装载原型」记账条在链上', async () => {
   const loaderSource = await readFile(new URL('../kernel/pluginLoader.mjs', import.meta.url), 'utf-8')
   assert.ok(loaderSource.includes('export async function loadCarriersFromDir'))
-  assert.ok(loaderSource.trimEnd().split('\n').length <= 60, '工单上限 60 行')
+  // 计数变化理由（批次65a）：60 行是桩2 打桩的上限；正式化把「声明型装载器」放进了同一文件——
+  // 两个装载器共用 readdir/JSON/@4 校验的骨架，只差形态闸一步，拆成第二个文件会立起第二份真相。
+  // 上限放到 150 行，并钉住声明型装载器与「绝不执行第三方 JS」的形态拒装段都在。
+  assert.ok(loaderSource.includes('export async function loadDeclarativeFromDir'))
+  assert.ok(loaderSource.includes("stage: 'form'"), '带 impl.mjs 的目录必须按形态拒装，不许静默忽略')
+  assert.ok(loaderSource.trimEnd().split('\n').length <= 150, '批次65a 上限 150 行（两个装载器同文件）')
   const acceptanceSource = await readFile(new URL('../testing/acceptance.mjs', import.meta.url), 'utf-8')
   assert.match(acceptanceSource, /装载原型：fixture 装入→registry 可见→卸载干净/u, '本批只记账不打回：acceptance 必须有这条 record')
 })

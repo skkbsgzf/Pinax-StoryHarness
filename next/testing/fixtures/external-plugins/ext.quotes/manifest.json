@@ -1,0 +1,20 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.quotes",
+  "title": "金句墙（外部声明型示例）",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "quotes.wall", "contextProfile": "quotes" },
+  "dataDirs": { "wall": "金句墙" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:金句墙:r"],
+  "contributes": {
+    "panes": [
+      { "id": "quotes.wall", "slot": "left-dock", "title": "金句墙", "icon": "extensions", "view": "pinax.view.list", "kind": "records-editor" }
+    ]
+  }
+}

@@ -37,6 +37,40 @@ export const DOCTOR_STATES = Object.freeze([
   'incompatible-form'
 ])
 
+/**
+ * 批次65a：外部声明型插件的装载态判例。不复用 DOCTOR_STATES——两边回答的问题不同：
+ * 六态答「这份清单跟宿主合不合」，这两态答「这个外部插件今天在不不在面上、不在的话凭什么」。
+ * 报告形状（{ state, manifestId, message, fix, checks }）与 result() 骨架照用，界面无需二套渲染分支。
+ */
+export const EXTERNAL_PLUGIN_STATES = Object.freeze(['external-declarative', 'external-rejected'])
+
+/**
+ * 把 loadDeclarativeFromDir 的 { loaded, skipped } 翻成逐插件判例：
+ *   loaded（含幂等重入 alreadyInstalled）→ external-declarative；
+ *   skipped 每一 stage（manifest/declarative/form/install/effect）→ external-rejected，
+ *   fix 直接把逐字段拒装理由摊给作者——「沙箱未裁」这类原因不许哑。
+ */
+export function diagnoseExternalLoads({ loaded = [], skipped = [] } = {}) {
+  const out = loaded.map((entry) => result('external-declarative', { id: entry.carrierId },
+    entry.alreadyInstalled
+      ? '外部声明型插件已在册（同目录重入，幂等跳过）'
+      : '外部声明型插件装载成功：impl 由内核声明式工厂生成，不执行第三方 JS',
+    '',
+    entry.alreadyInstalled
+      ? [{ name: 'installed', state: 'ok' }]
+      : [{ name: 'manifest', state: 'ok' }, { name: 'declarative-gate', state: 'ok' }, { name: 'install+effect', state: 'ok' }]))
+  for (const entry of skipped) {
+    const fix = entry.stage === 'declarative' && Array.isArray(entry.refused)
+      ? entry.refused.map((item) => `${item.field}：${item.reason}`).join('；')
+      : entry.stage === 'form'
+        ? '代码形态本批不收：删掉 impl.mjs 只留 manifest.json，或等沙箱裁决后的批次'
+        : '按 reason 修改或删除该清单目录（卸载请走载体管理面板，目录会进 .trash 而不是被删）'
+    out.push(result('external-rejected', { id: entry.carrierId }, entry.reason ?? String(entry.code ?? '拒装'), fix,
+      [{ name: 'stage', state: 'failed', stage: entry.stage ?? '(未知)', code: entry.code ?? null }]))
+  }
+  return out
+}
+
 export const HOST_DESCRIPTOR_FILE = fileURLToPath(new URL('./host-descriptor.json', import.meta.url))
 
 /** 读描述符；坏 JSON／缺字段都返回可渲染的失败载荷（doctor 自己先不崩）。 */
