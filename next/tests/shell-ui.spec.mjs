@@ -2102,15 +2102,47 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
   })
 })
 
-describe('大纲小窗（批次59：统一窗口化后，迷你大纲也只是一扇 PaneWindow）', () => {
+/**
+ * 页底座（批次61 · 作者裁定①「打开载体缺省＝切页」／③「形态切换走右键，不做死按钮」／④「底座＋D 一轮」）。
+ *
+ * 这一节替代批次59 那两节「统一窗口」用例。改名与翻案都有理由，不是把断言调松：
+ *   · 旧断言「点竖条开一扇浮窗／第一扇最大化＋后续浮窗」——被裁定①推翻：缺省是切页，
+ *     浮窗只能由显式动作（索引窗「悬浮」钮、右键「浮出为窗」）到达；
+ *   · 旧断言 `data-window-state: 'tiled'`＋`tiledWith`／`tileSide`——v3 里分屏不是窗态，
+ *     是「一页搬进对面页组」（form 仍 page，group 换 side）；
+ *   · 旧断言 `minimized: 'none'｜'tab'`＋「收起不啃 geometry」——v3 只有浮窗持有矩形，
+ *     收成标签与占为页都把 geometry 写成 null（位置归宿主排版），所以这条改成「只有浮窗有矩形」；
+ *   · 旧断言「窗头常驻形态钮／页签上放形态钮」——被裁定③推翻：形态一律走右键菜单。
+ * 状态机本体（迁移、非法值、级联）在 next/tests/workspace-v3.test.mjs 里逐条钉住；
+ * 这里只钉界面这一层：DOM 上看到的形态／页组／几何／标题，与工作区记录必须一致。
+ */
+describe('页底座：开窗缺省＝切页（批次61）', () => {
+  afterEach(() => {
+    resetWorkspace()
+    globalThis.localStorage?.clear()
+  })
+
   const OUTLINE_NODES = [
     { id: 'n1', title: '开场：雨夜进城', summary: '雪夜，柯秒进了城。' },
     { id: 'n2', title: '第一折：停摆的表' }
   ]
+  const NOVEL_PANES = [
+    { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', multiplicity: 'single', scope: 'project', forms: ['dock'] },
+    { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', multiplicity: 'single', scope: 'entry', split: 'main', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+  ]
+  /** 大纲那块板：`editorMultiplicity` 换掉中栏 pane 的多开声明——single 走 replace-page，keyed 按文档各开一页。 */
+  function outlinePanes(editorMultiplicity) {
+    return [
+      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', multiplicity: 'single', scope: 'project', forms: ['dock'] },
+      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', multiplicity: editorMultiplicity, scope: 'entry', split: 'side', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      // overlay 槽是协议里的覆层物种（〔§7 待裁②〕本批不收口）：仍缺省浮，但 forms 声明照旧进右键菜单。
+      { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, multiplicity: 'list', scope: 'session', forms: ['dock', 'split', 'overlay'] }
+    ]
+  }
 
-  /** 在 carrierView 上补一块大纲载体（含 overlay pane 声明）与它的左树/中栏。 */
-  function overlayView() {
+  function pageView({ editorMultiplicity = 'single' } = {}) {
     const base = carrierView()
+    const panes = outlinePanes(editorMultiplicity)
     const outlineCarrier = {
       id: 'pinax.carrier.outline',
       title: '大纲',
@@ -2124,35 +2156,42 @@ describe('大纲小窗（批次59：统一窗口化后，迷你大纲也只是�
       settings: [],
       tools: ['pinax_outline_read', 'pinax_outline_save'],
       context: { providers: ['outline'], budgetChars: 20000 },
-      panes: [
-        { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline' },
-        { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list' },
-        { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300 }
-      ]
+      panes
     }
     return {
       ...base,
-      carriers: [...base.carriers, outlineCarrier],
-      left: [...base.left, { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }],
-      center: [...base.center, { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }]
+      carriers: [{ ...base.carriers[0], panes: NOVEL_PANES }, ...base.carriers.slice(1), outlineCarrier],
+      left: [
+        { ...NOVEL_PANES[0], pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true },
+        { ...panes[0], pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
+      ],
+      center: [
+        { ...NOVEL_PANES[1], pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true },
+        { ...panes[1], pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
+      ]
     }
   }
 
   /**
-   * 工作区存档：缺省给一份空的 `{ version, entries }`，调用方传同一个对象即可跨挂载读回。
-   * save 落在同一个对象上（主进程那份 .pinax/workspace.json 的替身），用例直接读 entries 断言。
+   * 存档替身：`workspace` 由调用方传入并在用例内共享（就是主进程那份 `.pinax/workspace.json`），
+   * save 写在同一对象上，所以「跨挂载读回」在同一用例里就能断言。
+   * v3 落盘的是 { version, entries, active, focus }——四格都记下，恢复才谈得上完整。
    */
-  function overlayBridge({ handlers = new Map(), nodes = OUTLINE_NODES, workspace = { version: 2, entries: {} } } = {}) {
+  function pageBridge({ workspace = { version: 3, entries: {} }, editorMultiplicity = 'single', handlers = new Map(), nodes = OUTLINE_NODES } = {}) {
     const calls = []
     const request = vi.fn(async (channel, payload) => {
-      if (channel === IPC_CHANNELS.view) return { ok: true, value: overlayView() }
-      if (channel === IPC_CHANNELS.workspaceLoad) return { ok: true, value: { version: workspace.version ?? 2, entries: workspace.entries ?? {} } }
-      if (channel === IPC_CHANNELS.workspaceSave) {
-        workspace.version = payload?.snapshot?.version ?? 2
-        workspace.entries = payload?.snapshot?.entries ?? {}
-        return { ok: true, value: { version: workspace.version, entries: workspace.entries } }
-      }
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: pageView({ editorMultiplicity }) }
       if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } }
+      if (channel === IPC_CHANNELS.workspaceLoad) {
+        return { ok: true, value: { version: workspace.version ?? 3, entries: workspace.entries ?? {}, active: workspace.active ?? null, focus: workspace.focus ?? null } }
+      }
+      if (channel === IPC_CHANNELS.workspaceSave) {
+        workspace.version = payload?.snapshot?.version ?? 3
+        workspace.entries = payload?.snapshot?.entries ?? {}
+        workspace.active = payload?.snapshot?.active ?? null
+        workspace.focus = payload?.snapshot?.focus ?? null
+        return { ok: true, value: { ...workspace } }
+      }
       if (channel === IPC_CHANNELS.runtimeToolCall) {
         calls.push(payload.tool)
         if (payload.tool === 'pinax_chapter_list') {
@@ -2172,451 +2211,190 @@ describe('大纲小窗（批次59：统一窗口化后，迷你大纲也只是�
       if (handler) return handler(payload)
       return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
     })
-    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
-    return { request, onEvent, calls }
-  }
-
-  async function openOutlineBoard(wrapper) {
-    const rail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === '大纲')
-    expect(rail, '竖条应有大纲栏').toBeTruthy()
-    await rail.trigger('click')
-    await flushPromises()
-  }
-
-  async function openWidget(wrapper) {
-    // 协议 v3：「悬浮」钮从大纲那一栏的专属位置搬到了索引窗标题行（每一块声明了 overlay 槽的载体都出这一枚，
-    // 素材那类自带面板原先声明了却点不开）。所以这里按类名找，别钉死 aria 文案。
-    const toggle = wrapper.find('.nx-index-overlay-btn')
-    expect(toggle.exists(), '索引窗标题行右侧应有「悬浮」钮').toBe(true)
-    await toggle.trigger('click')
-    await flushPromises()
-  }
-
-  it('开/收/关：索引窗「悬浮」钮开小窗；右上三钮＝收起／分屏／×；Esc 与收起同义', async () => {
-    const workspace = { version: 2, entries: {} }
-    const bridge = overlayBridge({ workspace })
-    const wrapper = mount(AppNext, { props: { bridge } })
-    await flushPromises()
-    await openOutlineBoard(wrapper)
-
-    // 竖条点开的就是一扇 PaneWindow（大纲编辑），不再有独立的停靠容器。
-    expect(wrapper.find('.nx-window-layer').exists()).toBe(true)
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').exists()).toBe(true)
-
-    // 索引窗「悬浮」钮再开一扇——迷你大纲也是同一套窗，只是内容不同。
-    await openWidget(wrapper)
-    const widget = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(widget.exists()).toBe(true)
-    expect(widget.attributes('data-window-state')).toBe('floating')
-    expect(widget.attributes('aria-label')).toBe('大纲窗口')
-    expect(widget.find('.nx-pane-window-title').text()).toBe('大纲')
-    // 内容＝迷你大纲（只读清单），打开时现取一次大纲。
-    expect(bridge.calls).toContain('pinax_outline_read')
-    const rows = widget.findAll('.nx-overlay-tree .workspace-nav-item')
-    expect(rows).toHaveLength(2)
-    expect(rows[0].text()).toContain('开场：雨夜进城')
-    expect(rows[1].text()).toContain('第一折：停摆的表')
-
-    // chrome 只有三枚：收起／分屏／×（铁律一／五）。
-    expect(widget.findAll('[data-window-action]').map((node) => node.attributes('data-window-action'))).toEqual(['collapse', 'split', 'close'])
-
-    // 收起钮 → 右侧缘标签；点标签还原。
-    await widget.find('[data-window-action="collapse"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(false)
-    const tab = wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]')
-    expect(tab.exists()).toBe(true)
-    expect(tab.attributes('aria-label')).toBe('展开大纲窗口')
-    expect(tab.text()).toBe('大纲')
-    await tab.trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(true)
-
-    // Esc＝把叠序最高的那扇窗收成侧缘标签（同一条状态转移，不是第二套外壳）。
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(false)
-    expect(wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]').exists()).toBe(true)
-
-    // ×＝关窗：记录删除，标签也不留；另一扇窗不受牵连。
-    await wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]').trigger('click')
-    await flushPromises()
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="close"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(false)
-    expect(wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]').exists()).toBe(false)
-    expect(workspace.entries['outline.widget#1']).toBeUndefined()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('切板：上一载体的窗保持原位（多载体共存）', async () => {
-    // 批次59b 裁定：多载体共存，旧语义断言作废（切板不再把上一载体的窗收成侧缘标签）。
-    const bridge = overlayBridge()
-    const wrapper = mount(AppNext, { props: { bridge } })
-    await flushPromises()
-    await openOutlineBoard(wrapper)
-    await openWidget(wrapper)
-
-    const outlineWidget = () => wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(outlineWidget().attributes('data-window-state')).toBe('floating')
-
-    // 换到小说板：小说文档窗在场，大纲那两扇窗原地不动——窗态不变，也不变侧缘标签。
-    const novelRail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === '小说（夹具）')
-    expect(novelRail).toBeTruthy()
-    await novelRail.trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-pane-id="novel.editor"]').exists()).toBe(true)
-    expect(outlineWidget().exists()).toBe(true)
-    expect(outlineWidget().attributes('data-window-state')).toBe('floating')
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').attributes('data-window-state')).toBe('floating')
-    expect(wrapper.find('.nx-pane-window-tab').exists()).toBe(false)
-
-    // 迷你大纲仍可用：点一行跳到大纲栏并把该节点送进编辑面（大纲编辑窗仍在场）。
-    const first = wrapper.find('.nx-overlay-tree .workspace-nav-item')
-    expect(first.exists()).toBe(true)
-    await first.trigger('click')
-    await flushPromises()
-    expect(wrapper.find('[data-pane-id="outline.editor"]').exists()).toBe(true)
-    // 批次43：大纲面默认是阅读态——头部那一行标题就是节点名（要改先按「编辑」）。
-    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
-    expect(outlineWidget().exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('Esc 优先关统一二级页：设置开着时 Esc 收起的是弹窗，窗口不动', async () => {
-    const handlers = new Map()
-    const bridge = overlayBridge({ handlers })
-    const wrapper = mount(AppNext, { props: { bridge } })
-    await flushPromises()
-    await openOutlineBoard(wrapper)
-    await openWidget(wrapper)
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(true)
-
-    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
-    await flushPromises()
-    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
-
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await flushPromises()
-    // 弹窗被 Esc 关掉（WorkbenchModal 的语义），窗口还在。
-    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('位置记忆：拖动写进工作区存档的 outline.widget#1，重新挂载读回同一坐标', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
-    await flushPromises()
-    await openOutlineBoard(wrapper)
-    await openWidget(wrapper)
-
-    const head = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] .nx-pane-window-head').element
-    head.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
-    await flushPromises()
-    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 140, clientY: 130, bubbles: true }))
-    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 140, clientY: 130, bubbles: true }))
-    await flushPromises()
-
-    // 坐标不进 localStorage：落在工作区 v2 的窗口记录（geometry）。
-    expect(globalThis.localStorage.getItem('overlay.outline.widget')).toBe(null)
-    expect(workspace.entries['outline.widget#1'].geometry).toMatchObject({ x: 40, y: 30 })
-    expect(workspace.entries['outline.widget#1'].minimized).toBe('none')
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').attributes('style')).toContain('left: 40px')
-    wrapper.unmount()
-
-    // 重新挂载＝从同一份存档读回窗口与位置（窗还开着，不二次打开）。
-    const second = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
-    await flushPromises()
-    const restored = second.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(restored.exists()).toBe(true)
-    const style = restored.attributes('style')
-    expect(style).toContain('left: 40px')
-    expect(style).toContain('top: 30px')
-    second.unmount()
-  })
-
-  it('收起成侧缘标签：窗退场、标签留在原位序号；点标签还原回原坐标（收起不啃 geometry）', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
-    await flushPromises()
-    await openOutlineBoard(wrapper)
-    await openWidget(wrapper)
-
-    // 先把它拖到一个可辨认的位置。
-    const head = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] .nx-pane-window-head').element
-    head.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
-    await flushPromises()
-    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 260, clientY: 190, bubbles: true }))
-    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 260, clientY: 190, bubbles: true }))
-    await flushPromises()
-    expect(workspace.entries['outline.widget#1'].geometry).toMatchObject({ x: 160, y: 90 })
-
-    // 收起：同一实例只换 minimized 这一轴；窗口记录与几何都留着。
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="collapse"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(false)
-    const tab = wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]')
-    expect(tab.exists()).toBe(true)
-    expect(tab.attributes('data-window-state')).toBe('tab')
-    expect(hostWorkspace.get('outline.widget#1').minimized).toBe('tab')
-    expect(hostWorkspace.get('outline.widget#1').geometry).toMatchObject({ x: 160, y: 90 })
-
-    // 点标签展开：回到卡片，位置没被收起这一轴啃掉。
-    await tab.trigger('click')
-    await flushPromises()
-    const card = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(card.exists()).toBe(true)
-    expect(card.attributes('style')).toContain('left: 160px')
-    expect(card.attributes('style')).toContain('top: 90px')
-    expect(hostWorkspace.get('outline.widget#1').minimized).toBe('none')
-    wrapper.unmount()
-  })
-
-  it('同一 pane 多开（multiplicity 仍管开窗数量）：第二份是 #2，几何各记各的，关一份不牵连另一份', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: overlayBridge({ workspace }) } })
-    await flushPromises()
-    await openOutlineBoard(wrapper)
-    await openWidget(wrapper)
-
-    // 按钮唯一化后 UI 不再提供「再开一份」；多开语义留在工作区（multiplicity 仍生效）。
-    const second = hostWorkspace.openInstance('outline.widget', { geometry: { x: 300, y: 200, w: 320, h: 240 } })
-    expect(second).toBe('outline.widget#2')
-    await flushPromises()
-    expect(wrapper.findAll('.nx-pane-window[data-window-pane="outline.widget"]')).toHaveLength(2)
-
-    // 拖 #1：只改 #1 的坐标，#2 原样。
-    const firstGeometry = hostWorkspace.get('outline.widget#1').geometry
-    const secondGeometry = hostWorkspace.get('outline.widget#2').geometry
-    expect(firstGeometry.x).not.toBe(secondGeometry.x)
-    hostWorkspace.setGeometry('outline.widget#1', { x: 40, y: 30, w: 300, h: 240 })
-    await flushPromises()
-    expect(hostWorkspace.get('outline.widget#1').geometry).toMatchObject({ x: 40, y: 30 })
-    expect(hostWorkspace.get('outline.widget#2').geometry).toMatchObject({ x: 300, y: 200 })
-
-    // 关 #1：#2 仍是卡片——实例状态互不牵连。
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"][data-window-instance="outline.widget#1"] [data-window-action="close"]').trigger('click')
-    await flushPromises()
-    expect(hostWorkspace.get('outline.widget#1')).toBe(null)
-    expect(hostWorkspace.get('outline.widget#2')).toBeTruthy()
-    const remaining = wrapper.findAll('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(remaining.map((node) => node.attributes('data-window-instance'))).toEqual(['outline.widget#2'])
-    wrapper.unmount()
-  })
-})
-
-describe('统一窗口（批次59 · 协议 v1.3 铁律一～三）', () => {
-  afterEach(() => {
-    resetWorkspace()
-    globalThis.localStorage?.clear()
-  })
-
-  const OUTLINE_PANES = [
-    { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', forms: ['dock'] },
-    // 'window' 是词表外形态：宿主过滤掉，不进菜单（P18）。
-    // split:'side' 是协议 P11 的副栏声明——有它时这块 pane 优先当副 pane。
-    { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', split: 'side', forms: ['dock', 'split', 'fullscreen', 'window'] },
-    { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, forms: ['overlay', 'fullscreen'] }
-  ]
-  const NOVEL_PANES = [
-    { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', forms: ['dock'] },
-    // split:'main' 是协议 P11 的主栏声明——分屏时由它当主 pane。
-    // 批次45：正文 pane 额外声明 immersive，右键菜单据此多一项「沉浸」。
-    { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', split: 'main', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
-  ]
-
-  /** carrierView 上补两块带 forms 声明的载体：小说（左树/正文）与大纲（左树/编辑/悬浮窗）。 */
-  function multiFormView() {
-    const base = carrierView()
-    return {
-      ...base,
-      carriers: [
-        { ...base.carriers[0], panes: NOVEL_PANES },
-        ...base.carriers.slice(1),
-        {
-          id: 'pinax.carrier.outline',
-          title: '大纲',
-          primary: { projectKind: 'generic' },
-          isPrimary: false,
-          isEnabled: true,
-          capabilities: ['outline.tree'],
-          requires: [],
-          scopes: ['file:大纲:rw', 'agent:ask'],
-          dataDirs: ['大纲'],
-          settings: [],
-          tools: ['pinax_outline_read', 'pinax_outline_save'],
-          context: { providers: ['outline'], budgetChars: 20000 },
-          panes: OUTLINE_PANES
-        }
-      ],
-      left: [
-        { ...NOVEL_PANES[0], pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true },
-        { ...OUTLINE_PANES[0], pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
-      ],
-      center: [
-        { ...NOVEL_PANES[1], pluginId: 'fixture.novel', pluginTitle: '小说（夹具）', primary: true },
-        { ...OUTLINE_PANES[1], pluginId: 'pinax.carrier.outline', pluginTitle: '大纲' }
-      ]
-    }
-  }
-
-  function multiFormBridge({ workspace = { version: 2, entries: {} } } = {}) {
-    const request = vi.fn(async (channel, payload) => {
-      if (channel === IPC_CHANNELS.view) return { ok: true, value: multiFormView() }
-      if (channel === IPC_CHANNELS.prefsGet) return { ok: true, value: { theme: 'light' } }
-      if (channel === IPC_CHANNELS.workspaceLoad) return { ok: true, value: { version: workspace.version ?? 2, entries: workspace.entries ?? {} } }
-      if (channel === IPC_CHANNELS.workspaceSave) {
-        workspace.version = payload?.snapshot?.version ?? 2
-        workspace.entries = payload?.snapshot?.entries ?? {}
-        return { ok: true, value: { version: workspace.version, entries: workspace.entries } }
-      }
-      if (channel === IPC_CHANNELS.runtimeToolCall) {
-        if (payload.tool === 'pinax_outline_read') {
-          return {
-            ok: true,
-            value: {
-              tool: payload.tool,
-              owner: 'pinax.carrier.outline',
-              payload: { ok: true, source: '大纲/outline.json', nodes: [{ id: 'n1', title: '开场：雨夜进城' }], edges: [], nodeTotal: 1, truncated: false, revision: 1, warning: null }
-            }
-          }
-        }
-        if (payload.tool === 'pinax_chapter_list') {
-          return {
-            ok: true,
-            value: {
-              tool: payload.tool,
-              owner: 'fixture.novel',
-              payload: { ok: true, total: 1, truncated: false, chapters: [{ index: 0, title: '雨夜', file: '正文/雨夜.md', name: '雨夜.md', revision: 1 }] }
-            }
-          }
-        }
-      }
-      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
-    })
-    return { request, onEvent: () => () => {}, channels: IPC_CHANNELS }
+    return { request, onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }, calls, channels: IPC_CHANNELS }
   }
 
   function railByName(wrapper, name) {
     return wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === name)
   }
 
-  async function openOutlineWidget(wrapper) {
-    const outlineRail = railByName(wrapper, '大纲')
-    expect(outlineRail, '竖条应有大纲栏').toBeTruthy()
-    await outlineRail.trigger('click')
+  async function openOutlineBoard(wrapper) {
+    const rail = railByName(wrapper, '大纲')
+    expect(rail, '竖条应有大纲栏').toBeTruthy()
+    await rail.trigger('click')
     await flushPromises()
+  }
+
+  /** 索引窗标题行的「悬浮」钮＝显式浮窗入口（裁定①：浮窗只在用户明确要的时候才出现）。 */
+  async function openWidget(wrapper) {
     const toggle = wrapper.find('.nx-index-overlay-btn')
     expect(toggle.exists(), '索引窗标题行右侧应有「悬浮」钮').toBe(true)
     await toggle.trigger('click')
     await flushPromises()
   }
 
-  it('统一 chrome：窗口只有收起／分屏／× 三枚；竖条右键不再有「打开方式」菜单（铁律一／五）', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+  function rightClick(node, x = 300, y = 200) {
+    node.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y }))
+  }
+
+  const formOf = (instance) => hostWorkspace.get(instance)?.form
+  const groupOf = (instance) => hostWorkspace.get(instance)?.group
+
+  it('点竖条＝切出一页：form 落 page、进主组、不带几何，一条浮窗都不开（裁定①）', async () => {
+    const workspace = { version: 3, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
     await flushPromises()
-    await openOutlineWidget(wrapper)
 
-    const widget = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(widget.exists()).toBe(true)
-    expect(widget.findAll('[data-window-action]').map((node) => node.attributes('data-window-action'))).toEqual(['collapse', 'split', 'close'])
+    // 启动补的那一页：主载体正文窗——页态、主组、无矩形。
+    expect(hostWorkspace.get('novel.editor#1')).toMatchObject({ pane: 'novel.editor', form: 'page', group: 'main', resource: null, maximized: false })
+    expect(hostWorkspace.get('novel.editor#1').geometry).toBe(null)
 
-    // 批次35 七钮、各 pane 定制窗控、独立形态容器都不在（动作只住在统一 chrome）。
-    for (const gone of ['[data-action]', '.nx-overlay-widget', '.nx-overlay-head', '.nx-form-bar', '.nx-split', '.nx-overlay-tab', '.nx-overlay-bubble']) {
-      expect(wrapper.find(gone).exists(), `${gone} 不该再存在`).toBe(false)
-    }
+    await openOutlineBoard(wrapper)
+    const outline = hostWorkspace.get('outline.editor#1')
+    expect(outline).toMatchObject({ form: 'page', group: 'main' })
+    expect(outline.geometry).toBe(null)
 
-    // 竖条右键不弹「打开方式」：窗口动作不在菜单里。
-    const outlineRail = railByName(wrapper, '大纲')
-    outlineRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 80 }))
+    const editor = wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
+    expect(editor.attributes('data-window-state')).toBe('page')
+    expect(editor.attributes('data-window-group')).toBe('main')
+    expect(editor.classes()).toContain('is-page')
+    // 开窗决策的五种结果里没有「新建浮窗」这一档：整张工作区此刻一条非页态记录都没有。
+    expect(hostWorkspace.list().filter((entry) => entry.form !== 'page')).toEqual([])
+
+    // 页签栏＝全部页（按叠序），高亮跟着此刻这一页；中心区只画当前那一张。
+    const tabs = wrapper.findAll('.nx-page-tab')
+    expect(tabs.map((tab) => tab.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1'])
+    expect(tabs[1].classes()).toContain('is-active')
+    expect(tabs[1].attributes('data-page-form')).toBe('page')
+    expect(wrapper.findAll('.nx-pane-window.is-page')).toHaveLength(1)
+
+    // 连点同一格不新增页：第二次只是收起索引窗，第三次回到「已开着 → 回到那一页」。
+    await railByName(wrapper, '大纲').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('打开方式')
+    await railByName(wrapper, '大纲').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.list().filter((entry) => entry.pane === 'outline.editor')).toHaveLength(1)
+    expect(workspace.entries['outline.editor#1'].form).toBe('page')
     wrapper.unmount()
   })
 
-  it('未声明 forms 的载体：右键仍无菜单；点竖条＝打开该载体文档窗（不伪造任何形态）', async () => {
-    const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
+  it('切板不碰别的页；点页签＝揭示那一页（不新建、不升档）', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge() } })
     await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
 
-    const novelRail = railByName(wrapper, '小说（夹具）')
-    novelRail.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }))
-    await flushPromises()
-    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+    // 浮窗那条记录有矩形、页态两条没有：排版与浮动各归各的轴。
+    expect(hostWorkspace.get('outline.widget#1')).toMatchObject({ form: 'floating' })
+    expect(hostWorkspace.get('outline.widget#1').geometry).toBeTruthy()
+    const tabs = () => wrapper.findAll('.nx-page-tab')
+    expect(tabs().map((tab) => tab.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1', 'outline.widget#1'])
+    // 浮窗也上签：否则「看得见」只覆盖了一半；签上的后缀标出它此刻是浮着的。
+    expect(tabs()[2].attributes('data-page-form')).toBe('floating')
+    expect(tabs()[2].find('.nx-page-tab-flag').text()).toBe('浮窗')
 
-    // 竖条点击是唯一的开窗入口：打开的是正文窗本身。
-    await novelRail.trigger('click')
+    // 换回小说板：大纲那两条原地不动（页还是页、浮还是浮），只是主组的当前页换成小说。
+    await railByName(wrapper, '小说（夹具）').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="novel.editor"]').exists()).toBe(true)
+    expect(hostWorkspace.snapshot().active).toEqual({ main: 'novel.editor#1', side: null })
+    expect(formOf('outline.editor#1')).toBe('page')
+    expect(formOf('outline.widget#1')).toBe('floating')
+    expect(wrapper.find('.nx-pane-window[data-window-pane="novel.editor"]').classes()).toContain('is-page')
+    expect(wrapper.findAll('.nx-pane-window.is-page')).toHaveLength(1)
+
+    // 点大纲那条签＝揭示（同一实例，不新建第二页；页态不动它的矩形）。
+    await tabs()[1].trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.snapshot().active.main).toBe('outline.editor#1')
+    expect(hostWorkspace.list().filter((entry) => entry.pane === 'outline.editor')).toHaveLength(1)
+    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').classes()).toContain('is-page')
     wrapper.unmount()
   })
 
-  it('最大化＝铺满中间区：双击标题栏切换，浮窗几何保留；再双击回浮窗（铁律三）', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+  it('形态只从右键菜单改：项＝声明的 forms ∩ 能落点，fullscreen／immersive 不进菜单（裁定③）', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge() } })
     await flushPromises()
-    await openOutlineWidget(wrapper)
+    await openOutlineBoard(wrapper)
+
+    // 页签上只有「关闭这一页」一枚钮：形态钮不做成常驻死按钮。
+    const tab = wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]')
+    expect(tab.findAll('button').map((node) => node.attributes('data-page-action'))).toEqual(['close'])
+
+    rightClick(tab)
+    await flushPromises()
+    const menu = wrapper.find('[data-test="pane-form-menu"]')
+    expect(menu.exists()).toBe(true)
+    // 大纲编辑声明了 dock／split／overlay／fullscreen：菜单出三项，fullscreen 被词表闸掉（v3 没有独立落点）。
+    expect(menu.findAll('.nx-form-menu-item').map((item) => item.attributes('data-test')))
+      .toEqual(['form-menu-dock', 'form-menu-side', 'form-menu-float', 'form-menu-tab', 'form-menu-close'])
+    expect(menu.text()).not.toContain('全屏')
+    expect(menu.text()).not.toContain('沉浸')
+    // 已经是页态 → 「占为页」置灰：点了没变化的项不给假动作。
+    expect(menu.find('[data-test="form-menu-dock"]').element.disabled).toBe(true)
+
+    await menu.find('[data-test="form-menu-float"]').trigger('click')
+    await flushPromises()
+    expect(formOf('outline.editor#1')).toBe('floating')
+    expect(hostWorkspace.get('outline.editor#1').geometry).toBeTruthy()
+    const floating = wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
+    expect(floating.attributes('data-window-state')).toBe('floating')
+    // 只有浮窗给四角手柄（页态／标签态由宿主排版，没有可拖的矩形）。
+    expect(floating.findAll('.nx-pane-window-resize')).toHaveLength(4)
+    // 菜单是一次性浮层：动作完就收，不留第二份。
+    expect(wrapper.find('[data-test="pane-form-menu"]').exists()).toBe(false)
+
+    // 窗头右键＝同一条通路的第二个入口：从那儿把它压回页态（矩形随之清掉）。
+    rightClick(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"] .nx-pane-window-head'))
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="pane-form-menu"]')).toHaveLength(1)
+    const dockItem = wrapper.find('[data-test="form-menu-dock"]')
+    expect(dockItem.element.disabled).toBe(false)
+    await dockItem.trigger('click')
+    await flushPromises()
+    expect(formOf('outline.editor#1')).toBe('page')
+    expect(hostWorkspace.get('outline.editor#1').geometry).toBe(null)
+    wrapper.unmount()
+  })
+
+  it('分屏＝把这一页搬进对面页组（不是第四种形态）：两组各占一半，再点搬回来', async () => {
+    const workspace = { version: 3, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+
+    await wrapper.find('.nx-pane-window[data-window-pane="outline.editor"] [data-window-action="split"]').trigger('click')
+    await flushPromises()
+    // 形态没变，变的是页组：v3 的「分屏」就是 main／side 两组各摆自己那张页。
+    expect(hostWorkspace.get('outline.editor#1')).toMatchObject({ form: 'page', group: 'side' })
+    expect(hostWorkspace.get('outline.editor#1').geometry).toBe(null)
+    const win = wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
+    expect(win.attributes('data-window-state')).toBe('page')
+    expect(win.attributes('data-window-group')).toBe('side')
+    expect(win.classes()).toContain('is-in-side')
+    expect(wrapper.findAll('.nx-pane-window.is-page')).toHaveLength(2)
+    expect(hostWorkspace.snapshot().active).toEqual({ main: 'novel.editor#1', side: 'outline.editor#1' })
+    expect(workspace.entries['outline.editor#1'].group).toBe('side')
+
+    // 再点＝解除：搬回对面那一组，side 组空了，屏幕上只剩一张页。
+    await win.find('[data-window-action="split"]').trigger('click')
+    await flushPromises()
+    expect(groupOf('outline.editor#1')).toBe('main')
+    expect(hostWorkspace.snapshot().active).toEqual({ main: 'outline.editor#1', side: null })
+    expect(wrapper.findAll('.nx-pane-window.is-in-side')).toHaveLength(0)
+    expect(wrapper.findAll('.nx-pane-window.is-page')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('只有浮窗持有矩形：拖动／缩放写回工作区，重新挂载读回同一坐标（收起与占为页都清成 null）', async () => {
+    const workspace = { version: 3, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+    expect(formOf('outline.widget#1')).toBe('floating')
 
     const widget = () => wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(widget().attributes('data-window-state')).toBe('floating')
-    const geometry = hostWorkspace.get('outline.widget#1').geometry
-    expect(geometry).toBeTruthy()
-
-    await widget().find('.nx-pane-window-head').trigger('dblclick')
-    await flushPromises()
-    expect(widget().attributes('data-window-state')).toBe('maximized')
-    expect(widget().classes()).toContain('is-maximized')
-    expect(widget().attributes('style')).toContain('width: 100%')
-    expect(hostWorkspace.get('outline.widget#1').maximized).toBe(true)
-    expect(workspace.entries['outline.widget#1'].maximized).toBe(true)
-    // 几何没被最大化这一轴啃掉。
-    expect(hostWorkspace.get('outline.widget#1').geometry).toMatchObject({ x: geometry.x, y: geometry.y })
-
-    await widget().find('.nx-pane-window-head').trigger('dblclick')
-    await flushPromises()
-    expect(widget().attributes('data-window-state')).toBe('floating')
-    expect(hostWorkspace.get('outline.widget#1').maximized).toBe(false)
-    expect(widget().attributes('style')).toContain(`left: ${geometry.x}px`)
-    wrapper.unmount()
-  })
-
-  it('中间 doc 区是窗口管理器：多扇窗共存；点窗把叠序抬到最上，窗态不变（铁律二）', async () => {
-    // 批次59b 裁定：多载体共存，旧语义断言作废（在册窗含此前打开的载体窗，不只本次两块）。
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
-    await flushPromises()
-    await openOutlineWidget(wrapper)
-
-    // 小说窗（启动即在场）＋大纲编辑窗＋迷你大纲窗三扇同时在册，按叠序从低到高。
-    const openPanes = () => wrapper.findAll('.nx-pane-window').map((node) => node.attributes('data-window-pane'))
-    expect(openPanes()).toEqual(['novel.editor', 'outline.editor', 'outline.widget'])
-    expect(hostWorkspace.get('outline.widget#1').z).toBeGreaterThan(hostWorkspace.get('outline.editor#1').z)
-
-    // 点编辑窗把它抬到最上：只换叠序，不改窗态。
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').trigger('pointerdown')
-    await flushPromises()
-    expect(hostWorkspace.get('outline.editor#1').z).toBeGreaterThan(hostWorkspace.get('outline.widget#1').z)
-    expect(openPanes()).toEqual(['novel.editor', 'outline.widget', 'outline.editor'])
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').attributes('data-window-state')).toBe('floating')
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').attributes('data-window-state')).toBe('floating')
-    expect(wrapper.find('.nx-pane-window[data-window-pane="novel.editor"]').attributes('data-window-state')).toBe('maximized')
-    wrapper.unmount()
-  })
-
-  it('浮窗可拖可缩放：拖动标题栏与四角缩放都写回工作区 v2 的矩形（铁律一）', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
-    await flushPromises()
-    await openOutlineWidget(wrapper)
-
-    const widget = () => wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(widget().find('.nx-pane-window-resize.is-se').exists()).toBe(true)
-    expect(widget().findAll('.nx-pane-window-resize')).toHaveLength(4)
-
-    // 拖标题栏：位置跟着指针走，松手写回整数矩形。
+    // jsdom 里 getBoundingClientRect 全是 0，所以位移＝指针位移；松手写的是整数矩形。
     widget().find('.nx-pane-window-head').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 100, clientY: 100, bubbles: true }))
     await flushPromises()
     window.dispatchEvent(new PointerEvent('pointermove', { clientX: 140, clientY: 130, bubbles: true }))
@@ -2624,8 +2402,10 @@ describe('统一窗口（批次59 · 协议 v1.3 铁律一～三）', () => {
     await flushPromises()
     expect(workspace.entries['outline.widget#1'].geometry).toMatchObject({ x: 40, y: 30 })
     expect(widget().attributes('style')).toContain('left: 40px')
+    // 坐标不再进 localStorage：v3 唯一的落盘点是工作区记录。
+    expect(globalThis.localStorage.getItem('overlay.outline.widget')).toBe(null)
 
-    // 拖右下角缩放：宽高变大，矩形仍写回同一份工作区。
+    // 拖右下角：宽高变化，仍写回同一条记录。
     const before = hostWorkspace.get('outline.widget#1').geometry
     widget().find('.nx-pane-window-resize.is-se').element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 40, clientY: 30, bubbles: true }))
     await flushPromises()
@@ -2635,247 +2415,319 @@ describe('统一窗口（批次59 · 协议 v1.3 铁律一～三）', () => {
     const after = hostWorkspace.get('outline.widget#1').geometry
     expect(after.w).toBeGreaterThanOrEqual(before.w)
     expect(after.h).toBeGreaterThanOrEqual(before.h)
-    expect(widget().attributes('style')).toContain(`width: ${after.w}px`)
-    wrapper.unmount()
-  })
 
-  it('分屏＝对半贴：点右上分屏钮，当前窗与另一扇窗各占一半；再点解除回浮窗（铁律一／三）', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+    // 双击标题栏＝浮窗的子态：几何留着供还原，页态没有这一档。
+    await widget().find('.nx-pane-window-head').trigger('dblclick')
     await flushPromises()
-    await openOutlineWidget(wrapper)
-
-    const widget = () => wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    await widget().find('[data-window-action="split"]').trigger('click')
-    await flushPromises()
-
-    // 两扇窗各占共享矩形的一半：左／右，窗态都是 tiled。
-    expect(widget().attributes('data-window-state')).toBe('tiled')
-    expect(widget().attributes('style')).toContain('width: 380px')
-    const partner = wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
-    expect(partner.attributes('data-window-state')).toBe('tiled')
-    expect(hostWorkspace.get('outline.widget#1').tileSide).toBe('left')
-    expect(hostWorkspace.get('outline.widget#1').tiledWith).toBe('outline.editor#1')
-    expect(hostWorkspace.get('outline.editor#1').tileSide).toBe('right')
-    expect(hostWorkspace.get('outline.editor#1').tiledWith).toBe('outline.widget#1')
-    expect(workspace.entries['outline.widget#1'].tiledWith).toBe('outline.editor#1')
-
-    // 同一扇窗同一 chrome：分屏态仍是那三枚钮，分屏钮翻成「解除分屏」。
-    expect(widget().findAll('[data-window-action]').map((node) => node.attributes('data-window-action'))).toEqual(['collapse', 'split', 'close'])
-    expect(widget().find('[data-window-action="split"]').attributes('aria-label')).toBe('解除分屏')
-
-    // 再点＝解除贴靠，回到浮窗态（矩形保留）。
-    await widget().find('[data-window-action="split"]').trigger('click')
+    expect(widget().attributes('data-window-state')).toBe('maximized')
+    expect(workspace.entries['outline.widget#1'].maximized).toBe(true)
+    expect(hostWorkspace.get('outline.widget#1').geometry).toMatchObject({ x: after.x, y: after.y })
+    await widget().find('.nx-pane-window-head').trigger('dblclick')
     await flushPromises()
     expect(widget().attributes('data-window-state')).toBe('floating')
-    expect(hostWorkspace.get('outline.widget#1').tiledWith).toBe(null)
-    expect(hostWorkspace.get('outline.editor#1').tiledWith).toBe(null)
-    expect(hostWorkspace.get('outline.widget#1').geometry).toBeTruthy()
+    expect(workspace.entries['outline.widget#1'].maximized).toBe(false)
+
+    // 页态与标签态一律没有矩形（旧断言「收起不啃 geometry」随 v3 作废：位置归宿主排版）。
+    expect(hostWorkspace.list().filter((entry) => entry.form !== 'floating').every((entry) => entry.geometry === null)).toBe(true)
+    await widget().find('[data-window-action="collapse"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('outline.widget#1').geometry).toBe(null)
     wrapper.unmount()
+
+    // 重新挂载＝从同一份存档读回浮窗与坐标（不是二次打开；存档里那条收起态也读得回来）。
+    const second = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('tab')
+    expect(second.find('.nx-pane-window-tab[data-window-pane="outline.widget"]').exists()).toBe(true)
+    await second.find('.nx-page-tab[data-page-instance="outline.widget#1"]').trigger('click')
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('page')
+    second.unmount()
   })
 
-  // —— 批次35：浮窗控件组归位＋分屏一等公民＋钉住＋空白卡修复 ————————————————————
-  it('收起＝侧缘标签堆：多扇收起依次排开，点一枚只还原那一扇（铁律二）', async () => {
-    // 批次59b 裁定：多载体共存，旧语义断言作废（收起前不再预设上一板的窗已被切板收起）。
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+  it('统一 chrome：三枚钮＋没有第二套窗口壳；竖条右键不弹形态菜单', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge() } })
     await flushPromises()
-    await openOutlineWidget(wrapper)
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+
+    const widget = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
+    expect(widget.findAll('[data-window-action]').map((node) => node.attributes('data-window-action'))).toEqual(['collapse', 'split', 'close'])
+    expect(widget.attributes('aria-label')).toBe('大纲窗口')
+    for (const gone of ['[data-action]', '.nx-overlay-widget', '.nx-overlay-head', '.nx-form-bar', '.nx-split', '.nx-overlay-tab', '.nx-overlay-bubble']) {
+      expect(wrapper.find(gone).exists(), `${gone} 不该再存在`).toBe(false)
+    }
+
+    // 竖条右键不开形态菜单：菜单的入口是「某一页」（页签或窗头），载体格不是页。
+    rightClick(railByName(wrapper, '大纲'))
+    await flushPromises()
+    expect(wrapper.find('.nx-context-menu').exists()).toBe(false)
+    wrapper.unmount()
+
+    // 没声明 forms 的载体同样不伪造菜单：点竖条只是切出那一页。
+    const plain = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
+    await flushPromises()
+    rightClick(railByName(plain, '小说（夹具）'))
+    await flushPromises()
+    expect(plain.find('.nx-context-menu').exists()).toBe(false)
+    await railByName(plain, '小说（夹具）').trigger('click')
+    await flushPromises()
+    expect(plain.find('.nx-pane-window[data-window-pane="novel.editor"]').attributes('data-window-state')).toBe('page')
+    plain.unmount()
+  })
+
+  it('侧缘标签：收起＝退场留缘签，点缘签回页态；× 删记录（页签栏同时少一条）', async () => {
+    const workspace = { version: 3, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
 
     await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="collapse"]').trigger('click')
     await flushPromises()
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.editor"] [data-window-action="collapse"]').trigger('click')
-    await flushPromises()
-
-    // 大纲那两扇收成标签；启动即在场的第三扇（小说窗）没被动过。
-    expect(wrapper.findAll('.nx-pane-window').map((node) => node.attributes('data-window-pane'))).toEqual(['novel.editor'])
-    const tabs = wrapper.findAll('.nx-pane-window-tab')
-    // 标签按叠序排：top = 120 + 序号 * 36。
-    expect(tabs.map((tab) => tab.attributes('data-window-pane'))).toEqual(['outline.editor', 'outline.widget'])
-    expect(tabs[0].attributes('style')).toContain('top: 120px')
-    expect(tabs[1].attributes('style')).toContain('top: 156px')
-
-    // 点一枚：只还原那一扇，其余标签留着。
-    await tabs[1].trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(true)
-    expect(wrapper.findAll('.nx-pane-window-tab').map((tab) => tab.attributes('data-window-pane'))).toEqual(['outline.editor'])
-    wrapper.unmount()
-  })
-
-  it('贴靠不留半对：分屏中最大化其中一扇＝两扇一起解除贴靠（铁律三）', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
-    await flushPromises()
-    await openOutlineWidget(wrapper)
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="split"]').trigger('click')
-    await flushPromises()
-    expect(hostWorkspace.get('outline.editor#1').tiledWith).toBe('outline.widget#1')
-
-    // 双击标题栏最大化：它铺满中间区，搭档也解开——绝不留「半边贴着」。
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] .nx-pane-window-head').trigger('dblclick')
-    await flushPromises()
-
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').attributes('data-window-state')).toBe('maximized')
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').attributes('data-window-state')).toBe('floating')
-    expect(hostWorkspace.get('outline.widget#1').tiledWith).toBe(null)
-    expect(hostWorkspace.get('outline.editor#1').tiledWith).toBe(null)
-    wrapper.unmount()
-  })
-
-  it('关窗：× 删记录；分屏搭档同时解除贴靠，另一扇仍开着（不留半对）', async () => {
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
-    await flushPromises()
-    await openOutlineWidget(wrapper)
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="split"]').trigger('click')
-    await flushPromises()
-    expect(hostWorkspace.get('outline.editor#1').tiledWith).toBe('outline.widget#1')
-
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="close"]').trigger('click')
-    await flushPromises()
-    expect(workspace.entries['outline.widget#1']).toBeUndefined()
+    expect(formOf('outline.widget#1')).toBe('tab')
     expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(false)
-    expect(hostWorkspace.get('outline.editor#1').tiledWith).toBe(null)
-    expect(hostWorkspace.get('outline.editor#1').tileSide).toBe(null)
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]').exists()).toBe(true)
+    const tab = wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]')
+    expect(tab.exists()).toBe(true)
+    expect(tab.attributes('data-window-state')).toBe('tab')
+    expect(tab.attributes('aria-label')).toBe('展开大纲窗口')
+    // 缘签按叠序依次下移，多扇收起不叠成一枚。
+    expect(tab.attributes('style')).toContain('top: 120px')
+
+    await tab.trigger('click')
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('page')
+    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').classes()).toContain('is-page')
+
+    // × ＝删记录：窗口层与页签栏一起少一条，别的页不受牵连。
+    await wrapper.find('.nx-page-tab[data-page-instance="outline.widget#1"] [data-page-action="close"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('outline.widget#1')).toBe(null)
+    expect(workspace.entries['outline.widget#1']).toBeUndefined()
+    expect(wrapper.findAll('.nx-page-tab').map((node) => node.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1'])
+    // 中心区只画「所在组的当前页」：关掉的这页曾是 main 的当前页，指针随之回指组内第一张（novel）。
+    // 大纲那条记录仍在册（页态、main 组），只是不占屏——所以这里断言记录与签，不断言 DOM 存在。
+    expect(hostWorkspace.get('outline.editor#1')).toMatchObject({ form: 'page', group: 'main' })
+    expect(wrapper.findAll('.nx-pane-window.is-page').map((node) => node.attributes('data-window-instance'))).toEqual(['novel.editor#1'])
     wrapper.unmount()
   })
 
-  it('第一扇占页、后续浮窗：先开的文档窗最大化，再开的小窗浮在上面可叠（铁律二）', async () => {
-    // 批次59b 裁定：多载体共存，旧语义断言作废（页位由先开的窗占着，后开载体不再抢这一页）。
-    const workspace = { version: 2, entries: {} }
-    const wrapper = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+  it('Esc＝把最上面那一页收成侧缘标签；统一二级页开着时 Esc 先归弹窗', async () => {
+    const handlers = new Map()
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ handlers }) } })
     await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+    expect(formOf('outline.widget#1')).toBe('floating')
 
-    const outlineRail = railByName(wrapper, '大纲')
-    await outlineRail.trigger('click')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
-    // 页位归启动即在场的小说窗（最大化）；点大纲栏只多开一扇浮窗。
-    const novel = wrapper.find('.nx-pane-window[data-window-pane="novel.editor"]')
-    expect(novel.attributes('data-window-state')).toBe('maximized')
-    expect(hostWorkspace.get('novel.editor#1').maximized).toBe(true)
-    const editor = wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
-    expect(editor.attributes('data-window-state')).toBe('floating')
-    expect(hostWorkspace.get('outline.editor#1').maximized).toBe(false)
-    expect(editor.attributes('style')).toContain('width: 760px')
+    // 叠序最高的是刚开的浮窗 → 它成标签；页态那条不动。
+    expect(formOf('outline.widget#1')).toBe('tab')
+    expect(wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]').exists()).toBe(true)
+    expect(formOf('outline.editor#1')).toBe('page')
 
-    // 再开一扇（迷你大纲）：已有窗在场，新窗同样以浮窗落下来。
-    await wrapper.find('.nx-index-overlay-btn').trigger('click')
+    // 再按一次：非标签记录里最靠后的那张页（大纲编辑）也让位。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
-    const widget = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(widget.attributes('data-window-state')).toBe('floating')
-    expect(hostWorkspace.get('outline.widget#1').maximized).toBe(false)
-    expect(widget.attributes('style')).toContain('width: 760px')
-    expect(wrapper.findAll('.nx-pane-window')).toHaveLength(3)
+    expect(formOf('outline.editor#1')).toBe('tab')
+    expect(hostWorkspace.snapshot().active.main).toBe('novel.editor#1')
+
+    // 设置开着：Esc 关弹窗，窗口一条都不动（让位给那一层）。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
+    const before = hostWorkspace.list().map((entry) => `${entry.instance}:${entry.form}`)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+    expect(hostWorkspace.list().map((entry) => `${entry.instance}:${entry.form}`)).toEqual(before)
     wrapper.unmount()
   })
 
-  it('空白卡修复：没访问过大纲板，小窗挂载即触发 loadOutline，窗口不摊空树', async () => {
-    // 存档里 outline.widget#1 上次启动就开着——本次启动直接落在小说板，大纲板一次都没访问。
-    const workspace = {
-      version: 2,
-      entries: {
-        'outline.widget#1': {
-          instance: 'outline.widget#1',
-          pane: 'outline.widget',
-          geometry: { x: 40, y: 60, w: 320, h: 300 },
-          z: 1,
-          minimized: 'none',
-          maximized: false,
-          tiledWith: null,
-          tileSide: null
-        }
-      }
-    }
-    const bridge = multiFormBridge({ workspace })
-    const wrapper = mount(AppNext, { props: { bridge } })
+  it('multiplicity=single 硬闸：换文档＝换这一页装哪份稿子，不另起一页', async () => {
+    const workspace = { version: 3, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
     await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
 
-    const widget = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(widget.exists()).toBe(true)
-    expect(bridge.request.mock.calls.some((call) => call[1]?.tool === 'pinax_outline_read')).toBe(true)
-    const rows = widget.findAll('.nx-overlay-tree .workspace-nav-item')
-    expect(rows.length).toBeGreaterThan(0)
-    expect(rows[0].text()).toContain('开场：雨夜进城')
+    // 迷你大纲点第二行：资源是 outline:node:1，但这块 pane 声明 single → 只换那一页的 resource。
+    await wrapper.findAll('.nx-overlay-tree .workspace-nav-item')[1].trigger('click')
+    await flushPromises()
+    const pages = hostWorkspace.list().filter((entry) => entry.pane === 'outline.editor')
+    expect(pages).toHaveLength(1)
+    expect(pages[0].instance).toBe('outline.editor#1')
+    expect(pages[0].resource).toBe('outline:node:1')
+    expect(workspace.entries['outline.editor#1'].resource).toBe('outline:node:1')
+    // 窗头与页签的标题跟着文档走：载体名 ＋ 文档标识末段。
+    expect(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]').text()).toContain('大纲编辑 · 1')
+    // 那一页的文档面确实换了（读态标题＝第二个节点）。
+    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('第一折：停摆的表')
+
+    // 同一份文档重复点＝回到这一页，既不新建也不改 resource。
+    await wrapper.findAll('.nx-overlay-tree .workspace-nav-item')[1].trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.list().filter((entry) => entry.pane === 'outline.editor')).toHaveLength(1)
+    expect(hostWorkspace.get('outline.editor#1').resource).toBe('outline:node:1')
     wrapper.unmount()
   })
 
-  it('停用载体＝解注册：视图释放、该载体全部 pane 实例清出工作区；再启用从干净工作区重开', async () => {
-    // 存档里大纲开着一份小窗、又开了第二份，编辑窗也开着；小说窗最大化（不该被动）。
+  it('multiplicity=keyed：一份文档一页，两页各看各的稿子（〔裁定④〕D 的证据）', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ editorMultiplicity: 'keyed' }) } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+
+    // 竖条开的那一页 resource=null（该 pane 的缺省那份），两次点击各开一页。
+    await wrapper.findAll('.nx-overlay-tree .workspace-nav-item')[0].trigger('click')
+    await flushPromises()
+    await wrapper.findAll('.nx-overlay-tree .workspace-nav-item')[1].trigger('click')
+    await flushPromises()
+    const pages = hostWorkspace.list().filter((entry) => entry.pane === 'outline.editor')
+    expect(pages.map((page) => page.instance)).toEqual(['outline.editor#1', 'outline.editor#2', 'outline.editor#3'])
+    expect(pages.map((page) => page.resource)).toEqual([null, 'outline:node:0', 'outline:node:1'])
+    // 页签栏三条都上签，标题按各自那份文档区分。
+    expect(wrapper.findAll('.nx-page-tab').map((node) => node.text()).filter((text) => text.includes('大纲编辑')))
+      .toEqual(['大纲编辑', '大纲编辑 · 0', '大纲编辑 · 1'])
+
+    // 一页一份文档面（D-2）：揭示 #2 看到的是第一个节点，揭示 #3 看到的是第二个——两份草稿互不覆盖。
+    await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#2"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
+    await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#3"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('第一折：停摆的表')
+
+    // 关掉其中一页：另一页的记录与文档都不动。
+    await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#3"] [data-page-action="close"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.get('outline.editor#3')).toBe(null)
+    expect(hostWorkspace.get('outline.editor#2').resource).toBe('outline:node:0')
+    wrapper.unmount()
+  })
+
+  it('version:2 存档在 UI 层一次迁移到 v3：maximized→页、tab→标签、贴靠→对面页组、其余→浮窗', async () => {
     const workspace = {
       version: 2,
       entries: {
         'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', geometry: { x: 0, y: 0, w: 600, h: 400 }, z: 1, minimized: 'none', maximized: true, tiledWith: null, tileSide: null },
-        'outline.editor#1': { instance: 'outline.editor#1', pane: 'outline.editor', geometry: { x: 24, y: 24, w: 500, h: 360 }, z: 2, minimized: 'none', maximized: false, tiledWith: null, tileSide: null },
-        'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', geometry: { x: 40, y: 60, w: 320, h: 300 }, z: 3, minimized: 'tab', maximized: false, tiledWith: null, tileSide: null },
-        'outline.widget#2': { instance: 'outline.widget#2', pane: 'outline.widget', geometry: { x: 200, y: 90, w: 320, h: 300 }, z: 4, minimized: 'none', maximized: false, tiledWith: null, tileSide: null }
+        'outline.editor#1': { instance: 'outline.editor#1', pane: 'outline.editor', geometry: { x: 24, y: 24, w: 500, h: 360 }, z: 2, minimized: 'tab', maximized: false, tiledWith: null, tileSide: null },
+        'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', geometry: { x: 40, y: 60, w: 320, h: 300 }, z: 3, minimized: 'none', maximized: false, tiledWith: null, tileSide: null },
+        'novel.editor#2': { instance: 'novel.editor#2', pane: 'novel.editor', geometry: { x: 80, y: 80, w: 300, h: 300 }, z: 4, minimized: 'none', maximized: false, tiledWith: 'novel.editor#1', tileSide: 'right' }
       }
     }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    await flushPromises()
 
-    // 第三方视图（协议 v2 只收 custom）注册到被停用载体的 owner：验证 disposeOwner 真接到禁用链上。
-    // hostViewRegistry 是模块单例，测完把宿主的 custom 注册补回去。
+    // 四条记录各归各的 v3 落点；v2 的几何只有浮窗那一条带得过来。
+    expect(hostWorkspace.get('novel.editor#1')).toMatchObject({ form: 'page', group: 'main', geometry: null, maximized: false })
+    expect(hostWorkspace.get('outline.editor#1')).toMatchObject({ form: 'tab', geometry: null })
+    expect(hostWorkspace.get('outline.widget#1')).toMatchObject({ form: 'floating', resource: null })
+    expect(hostWorkspace.get('outline.widget#1').geometry).toMatchObject({ x: 40, y: 60, w: 320, h: 300 })
+    expect(hostWorkspace.get('novel.editor#2')).toMatchObject({ form: 'page', group: 'side' })
+    // 内存里已是 v3，并把整批迁移如实记成警告（v2 没有「哪份文档」这一格）。
+    const snap = hostWorkspace.snapshot()
+    expect(snap.version).toBe(3)
+    expect(snap.warnings).toContain('WORKSPACE_MIGRATED_V2')
+    expect(snap.warnings).toContain('WORKSPACE_RESOURCE_UNKNOWN')
+
+    // 界面按迁移结果渲染：缘签一条、浮窗一条、屏上两张页（main＋side 各画自己的当前页＝对半）。
+    expect(wrapper.find('.nx-pane-window-tab[data-window-pane="outline.editor"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').attributes('data-window-state')).toBe('floating')
+    const half = wrapper.findAll('.nx-pane-window.is-page')
+    expect(half.map((node) => node.attributes('data-window-instance'))).toEqual(['novel.editor#1', 'novel.editor#2'])
+    expect(half[1].attributes('data-window-group')).toBe('side')
+    expect(half[1].classes()).toContain('is-in-side')
+    // 下一次变更才整份重写：落盘形状升到 v3（四格齐全）。
+    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="collapse"]').trigger('click')
+    await flushPromises()
+    expect(workspace.version).toBe(3)
+    expect(Object.keys(workspace.active).sort()).toEqual(['main', 'side'])
+    expect(workspace.entries['novel.editor#2'].group).toBe('side')
+    expect(workspace.entries['novel.editor#2'].form).toBe('page')
+    wrapper.unmount()
+  })
+
+  it('空白卡修复（v3）：存档里开着的浮窗，挂载即补一次取数，窗口不摊空树', async () => {
+    const workspace = {
+      version: 3,
+      entries: {
+        'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', resource: null, group: 'main', order: 0, form: 'floating', geometry: { x: 40, y: 60, w: 320, h: 300 }, z: 1, maximized: false }
+      }
+    }
+    const bridge = pageBridge({ workspace })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    // 本次启动一次都没访问大纲板：这一页的数据面是水合时按记录自己补的那一次取数。
+    expect(bridge.calls).toContain('pinax_outline_read')
+    const widget = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
+    expect(widget.exists()).toBe(true)
+    const rows = widget.findAll('.nx-overlay-tree .workspace-nav-item')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('开场：雨夜进城')
+    wrapper.unmount()
+  })
+
+  it('停用载体＝解注册：该载体全部页记录清出工作区（v3 轴），别的载体原样', async () => {
+    const workspace = {
+      version: 3,
+      entries: {
+        'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', resource: 'chapter:正文/雨夜.md', group: 'main', order: 0, form: 'page', geometry: null, z: 1, maximized: false },
+        'outline.editor#1': { instance: 'outline.editor#1', pane: 'outline.editor', resource: null, group: 'main', order: 1, form: 'page', geometry: null, z: 2, maximized: false },
+        'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', resource: null, group: 'main', order: 0, form: 'tab', geometry: null, z: 3, maximized: false },
+        'outline.widget#2': { instance: 'outline.widget#2', pane: 'outline.widget', resource: null, group: 'main', order: 0, form: 'floating', geometry: { x: 200, y: 90, w: 320, h: 300 }, z: 4, maximized: false }
+      },
+      active: { main: 'novel.editor#1', side: null },
+      focus: 'main'
+    }
     const hostCustom = hostViewRegistry.resolve(CUSTOM_VIEW_TYPE)
     try {
       hostViewRegistry.unregister(CUSTOM_VIEW_TYPE)
       expect(hostViewRegistry.registerView(CUSTOM_VIEW_TYPE, () => ({ kind: 'custom-panel' }), { owner: 'pinax.carrier.outline' }).ok).toBe(true)
 
-      const base = multiFormBridge({ workspace })
+      const base = pageBridge({ workspace })
       const handlers = new Map()
       const setEnabled = vi.fn(async () => ({ ok: true, value: {} }))
-      const request = vi.fn(async (channel, payload) => (channel === IPC_CHANNELS.carrierSetEnabled
-        ? setEnabled(payload)
-        : base.request(channel, payload)))
-      const bridge = {
-        request,
-        onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) },
-        channels: IPC_CHANNELS
-      }
-
-      const wrapper = mount(AppNext, { props: { bridge } })
+      const request = vi.fn(async (channel, payload) => (channel === IPC_CHANNELS.carrierSetEnabled ? setEnabled(payload) : base.request(channel, payload)))
+      const wrapper = mount(AppNext, { props: { bridge: { request, onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }, channels: IPC_CHANNELS } } })
       await flushPromises()
-      expect(hostWorkspace.get('outline.widget#1').minimized).toBe('tab')
-      expect(hostWorkspace.get('outline.widget#2').minimized).toBe('none')
+      expect(formOf('outline.widget#1')).toBe('tab')
+      expect(formOf('outline.widget#2')).toBe('floating')
 
       handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
       await flushPromises()
-      const outlineRow = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
-        .find((row) => row.text().includes('大纲'))
+      const outlineRow = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row').find((row) => row.text().includes('大纲'))
       expect(outlineRow, '载体管理里应有非主载体大纲').toBeTruthy()
       await outlineRow.find('.carriers-toggle').trigger('click')
       await flushPromises()
 
       expect(setEnabled).toHaveBeenCalledWith({ pluginId: 'pinax.carrier.outline', enabled: false, expectedRevision: 1 })
-      // 1) 视图解注册：该 owner 的视图被释放，宿主内置视图不受影响。
       expect(hostViewRegistry.resolve(CUSTOM_VIEW_TYPE)).toBe(null)
       expect(hostViewRegistry.resolve('pinax.view.editor').builtin).toBe(true)
-      // 2) 工作区：该载体的 #1 与多开的 #n 全部清掉；别的载体（小说沉浸态）原样。
       expect(hostWorkspace.list().filter((entry) => entry.pane.startsWith('outline.'))).toEqual([])
+      expect(hostWorkspace.get('outline.widget#2')).toBe(null)
+      // 别的载体一条都不动：正文页仍是页态、仍装着它那篇稿子。
+      expect(hostWorkspace.get('novel.editor#1')).toMatchObject({ form: 'page', group: 'main', resource: 'chapter:正文/雨夜.md' })
       expect(workspace.entries['outline.widget#1']).toBeUndefined()
-      expect(workspace.entries['outline.widget#2']).toBeUndefined()
-      expect(workspace.entries['outline.editor#1']).toBeUndefined()
-      expect(workspace.entries['novel.editor#1'].maximized).toBe(true)
-      // 缺省实例不再存在：重新打开从干净状态建记录（不带着旧位置／收起态）。
-      expect(hostWorkspace.get('outline.widget#1')).toBe(null)
-      // 3) 事件照常：项目事件订阅仍在，已知 kind 进来不炸（刷新链继续跑）。
       expect(typeof handlers.get(IPC_EVENT.projectEvent)).toBe('function')
       expect(() => handlers.get(IPC_EVENT.projectEvent)({ kind: 'chapter-saved', at: 1 })).not.toThrow()
       await flushPromises()
       expect(request).toHaveBeenCalledWith(IPC_CHANNELS.view, {})
       wrapper.unmount()
 
-      // 4) 再启用：同一份存档里没有 outline.* 残留，重新打开浮窗从干净状态建记录。
+      // 再启用：存档里没有 outline.* 残留，重开浮窗从干净状态建记录。
       resetWorkspace()
-      const remount = mount(AppNext, { props: { bridge: multiFormBridge({ workspace }) } })
+      const remount = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
       await flushPromises()
       expect(Object.keys(workspace.entries).some((key) => key.startsWith('outline.'))).toBe(false)
-      await openOutlineWidget(remount)
+      await railByName(remount, '大纲').trigger('click')
+      await flushPromises()
+      await openWidget(remount)
       const reopened = hostWorkspace.get('outline.widget#1')
-      expect(reopened).toBeTruthy()
-      expect(reopened.minimized).toBe('none')
-      expect(reopened.maximized).toBe(false)
+      expect(reopened).toMatchObject({ pane: 'outline.widget', form: 'floating', resource: null })
       expect(reopened.geometry).toMatchObject({ x: expect.any(Number), y: expect.any(Number) })
-      expect(workspace.entries['outline.widget#1'].pane).toBe('outline.widget')
       remount.unmount()
     } finally {
       hostViewRegistry.disposeOwner('pinax.carrier.outline')

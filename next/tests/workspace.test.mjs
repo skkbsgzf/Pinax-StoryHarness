@@ -5,28 +5,38 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   DEFAULT_FLOATING_GEOMETRY,
-  DEFAULT_MINIMIZED,
+  DEFAULT_FORM,
+  DEFAULT_GROUP,
+  FLOATING_CASCADE_STEP,
   GEOMETRY_MAX_W,
   GEOMETRY_MIN_W,
-  MINIMIZED_MODES,
+  PAGE_FORMS,
+  PAGE_GROUPS,
   WORKSPACE_VERSION,
   createWorkspaceStore,
   defaultEntry,
   instanceIdFor,
+  isPageForm,
+  isPageGroup,
   migrateV1Entry,
+  migrateV2Entry,
   normalizeEntry,
   normalizeGeometry,
+  normalizeResource,
   normalizeWorkspace,
   parseInstanceId,
-  reconcileTiles
+  repairActive
 } from '../shell/workspace.mjs'
 import { migrateLegacyWorkspace, readLegacyWorkspace } from '../shell/workspaceMigration.mjs'
 import { createFileWorkspaceStore, workspacePath } from '../workspaceStore.mjs'
 
 /**
- * 工作区窗口状态单测（批次59 · v2）。
- * 纯 node:test：workspace.mjs 不 import Vue、不碰 localStorage，状态机与 v1→v2 迁移都能直接测；
+ * 工作区页状态单测（批次61 · v3）。
+ * 纯 node:test：workspace.mjs 不 import Vue、不碰 localStorage，状态机与 v1／v2→v3 迁移都能直接测；
  * 磁盘层（workspaceStore.mjs）用临时目录，测坏文件回落、「内容没变不写」与旧档放行。
+ *
+ * 断言写的就是这一批的规格本身：缺省落点＝切页（不是弹窗）、分屏＝页组的存在、
+ * 浮窗只有显式到达、每页一份文档（resource）。
  */
 
 function memoryStorage(initial = {}) {
@@ -58,182 +68,310 @@ test('实例 id：<paneId>#<n>；不带 # 的旧写法当 #1，越界与非法�
   assert.equal(parseInstanceId('正文#1'), null)
 })
 
-test('开窗＝记录存在：缺省几何／叠序，关窗＝删记录（get 返回 null）', () => {
+test('v3 词表：页组两档 main／side，形态三档 page／floating／tab，缺省是页', () => {
+  assert.deepEqual([...PAGE_GROUPS], ['main', 'side'])
+  assert.deepEqual([...PAGE_FORMS], ['page', 'floating', 'tab'])
+  assert.equal(DEFAULT_GROUP, 'main')
+  assert.equal(DEFAULT_FORM, 'page')
+  for (const group of PAGE_GROUPS) assert.equal(isPageGroup(group), true)
+  for (const form of PAGE_FORMS) assert.equal(isPageForm(form), true)
+  assert.equal(isPageGroup('center'), false)
+  assert.equal(isPageForm('dock'), false, '旧位置词表不等于 v3 形态词表')
+  assert.equal(isPageForm('bubble'), false, '气泡不是第五种形态（批次45 已裁）')
+})
+
+test('开页＝记录存在，且缺省落主组当前页：页态天然没有矩形', () => {
   const store = createWorkspaceStore()
   assert.equal(store.get('outline.tree#1'), null, '没开过就没有记录')
 
   const opened = store.open('outline.tree#1')
   assert.equal(opened.ok, true)
   assert.equal(opened.created, true)
-  const entry = store.get('outline.tree#1')
-  assert.deepEqual(entry, {
+  assert.equal(opened.form, 'page')
+  assert.equal(opened.group, 'main')
+  assert.deepEqual(store.get('outline.tree#1'), {
     instance: 'outline.tree#1',
     pane: 'outline.tree',
-    geometry: { ...DEFAULT_FLOATING_GEOMETRY },
+    resource: null,
+    group: 'main',
+    order: 0,
+    form: 'page',
+    geometry: null,
     z: 1,
-    minimized: DEFAULT_MINIMIZED,
-    maximized: false,
-    tiledWith: null,
-    tileSide: null
+    maximized: false
   })
+  assert.equal(store.snapshot().active.main, 'outline.tree#1', '新开的一页就是该组当前页')
+  assert.equal(store.snapshot().focus, 'main')
+  assert.deepEqual(store.pagesOf('main').map((page) => page.instance), ['outline.tree#1'])
+  assert.deepEqual(store.pagesOf('side'), [], '没搬页就没有侧组——分屏是页组的存在，不是第二套几何')
+  assert.deepEqual(store.floatingList(), [], '点载体不弹浮窗（作者裁定①）')
+
   const template = defaultEntry('outline.tree')
-  assert.equal(template.geometry, null, '缺省记录没有矩形；开窗时再铺缺省矩形')
+  assert.equal(template.geometry, null)
+  assert.equal(template.form, 'page')
   assert.equal(template.z, 0)
-  assert.equal(template.minimized, 'none')
-  assert.equal(template.maximized, false)
 
   assert.equal(store.close('outline.tree#1').removed, true)
   assert.equal(store.get('outline.tree#1'), null)
   assert.equal(store.list().length, 0)
-  assert.equal(store.close('outline.tree#1').changed, false, '重复关窗是 no-op')
+  assert.equal(store.snapshot().active.main, null, '关掉当前页后高亮不能悬在空处')
+  assert.equal(store.close('outline.tree#1').changed, false, '重复关页是 no-op')
 })
 
-test('v2 往返：geometry／z／minimized／maximized／贴靠落盘再读回不变形', () => {
+test('〔裁定①〕重复点同一张页只回到前台：不新建、不改文档、不动几何', () => {
   const store = createWorkspaceStore()
-  store.open('outline.tree#1', { geometry: { x: 1180, y: 96, w: 320, h: 520 } })
-  store.minimize('outline.tree#1', 'tab')
-  store.open('novel.editor#1', { geometry: { x: 40, y: 80, w: 900, h: 700 } })
-  store.setMaximized('novel.editor#1', true)
+  store.open('novel.editor#1', { resource: '章节/第一章.md' })
+  store.open('outline.tree#1')
+  const again = store.open('novel.editor#1')
+  assert.equal(again.created, false)
+  assert.equal(store.pagesOf('main').length, 2, '同一张页点两次不该多出第三页')
+  assert.equal(store.get('novel.editor#1').resource, '章节/第一章.md', '开页不顺手换文档（换文档走 setResource）')
+  assert.equal(store.snapshot().active.main, 'novel.editor#1')
 
-  const saved = store.serialize()
-  assert.equal(saved.version, WORKSPACE_VERSION)
-  const revived = createWorkspaceStore({ initial: saved })
-  assert.deepEqual(revived.get('outline.tree#1'), {
-    instance: 'outline.tree#1',
-    pane: 'outline.tree',
-    geometry: { x: 1180, y: 96, w: 320, h: 520 },
-    z: 1,
-    minimized: 'tab',
-    maximized: false,
-    tiledWith: null,
-    tileSide: null
+  let writes = 0
+  store.attachPersistence(() => {
+    writes += 1
+    return { ok: true }
   })
-  const editor = revived.get('novel.editor#1')
-  assert.equal(editor.maximized, true, '最大化是窗口自己的轴')
-  assert.equal(editor.minimized, 'none')
-  assert.deepEqual(editor.geometry, { x: 40, y: 80, w: 900, h: 700 }, '最大化也把矩形留着，还原用')
+  assert.equal(store.open('novel.editor#1').changed, false, '再点一次已经是当前页的那一页＝空点击')
+  assert.equal(writes, 0, '空点击不该写盘（竖条连点同一载体是最常见的动作）')
 })
 
-test('收起标签不丢几何：收起→展开回到原矩形（同一扇窗的状态变化）', () => {
-  const store = createWorkspaceStore()
-  store.open('outline.widget#1', { geometry: { x: 640, y: 120, w: 300, h: 480 } })
-  store.minimize('outline.widget#1', 'tab')
-
-  const tab = store.get('outline.widget#1')
-  assert.equal(tab.minimized, 'tab')
-  assert.deepEqual(tab.geometry, { x: 640, y: 120, w: 300, h: 480 }, '收起只是 minimized')
-
-  store.expand('outline.widget#1')
-  const expanded = store.get('outline.widget#1')
-  assert.equal(expanded.minimized, 'none')
-  assert.deepEqual(expanded.geometry, tab.geometry)
-})
-
-test('最大化：占满中栏、解除贴靠、提叠序；toggle 往返', () => {
-  const store = createWorkspaceStore()
-  store.open('novel.editor#1', { geometry: { x: 40, y: 80, w: 700, h: 500 } })
-  store.open('notes.editor#1', { geometry: { x: 100, y: 100, w: 600, h: 500 } })
-  store.tile('novel.editor#1', 'notes.editor#1')
-
-  const maximized = store.setMaximized('novel.editor#1', true)
-  assert.equal(maximized.ok, true)
-  const editor = store.get('novel.editor#1')
-  assert.equal(editor.maximized, true)
-  assert.equal(editor.tiledWith, null, '最大化先解除分屏')
-  const notes = store.get('notes.editor#1')
-  assert.equal(notes.tiledWith, null, '搭档不留半对')
-  assert.equal(notes.tileSide, null)
-  assert.deepEqual(editor.geometry, { x: 40, y: 80, w: 700, h: 500 }, '矩形保留给还原')
-
-  assert.equal(store.toggleMaximized('novel.editor#1').maximized, false)
-  assert.equal(store.get('novel.editor#1').maximized, false)
-})
-
-test('分屏：两窗共用同一矩形、左／右互指；拖动任一扇即解除；关窗不留半对', () => {
-  const store = createWorkspaceStore()
-  store.open('novel.editor#1', { geometry: { x: 100, y: 100, w: 800, h: 600 } })
-  store.open('notes.editor#1', { geometry: { x: 30, y: 30, w: 300, h: 300 } })
-
-  const tiled = store.tile('novel.editor#1', 'notes.editor#1')
-  assert.equal(tiled.ok, true)
-  const left = store.get('novel.editor#1')
-  const right = store.get('notes.editor#1')
-  assert.equal(left.tiledWith, 'notes.editor#1')
-  assert.equal(left.tileSide, 'left')
-  assert.equal(right.tiledWith, 'novel.editor#1')
-  assert.equal(right.tileSide, 'right')
-  assert.deepEqual(left.geometry, { x: 100, y: 100, w: 800, h: 600 }, '共用当前窗的矩形对半贴')
-  assert.deepEqual(right.geometry, left.geometry)
-  assert.equal(left.z, right.z, '一对同叠序')
-
-  store.setGeometry('notes.editor#1', { x: 10, y: 20, w: 500, h: 400 })
-  assert.equal(store.get('notes.editor#1').tiledWith, null)
-  assert.equal(store.get('novel.editor#1').tiledWith, null, '拖走一扇，另一扇也该解除')
-
-  store.tile('novel.editor#1', 'notes.editor#1')
-  store.close('novel.editor#1')
-  assert.equal(store.get('notes.editor#1').tiledWith, null, '关掉一扇，搭档回到浮窗')
-  assert.equal(store.get('notes.editor#1').tileSide, null)
-})
-
-test('分屏拒绝：同一扇窗／关着的窗／非法实例都返回错误，不静默改状态', () => {
+test('〔D〕每页一份文档：resource 只在这一格改，null＝回落该 pane 缺省文档', () => {
   const store = createWorkspaceStore()
   store.open('novel.editor#1')
-  assert.equal(store.tile('novel.editor#1', 'novel.editor#1').error.code, 'INVALID_INSTANCE')
-  assert.equal(store.tile('novel.editor#1', 'notes.editor#1').error.code, 'UNKNOWN_INSTANCE')
-  assert.equal(store.tile('NotAPane', 'novel.editor#1').error.code, 'INVALID_INSTANCE')
+  store.openInstance('novel.editor')
+  assert.equal(store.setResource('novel.editor#1', ' 章节/第一章.md ').resource, '章节/第一章.md', '入库前收掉首尾空白')
+  assert.equal(store.setResource('novel.editor#2', '章节/第二章.md').changed, true)
+  assert.equal(store.get('novel.editor#1').resource, '章节/第一章.md')
+  assert.equal(store.get('novel.editor#2').resource, '章节/第二章.md', '两页各装各的，不共享一份正文')
+  assert.equal(store.setResource('novel.editor#2', '章节/第二章.md').changed, false, '同一份文档重复设是 no-op')
+  assert.equal(store.setResource('novel.editor#2', '   ').resource, null)
+  assert.equal(store.setResource('novel.editor#1', null).resource, null)
+  assert.equal(store.setResource('novel.editor#9', 'x').error.code, 'UNKNOWN_INSTANCE')
+
+  assert.equal(normalizeResource(42), null)
+  assert.equal(normalizeResource('x'.repeat(500)).length, 240, '超长截断，不让脏数据把存档撑爆')
 })
 
-test('多实例：同一 pane 开两份，几何／窗态互不串；openInstance 取最小空位', () => {
+test('页签栏数据源：pagesOf 按组内 order 升序，浮窗与侧缘标签不占页位', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1')
+  store.open('outline.tree#1')
+  store.open('notes.editor#1')
+  assert.deepEqual(store.pagesOf('main').map((page) => page.instance), ['novel.editor#1', 'outline.tree#1', 'notes.editor#1'])
+  assert.deepEqual(store.pagesOf('main').map((page) => page.order), [0, 1, 2])
+
+  store.setForm('outline.tree#1', 'floating')
+  assert.deepEqual(store.pagesOf('main').map((page) => page.instance), ['novel.editor#1', 'notes.editor#1'], '浮窗不进页签栏')
+  assert.deepEqual(store.pagesOf('main').map((page) => page.order), [0, 1], '离开页组的序号要重排，不留空洞')
+  assert.equal(store.snapshot().active.main, 'notes.editor#1', '当前页浮出去后高亮必须落到还在页组里的一页')
+  assert.deepEqual(store.floatingList().map((page) => page.instance), ['outline.tree#1'])
+
+  store.setForm('notes.editor#1', 'tab')
+  assert.deepEqual(store.pagesOf('main').map((page) => page.instance), ['novel.editor#1'])
+  assert.deepEqual(store.tabList().map((page) => page.instance), ['notes.editor#1'])
+  assert.equal(store.snapshot().active.main, 'novel.editor#1')
+})
+
+test('pagesOf 认不出的页组一律按主组回，不让页签栏拿到 undefined', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1')
+  assert.deepEqual(store.pagesOf('center').map((page) => page.instance), ['novel.editor#1'])
+  assert.deepEqual(store.pagesOf(null).map((page) => page.instance), ['novel.editor#1'])
+})
+
+test('list() 的序是可断言的：页态在前、浮窗居中、标签在后（比较器必须自洽）', () => {
+  const store = createWorkspaceStore()
+  store.open('a.one#1')
+  store.open('b.two#1')
+  store.open('c.three#1')
+  store.setForm('a.one#1', 'floating')
+  store.setForm('b.two#1', 'tab')
+  assert.deepEqual(store.list().map((entry) => [entry.instance, entry.form]), [
+    ['c.three#1', 'page'],
+    ['a.one#1', 'floating'],
+    ['b.two#1', 'tab']
+  ])
+})
+
+test('分屏＝把一页搬进对面页组；两侧各有一张页与一个当前页', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1')
+  store.open('outline.tree#1')
+
+  const moved = store.moveToGroup('outline.tree#1', 'side')
+  assert.equal(moved.ok, true)
+  assert.equal(moved.from, 'main')
+  assert.deepEqual(store.pagesOf('main').map((page) => page.instance), ['novel.editor#1'])
+  assert.deepEqual(store.pagesOf('side').map((page) => page.instance), ['outline.tree#1'])
+  assert.equal(store.snapshot().active.main, 'novel.editor#1', '主组当前页不能跟着搬去侧组')
+  assert.equal(store.snapshot().active.side, 'outline.tree#1')
+  assert.equal(store.snapshot().focus, 'side', '作者刚搬的这组成为焦点组，下一页落在这')
+  assert.equal(store.get('outline.tree#1').order, 0, '进新组排到组尾')
+  assert.equal(store.moveToGroup('outline.tree#1', 'side').changed, false, '已经在对面了就是 no-op')
+
+  store.close('outline.tree#1')
+  assert.equal(store.snapshot().active.side, null, '侧组清空后没有当前页')
+  assert.equal(store.snapshot().focus, 'main', '焦点组回落到还有页的那一侧')
+})
+
+test('切当前页：只接受「这个组里的页」，跨组与非页态都拒', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1')
+  store.open('outline.tree#1')
+  store.open('notes.editor#1', { group: 'side' })
+  store.open('a.one#1', { form: 'floating' })
+
+  assert.equal(store.setActive('main', 'novel.editor#1').changed, true)
+  assert.equal(store.snapshot().active.main, 'novel.editor#1')
+  assert.equal(store.setActive('main', 'novel.editor#1').changed, false, '重复切同一页是 no-op，不该再刷一次盘')
+  assert.equal(store.setActive('main', 'notes.editor#1').error.code, 'NOT_A_PAGE_IN_GROUP', '侧组的页不能抢主组的高亮')
+  assert.equal(store.setActive('side', 'notes.editor#1').changed, true, '焦点组跟着移动，即便当前页本来就是它')
+  assert.equal(store.snapshot().focus, 'side', 'focus 变了也要落盘，不然重启后新页落错组')
+  assert.equal(store.setActive('main', 'a.one#1').error.code, 'NOT_A_PAGE_IN_GROUP', '浮窗不是当前页')
+  assert.equal(store.setActive('main', 'novel.editor#9').error.code, 'UNKNOWN_INSTANCE')
+  assert.equal(store.setActive('middle', 'outline.tree#1').error.code, 'UNKNOWN_GROUP')
+  assert.equal(store.setActive('main', '正文#1').error.code, 'INVALID_INSTANCE')
+})
+
+test('形态迁移的唯一入口：进浮窗才给几何，出浮窗收成 null，侧缘标签留着 home 组', () => {
+  const store = createWorkspaceStore()
+  store.open('outline.widget#1', { group: 'side' })
+
+  const floated = store.setForm('outline.widget#1', 'floating')
+  assert.equal(floated.previous, 'page')
+  const floating = store.get('outline.widget#1')
+  assert.equal(floating.form, 'floating')
+  assert.deepEqual(floating.geometry, { ...DEFAULT_FLOATING_GEOMETRY }, '没有原矩形就级联一个')
+  assert.equal(floating.group, 'side', '浮窗不占页组，但组籍留着，占为页时回到原来那一侧')
+  assert.equal(store.snapshot().active.side, null, '页浮出去了，侧组的当前页要重指')
+
+  store.setGeometry('outline.widget#1', { x: 300, y: 200, w: 420, h: 520 })
+  const back = store.setForm('outline.widget#1', 'page')
+  assert.equal(back.group, 'side')
+  assert.equal(store.get('outline.widget#1').geometry, null, '页态不藏矩形')
+  assert.equal(store.snapshot().active.side, 'outline.widget#1')
+
+  store.setForm('outline.widget#1', 'tab')
+  assert.equal(store.get('outline.widget#1').geometry, null)
+  assert.deepEqual(store.pagesOf('side'), [])
+  assert.equal(store.setForm('outline.widget#1', 'bubble').error.code, 'UNKNOWN_FORM')
+  assert.equal(store.setForm('outline.widget#9', 'page').error.code, 'UNKNOWN_INSTANCE')
+  assert.equal(store.setForm('正文#1', 'page').error.code, 'INVALID_INSTANCE')
+})
+
+test('浮窗子态：最大化只属于浮窗，页态与侧缘标签一律拒；几何留着供还原', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1')
+  store.open('notes.editor#1', { form: 'floating', geometry: { x: 40, y: 80, w: 700, h: 500 } })
+
+  assert.equal(store.setMaximized('novel.editor#1', true).error.code, 'NOT_FLOATING')
+  const maximized = store.setMaximized('notes.editor#1', true)
+  assert.equal(maximized.ok, true)
+  assert.equal(store.get('notes.editor#1').maximized, true)
+  assert.deepEqual(store.get('notes.editor#1').geometry, { x: 40, y: 80, w: 700, h: 500 }, '最大化不抹矩形，还原要用')
+
+  assert.equal(store.toggleMaximized('notes.editor#1').maximized, false)
+  assert.equal(store.toggleMaximized('notes.editor#9').error.code, 'UNKNOWN_INSTANCE')
+
+  store.setMaximized('notes.editor#1', true)
+  assert.equal(store.setGeometry('notes.editor#1', { x: 10, y: 20, w: 500, h: 400 }).changed, true)
+  assert.equal(store.get('notes.editor#1').maximized, false, '作者拖了就是想要自由窗，最大化自动让位')
+})
+
+test('浮窗几何只有 floating 可写；重复写同一矩形是 no-op', () => {
   const store = createWorkspaceStore()
   store.open('outline.tree#1')
-  const second = store.openInstance('outline.tree', { geometry: { x: 40, y: 80, w: 300, h: 400 } })
+  assert.equal(store.setGeometry('outline.tree#1', { x: 10, y: 10, w: 400, h: 400 }).error.code, 'NOT_FLOATING')
+  assert.equal(store.setGeometry('a.b#1', { x: 1 }).error.code, 'INVALID_GEOMETRY')
+  assert.equal(store.setGeometry('a.b#1', { x: 1, y: 2 }).error.code, 'UNKNOWN_INSTANCE')
+
+  store.open('notes.editor#1', { form: 'floating', geometry: { x: 100, y: 100, w: 400, h: 400 } })
+  assert.equal(store.setGeometry('notes.editor#1', { x: 100, y: 100, w: 400, h: 400 }).changed, false)
+})
+
+test('多实例：同一 pane 开两页，页组序号各算各的；openInstance 取最小空位且号可复用', () => {
+  const store = createWorkspaceStore()
+  store.open('outline.tree#1')
+  const second = store.openInstance('outline.tree')
   assert.equal(second, 'outline.tree#2')
   assert.deepEqual(store.instancesOf('outline.tree'), ['outline.tree#1', 'outline.tree#2'])
+  assert.deepEqual(store.pagesOf('main').map((page) => page.order), [0, 1])
 
-  store.minimize('outline.tree#2', 'tab')
-  assert.deepEqual(store.get('outline.tree#1').geometry, { ...DEFAULT_FLOATING_GEOMETRY }, '#1 不借 #2 的位置')
-  assert.equal(store.get('outline.tree#1').minimized, 'none')
-  assert.equal(store.get('outline.tree#2').minimized, 'tab')
+  store.setForm('outline.tree#2', 'tab')
+  assert.equal(store.get('outline.tree#1').form, 'page', '#1 不跟着 #2 换形态')
 
   store.close('outline.tree#1')
   assert.equal(store.openInstance('outline.tree'), 'outline.tree#1', '空出来的号可以复用')
+  assert.equal(store.openInstance('NotAPane'), null)
 })
 
-test('解注册清理（批次45／59）：removePanes 删除该 pane 的全部实例（含 #n）并解开贴靠', () => {
+test('解注册清理（批次45／61）：removePanes 删掉该 pane 的全部实例并修好当前页与焦点组', () => {
   const store = createWorkspaceStore()
   store.open('outline.tree#1')
   store.openInstance('outline.tree')
-  store.open('outline.widget#1', { geometry: { x: 40, y: 80, w: 300, h: 400 } })
-  store.open('novel.editor#1')
-  store.tile('novel.editor#1', 'outline.widget#1')
+  store.open('outline.widget#1', { form: 'floating' })
+  store.open('novel.editor#1', { group: 'side' })
 
   const removed = store.removePanes(['outline.tree', 'outline.widget'])
   assert.equal(removed.changed, true)
   assert.deepEqual(removed.instances.sort(), ['outline.tree#1', 'outline.tree#2', 'outline.widget#1'])
   assert.equal(store.list().some((entry) => entry.pane.startsWith('outline.')), false, '整族实例记录都应清掉')
-  assert.equal(store.get('novel.editor#1').tiledWith, null, '被删的搭档解开贴靠')
-  assert.equal(store.get('novel.editor#1').tileSide, null)
+  assert.equal(store.snapshot().active.main, null, '主组被清空后不该还指着删掉的页')
+  assert.equal(store.snapshot().active.side, 'novel.editor#1')
+  assert.equal(store.snapshot().focus, 'side', '焦点组跟着回落到还有页的一侧')
 
   const again = store.removePanes(['outline.tree'])
   assert.equal(again.changed, false, '重复清理不改任何东西')
 })
 
-test('几何净化：越界钳回值域，形状不对返回 null；v2 不再记 snap', () => {
+test('bringToFront：页态＝置为该组当前页，浮窗＝提叠序；重复置顶是 no-op', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1')
+  store.open('outline.tree#1')
+  assert.equal(store.bringToFront('novel.editor#1').changed, true)
+  assert.equal(store.snapshot().active.main, 'novel.editor#1')
+  assert.equal(store.bringToFront('novel.editor#1').changed, false, '已经是当前页且叠序最大')
+
+  store.open('a.one#1', { form: 'floating' })
+  store.open('b.two#1', { form: 'floating' })
+  store.bringToFront('a.one#1')
+  assert.deepEqual(store.floatingList().map((entry) => entry.instance), ['b.two#1', 'a.one#1'], '末尾＝最靠前')
+  assert.equal(store.bringToFront('nope#1').error.code, 'UNKNOWN_INSTANCE')
+})
+
+test('几何净化：越界钳回值域，形状不对返回 null；吸附随位置枚举一起退役', () => {
   const normalized = normalizeGeometry({ x: -20, y: 12, w: 5, h: 99999, snap: 'middle' })
   assert.deepEqual(normalized, { x: 0, y: 12, w: GEOMETRY_MIN_W, h: 2000 })
-  assert.equal('snap' in normalized, false, '吸附随位置枚举一起退役')
+  assert.equal('snap' in normalized, false)
   assert.equal(normalizeGeometry({ x: 10, y: 20, w: GEOMETRY_MAX_W + 500 }).w, GEOMETRY_MAX_W)
   assert.equal(normalizeGeometry({ x: 'nope', y: 1 }), null)
   assert.equal(normalizeGeometry(null), null)
 })
 
-test('坏档回落：不是对象／版本不对／脏条目逐条丢弃并记账', () => {
+test('级联矩形：第 n 扇浮窗相对缺省矩形错开 n×步长', () => {
+  const store = createWorkspaceStore()
+  const first = store.open('a.one#1', { form: 'floating' })
+  assert.equal(first.ok, true)
+  assert.deepEqual(store.get('a.one#1').geometry, { ...DEFAULT_FLOATING_GEOMETRY })
+  store.open('b.two#1', { form: 'floating' })
+  const third = store.open('c.three#1', { form: 'floating' })
+  assert.equal(third.ok, true)
+  assert.deepEqual(store.get('c.three#1').geometry, {
+    x: DEFAULT_FLOATING_GEOMETRY.x + 2 * FLOATING_CASCADE_STEP,
+    y: DEFAULT_FLOATING_GEOMETRY.y + 2 * FLOATING_CASCADE_STEP,
+    w: DEFAULT_FLOATING_GEOMETRY.w,
+    h: DEFAULT_FLOATING_GEOMETRY.h
+  })
+})
+
+test('坏档回落：不是对象／版本不对／脏条目逐条丢弃并记账，不连坐好数据', () => {
   assert.deepEqual(normalizeWorkspace('not-a-workspace').warnings, ['WORKSPACE_NOT_OBJECT'])
   const mixed = normalizeWorkspace({
     version: 9,
     entries: {
-      'outline.tree#1': { instance: 'outline.tree#1', pane: 'outline.tree', geometry: { x: 40, y: 50, w: 500, h: 400 }, minimized: 'tab' },
+      'outline.tree#1': { instance: 'outline.tree#1', pane: 'outline.tree', form: 'page', group: 'main', order: 0 },
       broken: { pane: 'nope' },
       'outline.tree#2': 'garbage'
     }
@@ -241,20 +379,83 @@ test('坏档回落：不是对象／版本不对／脏条目逐条丢弃并记�
   assert.equal(mixed.version, WORKSPACE_VERSION)
   assert.ok(mixed.warnings.includes('WORKSPACE_VERSION_9'))
   assert.ok(mixed.warnings.includes('WORKSPACE_DROPPED_2'))
-  assert.deepEqual(Object.keys(mixed.entries), ['outline.tree#1'], '脏条目只丢自己，不连坐好数据')
-  assert.equal(mixed.entries['outline.tree#1'].minimized, 'tab')
+  assert.deepEqual(Object.keys(mixed.entries), ['outline.tree#1'])
+  assert.equal(mixed.entries['outline.tree#1'].form, 'page')
+  assert.deepEqual(mixed.active, { main: 'outline.tree#1', side: null }, '当前页指针没写也照样补齐')
 })
 
-test('窗态词表：minimized 两档（none／tab）；未知值与非法实例不进门', () => {
-  assert.deepEqual([...MINIMIZED_MODES], ['none', 'tab'])
-  const store = createWorkspaceStore()
-  assert.equal(store.minimize('a.b#1', 'bubble').error.code, 'UNKNOWN_MINIMIZED')
-  assert.equal(store.open('NotAPane').error.code, 'INVALID_INSTANCE')
-  assert.equal(store.minimize('a.b#1', 'tab').error.code, 'UNKNOWN_INSTANCE')
-  assert.equal(store.setGeometry('a.b#1', { x: 1, y: 2 }).error.code, 'UNKNOWN_INSTANCE')
+test('normalizeEntry：未知字段与退役轴丢弃，非浮窗的矩形收成 null，形态未知回落到页', () => {
+  const entry = normalizeEntry({
+    instance: 'outline.tree#1',
+    pane: 'outline.tree',
+    form: 'page',
+    group: 'main',
+    geometry: { x: 1, y: 2, w: 300, h: 300 },
+    minimized: 'tab',
+    tiledWith: 'novel.editor#1',
+    tileSide: 'left',
+    placement: 'overlay',
+    pinned: true,
+    mystery: 1
+  })
+  assert.equal(entry.form, 'page')
+  assert.equal(entry.geometry, null, '页态藏矩形＝重启后位置玄学')
+  assert.equal('minimized' in entry, false, 'v2 的收起轴已退役进 form')
+  assert.equal('tiledWith' in entry, false)
+  assert.equal('tileSide' in entry, false)
+  assert.equal('placement' in entry, false)
+  assert.equal('pinned' in entry, false)
+  assert.equal('mystery' in entry, false)
+
+  const unknownForm = normalizeEntry({ instance: 'a.b#1', pane: 'a.b', form: 'bubble' })
+  assert.equal(unknownForm.form, 'page', '陌生形态回落缺省，不进状态机')
+  const unknownGroup = normalizeEntry({ instance: 'a.b#1', pane: 'a.b', group: 'center' })
+  assert.equal(unknownGroup.group, 'main')
+  assert.equal(normalizeEntry({ instance: 'a.b#1', pane: 'wrong.pane' }).pane, 'a.b', 'pane 以实例 id 为准')
+  assert.equal(normalizeEntry('garbage'), null)
 })
 
-test('v1→v2 迁移：dock 丢弃不算脏、overlay/split 浮窗、fullscreen/immersive 最大化、气泡/收起折成 tab', () => {
+test('repairActive：指针悬空／指错组／指向非页态，三种坏味道一次修好', () => {
+  const page = { instance: 'a.one#1', pane: 'a.one', resource: null, group: 'main', order: 0, form: 'page', geometry: null, z: 0, maximized: false }
+  const floated = { instance: 'b.two#1', pane: 'b.two', resource: null, group: 'side', order: 0, form: 'floating', geometry: { ...DEFAULT_FLOATING_GEOMETRY }, z: 1, maximized: false }
+  const entries = { 'a.one#1': page, 'b.two#1': floated }
+  assert.deepEqual(repairActive(entries, { main: 'ghost#1', side: 'a.one#1' }), { main: 'a.one#1', side: null })
+  assert.deepEqual(repairActive(entries, { main: 'b.two#1', side: null }), { main: 'a.one#1', side: null })
+  assert.deepEqual(repairActive({}, { main: 'a.one#1', side: 'b.two#1' }), { main: null, side: null })
+})
+
+test('v2→v3 迁移：tab→侧缘标签、maximized→页、贴靠→页组、其余→浮窗，resource 一律待重开', () => {
+  const legacy = normalizeWorkspace({
+    version: 2,
+    entries: {
+      'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', geometry: { x: 60, y: 70, w: 800, h: 600 }, z: 3, minimized: 'none', maximized: false, tiledWith: null, tileSide: null },
+      'outline.tree#1': { instance: 'outline.tree#1', pane: 'outline.tree', geometry: { x: 1, y: 1, w: 300, h: 300 }, z: 2, minimized: 'tab', maximized: false, tiledWith: null, tileSide: null },
+      'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', geometry: null, z: 1, minimized: 'none', maximized: true, tiledWith: null, tileSide: null },
+      'notes.editor#1': { instance: 'notes.editor#1', pane: 'notes.editor', geometry: { x: 0, y: 0, w: 1200, h: 700 }, z: 0, minimized: 'none', maximized: false, tiledWith: 'script.editor#1', tileSide: 'right' }
+    }
+  })
+  assert.ok(legacy.warnings.includes('WORKSPACE_MIGRATED_V2'))
+  assert.ok(legacy.warnings.includes('WORKSPACE_RESOURCE_UNKNOWN'), 'v2 没有「哪份文档」这一格，如实记账不猜')
+
+  assert.equal(legacy.entries['novel.editor#1'].form, 'floating', 'v2 的常态就是一扇浮窗')
+  assert.deepEqual(legacy.entries['novel.editor#1'].geometry, { x: 60, y: 70, w: 800, h: 600 }, '矩形是 v2 唯一能原样带走的位置信息')
+  assert.equal(legacy.entries['novel.editor#1'].z, 3)
+
+  assert.equal(legacy.entries['outline.tree#1'].form, 'tab')
+  assert.equal(legacy.entries['outline.tree#1'].geometry, null, '侧缘标签不需要矩形')
+
+  assert.equal(legacy.entries['outline.widget#1'].form, 'page', '最大化在 v3 就是页态（天然铺满）')
+  assert.equal(legacy.entries['outline.widget#1'].geometry, null)
+
+  assert.equal(legacy.entries['notes.editor#1'].form, 'page')
+  assert.equal(legacy.entries['notes.editor#1'].group, 'side', '右半进侧组——那对 tiledWith 只能装两个窗，是页组的退化形态')
+
+  const moved = migrateV2Entry({ instance: 'a.b#1', pane: 'a.b', tiledWith: 'c.d#1', tileSide: 'left' }, 'a.b#1')
+  assert.equal(moved.group, 'main', '左半留在主组')
+  assert.equal(migrateV2Entry(null), null)
+})
+
+test('v1→v3 迁移：dock 丢弃不算脏，overlay→浮窗，全屏／沉浸→页，气泡折成侧缘标签', () => {
   const legacy = normalizeWorkspace({
     version: 1,
     entries: {
@@ -265,77 +466,106 @@ test('v1→v2 迁移：dock 丢弃不算脏、overlay/split 浮窗、fullscreen/
     }
   })
   assert.ok(legacy.warnings.includes('WORKSPACE_MIGRATED_V1'))
-  assert.equal(legacy.warnings.some((warning) => warning.startsWith('WORKSPACE_DROPPED_')), false, 'dock 不是窗口，不算脏数据')
+  assert.equal(legacy.warnings.some((warning) => warning.startsWith('WORKSPACE_DROPPED_')), false, 'dock 不是页，不算脏数据')
   assert.deepEqual(Object.keys(legacy.entries).sort(), ['notes.editor#1', 'novel.editor#1', 'outline.widget#1'])
 
   const overlay = legacy.entries['novel.editor#1']
-  assert.equal(overlay.maximized, false)
+  assert.equal(overlay.form, 'floating')
   assert.deepEqual(overlay.geometry, { x: 10, y: 20, w: 500, h: 400 }, 'snap 退场，矩形保留')
 
   const widget = legacy.entries['outline.widget#1']
-  assert.equal(widget.maximized, true, '全屏就是最大化')
-  assert.equal(widget.minimized, 'tab', '气泡折成侧缘标签')
-  assert.deepEqual(widget.geometry, { ...DEFAULT_FLOATING_GEOMETRY }, 'v1 全屏没留矩形，给一份可拖的')
+  assert.equal(widget.form, 'tab', '收起优先于全屏：v2 里两者互斥，标签是更近的状态')
 
-  assert.equal(legacy.entries['notes.editor#1'].maximized, true, '沉浸也是最大化')
-  assert.equal(migrateV1Entry({ pane: 'x.y', placement: 'split' }, 'x.y#1').tiledWith, null, 'v1 分屏没有搭档可复原，回浮窗')
+  assert.equal(legacy.entries['notes.editor#1'].form, 'page', '沉浸＝整窗铺开＝页态')
+  assert.equal(legacy.entries['notes.editor#1'].geometry, null)
+
+  const split = migrateV1Entry({ pane: 'x.y', placement: 'split' }, 'x.y#1')
+  assert.equal(split.form, 'floating', 'v1 没留下搭档指针，分屏只能回浮窗')
+  assert.equal(migrateV1Entry({ pane: 'x.y', placement: 'dock' }, 'x.y#1'), null)
 })
 
-test('贴靠净化：单边指向作废；两边同侧按实例 id 补成左／右', () => {
-  const entries = {
-    'a.one#1': { ...defaultEntry('a.one'), instance: 'a.one#1', tiledWith: 'b.two#1', tileSide: 'left' },
-    'b.two#1': { ...defaultEntry('b.two'), instance: 'b.two#1', tiledWith: null, tileSide: null },
-    'c.three#1': { ...defaultEntry('c.three'), instance: 'c.three#1', tiledWith: 'd.four#1', tileSide: 'left' },
-    'd.four#1': { ...defaultEntry('d.four'), instance: 'd.four#1', tiledWith: 'c.three#1', tileSide: 'left' }
-  }
-  reconcileTiles(entries)
-  assert.equal(entries['a.one#1'].tiledWith, null, '搭档没指回来就作废')
-  assert.equal(entries['a.one#1'].tileSide, null)
-  assert.equal(entries['c.three#1'].tileSide, 'left')
-  assert.equal(entries['d.four#1'].tileSide, 'right', '同侧脏档补成一对')
-})
-
-test('normalizeEntry：搭档指向自己算脏；未知字段丢弃', () => {
-  const entry = normalizeEntry({
-    instance: 'outline.tree#1',
-    pane: 'outline.tree',
-    tiledWith: 'outline.tree#1',
-    tileSide: 'left',
-    placement: 'overlay',
-    pinned: true,
-    mystery: 1,
-    geometry: { x: 1, y: 2, w: 300, h: 300 }
-  })
-  assert.equal(entry.tiledWith, null, '分屏没有「自己跟自己」')
-  assert.equal(entry.tileSide, null)
-  assert.equal('placement' in entry, false)
-  assert.equal('pinned' in entry, false)
-  assert.equal('mystery' in entry, false)
-})
-
-test('持久化：attachPersistence 收到整份快照；save 抛错只记 degraded，不拦状态机', () => {
+test('持久化：attachPersistence 收到整份快照（含 active／focus）；save 抛错只记 degraded，不拦状态机', () => {
   const store = createWorkspaceStore()
   const seen = []
   store.attachPersistence((snapshot) => {
     seen.push(snapshot)
     return { ok: true }
   })
-  store.open('outline.tree#1', { geometry: { x: 20, y: 30, w: 500, h: 400 } })
-  assert.equal(seen.length, 1)
-  assert.deepEqual(seen[0].entries['outline.tree#1'].geometry, { x: 20, y: 30, w: 500, h: 400 })
-  assert.equal(seen[0].version, WORKSPACE_VERSION)
+  store.open('novel.editor#1')
+  store.open('outline.tree#1', { group: 'side' })
+  assert.equal(seen.length, 2)
+  assert.equal(seen[1].version, WORKSPACE_VERSION)
+  assert.deepEqual(seen[1].active, { main: 'novel.editor#1', side: 'outline.tree#1' })
+  assert.equal(seen[1].focus, 'side')
+  assert.deepEqual(Object.keys(seen[1].entries).sort(), ['novel.editor#1', 'outline.tree#1'])
   assert.equal(store.snapshot().persistent, true)
 
   store.attachPersistence(() => {
     throw new Error('disk full')
   })
-  const result = store.minimize('outline.tree#1', 'tab')
+  const result = store.setForm('novel.editor#1', 'floating')
   assert.equal(result.ok, true, '落盘失败不拦本次会话')
-  assert.equal(store.get('outline.tree#1').minimized, 'tab')
+  assert.equal(store.get('novel.editor#1').form, 'floating')
   assert.equal(store.snapshot().persistent, false, 'degraded 要如实报给界面')
 })
 
-test('老键迁移：paneForm./overlay. 搬进 #1，成功后删键；已有记录不覆盖', () => {
+test('落盘只认 { version, entries, active, focus }；snapshot 的 persistent／warnings 不写进档', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1', { resource: '章节/第一章.md' })
+  const saved = store.serialize()
+  assert.deepEqual(Object.keys(saved).sort(), ['active', 'entries', 'focus', 'version'])
+  assert.equal(saved.entries['novel.editor#1'].resource, '章节/第一章.md')
+  assert.equal('persistent' in saved, false)
+  assert.equal('warnings' in saved, false)
+})
+
+test('订阅：每次变更收到快照，退订后不再收', () => {
+  const store = createWorkspaceStore()
+  const seen = []
+  const unsubscribe = store.subscribe((snapshot) => seen.push(snapshot.active.main))
+  store.open('novel.editor#1')
+  store.close('novel.editor#1')
+  unsubscribe()
+  store.open('outline.tree#1')
+  assert.deepEqual(seen, ['novel.editor#1', null])
+  assert.equal(typeof store.subscribe(null), 'function', '非函数订阅者不炸')
+})
+
+test('往返：v3 落盘再读回不变形（含每页文档、页组、形态与当前页）', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1', { resource: '章节/第一章.md' })
+  store.open('outline.tree#1', { group: 'side', resource: 'outline:node:3' })
+  store.open('outline.widget#1', { form: 'floating', geometry: { x: 640, y: 120, w: 300, h: 480 } })
+  store.open('notes.editor#1')
+  store.setForm('notes.editor#1', 'tab')
+
+  const saved = store.serialize()
+  assert.equal(saved.version, WORKSPACE_VERSION)
+  const revived = createWorkspaceStore({ initial: saved })
+  assert.deepEqual(revived.serialize(), saved, '读回来再写出去必须一字不差')
+  assert.equal(revived.get('novel.editor#1').resource, '章节/第一章.md')
+  assert.deepEqual(revived.pagesOf('side').map((page) => page.instance), ['outline.tree#1'])
+  assert.deepEqual(revived.get('outline.widget#1').geometry, { x: 640, y: 120, w: 300, h: 480 })
+  assert.deepEqual(revived.tabList().map((page) => page.instance), ['notes.editor#1'])
+  assert.deepEqual(revived.snapshot().active, { main: 'novel.editor#1', side: 'outline.tree#1' })
+})
+
+test('存档里的当前页指针是脏的（跨组／指向浮窗／悬空）→ 读入即修，界面不各说各话', () => {
+  const store = createWorkspaceStore({
+    initial: {
+      version: WORKSPACE_VERSION,
+      entries: {
+        'a.one#1': { instance: 'a.one#1', pane: 'a.one', form: 'page', group: 'main', order: 0 },
+        'b.two#1': { instance: 'b.two#1', pane: 'b.two', form: 'floating', group: 'side', order: 0 }
+      },
+      active: { main: 'b.two#1', side: 'ghost#1' },
+      focus: 'side'
+    }
+  })
+  assert.deepEqual(store.snapshot().active, { main: 'a.one#1', side: null })
+})
+
+test('老键迁移：paneForm./overlay. 搬进 #1 的浮窗，成功后删键；已有记录不覆盖', () => {
   const storage = memoryStorage({
     'paneForm.outline.widget': 'overlay',
     'overlay.outline.widget': JSON.stringify({ left: 120, top: 64, snap: 'right' }),
@@ -349,8 +579,9 @@ test('老键迁移：paneForm./overlay. 搬进 #1，成功后删键；已有记�
   assert.deepEqual(storage.dump(), {}, '搬成功的老键必须删掉')
 
   const widget = store.get('outline.widget#1')
+  assert.equal(widget.form, 'floating', '老键只证明「它曾浮着」，不凭空占一页')
   assert.deepEqual(widget.geometry, { x: 120, y: 64, w: DEFAULT_FLOATING_GEOMETRY.w, h: DEFAULT_FLOATING_GEOMETRY.h }, 'snap 退场，w/h 用缺省')
-  assert.equal(store.get('novel.editor#1').maximized, true, '老全屏＝最大化')
+  assert.equal(store.get('novel.editor#1').form, 'floating', 'v3 的「铺满」是页态；老全屏没有文档身份，先落成可拖的浮窗')
 
   const again = migrateLegacyWorkspace({ store, storage, paneIds: ['outline.widget'] })
   assert.equal(again.migrated, 0)
@@ -368,14 +599,14 @@ test('老键迁移：坏位置只记账不删键；store 已有记录时老键�
   assert.deepEqual(read.warnings, ['BAD_LEGACY_OVERLAY:outline.widget'])
   assert.ok(storage.getItem('overlay.outline.widget'), '解析失败的老键要留着')
 
-  store.open('outline.widget#1', { geometry: { x: 10, y: 10, w: 500, h: 400 } })
+  store.open('outline.widget#1', { form: 'floating', geometry: { x: 10, y: 10, w: 500, h: 400 } })
   const result = migrateLegacyWorkspace({ store, storage, paneIds: ['outline.widget'] })
   assert.equal(result.migrated, 0, '新真相优先：已有记录不被老键覆盖')
   assert.deepEqual(store.get('outline.widget#1').geometry, { x: 10, y: 10, w: 500, h: 400 })
   assert.equal(storage.getItem('paneForm.outline.widget'), null, '搬过（或已有记录）的形态键可以退场')
 })
 
-test('老键迁移：只有位置没有形态也算「它曾浮着」；老 dock 不凭空开窗', () => {
+test('老键迁移：只有位置没有形态也算「它曾浮着」；老 dock 不凭空开页', () => {
   const storage = memoryStorage({
     'overlay.notes.editor': JSON.stringify({ left: 20, top: 40 }),
     'paneForm.outline.tree': 'dock'
@@ -384,7 +615,8 @@ test('老键迁移：只有位置没有形态也算「它曾浮着」；老 dock
   const result = migrateLegacyWorkspace({ store, storage, paneIds: ['notes.editor', 'outline.tree'] })
   assert.equal(result.migrated, 1)
   assert.deepEqual(store.get('notes.editor#1').geometry, { x: 20, y: 40, w: DEFAULT_FLOATING_GEOMETRY.w, h: DEFAULT_FLOATING_GEOMETRY.h })
-  assert.equal(store.get('outline.tree#1'), null, '停靠栏不是窗口')
+  assert.equal(store.get('outline.tree#1'), null, '停靠栏不是页')
+  assert.deepEqual(store.snapshot().active, { main: null, side: null })
 })
 
 test('磁盘层：读坏 JSON 回落并记账；写盘原子替换；同内容不重复写；拒写旧版本', async () => {
@@ -402,39 +634,58 @@ test('磁盘层：读坏 JSON 回落并记账；写盘原子替换；同内容�
   const snapshot = {
     version: WORKSPACE_VERSION,
     entries: {
-      'outline.tree#1': { instance: 'outline.tree#1', pane: 'outline.tree', geometry: { x: 10, y: 20, w: 500, h: 400 }, z: 1, minimized: 'none', maximized: false, tiledWith: null, tileSide: null }
-    }
+      'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', resource: '章节/第一章.md', group: 'main', order: 0, form: 'page', geometry: null, z: 1, maximized: false }
+    },
+    active: { main: 'novel.editor#1', side: null },
+    focus: 'main'
   }
   const first = await disk.write(snapshot)
   assert.equal(first.ok, true)
   assert.equal(first.value.skipped, false)
   const onDisk = JSON.parse(await readFile(workspacePath(root), 'utf-8'))
-  assert.deepEqual(onDisk, snapshot)
+  assert.deepEqual(onDisk, snapshot, '每页文档与当前页指针都要落盘，不然重启后页签高亮丢了')
 
   const second = await disk.write(snapshot)
   assert.equal(second.value.skipped, true, '内容没变不该再写一次盘')
   assert.equal((await disk.write({ version: 1, entries: {} })).ok, false, '旧版本直接拒写')
+  assert.equal((await disk.write({ version: WORKSPACE_VERSION, entries: [] })).ok, false)
 })
 
-test('磁盘层：version:1 旧档照常读出（version 原样），交给渲染层迁移', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'pinax-workspace-v1-'))
+test('磁盘层：version:2 旧档照常读出（version 原样），迁移归渲染层', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pinax-workspace-v2-'))
   await mkdir(join(root, '.pinax'), { recursive: true })
   await writeFile(workspacePath(root), JSON.stringify({
-    version: 1,
+    version: 2,
     entries: {
-      'novel.editor#1': { pane: 'novel.editor', placement: 'fullscreen', minimized: 'none', geometry: null }
+      'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', geometry: { x: 40, y: 40, w: 900, h: 600 }, z: 1, minimized: 'none', maximized: true, tiledWith: null, tileSide: null }
     }
   }), 'utf-8')
 
   const disk = createFileWorkspaceStore({ root })
   const read = await disk.read()
-  assert.equal(read.value.version, 1, '磁盘层不把 v1 改写成 v2——迁移归渲染层')
+  assert.equal(read.value.version, 2, '磁盘层不把 v2 改写成 v3——旧条目还得按窗口轴读')
   assert.deepEqual(read.value.warnings, [])
 
   const store = createWorkspaceStore({ initial: read.value })
   const entry = store.get('novel.editor#1')
-  assert.equal(entry.maximized, true)
-  assert.deepEqual(entry.geometry, { ...DEFAULT_FLOATING_GEOMETRY })
+  assert.equal(entry.form, 'page', '最大化＝铺满＝页态')
+  assert.equal(entry.geometry, null)
+  assert.deepEqual(store.snapshot().active, { main: 'novel.editor#1', side: null })
+})
+
+test('磁盘层：active／focus 形状不对时不写进档，不让脏指针落盘', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pinax-workspace-active-'))
+  const disk = createFileWorkspaceStore({ root })
+  const written = await disk.write({
+    version: WORKSPACE_VERSION,
+    entries: {},
+    active: { main: 42, side: null },
+    focus: 'center'
+  })
+  assert.equal(written.ok, true)
+  const onDisk = JSON.parse(await readFile(written.value.file, 'utf-8'))
+  assert.equal('active' in onDisk, false, 'main 必须是字符串或 null')
+  assert.equal('focus' in onDisk, false)
 })
 
 test('磁盘层：没有项目根时报错，不造孤儿文件', () => {

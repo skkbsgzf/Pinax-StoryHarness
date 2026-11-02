@@ -1,19 +1,39 @@
 /**
- * 协议 v1.2 的位置词表——批次59 起只作兼容读：渲染层不再有位置菜单，
- * 任何打开的内容都是同一扇 PaneWindow（状态机在 next/shell/workspace.mjs v2）。
+ * 载体清单 `panes[].forms` 的词表与文案的单一来源（批次61 · 作者裁定③「形态切换多用右键，
+ * 不必做成死按钮」）：页签右键与窗头右键弹出的那一份「形态」菜单据此列项，
+ * 未声明的形态不出现在菜单里（P18）。批次59 那句「只作兼容读，新代码不要 import」随本批作废——
+ * 那时死的是消费端，12 份清单的 `forms` 声明一直是活的。
  *
- * 保留文件的原因：宿主描述导出（next/testing/exportHostDescriptor.mjs）仍要给出
- * manifest.panes[].forms 的词表，12 份清单本身不动。新代码不要再 import 这里的
- * 词表来驱动界面；状态只认 geometry／z／minimized／maximized／tiledWith／tileSide。
+ * v3 状态轴（next/shell/workspace.mjs）的落点映射见 FORM_ACTIONS：
+ *   dock     → 占为页（留在当前页组）
+ *   split    → 移到对面页组（对半）
+ *   overlay  → 浮出为窗
+ * `fullscreen`／`immersive` 在 v3 没有独立落点（页态天然铺满；浮窗的双击另有子态），
+ * 本批**不进菜单**——进了就是看着能点、其实没差别的骗人入口（工单 §7 待裁 ④）。
  */
 
-/** 旧词表（仅兼容导出用；界面不再据此列入口）。 */
+/** 协议词表（清单与宿主描述符都用这五个值；界面只用其中能落地的三个）。 */
 export const PANE_FORMS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
 
-/** 旧缺省位置（兼容读；批次59 后不存在「缺省位置」这一说）。 */
+/** 本批右键菜单能真正落地的形态（其余值在词表里，但 v3 状态轴装不下）。 */
+export const FORM_ACTIONS = Object.freeze({
+  dock: { action: 'dock', label: '占为页' },
+  split: { action: 'side', label: '移到侧页组（对半）' },
+  overlay: { action: 'float', label: '浮出为窗' }
+})
+
+/** 缺省形态（批次61 起＝页：`form:'page'`）。旧值 `dock` 只作兼容读。 */
 export const DEFAULT_PANE_FORM = 'dock'
 
-/** 旧词表文案（兼容导出用）。 */
+/**
+ * 菜单动作 → v3 形态的映射（宿主 applyFormAction 与单测共用这一张表）：
+ * 右键菜单发的是清单词表里的动作名，状态机认的是 v3 形态，两边各留一份表迟早对不上。
+ * `side` 的落点也是页态——「分屏」是页组的存在，宿主随后再把它搬进对面那一组。
+ * `close` 不在这里：它删记录，不是第四种形态。
+ */
+export const MENU_TARGET_FORM = Object.freeze({ dock: 'page', side: 'page', float: 'floating', tab: 'tab' })
+
+/** 词表文案（菜单与宿主描述符共用；`fullscreen`／`immersive` 只在这里留名，不进菜单）。 */
 export const PANE_FORM_LABELS = Object.freeze({
   dock: '停靠栏',
   split: '分屏',
@@ -21,6 +41,12 @@ export const PANE_FORM_LABELS = Object.freeze({
   fullscreen: '全屏',
   immersive: '沉浸'
 })
+
+/** 右键菜单里「页操作」那一组：不属于 forms 词表（v3 自有形态与关闭），故恒在。 */
+export const PAGE_ACTIONS = Object.freeze([
+  { action: 'tab', label: '收成侧缘标签' },
+  { action: 'close', label: '关闭这一页' }
+])
 
 /** 老键前缀：迁移只用一次（next/shell/workspaceMigration.mjs 读，成功后删）。 */
 export const PANE_FORM_STORAGE_PREFIX = 'paneForm.'
@@ -30,7 +56,7 @@ export function isPaneForm(value) {
 }
 
 /**
- * 把清单里的 forms 数组收成宿主词表内的形态（去重、按词表顺序）。
+ * 把清单里的 forms 数组收进宿主词表内的形态（去重、按词表顺序）。
  * 词表外的形态不报错、也不出现在菜单里——P18「未声明的形态不出现」。
  * 清单层的「拒装」归内核校验器；渲染层只做最后一道过滤，不让陌生值漏进状态机。
  */
@@ -38,6 +64,16 @@ export function sanitizePaneForms(value) {
   if (!Array.isArray(value)) return []
   const declared = new Set(value.filter((item) => typeof item === 'string'))
   return PANE_FORMS.filter((form) => declared.has(form))
+}
+
+/**
+ * 形态菜单的那一组项＝`sanitizePaneForms(pane.forms)` ∩ 本批可落点。
+ * 顺序跟词表（dock→split→overlay），项里带上 v3 的落点动作，菜单组件只管画与发。
+ */
+export function formMenuItems(value) {
+  return sanitizePaneForms(value)
+    .filter((form) => FORM_ACTIONS[form])
+    .map((form) => ({ form, ...FORM_ACTIONS[form] }))
 }
 
 export function paneFormStorageKey(paneId) {

@@ -942,10 +942,11 @@ input.doc-title {
   }
 }
 
-/* —— 文档窗（批次59 · 铁律一／二）———————————————————————————
-   中间 doc 区＝窗口管理器：任何打开的内容都是一扇 PaneWindow，chrome（标题条＋
-   收起／分屏／×）只此一份。浮窗可拖标题条移动、四角缩放；分屏＝两窗共用同一矩形
-   对半贴；收起＝右缘一枚竖排标签。z-index 走窗口记录的叠序（低于统一二级页）。
+/* —— 文档窗与页签栏（批次61 · 〔铁律一／四〕）————————————————————
+   中间 doc 区＝页底座：页签栏只回答「哪一页是当前页」，窗口 chrome（标题条＋
+   收起／分屏／×）仍只 PaneWindow 这一份。页态按页组排版（主／侧各半＝原来的分屏），
+   浮窗态才持矩形、可拖标题条移动、四角缩放；收起＝右缘一枚竖排标签。
+   z-index 走页记录的叠序（低于统一二级页）。
    颜色、字号、圆角一律走 token；尺寸是布局 px（允许）。 */
 .nx-window-layer {
   position: relative;
@@ -966,11 +967,21 @@ input.doc-title {
   box-shadow: 0 12px 30px color-mix(in srgb, var(--archive-ink) 16%, transparent);
   overflow: hidden;
 }
-.nx-pane-window.is-maximized {
+/* 页态：不绝对定位、不领阴影——它是所在页组的那一页，铺满由排版决定（〔铁律一〕）。
+   侧页组那一扇加左缘细线，让「对半」有一条可读的分界。 */
+.nx-pane-window.is-page {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
   border-radius: 0;
+  border-top: 0;
+  border-bottom: 0;
   box-shadow: none;
 }
-.nx-pane-window.is-tiled {
+.nx-pane-window.is-page.is-in-side {
+  border-left: 1px solid var(--hairline-soft);
+}
+.nx-pane-window.is-maximized {
   border-radius: 0;
   box-shadow: none;
 }
@@ -1056,6 +1067,88 @@ input.doc-title {
   font-size: var(--nx-fs-2xs);
   letter-spacing: 0.08em;
   box-shadow: 0 6px 18px color-mix(in srgb, var(--archive-ink) 14%, transparent);
+}
+/* —— 页签栏（批次61 · 〔铁律四〕）——————————————————————————————
+   它不是第二套窗口壳：一条横向签列，只回答「哪一页是当前页」。
+   签上没有拖拽句柄、没有缩放角、没有任何常驻形态钮——形态切换只在右键菜单里（裁定③）。
+   度量抄的是浏览器／IDE 的常见档：签高 28px，窄屏不折行、超出横向滚。 */
+.nx-page-tabstrip {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  gap: 2px;
+  min-height: 30px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--surface-workbench-muted);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+.nx-page-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 200px;
+  min-width: 96px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-md);
+  cursor: pointer;
+  user-select: none;
+}
+.nx-page-tab:hover {
+  color: var(--archive-ink);
+  background: color-mix(in srgb, var(--surface-workbench-raised) 60%, transparent);
+}
+.nx-page-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.nx-page-tab.is-active {
+  color: var(--archive-ink);
+  border-color: var(--hairline-soft);
+  background: var(--surface-workbench-raised);
+}
+.nx-page-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 浮窗／侧缘标签在签上留一个词——「看得见」要覆盖四种形态，不只页态。 */
+.nx-page-tab-flag {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  font-size: var(--nx-fs-2xs);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.nx-page-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  opacity: 0;
+}
+.nx-page-tab:hover .nx-page-tab-close,
+.nx-page-tab:focus-within .nx-page-tab-close,
+.nx-page-tab.is-active .nx-page-tab-close {
+  opacity: 1;
+}
+.nx-page-tab-close:hover {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
 }
 /* 浮窗四角缩放把手：只在浮窗态渲染（分屏／最大化不吃这个手势）。 */
 .nx-pane-window-resize {

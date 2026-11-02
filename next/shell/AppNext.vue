@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
 import ActivityRail from './ActivityRail.vue'
 import IndexWindow from './IndexWindow.vue'
 import CarrierPaneHost from './CarrierPaneHost.vue'
@@ -26,11 +26,14 @@ import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './rec
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from './ipcContract.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
 import {
-  DEFAULT_FLOATING_GEOMETRY,
   hostWorkspace,
   instanceIdFor,
   subscribeWorkspace
 } from './workspace.mjs'
+import { resolveOpenTarget } from './openTarget.mjs'
+import { MENU_TARGET_FORM } from './paneForms.mjs'
+import PaneTabStrip from './PaneTabStrip.vue'
+import PaneFormMenu from './PaneFormMenu.vue'
 import { layoutTemplateForBoard, templateHasTree } from './layoutTemplates.mjs'
 import { legacyLocalStorage, migrateLegacyWorkspace } from './workspaceMigration.mjs'
 import { hostViewRegistry } from './viewRegistry.mjs'
@@ -66,7 +69,12 @@ const props = defineProps({
 })
 
 const view = ref(props.initialView ?? null)
-/** 章节／条目的单一归属：索引窗与核心区共用这一份，存完正文索引窗不会还写着旧版本号。 */
+/**
+ * 基座数据面：项目级的事（清单、检索、Agent、设置页）都归它。
+ * 〔批次61 · 裁定④〕中心区的**每一页各持一份** boardData——索引窗与核心区不再共用一份，
+ * 因为「一页一份文档」要求两块同 pane 的页能显示两份不同的稿子（共用一份时必然同文档）。
+ * 页实例（`<paneId>#<n>`）→ 数据面的登记表与取用口在下面 pageDataOf／prunePageData。
+ */
 const data = useBoardData(props.bridge)
 const activeBoardId = ref(null)
 /**
@@ -98,19 +106,126 @@ const writingPrefs = ref({
 })
 
 /**
- * 窗口状态（批次59 · 协议 v1.3）：宿主一份工作区状态，AppNext 只订阅快照。
- * 「记录存在＝窗口开着」；几何／叠序／最小化（none|tab）／最大化／分屏搭档都是窗口自己的轴，
- * 落 `.pinax/workspace.json`（项目级，经主进程通道）。四轴 placement 已退役。
+ * 工作区页状态（批次61 · v3）：宿主一份状态，AppNext 只订阅快照。
+ * 「记录存在＝这一页开着」；页组（main|side）× 组内序号 × 每组当前页（active）× 形态
+ * （page|floating|tab）＋ resource（这页装哪份文档）是页自己的轴，落 `.pinax/workspace.json`（version:3）。
+ * v2 的 minimized／maximized（页档）／tiledWith／tileSide 全部退役。
  */
 const workspaceSnapshot = ref(hostWorkspace.snapshot())
 const unsubscribeWorkspace = subscribeWorkspace((snapshot) => {
   workspaceSnapshot.value = snapshot
+  prunePageData()
 })
 
-/** 一块 pane 的缺省实例（`<paneId>#1`）。第二份起由 openInstance 分配，#n 各记各的状态。 */
+/** 一块 pane 的缺省实例（`<paneId>#1`）。第二份起由页身份分配，#n 各记各的状态。 */
 function paneInstance(paneId) {
   return instanceIdFor(paneId, 1)
 }
+
+/**
+ * 页实例 → 这一页自己的数据面（〔裁定④〕D 的落点）。
+ * 每份都是独立的 useBoardData：各自的 selection／chapter／draft／entry／note…，
+ * 所以两块同 pane 的页能各开各的稿子；代价是同一棵树可能被两页各取一次（走同一条
+ * runtimeToolCall 通道，不是第二套读法——批次35 那条纪律仍成立）。
+ * 认领表要喂给每一页，否则 noteClaim／claimDecision 在页面上读不到裁决事实。
+ */
+const pageDataMap = new Map()
+/** instance → 这页此刻materialize 的是哪份文档；用来判「已载入就别重取」（会冲掉手上草稿）。 */
+const pageResource = new Map()
+let claimPanesSnapshot = []
+
+function pageDataOf(instance) {
+  if (!instance) return data
+  let page = pageDataMap.get(instance)
+  if (!page) {
+    page = useBoardData(props.bridge)
+    page.declareClaimPanes?.(claimPanesSnapshot)
+    pageDataMap.set(instance, page)
+  }
+  return page
+}
+
+/** 关页要把那页的数据面摘掉：留着既不释放草稿也没人再读它。 */
+function prunePageData() {
+  const alive = new Set(Object.keys(workspaceSnapshot.value.entries))
+  for (const instance of [...pageDataMap.keys()]) {
+    if (alive.has(instance)) continue
+    pageDataMap.get(instance).dispose?.()
+    pageDataMap.delete(instance)
+    pageResource.delete(instance)
+  }
+}
+
+/** 此刻说话的那一页：焦点组的当前页 → 另一组 → 最靠前的浮窗 → 都没有就是基座。 */
+function focusedInstance() {
+  const snap = workspaceSnapshot.value
+  const order = [snap.focus, snap.focus === 'main' ? 'side' : 'main']
+  for (const group of order) {
+    const instance = snap.active?.[group]
+    if (instance && snap.entries[instance]) return instance
+  }
+  const floats = Object.values(snap.entries).filter((entry) => entry.form === 'floating').sort((a, b) => a.z - b.z)
+  return floats.length ? floats[floats.length - 1].instance : null
+}
+
+/** 历史／导出／Agent 这些「作者此刻看到的文档」都从这里取，不再钉死基座那一份。 */
+function activeData() {
+  return pageDataOf(focusedInstance())
+}
+
+/**
+ * 全部数据面（基座＋每一扇开着的页）——旁路广播只用它。
+ * 批次39 的事件刷新与批次43 的自动保存各自挂在一份 useBoardData 上：一页一份文档之后，
+ * 一次磁盘变更要落到所有正在看这棵树的页，否则「A 页保存了，B 页还揣着旧稿」。
+ * 这不是第二套读法：每一份走的仍是它自己那条 runtimeToolCall。
+ */
+function allDataSources() {
+  return [data, ...pageDataMap.values()]
+}
+
+/**
+ * 某一页此刻装的文档换了（不是经 routeOpen 进来的那条路，例如历史恢复后的回读）：
+ * 记账两处——工作区记录里的 resource（重启后还回到这一份）＋页数据面的备忘录（别重复取数）。
+ * 没有焦点页（还没开窗）就什么都不做，不拿基座当替身。
+ */
+function rememberPageResource(resource) {
+  const instance = focusedInstance()
+  if (!instance) return
+  hostWorkspace.setResource(instance, resource)
+  pageResource.set(instance, resource)
+}
+
+/** 大纲转换落盘后重列：基座（索引窗那棵树）与每扇开着的大纲页各取各的，一份都不落。 */
+function reloadOutlineEverywhere() {
+  for (const page of allDataSources()) void page.loadOutline?.()
+}
+
+/** 这一页此刻装的是哪份文档（从它自己的 selection 推，不另记第二份真相）。 */
+function selectionResource(page) {
+  const selection = page?.selection
+  if (!selection?.type) return null
+  if (selection.type === 'outline-node') return `outline:node:${selection.item?.index ?? 0}`
+  return resourceOf(selection.type, selection.item)
+}
+
+/**
+ * 页记录里的 resource 必须跟着「这一页此刻装哪份文档」走——不管作者是经 routeOpen 跳过来的，
+ * 还是在索引窗／画廊里直接点的行（它们拿到的就是这一页自己的数据面，〔任务四〕归一的副作用）。
+ * 少了这一条，作者点过的文档不会落盘，重启后那一页会回到它第一次打开的那一份。
+ * 读 workspaceSnapshot 那一行是有意的：页开／关都要重算（登记表不是响应式的）。
+ */
+watch(() => {
+  void workspaceSnapshot.value
+  const out = {}
+  for (const [instance, page] of pageDataMap.entries()) out[instance] = selectionResource(page)
+  return out
+}, (next, previous) => {
+  for (const [instance, resource] of Object.entries(next)) {
+    if (previous?.[instance] === resource) continue
+    pageResource.set(instance, resource)
+    if (hostWorkspace.get(instance)?.resource !== resource) hostWorkspace.setResource(instance, resource)
+  }
+}, { deep: true })
 
 
 const project = computed(() => view.value?.project ?? null)
@@ -125,7 +240,12 @@ const carriers = computed(() => view.value?.carriers ?? [])
  */
 watch(
   () => carriers.value.flatMap((carrier) => (Array.isArray(carrier?.panes) ? carrier.panes : [])),
-  (panes) => data.declareClaimPanes?.(panes),
+  (panes) => {
+    claimPanesSnapshot = panes
+    data.declareClaimPanes?.(panes)
+    // 页实例是懒建的，认领表要一并补喂；否则后开的页读不到裁决事实。
+    for (const page of pageDataMap.values()) page.declareClaimPanes?.(panes)
+  },
   { immediate: true }
 )
 const rejected = computed(() => view.value?.rejected ?? [])
@@ -134,34 +254,37 @@ const openError = computed(() => view.value?.openError ?? null)
 const kinds = computed(() => view.value?.kernel?.kinds ?? [])
 
 /**
- * 当前文档（D2 历史面板的锚点）：索引窗选中什么，历史就查什么。
+ * 当前文档（D2 历史面板的锚点）：此刻聚焦那一页选中什么，历史就查什么。
  * 路径与修订号都取自已读回的状态（不是列表页的旧值）——恢复时 expectedRevision 才对得上。
+ * 〔裁定④〕取的是**那一页自己的**数据面，不再钉死基座：两页各开各的稿子时，
+ * 历史面板跟着作者正在看的那一页走。
  */
 const historyTarget = computed(() => {
-  const selection = data.selection
+  const source = activeData()
+  const selection = source.selection
   if (!selection?.type) return null
-  if (selection.type === 'chapter' && data.chapter?.file) {
+  if (selection.type === 'chapter' && source.chapter?.file) {
     return {
       kind: 'chapter',
-      path: data.chapter.file,
-      title: data.chapter.title ?? selection.item?.title ?? '章节',
-      revision: Number.isInteger(data.chapter.revision) ? data.chapter.revision : 0
+      path: source.chapter.file,
+      title: source.chapter.title ?? selection.item?.title ?? '章节',
+      revision: Number.isInteger(source.chapter.revision) ? source.chapter.revision : 0
     }
   }
-  if (selection.type === 'entry' && (data.entry?.path ?? selection.item?.path)) {
+  if (selection.type === 'entry' && (source.entry?.path ?? selection.item?.path)) {
     return {
       kind: 'entry',
-      path: data.entry?.path ?? selection.item.path,
-      title: data.entry?.title ?? data.entry?.name ?? selection.item?.name ?? '条目',
-      revision: Number.isInteger(data.entry?.revision) ? data.entry.revision : 0
+      path: source.entry?.path ?? selection.item.path,
+      title: source.entry?.title ?? source.entry?.name ?? selection.item?.name ?? '条目',
+      revision: Number.isInteger(source.entry?.revision) ? source.entry.revision : 0
     }
   }
-  if (selection.type === 'note' && (data.note?.file ?? selection.item?.file)) {
+  if (selection.type === 'note' && (source.note?.file ?? selection.item?.file)) {
     return {
       kind: 'note',
-      path: data.note?.file ?? selection.item.file,
-      title: data.note?.title ?? selection.item?.title ?? '构思',
-      revision: Number.isInteger(data.note?.revision) ? data.note.revision : 0
+      path: source.note?.file ?? selection.item.file,
+      title: source.note?.title ?? selection.item?.title ?? '构思',
+      revision: Number.isInteger(source.note?.revision) ? source.note.revision : 0
     }
   }
   if (selection.type === 'outline-node') {
@@ -169,7 +292,7 @@ const historyTarget = computed(() => {
       kind: 'outline',
       path: '大纲/outline.json',
       title: '大纲',
-      revision: Number.isInteger(data.outlineRevision) ? data.outlineRevision : 0
+      revision: Number.isInteger(source.outlineRevision) ? source.outlineRevision : 0
     }
   }
   return null
@@ -177,44 +300,45 @@ const historyTarget = computed(() => {
 
 /**
  * 导出目标（批次26）：当前打开的那一份文档。
- * 锚点与历史面板同一个（data.selection），但取的是「作者此刻看到的那份文本」——
+ * 锚点与历史面板同一个（此刻那一页的 selection），但取的是「作者此刻看到的那份文本」——
  * 编辑态取草稿（未保存的改动也在），阅读态取读回来的正文；没有打开文档就是 null。
  * 只在六个有正文的载体之间取：章节／条目／构思／资料／约束／剧本（大纲是结构不是正文，不导）。
  */
 const exportDocumentTarget = computed(() => {
-  const selection = data.selection
+  const source = activeData()
+  const selection = source.selection
   if (!selection?.type) return null
-  if (selection.type === 'chapter' && data.chapter?.file) {
-    return { kind: 'chapter', title: data.chapter.title ?? selection.item?.title ?? '章节', path: data.chapter.file, text: data.draft ?? '' }
+  if (selection.type === 'chapter' && source.chapter?.file) {
+    return { kind: 'chapter', title: source.chapter.title ?? selection.item?.title ?? '章节', path: source.chapter.file, text: source.draft ?? '' }
   }
-  if (selection.type === 'entry' && data.entry?.path) {
+  if (selection.type === 'entry' && source.entry?.path) {
     return {
       kind: 'entry',
-      title: data.entry.name ?? selection.item?.name ?? '条目',
-      path: data.entry.path,
-      text: data.editingEntry ? (data.entryDraft ?? '') : (data.entry.content ?? '')
+      title: source.entry.name ?? selection.item?.name ?? '条目',
+      path: source.entry.path,
+      text: source.editingEntry ? (source.entryDraft ?? '') : (source.entry.content ?? '')
     }
   }
-  if (selection.type === 'note' && data.note?.file) {
-    return { kind: 'note', title: data.note.title ?? '构思', path: data.note.file, text: data.noteDraft ?? data.note.text ?? '' }
+  if (selection.type === 'note' && source.note?.file) {
+    return { kind: 'note', title: source.note.title ?? '构思', path: source.note.file, text: source.noteDraft ?? source.note.text ?? '' }
   }
-  if (selection.type === 'document' && data.document?.file) {
+  if (selection.type === 'document' && source.document?.file) {
     return {
       kind: 'document',
-      title: data.document.title ?? '资料',
-      path: data.document.file,
-      text: data.editingDocument ? (data.documentDraft ?? '') : (data.document.text ?? '')
+      title: source.document.title ?? '资料',
+      path: source.document.file,
+      text: source.editingDocument ? (source.documentDraft ?? '') : (source.document.text ?? '')
     }
   }
-  if (selection.type === 'rule' && data.rule?.file) {
-    return { kind: 'rule', title: data.rule.title ?? '约束', path: data.rule.file, text: data.ruleDraft ?? data.rule.text ?? '' }
+  if (selection.type === 'rule' && source.rule?.file) {
+    return { kind: 'rule', title: source.rule.title ?? '约束', path: source.rule.file, text: source.ruleDraft ?? source.rule.text ?? '' }
   }
-  if (selection.type === 'script' && data.script?.file) {
+  if (selection.type === 'script' && source.script?.file) {
     return {
       kind: 'script',
-      title: data.script.title ?? '剧本',
-      path: data.script.file,
-      text: data.editingScript ? (data.scriptDraft ?? '') : (data.script.text ?? '')
+      title: source.script.title ?? '剧本',
+      path: source.script.file,
+      text: source.editingScript ? (source.scriptDraft ?? '') : (source.script.text ?? '')
     }
   }
   return null
@@ -223,25 +347,37 @@ const exportDocumentTarget = computed(() => {
 /**
  * @ 引用清单（批次27 · 任务三）：从 board data 组一份 { kind, title, path } 交给右栏。
  * 只列已经载入过的树——为了这份清单额外读盘会顺手打开第一条（loadEntries 的既有行为），
- * 那不是作者点的事，所以这里只做投影，不触发取数。对应栏目打开过一次，它的内容就会出现在 @ 里。
+ * 那不是作者点的事，所以这里只做投影，不触发取数。
+ * 〔裁定④〕树现在可能只载在某一页那份数据面里，所以基座与每一页都取并去重；
+ * 读 workspaceSnapshot 那一行是有意的——页开／关时这份清单要重算（登记表不是响应式的）。
  */
 const referenceCatalog = computed(() => {
+  void workspaceSnapshot.value
   const out = []
-  for (const chapter of data.chapters ?? []) {
-    if (!chapter?.file) continue
-    out.push({ kind: 'chapter', title: chapter.title ?? chapter.file, path: chapter.file })
+  const seen = new Set()
+  const push = (item) => {
+    const key = `${item.kind}|${item.path ?? ''}|${item.id ?? ''}`
+    if (seen.has(key)) return
+    seen.add(key)
+    out.push(item)
   }
-  for (const entry of data.entries ?? []) {
-    if (!entry?.path) continue
-    out.push({ kind: 'entry', title: entry.name ?? entry.title ?? entry.path, path: entry.path, id: entry.id ?? null })
-  }
-  for (const document of data.documents ?? []) {
-    if (!document?.file) continue
-    out.push({ kind: 'document', title: document.title ?? document.file, path: document.file })
-  }
-  for (const script of data.scripts ?? []) {
-    if (!script?.file) continue
-    out.push({ kind: 'script', title: script.title ?? script.file, path: script.file })
+  for (const source of [data, ...pageDataMap.values()]) {
+    for (const chapter of source.chapters ?? []) {
+      if (!chapter?.file) continue
+      push({ kind: 'chapter', title: chapter.title ?? chapter.file, path: chapter.file })
+    }
+    for (const entry of source.entries ?? []) {
+      if (!entry?.path) continue
+      push({ kind: 'entry', title: entry.name ?? entry.title ?? entry.path, path: entry.path, id: entry.id ?? null })
+    }
+    for (const document of source.documents ?? []) {
+      if (!document?.file) continue
+      push({ kind: 'document', title: document.title ?? document.file, path: document.file })
+    }
+    for (const script of source.scripts ?? []) {
+      if (!script?.file) continue
+      push({ kind: 'script', title: script.title ?? script.file, path: script.file })
+    }
   }
   return out
 })
@@ -333,7 +469,7 @@ const settingsSections = computed(() => [
   // 批次26（任务三）：导出当前打开的文档（txt／doc）。锚点与历史面板共用 data.selection。
   { id: 'export', title: '导出', group: '文档', keywords: ['导出', '另存为', 'txt', 'doc', 'word', '纯文本', '下载'], component: ExportSection, props: { bridge: props.bridge, document: exportDocumentTarget.value } },
   // 批次30：散文章节稿 → 大纲/outline.json。只追加缺的章节，现有节点不动（dryRun 扫描后才落盘）。
-  { id: 'outline-import', title: '大纲转换', group: '文档', keywords: ['大纲', '章节稿', 'outline', '001-004', '散文', '转换', 'md'], component: OutlineImportSection, props: { bridge: props.bridge, project: project.value, reload: data.loadOutline } }
+  { id: 'outline-import', title: '大纲转换', group: '文档', keywords: ['大纲', '章节稿', 'outline', '001-004', '散文', '转换', 'md'], component: OutlineImportSection, props: { bridge: props.bridge, project: project.value, reload: reloadOutlineEverywhere } }
 ])
 
 function openSection(id) {
@@ -387,13 +523,11 @@ function openProposals() {
   openSection('proposals')
 }
 
-/** 索引窗行动作：先把该文档读进来（修订号以磁盘为准），再摊开历史。 */
+/** 索引窗行动作：先把该文档读进它自己的那一页（修订号以磁盘为准），再摊开历史。 */
 async function openHistoryFor(payload) {
   if (!payload) return
-  if (payload.type === 'chapter') await data.openChapter(payload.item)
-  else if (payload.type === 'entry') await data.openEntry(payload.item)
-  else if (payload.type === 'note') data.openNote(payload.item)
-  else if (payload.type === 'outline') data.selectOutlineNode(payload.index)
+  if (payload.type === 'outline') await openResource('outline-node', { index: payload.index })
+  else await openResource(payload.type, payload.item)
   openSection('history')
 }
 
@@ -522,31 +656,37 @@ function stripWorldbookFrontmatter(text) {
  */
 async function restoreHistoryVersion({ target, text } = {}) {
   if (!target) return { ok: false, message: '没有可恢复的文档' }
+  // 批次61〔裁定④〕：历史面板锚的是「作者此刻那一页」，恢复后回读也必须回到同一页——
+  // 用基座那份 data 会把结果写进没人看的 selection。
+  const source = activeData()
   const revision = Number.isInteger(target.revision) ? target.revision : 0
 
   if (target.kind === 'chapter') {
-    const saved = await data.tool('pinax_chapter_save', { file: target.path, text: String(text ?? ''), expectedRevision: revision })
+    const saved = await source.tool('pinax_chapter_save', { file: target.path, text: String(text ?? ''), expectedRevision: revision })
     if (!saved.ok) return { ok: false, message: saved.message }
-    await data.openChapter({ file: target.path, title: target.title })
+    await source.openChapter({ file: target.path, title: target.title })
+    rememberPageResource(`chapter:${target.path}`)
     return { ok: true, message: `已恢复「${target.title}」· 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
   }
 
   if (target.kind === 'entry') {
     const body = stripWorldbookFrontmatter(text)
     if (!body.trim()) return { ok: false, message: '这一版条目只有契约头、没有正文，无法恢复。' }
-    const saved = await data.tool('pinax_worldbook_save', { path: target.path, text: body, expectedRevision: revision })
+    const saved = await source.tool('pinax_worldbook_save', { path: target.path, text: body, expectedRevision: revision })
     if (!saved.ok) return { ok: false, message: saved.message }
-    const entry = data.entry ?? data.selection?.item
-    if (entry) await data.openEntry(entry)
+    const entry = source.entry ?? source.selection?.item
+    if (entry) await source.openEntry(entry)
+    rememberPageResource(`entry:${target.path}`)
     return { ok: true, message: `已恢复「${target.title}」· 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
   }
 
   if (target.kind === 'note') {
-    const saved = await data.tool('pinax_notes_save', { file: target.path, text: String(text ?? ''), expectedRevision: revision })
+    const saved = await source.tool('pinax_notes_save', { file: target.path, text: String(text ?? ''), expectedRevision: revision })
     if (!saved.ok) return { ok: false, message: saved.message }
-    await data.loadNotes()
-    const note = data.notes.find((item) => item.file === saved.value.file)
-    if (note) data.openNote(note)
+    await source.loadNotes()
+    const note = source.notes.find((item) => item.file === saved.value.file)
+    if (note) source.openNote(note)
+    rememberPageResource(`note:${target.path}`)
     return { ok: true, message: `已恢复「${target.title}」· 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
   }
 
@@ -559,13 +699,13 @@ async function restoreHistoryVersion({ target, text } = {}) {
     }
     const nodes = Array.isArray(document?.nodes) ? document.nodes : null
     if (!nodes?.length) return { ok: false, message: '这一版大纲没有节点，无法恢复。' }
-    const saved = await data.tool('pinax_outline_save', {
+    const saved = await source.tool('pinax_outline_save', {
       nodes,
       edges: Array.isArray(document.edges) ? document.edges : [],
       expectedRevision: revision
     })
     if (!saved.ok) return { ok: false, message: saved.message }
-    await data.loadOutline()
+    await source.loadOutline()
     return { ok: true, message: `已恢复大纲 · 第 ${saved.value.revision} 版；下一次快照会记为一条新版本。` }
   }
 
@@ -670,7 +810,9 @@ const overlayPanes = computed(() => carriers.value
       pluginTitle: carrier.title,
       view: pane.view ?? null,
       kind: pane.kind ?? null,
-      entry: carrier.entry ?? null
+      entry: carrier.entry ?? null,
+      // 窗头右键的形态菜单只认清单声明（P18）：这一格不带出来，overlay 小窗的右键就只剩页操作。
+      forms: Array.isArray(pane.forms) ? pane.forms : []
     }))))
 
 /** 一块 pane 属于哪个载体（分屏与默认窗口都要找它）。 */
@@ -681,24 +823,6 @@ function boardForPane(paneId) {
     ?? boards.value.find((item) => item.overlayPane?.id === id)
     ?? null
 }
-
-/** 新窗的落点：缺省矩形按打开顺序向右下错开一点，多扇窗不会完全叠死。 */
-function nextFloatingGeometry() {
-  const count = Object.keys(workspaceSnapshot.value.entries).length
-  const offset = (count % 6) * 24
-  return {
-    x: DEFAULT_FLOATING_GEOMETRY.x + offset,
-    y: DEFAULT_FLOATING_GEOMETRY.y + offset,
-    w: DEFAULT_FLOATING_GEOMETRY.w,
-    h: DEFAULT_FLOATING_GEOMETRY.h
-  }
-}
-
-/** 当前打开的窗口（记录存在且 pane 仍在注册表里），按叠序从低到高。 */
-const openWindows = computed(() => Object.values(workspaceSnapshot.value.entries)
-  .map((entry) => ({ entry, pane: descriptorFor(entry.pane) }))
-  .filter((item) => item.pane)
-  .sort((a, b) => a.entry.z - b.entry.z))
 
 /** pane id → 窗口内容声明（只认 center／overlay 槽；左树不是可开窗的内容）。 */
 function descriptorFor(paneId) {
@@ -714,18 +838,301 @@ function descriptorFor(paneId) {
   return overlay ? { ...overlay, id, slot: 'overlay', boardId: overlay.carrierId } : null
 }
 
-function anyOpenWindow() {
-  return Object.values(workspaceSnapshot.value.entries).some((entry) => entry.minimized !== 'tab')
+/** 此刻的全部页记录（四种形态都在内）——开窗决策吃的就是这份。 */
+function pageRecords() {
+  return hostWorkspace.list()
 }
 
-/** 收起标签在右缘的排位：只看已收起的窗，按叠序依次下移。 */
+/* —— 资源标识（〔裁定④〕D 的口径：一页一份文档，文档用一条字符串标识） ————————
+ * 前缀按 pane 声明的 keyField／清单归属推出来，不在状态轴里再造第二套身份：
+ *   chapter:正文/12.md   note:构思/x.md   entry:世界书/北境军报.md
+ *   document:资料/x.md   rule:约束/y.md   script:剧本/z.md
+ *   record:material#7    outline:node#3   proposal:名字
+ * 页只认这一条串；重启后据它把那一页恢复到它自己的那份文档。
+ */
+function resourceOf(kind, item) {
+  if (!item) return null
+  if (kind === 'record') return `record:${item.carrier ?? ''}:${item.id ?? ''}`
+  if (kind === 'outline-node') return `outline:node:${item.index ?? 0}`
+  if (kind === 'proposal') return `proposal:${item.name ?? ''}`
+  const path = item.path ?? item.file ?? null
+  if (!path) return null
+  return `${kind}:${path}`
+}
+
+/** 从 resource 串还原「该调哪棵树里的哪一条」。认不出来返回 null（回落该 pane 的缺省那份，并如实留在记账里）。 */
+function resourceTarget(resource) {
+  const match = /^(chapter|note|entry|document|rule|script):(.+)$/u.exec(String(resource ?? ''))
+  if (match) return { kind: match[1], path: match[2] }
+  const record = /^record:([^:]+):(.+)$/u.exec(String(resource ?? ''))
+  if (record) return { kind: 'record', carrier: record[1], id: record[2] }
+  const outline = /^outline:node:(\d+)$/u.exec(String(resource ?? ''))
+  if (outline) return { kind: 'outline-node', index: Number.parseInt(outline[1], 10) }
+  return null
+}
+
+/** 把一条 resource 送进那一页自己的数据面（清单反查 → 该载体的既有读法，不另开辟读路径）。 */
+async function openResourceInPage(page, paneId, resource) {
+  const target = resourceTarget(resource)
+  if (!target) {
+    // 没标识＝这块 pane 的缺省那份：载树时它自己会开第一条，这里不替它决定。
+    await ensurePaneData(paneInstance(paneId), paneId)
+    return false
+  }
+  if (target.kind === 'outline-node') {
+    page.selectOutlineNode(target.index)
+    return true
+  }
+  if (target.kind === 'record') {
+    await page.loadRecords?.(target.carrier)
+    const item = (page.recordSets?.[target.carrier] ?? []).find((record) => String(record.id) === String(target.id))
+    if (!item) return false
+    page.openRecord(target.carrier, item)
+    return true
+  }
+  // 条目／资料／约束这一类要先有清单；dossier 的约束与文档同 pane，按前缀选那一棵树。
+  if (target.kind === 'entry') await page.loadEntries?.()
+  if (target.kind === 'note') await page.loadNotes?.()
+  if (target.kind === 'chapter') await page.loadChapters?.()
+  if (target.kind === 'script') await page.loadScripts?.()
+  if (target.kind === 'document' || target.kind === 'rule') {
+    await page.loadDocuments?.()
+    await page.loadRules?.()
+  }
+  const lists = {
+    chapter: page.chapters,
+    note: page.notes,
+    entry: page.entries,
+    document: page.documents,
+    rule: page.rules,
+    script: page.scripts
+  }
+  const field = target.kind === 'entry' ? 'path' : 'file'
+  const item = (lists[target.kind] ?? []).find((candidate) => candidate?.[field] === target.path)
+  if (!item) return false
+  const openers = {
+    chapter: () => page.openChapter(item),
+    note: () => page.openNote(item),
+    entry: () => page.openEntry(item),
+    document: () => page.openDocument(item),
+    rule: () => page.openRule(item),
+    script: () => page.openScript(item)
+  }
+  await openers[target.kind]?.()
+  return true
+}
+
+/**
+ * 开窗的唯一通路（〔铁律二〕缺省＝切换；升档只从右键菜单进来）。
+ * 竖条、左树、看板卡、蓝链、检索命中、图谱节点、命令——七条路径都只问这里一次，
+ * 结果只有五种：回到已开着的那一页（reveal）、展开侧缘标签（raise-tab）、
+ * 换这一页装哪份文档（replace-page，single 硬闸的后果）、新开一页（open-page）、拒（block）。
+ * **这里没有任何一档会新建浮窗**：浮窗只经 PaneFormMenu 的「浮出为窗」到达。
+ */
+async function routeOpen({ pane, resource = null, opener = null }) {
+  const descriptor = descriptorFor(pane)
+  if (!descriptor) return { action: 'block', reason: 'UNKNOWN_PANE', pane }
+  const decision = resolveOpenTarget({
+    pane,
+    multiplicity: descriptor.multiplicity ?? 'single',
+    resource,
+    pages: pageRecords(),
+    groups: { focus: workspaceSnapshot.value.focus }
+  })
+  if (decision.action === 'block') return decision
+  const instance = decision.instance
+  const page = pageDataOf(instance)
+  await ensurePaneData(instance, decision.pane)
+  if (decision.action === 'open-page') hostWorkspace.open(instance, { resource: decision.resource, group: decision.group })
+  else if (decision.action === 'replace-page') hostWorkspace.setResource(instance, decision.resource)
+  else if (decision.action === 'raise-tab') hostWorkspace.setForm(instance, 'page')
+  else hostWorkspace.bringToFront(instance)
+  const settled = decision.resource ?? hostWorkspace.get(instance)?.resource ?? null
+  if (pageResource.get(instance) !== settled) {
+    if (opener) await opener(page)
+    else await openResourceInPage(page, decision.pane, settled)
+    pageResource.set(instance, settled)
+  }
+  if (descriptor.boardId) activeBoardId.value = descriptor.boardId
+  return { ...decision, instance, resource: settled }
+}
+
+/**
+ * 竖条点击＝揭示／新开该载体的那一页（〔铁律二〕原文的「开浮窗」已被本批推翻）。
+ * `maximize` 这个入参在 v3 不再有意义（页态天然铺满）：保留形参只为七个调用点一行不改（工单任务四），
+ * 传进来的旧轴残值一律忽略，不拿它当隐形闸。
+ */
+function showBoardWindow(board, { maximize = null } = {}) {
+  void maximize
+  const pane = chosenCenterPaneFor(board)
+  if (!pane) return null
+  const instance = paneInstance(pane.id)
+  const existing = hostWorkspace.get(instance)
+  if (existing) {
+    // 已开着：回到那一页（侧缘标签先展开），不动它此刻装的文档。
+    if (existing.form === 'tab') hostWorkspace.setForm(instance, 'page')
+    else hostWorkspace.bringToFront(instance)
+    void ensurePaneData(instance, pane.id)
+    if (existing.resource) pageResource.set(instance, existing.resource)
+    return instance
+  }
+  void routeOpen({ pane: pane.id, resource: null })
+  return instance
+}
+
+/** 索引窗那一棵树里点一行／看板卡／检索命中：按 kind 找到它归属的 pane，再走唯一通路。 */
+function paneIdForKind(kind, item) {
+  if (kind === 'record') {
+    const carrier = String(item?.carrier ?? '')
+    return descriptorFor(`${carrier}.editor`) ? `${carrier}.editor` : `${carrier}.board`
+  }
+  const board = boards.value.find((entry) => (entry.centerPanes ?? []).some((pane) => String(pane.id).startsWith(`${kind === 'entry' ? 'worldbook' : kind === 'chapter' ? 'novel' : kind === 'note' ? 'notes' : kind === 'script' ? 'script' : kind === 'outline-node' ? 'outline' : 'dossier'}.`)))
+  const pane = board ? chosenCenterPaneFor(board) : null
+  return pane?.id ?? null
+}
+
+/** 交给索引窗／画廊的注入口（替代它们直接调 props.data.openX 的老路）。 */
+function openResource(kind, item) {
+  const pane = paneIdForKind(kind, item)
+  if (!pane) return Promise.resolve({ action: 'block', reason: 'NO_PANE_FOR_KIND' })
+  const resource = resourceOf(kind, item)
+  const openers = {
+    chapter: (page) => page.openChapter(item),
+    note: (page) => page.openNote(item),
+    entry: (page) => page.openEntry(item),
+    document: (page) => page.openDocument(item),
+    rule: (page) => page.openRule(item),
+    script: (page) => page.openScript(item),
+    record: (page) => page.openRecord(item.carrier, item),
+    'outline-node': (page) => page.selectOutlineNode(item.index ?? 0)
+  }
+  return routeOpen({ pane, resource, opener: openers[kind] })
+}
+provide('pinaxOpenResource', openResource)
+
+/** 当前打开的页：页态按组内序号、浮窗按叠序，侧缘标签排最后（页签栏与窗口层共同的数据源）。 */
+const openWindows = computed(() => Object.values(workspaceSnapshot.value.entries)
+  .map((entry) => ({ entry, pane: descriptorFor(entry.pane) }))
+  .filter((item) => item.pane)
+  .sort((a, b) => formRank(a.entry.form) - formRank(b.entry.form) || a.entry.z - b.entry.z || a.entry.order - b.entry.order))
+
+/** 渲染序：页态 → 浮窗 → 侧缘标签（标签不是窗，只留一条记录给页签栏与侧缘列）。 */
+function formRank(form) {
+  return form === 'page' ? 0 : form === 'floating' ? 1 : 2
+}
+
+/** 侧缘标签那一竖列的排位：只看标签态的记录，按叠序依次下移。 */
 function tabOrdinal(instance) {
   let ordinal = 0
   for (const win of openWindows.value) {
     if (win.entry.instance === instance) return ordinal
-    if (win.entry.minimized === 'tab') ordinal += 1
+    if (win.entry.form === 'tab') ordinal += 1
   }
   return ordinal
+}
+
+/* —— 中心区的三层渲染（批次61 · 〔铁律一〕页是一等对象）————————————————
+ * 页签栏列全部页；页层（page 层）只放两组各自的当前页——同组还有第二页时它不占屏，
+ * 但签上有名，点一下就揭示（这正是作者要的「首先考虑切换」）；
+ * 浮窗层与侧缘标签层各按自己的形态渲染，都用同一个 PaneWindow，不出第二套窗口壳。
+ */
+const pageTierWindows = computed(() => [activePageWindow('main'), activePageWindow('side')].filter(Boolean))
+const floatWindows = computed(() => openWindows.value.filter((win) => win.entry.form === 'floating'))
+const sideTabWindows = computed(() => openWindows.value.filter((win) => win.entry.form === 'tab'))
+/** 摆在屏幕上的那些页：页层（两组各占其当前页）＋浮窗层。同组没被选中的页只出现在页签栏。 */
+const visibleWindows = computed(() => [...pageTierWindows.value, ...floatWindows.value])
+
+function activePageWindow(group) {
+  const snap = workspaceSnapshot.value
+  const instance = snap.active?.[group]
+  const entry = instance ? snap.entries[instance] : null
+  if (!entry || entry.form !== 'page' || entry.group !== group) return null
+  return openWindows.value.find((win) => win.entry.instance === instance) ?? null
+}
+
+/** 一条 resource 的短标签（页签与窗头用它区分同 pane 的两页）：取路径末段，去掉 md／json 尾巴。 */
+function resourceLabel(resource) {
+  const text = String(resource ?? '')
+  if (!text) return ''
+  const tail = text.split(':').filter(Boolean).pop() ?? ''
+  return tail.split('/').pop()?.replace(/\.(md|json)$/u, '') ?? ''
+}
+
+/** 页签与窗头的标题：载体名打底，装了具体文档就补上文档名。 */
+function windowTitle(win) {
+  const base = win.pane.title ?? win.entry.pane
+  const label = resourceLabel(win.entry.resource)
+  return label ? `${base} · ${label}` : base
+}
+
+/** 页签栏的数据源：全部页记录（四种形态都在内），高亮跟着作者此刻那一页。 */
+const tabStripPages = computed(() => {
+  const current = focusedInstance() ?? ''
+  return openWindows.value.map((win) => ({
+    instance: win.entry.instance,
+    pane: win.entry.pane,
+    title: windowTitle(win),
+    form: win.entry.form,
+    group: win.entry.group,
+    active: win.entry.instance === current
+  }))
+})
+
+/** 此刻说话的那一页（页签高亮与 aria-selected 的口径，与 activeData 同源）。 */
+const currentInstance = computed(() => focusedInstance() ?? '')
+
+/**
+ * 索引窗／画廊跟着走的那一页：当前板的那块中栏 pane 里序号最靠前的页。
+ * 没开页就回落基座那一份数据（索引窗自己会取数，行为与批次60 一致）。
+ * IndexWindow 本批不在允许改动的文件里，所以「点一行开哪份文档」仍由它直接调它拿到的
+ * 那份数据——把「这一页」递给它就是归一的那一步：跳转落在页上，不再写没人看的基座 selection。
+ */
+function indexPageInstance() {
+  const pane = chosenCenterPaneFor(activeBoard.value)
+  if (!pane) return null
+  const snap = workspaceSnapshot.value
+  const focused = focusedInstance()
+  if (focused && snap.entries[focused]?.pane === pane.id) return focused
+  const candidates = Object.values(snap.entries)
+    .filter((entry) => entry.pane === pane.id && entry.form === 'page')
+    .sort((a, b) => a.order - b.order)
+  return candidates.length ? candidates[0].instance : null
+}
+const indexData = computed(() => pageDataOf(indexPageInstance()))
+
+/** 页签／窗头右键共用的形态菜单状态：同一时刻只有一份，锚点＝右键处的视口坐标。 */
+const formMenu = ref(null)
+
+function openFormMenu(instance, anchor) {
+  formMenu.value = { instance, ...anchor }
+}
+
+function closeFormMenu() {
+  formMenu.value = null
+}
+
+const formMenuTarget = computed(() => {
+  const menu = formMenu.value
+  if (!menu) return null
+  const entry = hostWorkspace.get(menu.instance)
+  if (!entry) return null
+  return { instance: menu.instance, anchor: { x: menu.x, y: menu.y }, forms: descriptorFor(entry.pane)?.forms ?? [], form: entry.form, group: entry.group }
+})
+
+/**
+ * 页签点击＝揭示（〔铁律二〕唯一的缺省动作）：
+ * 页态→置为该组当前页；浮窗→抬到最前（不改形态，点签不升档也不降档）；标签→展开。
+ */
+function revealPage(instance) {
+  const entry = hostWorkspace.get(instance)
+  if (!entry) return null
+  if (entry.form === 'tab') hostWorkspace.setForm(instance, 'page')
+  else if (entry.form === 'floating') hostWorkspace.bringToFront(instance)
+  else hostWorkspace.setActive(entry.group, instance)
+  const board = boardForPane(entry.pane)
+  if (board) activeBoardId.value = board.id
+  void ensurePaneData(instance, entry.pane)
+  return instance
 }
 
 /** 载体的文档窗 pane：多中栏 pane 时用作者选过的那块（切换条），否则第一块。 */
@@ -738,134 +1145,114 @@ function chosenCenterPaneFor(board) {
 }
 
 /**
- * 竖条点击＝开／还原该载体的文档窗（铁律二）。
- * 一扇都没有时开成最大化（先有一页），已有别的窗则开成浮窗（自由几何可叠）。
- */
-function showBoardWindow(board, { maximize = null } = {}) {
-  const pane = chosenCenterPaneFor(board)
-  if (!pane) return null
-  const instance = paneInstance(pane.id)
-  const existing = hostWorkspace.get(instance)
-  if (!existing) {
-    const shouldMaximize = maximize ?? !anyOpenWindow()
-    hostWorkspace.open(instance, { geometry: nextFloatingGeometry() })
-    if (shouldMaximize) hostWorkspace.setMaximized(instance, true)
-  } else {
-    if (existing.minimized === 'tab') hostWorkspace.expand(instance)
-    hostWorkspace.bringToFront(instance)
-  }
-  // 窗一打开就把这块 pane 的树取回来（已载入的不重取，免得冲掉作者手上的草稿）。
-  void ensurePaneData(pane.id)
-  return instance
-}
-
-/**
  * 跨载体跳转（批次60）：蓝链的目标不限于世界书——资料与约束也在同一个知识库里。
- * 先切到目标载体那一栏，再走窗口系统开／还原它的文档窗，最后把目标交给同一份数据打开
- * （条目走 openEntry、资料走 openDocument、约束走 openRule）；三处仍是各自既有的读法。
+ * 〔任务四〕这条曾是第二条开窗旁路（自己 openEntry ＋ 自己 showBoardWindow，两处各开各的）；
+ * 现在它只报「要去哪块 pane、哪份文档」，落点与那一页的数据面都交回 routeOpen 一处判。
  */
 function boardWithPrefix(prefix) {
   return boards.value.find((board) => (board.panes ?? []).some((pane) => String(pane.id).startsWith(prefix))) ?? null
 }
 
-function openKnowledge(target) {
+async function openKnowledge(target) {
   const item = target?.item
   if (!item) return
-  const board = boardWithPrefix(target.kind === 'entry' ? 'worldbook.' : 'dossier.')
+  const kind = target.kind === 'entry' ? 'entry' : target.kind === 'rule' ? 'rule' : 'document'
+  const board = boardWithPrefix(kind === 'entry' ? 'worldbook.' : 'dossier.')
   if (board) activeBoardId.value = board.id
-  if (target.kind === 'entry') void data.openEntry(item)
-  else if (target.kind === 'rule') data.openRule(item)
-  else void data.openDocument(item)
-  if (board) showBoardWindow(board)
+  await openResource(kind, { ...item, carrier: item.carrier ?? null })
 }
 provide('pinaxOpenKnowledge', openKnowledge)
 
-/** 收起＝侧缘标签；标签点开＝还原（几何不动）。 */
-function collapseWindow(instance) {  return hostWorkspace.minimize(instance, 'tab')
+/** 收成侧缘标签（v3 的 form:'tab'）——右键菜单与窗头「—」钮共用这一句。 */
+function collapseWindow(instance) {
+  return hostWorkspace.setForm(instance, 'tab')
 }
 
 function expandWindow(instance) {
   const entry = hostWorkspace.get(instance)
   if (!entry) return null
-  hostWorkspace.expand(instance)
-  hostWorkspace.bringToFront(instance)
+  const result = hostWorkspace.setForm(instance, 'page')
   const board = boardForPane(entry.pane)
   if (board) activeBoardId.value = board.id
-  return entry
+  return result ?? entry
 }
 
+/** 浮窗的双击标题栏：占满中栏是浮窗的子态，页态没有这一档（天然铺满）。 */
 function toggleWindowMaximized(instance) {
   return hostWorkspace.toggleMaximized(instance)
 }
 
-/** 宽高／位置拖完回宿主；宿主据此解除贴靠并取消最大化。 */
+/** 宽高／位置拖完回宿主；只有浮窗有矩形可写（页态在状态机里就被拒）。 */
 function saveWindowGeometry(instance, geometry) {
   if (!instance) return null
   return hostWorkspace.setGeometry(instance, geometry)
 }
 
 /**
- * 分屏（铁律一／二）：当前窗与另一扇窗对半贴（当前窗在左）。
- * 搭档优先级：已开着的另一扇窗 > 同载体另一块中栏 pane > 同载体 overlay pane > 同一 pane 再开一份。
+ * 分屏（〔铁律一〕side 是页组不是形态）：把这页搬到对面那一组，两组各占一半。
+ * 已经在对面组／已是页态在同一组的另一侧，就搬回来——一条动作，没有「半对」这种残留态。
  */
 function splitWindow(instance) {
   const entry = hostWorkspace.get(instance)
   if (!entry) return null
-  if (entry.tileSide) return hostWorkspace.untile(instance)
-  if (entry.maximized) hostWorkspace.setMaximized(instance, false)
-  let partner = hostWorkspace.list()
-    .filter((candidate) => candidate.instance !== instance && candidate.minimized !== 'tab' && !candidate.tiledWith)
-    .pop()
-  if (!partner) {
-    const board = boardForPane(entry.pane)
-    const target = board?.centerPanes?.find((pane) => pane.id !== entry.pane) ?? board?.overlayPane ?? null
-    if (target) {
-      const partnerInstance = paneInstance(target.id)
-      if (!hostWorkspace.get(partnerInstance)) {
-        hostWorkspace.open(partnerInstance, { geometry: entry.geometry ?? nextFloatingGeometry() })
-      }
-      partner = hostWorkspace.get(partnerInstance)
-    }
+  const target = entry.group === 'main' ? 'side' : 'main'
+  if (entry.form === 'page') {
+    // 页态点分屏：已经在对面组就是「解除」（搬回主组），否则就是移到对面。
+    const opposite = entry.group === 'main' ? 'side' : 'main'
+    return hostWorkspace.moveToGroup(instance, opposite)
   }
-  if (!partner) {
-    const partnerInstance = hostWorkspace.openInstance(entry.pane, { geometry: entry.geometry ?? nextFloatingGeometry() })
-    partner = partnerInstance ? hostWorkspace.get(partnerInstance) : null
-  }
-  if (!partner) return null
-  return hostWorkspace.tile(instance, partner.instance)
+  const moved = hostWorkspace.setForm(instance, 'page')
+  if (!moved?.ok) return moved
+  return hostWorkspace.moveToGroup(instance, target)
 }
 
 function closeWindow(instance) {
   return hostWorkspace.close(instance)
 }
 
-/** 索引窗标题行的「悬浮」钮：开／收起这块 overlay 小窗（开＝浮窗，收起＝侧缘标签）。 */
+/**
+ * 形态菜单的唯一落点（页签右键与窗头右键是同一个入口的两份）。
+ * 项从这块 pane 清单声明的 `forms` 里出， fullscreen／immersive 不进菜单（工单 §7 待裁 ④）。
+ */
+function applyFormAction(instance, action) {
+  const entry = hostWorkspace.get(instance)
+  if (!entry) return null
+  if (action === 'close') return closeWindow(instance)
+  const target = MENU_TARGET_FORM[action]
+  if (!target) return null
+  const result = hostWorkspace.setForm(instance, target)
+  // 「分屏」不是第四种形态：先把这一页落成页态，再搬进对面那一组。
+  if (action === 'side') return hostWorkspace.moveToGroup(instance, entry.group === 'main' ? 'side' : 'main') ?? result
+  return result
+}
+
+/** 索引窗标题行的「悬浮」钮：开／收起这块 overlay 小窗。〔§7 待裁 ②〕overlay 槽仍默认浮——
+ *  它是协议里的覆层物种，不是稿件页，本批不收口。 */
 function toggleBoardOverlay(paneId) {
   const instance = paneInstance(paneId)
   const entry = hostWorkspace.get(instance)
   if (entry) {
-    if (entry.minimized !== 'tab') return hostWorkspace.minimize(instance, 'tab')
-    return hostWorkspace.expand(instance)
+    if (entry.form !== 'tab') return hostWorkspace.setForm(instance, 'tab')
+    return hostWorkspace.setForm(instance, 'floating')
   }
   // 开卡即补一次取数：卡片内容不等下一次板激活。
-  void ensurePaneData(paneId)
-  return hostWorkspace.open(instance, { geometry: nextFloatingGeometry() })
+  void ensurePaneData(instance, paneId)
+  return hostWorkspace.open(instance, { form: 'floating', resource: null })
 }
 
 /**
- * 迷你大纲里点一行：切到大纲栏（若已启用）并把该节点送进中栏编辑面；悬浮窗保持开着，方便连续跳。
- * 切板会触发索引窗的 watch 重列大纲（它会先把草稿清空）——所以先让那一拍跑完（nextTick），
- * 需要时再补齐一份大纲，最后才 selectOutlineNode；否则刚建好的草稿会被换板重列冲掉。
+ * 迷你大纲里点一行：切到大纲栏（若已启用）并把该节点送进那一页的编辑面；小窗保持开着，方便连续跳。
+ * 批次61：一页一份文档之后，「先 nextTick 再 selectOutlineNode」那套防冲草稿的编排不再需要——
+ * 大纲页自己的草稿不会被索引窗换板重列抹掉（那是基座那一份 data 的事）。跳转只走 routeOpen 一条口。
  */
 async function openOutlineNodeFromWidget(index) {
   const board = boards.value.find((item) => (item.centerPanes ?? []).some((pane) => String(pane.id).startsWith('outline.')))
-  if (board) activeBoardId.value = board.id
+  if (!board) return
+  activeBoardId.value = board.id
   indexOpen.value = true
-  await nextTick()
-  if (!data.outline?.length) await data.loadOutline()
-  data.selectOutlineNode(index)
-  // 窗口模型下「跳到编辑面」＝把该载体的文档窗开／还原并抬到最前（标签态则展开）。
-  if (board) showBoardWindow(board)
+  const pane = chosenCenterPaneFor(board)
+  if (!pane) return
+  await routeOpen({ pane: pane.id, resource: `outline:node:${index}` })
 }
 
 /** 提案的目标是正文：审阅面只挂在「正文」那一栏（协议 v1.1-A 的载体分栏，一栏一棵树）。 */
@@ -882,10 +1269,12 @@ const chapterBoardId = computed(() => {
 async function openProposalFromSettings(item) {
   if (!item?.name) return
   closeSettings()
-  const target = chapterBoardId.value
-  if (target) activeBoardId.value = target
+  const board = boards.value.find((entry) => entry.id === chapterBoardId.value)
+  if (board) activeBoardId.value = board.id
   indexOpen.value = true
-  await data.openProposal(item)
+  const pane = board ? chosenCenterPaneFor(board) : null
+  if (!pane) return
+  await routeOpen({ pane: pane.id, resource: resourceOf('proposal', item), opener: (page) => page.openProposal(item) })
 }
 /**
  * 核心区挂哪块 center pane：一块板可能声明两块以上（comic.editor 与 comic.canvas 同载体双 center）。
@@ -898,21 +1287,21 @@ const activeCenterPane = computed(() => chosenCenterPaneFor(activeBoard.value))
 /** 同一块板有两块以上中栏 pane 时才出切换条（单 pane 的板维持原样，不新增视觉噪声）。 */
 const centerPaneTabs = computed(() => (activeCenterPanes.value.length > 1 ? activeCenterPanes.value : []))
 /**
- * 同载体双中栏 pane 的切换：旧窗收成侧缘标签、新窗接着占位（原窗最大化时新窗也最大化）。
+ * 同载体双中栏 pane 的切换：旧窗收成侧缘标签、新窗接着占位。
  * 二者仍是同一套 PaneWindow，只是内容 pane 换了。
+ * （批次61 v3：页态天然铺满所在页组，原来那句「旧窗最大化则新窗也最大化」没有对应落点，删。）
  */
 function chooseCenterPane(paneId) {
   const board = activeBoard.value
   if (!board) return null
   const id = String(paneId ?? '')
   centerPaneChoice[board.id] = id
-  const previousMaximized = (board.centerPanes ?? []).some((pane) => hostWorkspace.get(paneInstance(pane.id))?.maximized)
   for (const pane of board.centerPanes ?? []) {
     if (pane.id === id) continue
     const instance = paneInstance(pane.id)
-    if (hostWorkspace.get(instance)) hostWorkspace.minimize(instance, 'tab')
+    if (hostWorkspace.get(instance)) hostWorkspace.setForm(instance, 'tab')
   }
-  showBoardWindow(board, { maximize: previousMaximized })
+  showBoardWindow(board)
   return id
 }
 
@@ -922,26 +1311,26 @@ const activeLayoutTemplate = computed(() => layoutTemplateForBoard(activeBoard.v
 const showIndexWindow = computed(() => indexOpen.value && templateHasTree(activeLayoutTemplate.value))
 
 /** 换形态后把对应载体的内容取回来（浮窗／分屏／全屏都可能打开一块不在当前板的树）。 */
-async function preparePaneData(paneId) {
+async function preparePaneData(page, paneId) {
   const id = String(paneId ?? '')
-  if (!id) return
-  if (id.startsWith('novel.')) await data.loadChapters()
-  else if (id.startsWith('outline.')) await data.loadOutline()
-  else if (id.startsWith('notes.')) await data.loadNotes()
+  if (!id || !page) return
+  if (id.startsWith('novel.')) await page.loadChapters()
+  else if (id.startsWith('outline.')) await page.loadOutline()
+  else if (id.startsWith('notes.')) await page.loadNotes()
   else if (id.startsWith('worldbook.')) {
-    await data.loadEntries()
+    await page.loadEntries()
     // 批次60：蓝色双链指向整个知识库（条目＋资料＋约束）——另两棵树没取过就顺手补一次。
-    await data.ensureKnowledgeCatalog?.()
+    await page.ensureKnowledgeCatalog?.()
   }
   // 批次60：设定与资料合并体——编辑面要在文档与约束之间切换，两份清单都备齐。
   else if (id.startsWith('dossier.')) {
-    await data.loadDocuments()
-    await data.loadRules()
+    await page.loadDocuments()
+    await page.loadRules()
   }
-  else if (id.startsWith('script.')) await data.loadScripts()
+  else if (id.startsWith('script.')) await page.loadScripts()
   else {
     const records = recordCarrierOfPaneId(id)
-    if (records) await data.loadRecords(records.key)
+    if (records) await page.loadRecords(records.key)
   }
 }
 
@@ -965,25 +1354,36 @@ function treeKeyForPane(paneId) {
 }
 
 /**
- * 窗口的数据闸（批次35 · 修「先开浮窗就是空卡」；批次59 起所有窗共用）：
+ * 窗口的数据闸（批次35 · 修「先开浮窗就是空卡」；批次61 起一扇窗一份数据）：
  * 窗一打开／恢复时先补一次取数，走的是停靠板同一条口（preparePaneData → 载体工具 →
  * runtimeToolCall），不是第二套读法。已经取过的树不重取——重取会把作者手上的草稿
  * （大纲节点、条目编辑）冲掉；在途期间由 overlayLoading 让卡片显示载入语。
+ * 「取过没有」读的是这一页自己的 `loadedTrees`：D（一页一份文档）之后，两扇窗各查各的树，
+ * 不会因为别的页取过就跟着跳过，也不会把别的页的草稿算在自己头上。
  */
 const overlayLoading = ref({})
+/**
+ * 在途取数按「这一页的哪一份文档面」记账，不是只按实例名：
+ * 水合换掉工作区时，同名实例的数据面会被摘掉重造（〔D〕之后一页一份），
+ * 只认实例名的话，新那一页会顶着上一页的在途标记直接跳过取数——永远是一棵空树。
+ */
+const pendingPaneLoads = new Map()
 
-async function ensurePaneData(paneId) {
+async function ensurePaneData(instance, paneId) {
   const id = String(paneId ?? '')
-  if (!id) return
+  if (!instance || !id) return
+  const page = pageDataOf(instance)
   const keys = treeKeyForPane(id)
-  if (!keys?.length || keys.every((key) => data.loadedTrees?.[key])) return
-  if (overlayLoading.value[id]) return
-  overlayLoading.value = { ...overlayLoading.value, [id]: true }
+  if (!keys?.length || keys.every((key) => page.loadedTrees?.[key])) return
+  if (pendingPaneLoads.get(instance) === page) return
+  pendingPaneLoads.set(instance, page)
+  overlayLoading.value = { ...overlayLoading.value, [instance]: true }
   try {
-    await preparePaneData(id)
+    await preparePaneData(page, id)
   } finally {
+    if (pendingPaneLoads.get(instance) === page) pendingPaneLoads.delete(instance)
     const next = { ...overlayLoading.value }
-    delete next[id]
+    delete next[instance]
     overlayLoading.value = next
   }
 }
@@ -1015,23 +1415,23 @@ function syncWorkspaceForView() {
     migrateLegacyWorkspace({ store: hostWorkspace, storage: legacyLocalStorage(), paneIds: ids })
   }
   if (!paneDataRestored) {
-    // 本次打开的第一次有效清单：先把上次留下的窗内容取回来，再保证至少有一扇文档窗。
+    // 本次打开的第一次有效清单：先把上次留下的窗内容取回来，再保证至少有一页占着中心区。
     paneDataRestored = true
-    for (const entry of hostWorkspace.list()) void preparePaneData(entry.pane)
+    for (const entry of hostWorkspace.list()) void ensurePaneData(entry.instance, entry.pane)
     restoreActiveBoardFromWorkspace()
-    // 图库模板不补窗：它的内容（画廊）本身就在核心区，开一扇记录窗反而是多余的遮挡。
-    if (!anyOpenWindow() && layoutTemplateForBoard(activeBoard.value) !== 'gallery') showBoardWindow(activeBoard.value)
+    // 图库模板不补页：它的内容（画廊）本身就在核心区，开一扇记录窗反而是多余的遮挡。
+    if (!hostWorkspace.list().length && layoutTemplateForBoard(activeBoard.value) !== 'gallery') showBoardWindow(activeBoard.value)
   }
 }
 
 /** 从工作区把「上次看的那一栏」找回来：叠序最高的窗口属于哪个载体，竖条就落哪一格。 */
 function restoreActiveBoardFromWorkspace() {
-  const top = hostWorkspace.list().filter((entry) => entry.minimized !== 'tab').pop()
+  const top = hostWorkspace.list().filter((entry) => entry.form !== 'tab').pop()
   const board = top ? boardForPane(top.pane) : null
   if (board) activeBoardId.value = board.id
 }
 
-async function hydrateWorkspace(bridge) {
+async function hydrateWorkspace(bridge, root) {
   const seq = ++workspaceHydrateSeq
   workspaceReady = false
   paneDataRestored = false
@@ -1041,6 +1441,13 @@ async function hydrateWorkspace(bridge) {
     hostWorkspace.attachPersistence(null)
     workspaceReady = true
     syncWorkspaceForView()
+    return
+  }
+  if (!root) {
+    // 还没选项目＝没有那一份 `.pinax/workspace.json` 可读：清空、不算就绪、也不补默认页。
+    // 等项目到了再水合——抢先把页开出来，随后水合一定位就把这一页的数据面连草稿一起摘掉。
+    hostWorkspace.load(null)
+    hostWorkspace.attachPersistence(null)
     return
   }
   let loaded = null
@@ -1054,7 +1461,12 @@ async function hydrateWorkspace(bridge) {
   // 读不到存档（新项目／没有 .pinax/workspace.json／读盘失败）＝这个项目还没有窗口：
   // 先清掉上一个项目留在单例里的记录，免得换项目时把旧窗带过来。
   if (loaded && loaded.entries && typeof loaded.entries === 'object') {
-    hostWorkspace.load({ version: loaded.version ?? 1, entries: loaded.entries })
+    hostWorkspace.load({
+      version: loaded.version ?? 1,
+      entries: loaded.entries,
+      active: loaded.active ?? null,
+      focus: loaded.focus ?? null
+    })
   } else {
     hostWorkspace.load(null)
   }
@@ -1064,7 +1476,7 @@ async function hydrateWorkspace(bridge) {
 }
 
 watch([boards, overlayPanes], () => syncWorkspaceForView(), { immediate: true })
-watch([() => props.bridge, () => project.value?.root ?? ''], ([bridge]) => { void hydrateWorkspace(bridge) }, { immediate: true })
+watch([() => props.bridge, () => project.value?.root ?? ''], ([bridge, root]) => { void hydrateWorkspace(bridge, root) }, { immediate: true })
 
 /**
  * Esc＝把叠序最高的那扇窗收成侧缘标签（铁律二）。
@@ -1073,10 +1485,10 @@ watch([() => props.bridge, () => project.value?.root ?? ''], ([bridge]) => { voi
 function onWindowKeydown(event) {
   if (event.key !== 'Escape') return
   if (settingsOpen.value || openMenuLabel.value) return
-  const top = hostWorkspace.list().filter((entry) => entry.minimized !== 'tab').pop()
+  const top = hostWorkspace.list().filter((entry) => entry.form !== 'tab').pop()
   if (!top) return
   event.preventDefault()
-  hostWorkspace.minimize(top.instance, 'tab')
+  hostWorkspace.setForm(top.instance, 'tab')
 }
 
 /** 只申请只读作用域的板块适合默认随行：它贡献上下文块，不跟主载体抢写盘。 */
@@ -1107,7 +1519,7 @@ async function refresh() {
  * 再点同一格＝收起索引窗；若该载体是 web／gallery 模板（没有树），再点就是还原它的窗。
  */
 function selectBoard(id) {
-  data.clearTransient?.()
+  for (const page of allDataSources()) page.clearTransient?.()
   const board = boards.value.find((item) => item.id === id)
   if (!board) return
   // 图库模板的内容就是画廊本身：竖条只负责换板，不替作者凭空开一扇记录窗。
@@ -1315,7 +1727,7 @@ function onProjectEvent(payload) {
     projectEventTimer = null
     const kinds = [...pendingProjectEventKinds]
     pendingProjectEventKinds.clear()
-    for (const pending of kinds) void data.refreshFromProjectEvent(pending)
+    for (const pending of kinds) for (const page of allDataSources()) void page.refreshFromProjectEvent(pending)
   }, 150)
 }
 
@@ -1350,6 +1762,10 @@ onMounted(() => {
 onBeforeUnmount(() => {
   // 自动保存的计时器收摊（批次43）：组件拆了不许再拿着工具去写盘。
   data.dispose?.()
+  // 批次61：一页一份数据面，拆外壳时每一页都要各自收掉自动保存计时器与在途请求。
+  for (const page of pageDataMap.values()) page.dispose?.()
+  pageDataMap.clear()
+  pageResource.clear()
   if (offProjectEvent) {
     offProjectEvent()
     offProjectEvent = null
@@ -1447,7 +1863,7 @@ onBeforeUnmount(() => {
       <template v-if="showIndexWindow">
         <IndexWindow
           :board="activeBoard"
-          :data="data"
+          :data="indexData"
           :width="indexWidth"
           @collapse="indexOpen = false"
           @history="openHistoryFor"
@@ -1493,30 +1909,41 @@ onBeforeUnmount(() => {
           >{{ pane.title ?? pane.id }}</button>
         </div>
 
-        <!-- 中间 doc 区＝窗口管理器（铁律二）：多载体共存；所有窗走同一个 PaneWindow。
-             浮窗可叠、可拖动缩放；分屏对半贴；收起＝侧缘标签；×＝关窗。 -->
+        <!-- 中间 doc 区＝页底座（批次61 · 〔铁律一〕）：页签栏在上，页层按页组排版，
+             浮窗与侧缘标签叠在同一层里，全都走同一个 PaneWindow（〔铁律四〕不出第二套窗口壳）。 -->
+        <PaneTabStrip
+          :pages="tabStripPages"
+          :current-instance="currentInstance"
+          @reveal="revealPage"
+          @close="closeWindow"
+          @menu="openFormMenu"
+        />
         <div class="nx-window-layer" data-test="window-layer">
           <!-- 图库模板（批次60）：没有左栏也没有缺省文档窗，核心区就是一整面素材卡片墙；
                窗户仍叠在它上面，点一张卡才开那条记录的素材窗。 -->
           <MaterialGallery
             v-if="activeLayoutTemplate === 'gallery'"
             :board="activeBoard"
-            :data="data"
+            :data="indexData"
             @open="showBoardWindow(activeBoard)"
           />
-          <p v-else-if="!openWindows.length" class="center-empty">没有打开的窗口。点竖条上的载体打开它的文档窗。</p>
+          <p v-else-if="!visibleWindows.length && !sideTabWindows.length" class="center-empty">
+            中心区还没有页。点竖条上的载体，或在左树里点一份文档。
+          </p>
+          <!-- 页层与浮窗层同一条 v-for（〔铁律四〕PaneWindow 是唯一窗口壳，排版差异交给 CSS：
+               页态 flex 占位、主／侧两组各半＝原来的分屏；浮窗态绝对定位可拖可缩）。 -->
           <PaneWindow
-            v-for="win in openWindows"
+            v-for="win in visibleWindows"
             :key="win.entry.instance"
             :instance="win.entry.instance"
             :pane-id="win.entry.pane"
-            :title="win.pane.title ?? win.entry.pane"
+            :title="windowTitle(win)"
+            :form="win.entry.form"
+            :group="win.entry.group"
             :geometry="win.entry.geometry"
-            :minimized="win.entry.minimized"
             :maximized="win.entry.maximized"
-            :tile-side="win.entry.tileSide"
             :z="win.entry.z"
-            :tab-index="win.entry.minimized === 'tab' ? tabOrdinal(win.entry.instance) : 0"
+            :tab-index="0"
             :suspend-esc="settingsOpen"
             @close="closeWindow(win.entry.instance)"
             @collapse="collapseWindow(win.entry.instance)"
@@ -1525,14 +1952,14 @@ onBeforeUnmount(() => {
             @split="splitWindow(win.entry.instance)"
             @focus="hostWorkspace.bringToFront(win.entry.instance)"
             @geometry="saveWindowGeometry(win.entry.instance, $event)"
+            @menu="openFormMenu(win.entry.instance, $event)"
           >
-            <!-- 大纲小窗：迷你大纲（只读清单，点一行跳到大纲编辑面）。 -->
             <template v-if="win.entry.pane === 'outline.widget'">
-              <p v-if="overlayLoading[win.entry.pane]" class="nx-overlay-empty">正在载入大纲…</p>
-              <p v-else-if="data.outlineError" class="nx-overlay-error">{{ data.outlineError }}</p>
-              <p v-else-if="!data.outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
+              <p v-if="overlayLoading[win.entry.instance]" class="nx-overlay-empty">正在载入大纲…</p>
+              <p v-else-if="pageDataOf(win.entry.instance).outlineError" class="nx-overlay-error">{{ pageDataOf(win.entry.instance).outlineError }}</p>
+              <p v-else-if="!pageDataOf(win.entry.instance).outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
               <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
-                <li v-for="(node, index) in data.outline" :key="node.id ?? `overlay-node-${index}`">
+                <li v-for="(node, index) in pageDataOf(win.entry.instance).outline" :key="node.id ?? `overlay-node-${index}`">
                   <button
                     type="button"
                     class="workspace-nav-item workspace-nav-item--tree nx-tree-row"
@@ -1543,16 +1970,43 @@ onBeforeUnmount(() => {
                 </li>
               </ul>
             </template>
-            <!-- 其余窗口（中栏／自带面板）：内容渲染不随窗态变，一律走同一个 CarrierPaneHost。 -->
+            <!-- 其余窗口（中栏／自带面板）：内容渲染不随窗态变，一律走同一个 CarrierPaneHost；
+                 〔裁定④〕数据面用的是这一页自己的那一份，不是基座——两页各看各的稿子。 -->
             <CarrierPaneHost
               v-else
               :pane="win.pane"
-              :data="data"
+              :data="pageDataOf(win.entry.instance)"
               :project-root="project?.root ?? ''"
               @history="openHistoryFor"
             />
           </PaneWindow>
+          <!-- 侧缘标签列：收起≠关掉，一扇窗收成一条缘签，点它展开（页签栏里也有一条签）。 -->
+          <PaneWindow
+            v-for="win in sideTabWindows"
+            :key="win.entry.instance"
+            :instance="win.entry.instance"
+            :pane-id="win.entry.pane"
+            :title="windowTitle(win)"
+            :form="win.entry.form"
+            :group="win.entry.group"
+            :geometry="null"
+            :maximized="false"
+            :z="win.entry.z"
+            :tab-index="tabOrdinal(win.entry.instance)"
+            :suspend-esc="settingsOpen"
+            @expand="expandWindow(win.entry.instance)"
+            @menu="openFormMenu(win.entry.instance, $event)"
+          />
         </div>
+        <PaneFormMenu
+          v-if="formMenuTarget"
+          :anchor="formMenuTarget.anchor"
+          :forms="formMenuTarget.forms"
+          :form="formMenuTarget.form"
+          :group="formMenuTarget.group"
+          @action="applyFormAction(formMenuTarget.instance, $event)"
+          @dismiss="closeFormMenu"
+        />
       </div>
 
       <div

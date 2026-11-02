@@ -15,9 +15,9 @@ import { join } from 'node:path'
 
 export const WORKSPACE_DIR = '.pinax'
 export const WORKSPACE_FILENAME = 'workspace.json'
-export const WORKSPACE_VERSION = 2
-/** 读侧仍收 version:1 的旧档：逐条迁移归渲染层（next/shell/workspace.mjs），这里只放行。 */
-export const READABLE_VERSIONS = Object.freeze([1, 2])
+export const WORKSPACE_VERSION = 3
+/** 读侧仍收 version:1／version:2 的旧档：逐条迁移归渲染层（next/shell/workspace.mjs），这里只放行。 */
+export const READABLE_VERSIONS = Object.freeze([1, 2, 3])
 
 export function workspacePath(root) {
   return join(String(root ?? ''), WORKSPACE_DIR, WORKSPACE_FILENAME)
@@ -40,7 +40,17 @@ function validateSnapshot(snapshot) {
   if (!snapshot.entries || typeof snapshot.entries !== 'object' || Array.isArray(snapshot.entries)) {
     return { ok: false, error: { code: 'INVALID_INPUT', message: '工作区快照 entries 必须是对象' } }
   }
-  return { ok: true, value: { version: WORKSPACE_VERSION, entries: snapshot.entries } }
+  // v3 起每组当前页与焦点组也要落盘（不落就有「重启后页签高亮丢了」）；形状只粗验，逐条净化归渲染层。
+  const value = { version: WORKSPACE_VERSION, entries: snapshot.entries }
+  if (snapshot.active && typeof snapshot.active === 'object' && !Array.isArray(snapshot.active)) {
+    const active = {}
+    for (const group of ['main', 'side']) {
+      if (snapshot.active[group] === null || typeof snapshot.active[group] === 'string') active[group] = snapshot.active[group]
+    }
+    if (Object.keys(active).length === 2) value.active = active
+  }
+  if (snapshot.focus === 'main' || snapshot.focus === 'side') value.focus = snapshot.focus
+  return { ok: true, value }
 }
 
 function parseStored(raw) {
@@ -60,7 +70,14 @@ function parseStored(raw) {
   if (!readable) warnings.push(`WORKSPACE_VERSION_${String(parsed.version)}`)
   const entries = parsed.entries && typeof parsed.entries === 'object' && !Array.isArray(parsed.entries) ? parsed.entries : {}
   if (!parsed.entries) warnings.push('WORKSPACE_ENTRIES_MISSING')
-  return { version: readable ? Number(parsed.version) : WORKSPACE_VERSION, entries, warnings, exists: true }
+  return {
+    version: readable ? Number(parsed.version) : WORKSPACE_VERSION,
+    entries,
+    active: parsed.active && typeof parsed.active === 'object' && !Array.isArray(parsed.active) ? parsed.active : null,
+    focus: parsed.focus === 'main' || parsed.focus === 'side' ? parsed.focus : null,
+    warnings,
+    exists: true
+  }
 }
 
 export function createFileWorkspaceStore({ root } = {}) {

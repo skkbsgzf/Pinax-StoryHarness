@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, nextTick, ref, watch } from 'vue'
+import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
 import { buildEntryTokenMap, buildKnowledgeCatalog, computeBacklinks, linkifyEntryNames, ownEntryTokens } from './wikiLinks.mjs'
 
@@ -65,11 +65,15 @@ const entryLinkTokens = computed(() => {
 })
 
 const entryRenderedEl = ref(null)
-watch([entryHtml, () => props.data.entry?.name, () => props.data.editingEntry], async () => {
-  if (props.data.editingEntry) return
+async function applyEntryLinks() {
   await nextTick()
-  if (entryRenderedEl.value) linkifyEntryNames(entryRenderedEl.value, entryLinkTokens.value, { firstOnly: true })
-})
+  if (props.data.editingEntry || !entryRenderedEl.value) return
+  linkifyEntryNames(entryRenderedEl.value, entryLinkTokens.value, { firstOnly: true })
+}
+watch([entryHtml, () => props.data.entry?.name, () => props.data.editingEntry], applyEntryLinks)
+// 挂载时正文可能已经在那儿了（批次61 一页一份文档后，条目是这一页的数据面自己开的）：
+// 依赖一样就不会触发 watch，蓝链一条都不染——看着是字，其实该能点。
+onMounted(applyEntryLinks)
 
 function resolveEntryToken(token) {
   return entryTokenMap.value.get(String(token ?? '')) ?? null
@@ -96,7 +100,13 @@ const entryBacklinks = computed(() => computeBacklinks(props.data.entries ?? [],
 
 async function openBacklink(backlink) {
   const item = props.data.entries.find((candidate) => candidate.path === backlink.path || candidate.name === backlink.name)
-  if (item) await props.data.openEntry(item)
+  if (!item) return
+  // 与正文蓝链同一条通路（〔任务四〕）：宿主给了就交回宿主判落点，别在这里抄近路。
+  if (typeof openKnowledge === 'function') {
+    openKnowledge({ kind: 'entry', item })
+    return
+  }
+  await props.data.openEntry(item)
 }
 
 /**

@@ -681,48 +681,116 @@ test('批次33 索引窗 IDE 化：行＝名字、版本进 title、历史与新
 })
 
 /**
- * 批次59 · 协议 v1.3：位置四轴退役，窗口态收敛成 workspace v2；
- * 旧形态入口（七钮、竖条右键菜单、分屏外壳、形态条）全部删除；左树只属于 folder 模板。
+ * 批次61 · 页底座（作者裁定①③④）：中心区是「页组 × 页列表 × 每组当前页 × 形态」，
+ * 「打开一个页面」不再等于「弹一扇窗」；形态切换走右键，页签上不放常驻形态钮；每页各装一份文档。
+ * 这几条断言就是这一批的规格本身——要改断言，先改裁定。
+ * （批次59 那版测的是 v2「窗口是唯一实体」，随本批作废：v2 的几何轴与贴靠轴已退役进页组。）
  */
-test('批次59：workspace v2 窗态轴就位，旧位置四轴与七钮零残留', async () => {
+test('批次61：workspace v3 页轴就位，v2 窗口 API 与旧位置四轴零残留', async () => {
   const workspace = await readFile(join(shellDir, 'workspace.mjs'), 'utf-8')
   for (const needle of [
-    'WORKSPACE_VERSION = 2',
-    "MINIMIZED_MODES = Object.freeze(['none', 'tab'])",
+    'WORKSPACE_VERSION = 3',
+    "PAGE_GROUPS = Object.freeze(['main', 'side'])",
+    "PAGE_FORMS = Object.freeze(['page', 'floating', 'tab'])",
     'export function createWorkspaceStore',
     'export function instanceIdFor',
-    'setGeometry',
-    'minimize',
-    'setMaximized',
-    'tile(',
-    'untile',
-    'removePanes'
+    'export function repairActive',
+    'function pagesOf',
+    'function floatingList',
+    'function tabList',
+    'function setForm',
+    'function moveToGroup',
+    'function setActive',
+    'function setResource',
+    'function setGeometry',
+    'function setMaximized',
+    'function removePanes',
+    'function adoptLegacy',
+    'export function migrateV1Entry',
+    'export function migrateV2Entry'
   ]) {
-    assert.ok(workspace.includes(needle), `工作区 v2 缺窗口轴：${needle}`)
+    assert.ok(workspace.includes(needle), `工作区 v3 缺页轴落点：${needle}`)
   }
-  for (const gone of ['PLACEMENTS', 'restorePlacement', 'setPinned', 'dockPane', 'place(']) {
-    assert.equal(workspace.includes(gone), false, `旧位置四轴残留：${gone}`)
+  // 只钉「API 还在不在」，不钉字段名：tiledWith／minimized 必须还能被迁移读出来，
+  // 但谁都不许再当状态轴用（函数声明形式写死，读旧档的 value.tiledWith 不算违规）。
+  for (const gone of [
+    'PLACEMENTS', 'restorePlacement', 'setPinned', 'dockPane', 'place(',
+    'function minimize', 'function expand', 'function tile', 'function untile',
+    'reconcileTiles', 'MINIMIZED_MODES', 'DEFAULT_MINIMIZED', 'isMinimized'
+  ]) {
+    assert.equal(workspace.includes(gone), false, `退役的窗口 API 又回来了：${gone}`)
   }
+  assert.equal(workspace.includes('export function normalizeEntry'), true)
+  assert.equal(workspace.includes("const geometry = form === 'floating' ? normalizeGeometry(value.geometry) : null"), true,
+    '只有浮窗持有矩形：页态藏几何＝重启后位置玄学')
   assert.doesNotMatch(workspace, /\.localStorage/u, '工作区状态只经主进程通道读写，渲染层不写 localStorage')
 
   const forms = await readFile(join(shellDir, 'paneForms.mjs'), 'utf-8')
-  assert.match(forms, /PANE_FORMS = Object\.freeze\(\['dock', 'split', 'overlay', 'fullscreen', 'immersive'\]\)/u,
-    '旧词表只作兼容读（host descriptor 与 12 份清单核对用）')
-  assert.match(forms, /PANE_FORM_STORAGE_PREFIX = 'paneForm\.'/u, '老键前缀 paneForm.（迁移只用一次）')
+  for (const needle of [
+    "PANE_FORMS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])",
+    'FORM_ACTIONS',
+    'PAGE_ACTIONS',
+    'MENU_TARGET_FORM',
+    'export function formMenuItems',
+    "PANE_FORM_STORAGE_PREFIX = 'paneForm.'"
+  ]) {
+    assert.ok(forms.includes(needle), `形态词表缺右键菜单落点：${needle}`)
+  }
   assert.doesNotMatch(forms, /\.localStorage/u, '词表模块不碰浏览器缓存')
 
-  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
-  for (const needle of ['hostWorkspace', '<PaneWindow', 'layoutTemplateForBoard', 'data-test="window-layer"']) {
-    assert.ok(app.includes(needle), `AppNext 缺窗口管理器落点：${needle}`)
+  const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  for (const needle of [
+    'hostWorkspace',
+    '<PaneWindow',
+    '<PaneTabStrip',
+    '<PaneFormMenu',
+    'data-test="window-layer"',
+    'pageTierWindows',
+    'floatWindows',
+    'sideTabWindows',
+    'resolveOpenTarget',
+    'MENU_TARGET_FORM',
+    'pageDataOf',
+    'layoutTemplateForBoard'
+  ]) {
+    assert.ok(app.includes(needle), `AppNext 缺页底座落点：${needle}`)
   }
-  for (const gone of ['sanitizePaneForms', 'setPaneForm', 'nx-context-menu', 'nx-split', 'nx-form-bar', 'CenterSlotHost', 'FloatingWidget', '打开方式']) {
-    assert.equal(app.includes(gone), false, `AppNext 仍有退役的形态入口：${gone}`)
+  for (const gone of [
+    'sanitizePaneForms', 'setPaneForm', 'nx-context-menu', 'nx-split', 'nx-form-bar',
+    'CenterSlotHost', 'FloatingWidget', '打开方式',
+    '.minimize(', '.expand(', '.tile(', 'tiledWith', 'tileSide'
+  ]) {
+    assert.equal(app.includes(gone), false, `AppNext 仍有退役的窗口轴／形态入口：${gone}`)
   }
+  assert.equal((app.match(/<PaneWindow/gu) ?? []).length, 2, '页＋浮窗一层、侧缘标签一层，全都走同一套 PaneWindow（〔铁律四〕不出第二套窗口壳）')
+  // 〔裁定①〕缺省落点是页：全文件只有两处开窗，唯一带 floating 的那处是索引窗标题行那枚显式「悬浮」钮。
+  assert.equal((app.match(/hostWorkspace\.open\(/gu) ?? []).length, 2, '开页只该有两条口：routeOpen 与索引窗的悬浮钮')
+  assert.equal((app.match(/form:\s*'floating'/gu) ?? []).length, 1, '缺省落点不许是浮窗——除了显式那一枚，点载体不该凭空浮出一扇窗')
+  assert.match(app, /function toggleBoardOverlay[\s\S]{0,600}form: 'floating'/u, '唯一的浮窗落点＝索引窗那枚显式悬浮钮')
 
   const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
-  for (const gone of ['.nx-overlay-widget', '.nx-overlay-bubble', '.nx-split-side', '.nx-split-main', '.nx-form-bar']) {
+  for (const needle of ['.nx-page-tabstrip', '.nx-page-tab', '.nx-pane-window.is-page', '.nx-pane-window.is-page.is-in-side', '.nx-pane-window-tab']) {
+    assert.ok(layout.includes(needle), `页底座缺样式落点：${needle}`)
+  }
+  for (const gone of ['.nx-overlay-widget', '.nx-overlay-bubble', '.nx-split-side', '.nx-split-main', '.nx-form-bar', '.is-tiled']) {
     assert.equal(layout.includes(gone), false, `next-shell.css 还留着退役形态的规则：${gone}`)
   }
+
+  const paneWindow = stripComments(await readFile(join(shellDir, 'PaneWindow.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  for (const needle of ['@contextmenu', "emit('menu'", "'is-page'", "'is-in-side'", 'data-window-group', "state === 'page'"]) {
+    assert.ok(paneWindow.includes(needle), `PaneWindow 缺 v3 形态落点：${needle}`)
+  }
+  for (const gone of ['minimized', 'tiledWith', 'tileSide', '.nx-pane-window-btn--tile']) {
+    assert.equal(paneWindow.includes(gone), false, `PaneWindow 还读 v2 窗口轴：${gone}`)
+  }
+
+  // 〔裁定③〕页签上只有「关这一页」一枚钮：形态切换一律走右键，不做常驻死按钮。
+  const tabStrip = stripComments(await readFile(join(shellDir, 'PaneTabStrip.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  for (const needle of ['data-page-instance', 'aria-selected', '@contextmenu', 'data-test="page-tabstrip"']) {
+    assert.ok(tabStrip.includes(needle), `页签栏缺落点：${needle}`)
+  }
+  assert.equal((tabStrip.match(/<button/gu) ?? []).length, 1, '页签上只该有 × 一枚钮（右键才是形态入口）')
+  assert.doesNotMatch(tabStrip, /data-window-action/u, '页签不放窗口动作钮')
 
   // 载体 SFC 不感知窗口状态（今日 next/carriers 里没有 SFC，这条是给后续载体立的钉子）。
   const carrierSfcs = (await walk(join(repoRoot, 'next', 'carriers'))).filter((file) => file.endsWith('.vue'))

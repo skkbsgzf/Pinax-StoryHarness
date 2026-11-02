@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
 import { resolvePaneView } from './viewRegistry.mjs'
 import { recordCarrierOfPaneId } from './recordCarriers.mjs'
@@ -294,17 +294,27 @@ const chapterLinkTokens = computed(() => {
   return [...chapterEntryTokenMap.value.keys()].filter((token) => text.includes(token))
 })
 const chapterRenderedEl = ref(null)
-watch([chapterReadingKey, chapterReadingSourceText, chapterEntryTokenMap], async () => {
+async function applyChapterLinks() {
   await nextTick()
   if (chapterEditing.value || !chapterRenderedEl.value) return
   linkifyEntryNames(chapterRenderedEl.value, chapterLinkTokens.value, { firstOnly: true })
-})
+}
+watch([chapterReadingKey, chapterReadingSourceText, chapterEntryTokenMap], applyChapterLinks)
+// 挂载即补一次：这一页的正文可能在面板挂载前就取回来了（批次61 一页一份文档），
+// 依赖没变就不触发 watch，蓝链会一条都不染。
+onMounted(applyChapterLinks)
 
 function onChapterRenderedClick(event) {
   const link = event.target?.closest?.('.nx-wikilink')
   if (!link) return
   const item = chapterEntryTokenMap.value.get(String(link.dataset.entry ?? ''))
-  if (item) props.data.openEntry(item)
+  if (!item) return
+  // 蓝链的目标是另一块 pane 的文档：交回宿主的唯一通路，不在这一页里就地换装（〔任务四〕归一）。
+  if (typeof openKnowledge === 'function') {
+    openKnowledge({ kind: 'entry', item })
+    return
+  }
+  props.data.openEntry(item)
 }
 
 /**
@@ -670,6 +680,12 @@ const recordCarrier = computed(() => recordCarrierOfPaneId(props.pane?.id))
  * 载体自己不调壳、不开窗（formTaxonomy 的 jump 纪律）。
  */
 const serviceSnapshot = inject('pinaxServiceSnapshot', null)
+/**
+ * 跨载体跳转的唯一通路（批次61 · 〔任务四〕「同一根蓝链两种结果」的收口）：
+ * 章节正文里的条目蓝链，目标不在这一页（novel.editor 只渲染章节），必须由宿主决定
+ * 「揭示世界书那一页／换装那份条目」。宿主没给（浏览器预览、单测）才回落这一页自己的读法。
+ */
+const openKnowledge = inject('pinaxOpenKnowledge', null)
 const comicPreviewService = computed(() => {
   if (recordCarrier.value?.key !== 'comic') return null
   const carrierId = String(props.pane?.pluginId ?? '')
@@ -770,7 +786,14 @@ async function runKnowledgeSearch() {
 async function openKnowledgeHit(hit) {
   const file = knowledgeHitFile(hit)
   if (!file) return
-  await props.data.openDocument({ file, title: hit.title ?? file })
+  const item = { file, title: hit.title ?? file }
+  // 检索命中也走同一条开窗通路：可打开的原文都在「资料/」下，所以落点是资料那一页；
+  // 不再「在当前这块面上就地换内容」（同一根蓝链两种结果的第三条，〔任务四〕）。
+  if (typeof openKnowledge === 'function') {
+    openKnowledge({ kind: 'document', item })
+    return
+  }
+  await props.data.openDocument(item)
 }
 
 /**
