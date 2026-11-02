@@ -100,7 +100,7 @@
     "test:next": "node --test \"next/tests/*.test.mjs\"",
     "test:next:ui": "vitest run --config next/vitest.next.shell.config.mjs",
     "lint:next": "eslint next --ext .mjs,.vue --max-warnings 0",
-    "verify:next": "node next/testing/acceptance.mjs && node --test \"next/tests/*.test.mjs\" && vitest run --config next/vitest.next.shell.config.mjs && npm run lint:next && node next/testing/bundleAssertions.mjs",
+    "verify:next": "node next/testing/acceptance.mjs && node --test \"next/tests/*.test.mjs\" && vitest run --no-file-parallelism --config next/vitest.next.shell.config.mjs && npm run lint:next && node next/testing/bundleAssertions.mjs",
     "next:build:preload": "vite build --config next/vite.next.preload.config.mjs"
   },
   "dependencies": {
