@@ -31,7 +31,7 @@ process.env.PINAX_APP_DATA = join(isolatedRoot, 'appdata')
 process.env.PINAX_MIRROR_ROOT = join(isolatedRoot, 'mirror')
 const { createNextSession, NOVEL_CARRIER_ID, DOSSIER_CARRIER_ID } = createRequire(import.meta.url)(resolve(here, '..', 'index.mjs'))
 // 世界书载体的 id 从 carriers 清单直接取：next/index.mjs 的再导出名单不在本批改动面内。
-import { WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { WORLDBOOK_CARRIER_ID } from '../carriers/worldbook/manifest.mjs'
 
 const workspaces = []
 

@@ -9,7 +9,16 @@ import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, NOVEL_CARRIER_ID, OUTLINE_CARRIER_ID, DOSSIER_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
+import { NOVEL_CARRIER_ID } from '../carriers/novel/manifest.mjs'
+import { OUTLINE_CARRIER_ID } from '../carriers/outline/manifest.mjs'
+import { DOSSIER_CARRIER_ID } from '../carriers/dossier/manifest.mjs'
+import { WORLDBOOK_CARRIER_ID } from '../carriers/worldbook/manifest.mjs'
+
+// 批次65b（框架计划 J2「一切从磁盘装载，内置只是随包已安装」）：随包载体不再静态 import 实现数组，
+// 装载走 pluginLoader 从货架取（开发轨 next/carriers/，装机轨 next/.build/next/carriers/）。
+// 本文件的断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**

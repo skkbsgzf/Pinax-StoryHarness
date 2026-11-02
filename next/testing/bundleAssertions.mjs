@@ -2,12 +2,13 @@
 /* eslint-disable no-console */
 import { cp, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { isBuiltin } from 'node:module'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'vite'
 import { loadSkills } from '../skills/loadSkills.mjs'
 import { SKILL_READ_TOOL } from '../runtime/skillTools.mjs'
-import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_IDS, loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
+import { loadBuiltInCarriersFromDir } from '../kernel/pluginLoader.mjs'
 import { checkHostDescriptor } from './exportHostDescriptor.mjs'
 
 /**
@@ -28,6 +29,13 @@ const BUNDLE_PATH = join(repoRoot, 'next', '.build', 'pinax-next-main.mjs')
 const ALLOWED_BARE = new Set(['electron', 'better-sqlite3', 'bindings', 'file-uri-to-path'])
 const SKILLS_SOURCE = join(repoRoot, 'next', 'skills')
 const SKILLS_TARGET = join(repoRoot, 'next', '.build', 'skills')
+
+/**
+ * 批次65b（框架计划 J2）：随包载体不再从 carriers/index.mjs 静态 import 实现数组——
+ * 门禁拿的是「开发轨装载实况」（next/carriers/），装机轨另由 n4 从 .build/next/carriers/ 装一遍对表。
+ * 下面的清单计数（r 系）与工具计数（44 把、21 面、46 聚合面）一律不变：同实现换装载方式。
+ */
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 
 /**
  * 批次37：技能目录随产物走（SKILL.md 是运行时读的文件，不是 vite 资产）。
@@ -254,12 +262,36 @@ check('m3 外壳 bundle 的双落点解析在产物里：保留 PINAX_NEXT_SKILL
   shellBundle.includes('PINAX_NEXT_SKILLS_DIR') ? '覆盖口在' : '缺 PINAX_NEXT_SKILLS_DIR')
 
 // 协议 v3 的 entry 面（插件自带面板）在产物里得有两件东西：
-//   n  面板页与它的脚本随产物走（next/carriers/<名字>/ui → next/.build/<名字>/ui）；
+//   n  面板页与它的脚本随产物走（next/carriers/<名字>/ui → next/.build/next/carriers/<名字>/ui）；
 //      面板页是运行时从盘上读的静态文件，不进 vite 资产图——漏拷一次装机就是一块白板。
 //   n2 外壳 bundle 带着面板协议本身（pinax-plugin:// 与它的处理器）；
 //      协议没进包，面板页连都取不到。
+// 批次65b（J2）改落点：产物里载体住在 `.build/next/carriers/<名字>/`（带一层 next/），不是
+// `.build/<名字>/`。原因在载体件里的相对导入按仓库深度写死（`../../kernel/errors.mjs`、
+// `../../../shared/worldbookFileContract.js`）——镜像保持同深度，装机轨的每一级 `../` 才爬得进
+// `.build` 里那份同一深度铺开的导入闭包（n4/n5 就是钉这件事）。
 const CARRIERS_SOURCE = join(repoRoot, 'next', 'carriers')
 const BUILD_DIR = join(repoRoot, 'next', '.build')
+const CARRIERS_PACKED = join(BUILD_DIR, 'next', 'carriers')
+const RUNTIME_FILE_PATTERN = /\.(?:mjs|js|cjs|json)$/u
+
+/** 递归列出目录里的文件（相对该目录的路径，正斜杠）。 */
+async function listFiles(dir, prefix = '') {
+  const found = []
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isDirectory()) found.push(...await listFiles(join(dir, entry.name), rel))
+    else found.push(rel)
+  }
+  return found
+}
+
+/** 货架上真正是一块载体的目录（带 manifest.mjs）——n4 逐块核运行时件时用。 */
+const shelfCarrierNames = []
+for (const entry of await readdir(CARRIERS_SOURCE, { withFileTypes: true })) {
+  if (!entry.isDirectory()) continue
+  if (await stat(join(CARRIERS_SOURCE, entry.name, 'manifest.mjs')).then((info) => info.isFile(), () => false)) shelfCarrierNames.push(entry.name)
+}
 const sourceCarrierUiDirs = []
 for (const entry of await readdir(CARRIERS_SOURCE, { withFileTypes: true })) {
   if (!entry.isDirectory()) continue
@@ -268,12 +300,87 @@ for (const entry of await readdir(CARRIERS_SOURCE, { withFileTypes: true })) {
 }
 const missingCarrierAssets = []
 for (const name of sourceCarrierUiDirs) {
-  const exists = await stat(join(BUILD_DIR, name, 'ui', 'index.html')).then(() => true, () => false)
+  const exists = await stat(join(CARRIERS_PACKED, name, 'ui', 'index.html')).then(() => true, () => false)
   if (!exists) missingCarrierAssets.push(name)
 }
-check('n 载体面板资产进产物：.build/<载体>/ui/index.html 与源码逐一对应',
+check('n 载体面板资产进产物：.build/next/carriers/<载体>/ui/index.html 与源码逐一对应',
   sourceCarrierUiDirs.length > 0 && missingCarrierAssets.length === 0,
   missingCarrierAssets.length ? `缺 ${missingCarrierAssets.join(', ')}` : `${sourceCarrierUiDirs.join(' / ')}`)
+
+// 批次65b（J2 · 工单任务1）：载体的**运行时件**（manifest.mjs／tools.mjs／context.mjs 等）也必须逐份在包。
+// 以前只有 ui/ 与 AGENT.md 随产物走，实现留在 bundle 里（静态 import 进包）；装载改从盘上发现之后，
+// 少拷一个 .mjs 就是「那一格竖条从此装不上」——所以逐文件对表，不抽样。
+const missingCarrierRuntimeFiles = []
+for (const name of shelfCarrierNames) {
+  for (const rel of await listFiles(join(CARRIERS_SOURCE, name))) {
+    if (!RUNTIME_FILE_PATTERN.test(rel)) continue
+    const packed = await stat(join(CARRIERS_PACKED, name, rel)).then((info) => info.isFile(), () => false)
+    if (!packed) missingCarrierRuntimeFiles.push(`${name}/${rel}`)
+  }
+}
+check('n4 载体运行时件进产物：每块的 *.mjs/*.json 在 .build/next/carriers/<载体>/ 下逐份存在（装载只可能来自盘上）',
+  shelfCarrierNames.length > 0 && missingCarrierRuntimeFiles.length === 0,
+  missingCarrierRuntimeFiles.length ? `缺 ${missingCarrierRuntimeFiles.slice(0, 8).join(', ')}` : `${shelfCarrierNames.length} 块逐份对齐`)
+
+// 批次65b（J2 · n 系）：装机轨的相对导入闭包自足——凡随包铺开的 Node 运行期件，其每一条 `.` 开头的
+// 导入都必须解析到 .build 内且真的存在。装机机上没有源码树，闭包漏铺一份＝运行时 MODULE_NOT_FOUND；
+// 反过来，一条 `../` 爬回源码树会「在开发机上看着没事，装机即坏」——两种都在这里当场红。
+const packedImportOffenders = []
+const underBuild = (target) => target === BUILD_DIR || target.startsWith(BUILD_DIR + sep)
+/** 产物里跳过的目录：渲染层与技能是各自独立的资产轨，ui/ 是浏览器侧静态资源（不是 Node 模块）。 */
+const PACKED_SKIP_DIRS = new Set(['renderer-next', 'skills', 'ui', 'node_modules', 'third-party'])
+/** 顶层只有这几面镜像目录参与扫描（其余顶层条目是 bundle 与静态资源，不是闭包件）。 */
+const PACKED_MIRROR_DIRS = new Set(['next', 'shared', 'server', 'src', 'electron', 'docs'])
+const BUNDLE_FILE_NAMES = new Set(['pinax-next-main.mjs', 'pinax-next-shell-main.mjs', 'preload.mjs'])
+async function listPackedModules(dir, prefix = '') {
+  const found = []
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (PACKED_SKIP_DIRS.has(entry.name)) continue
+      if (!prefix && !PACKED_MIRROR_DIRS.has(entry.name)) continue
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+      found.push(...await listPackedModules(join(dir, entry.name), rel))
+      continue
+    }
+    if (!/\.(?:mjs|js|cjs)$/u.test(entry.name)) continue
+    if (!prefix && BUNDLE_FILE_NAMES.has(entry.name)) continue
+    found.push(prefix ? `${prefix}/${entry.name}` : entry.name)
+  }
+  return found
+}
+const packedModules = await listPackedModules(BUILD_DIR)
+for (const rel of packedModules) {
+  const filePath = join(BUILD_DIR, ...rel.split('/'))
+  const text = await readFile(filePath, 'utf-8').catch(() => '')
+  for (const match of text.matchAll(/(?:\bfrom|\bimport)\s*(?:\(\s*)?['"](\.[^'"]+)['"]/gu)) {
+    const target = resolve(dirname(filePath), match[1])
+    const candidates = [target, `${target}.mjs`, `${target}.js`, `${target}.json`, join(target, 'index.mjs'), join(target, 'index.js')]
+    const hits = await Promise.all(candidates.map((candidate) => stat(candidate).then((info) => info.isFile(), () => false)))
+    const existing = candidates.filter((_candidate, index) => hits[index])
+    if (!existing.length) packedImportOffenders.push(`${rel} → ${match[1]}(未铺)`)
+    else if (!existing.every(underBuild)) packedImportOffenders.push(`${rel} → ${match[1]}(爬出 .build)`)
+  }
+}
+check('n5 装机轨导入闭包自足：随包件每一条相对导入都解析到 .build 内且真的存在（不爬回源码树，不留未铺的份）',
+  packedImportOffenders.length === 0,
+  packedImportOffenders.length ? packedImportOffenders.slice(0, 6).join(' | ') : `扫了 ${packedModules.length} 份随包件（含 ${shelfCarrierNames.length} 块载体）`)
+
+// 批次65b（J2 · 工单任务3「打包断言改为装载后列工具」）：门禁不再从 carriers/index.mjs 静态拿实现，
+// 而是**从装机轨把载体装一遍再列工具**——这份 loaded 的 id 顺序、块数、逐块声明工具名与开发轨逐字一致，
+// 才叫「随包已安装」。任何一份 .mjs 漏拷／挑错导出／清单校验被拒，这里当场少一块或少一把。
+const packedLoad = await loadBuiltInCarriersFromDir(CARRIERS_PACKED, { order: BUILT_IN_CARRIER_IDS })
+const devToolNames = BUILT_IN_CARRIER_PLUGINS.flatMap((plugin) => plugin?.manifest?.tools ?? [])
+const packedToolNames = packedLoad.loaded.flatMap((entry) => entry?.manifest?.tools ?? [])
+const packedToolFactories = await Promise.all(packedLoad.loaded.map(async (entry) => {
+  const tools = entry.impl.tools({ fileService: null, view: null, pluginId: entry.carrierId })
+  return (await Promise.resolve(tools)).map((tool) => tool?.name ?? '')
+}))
+check('n6 装载后列工具（装机轨）：从 .build/next/carriers/ 装载零跳过，id 顺序与逐块声明工具名＝开发轨实况',
+  packedLoad.skipped.length === 0
+    && packedLoad.loaded.map((entry) => entry.carrierId).join('|') === BUILT_IN_CARRIER_PLUGINS.map((plugin) => plugin.manifest.id).join('|')
+    && packedToolNames.join('|') === devToolNames.join('|')
+    && packedToolFactories.flat().sort().join('|') === devToolNames.slice().sort().join('|'),
+  `装机轨装入=${packedLoad.loaded.length} 跳过=${packedLoad.skipped.length}${packedLoad.skipped.length ? `(${packedLoad.skipped.map((entry) => `${entry.carrierId}:${entry.stage}`).join(',')})` : ''} 声明工具=${packedToolNames.length} 工厂出工具=${packedToolFactories.flat().length}`)
 
 const panelProtocolMarkers = ['pinax-plugin', 'registerSchemesAsPrivileged', 'content-security-policy']
 const missingPanelProtocol = panelProtocolMarkers.filter((marker) => !shellBundle.includes(marker))
@@ -291,23 +398,25 @@ for (const entry of await readdir(CARRIERS_SOURCE, { withFileTypes: true })) {
 }
 const missingAgentMd = []
 for (const name of carrierDirsInSource) {
-  const exists = await stat(join(BUILD_DIR, name, 'AGENT.md')).then(() => true, () => false)
+  const exists = await stat(join(CARRIERS_PACKED, name, 'AGENT.md')).then(() => true, () => false)
   if (!exists) missingAgentMd.push(name)
 }
-check('n3 载体作者须知进产物：.build/<载体>/AGENT.md 与源码逐一对应',
+check('n3 载体作者须知进产物：.build/next/carriers/<载体>/AGENT.md 与源码逐一对应',
   carrierDirsInSource.length > 0 && missingAgentMd.length === 0,
   missingAgentMd.length ? `缺 ${missingAgentMd.join(', ')}` : `${carrierDirsInSource.length} 份`)
 
 // 批次57（门禁 n3b）：作者须知里最值钱的是「已知边界」——模型读到它就知道哪些事这一栏做不到。
-// 批次60 合并后十一份 AGENT.md 任何一份缺这一段，模型就会把「没做」当「能做」；所以逐份核段标题，不抽样。
+// 任何一份 AGENT.md 缺这一段，模型就会把「没做」当「能做」；所以逐份核段标题，不抽样。
+// 批次65b（J2）去掉 `=== 11` 这枚数量断言：块数归货架与随包 id 清单对表（n4/n6 已核），
+// 这里只守「每一份有须知的载体都必须有已知边界段」——加一块载体不必再来改这个数字。
 const missingKnownLimits = []
 for (const name of carrierDirsInSource) {
   const text = await readFile(join(CARRIERS_SOURCE, name, 'AGENT.md'), 'utf-8')
   if (!/^## 已知边界\s*$/mu.test(text)) missingKnownLimits.push(name)
 }
-check('n3b 载体作者须知含「已知边界」段：11 份 AGENT.md 逐一核（批次60 合并后）',
-  carrierDirsInSource.length === 11 && missingKnownLimits.length === 0,
-  missingKnownLimits.length ? `缺 ${missingKnownLimits.join(', ')}` : `${carrierDirsInSource.length}/11 都有「## 已知边界」`)
+check('n3b 载体作者须知含「已知边界」段：每份 AGENT.md 逐一核（数量由货架对表，不在这条里钉）',
+  carrierDirsInSource.length > 0 && missingKnownLimits.length === 0,
+  missingKnownLimits.length ? `缺 ${missingKnownLimits.join(', ')}` : `${carrierDirsInSource.length} 份都有「## 已知边界」`)
 
 // 批次48（门禁 o）：services／mcp 牌声明的 .mjs 运行期脚本必须随载体进产物。
 // 理由：宿主按清单以插件目录为 cwd 起这些脚本（node preview-server.mjs／comfy-mcp-bridge.mjs）；
@@ -326,10 +435,10 @@ for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
 }
 const missingRuntimeScripts = []
 for (const { name, script } of runtimeScripts) {
-  const exists = await stat(join(BUILD_DIR, name, script)).then((info) => info.isFile(), () => false)
+  const exists = await stat(join(CARRIERS_PACKED, name, script)).then((info) => info.isFile(), () => false)
   if (!exists) missingRuntimeScripts.push(`${name}/${script}`)
 }
-check('o 载体 services／mcp 脚本进产物：清单声明的 .mjs 运行期脚本在 .build/<载体>/ 下逐一存在',
+check('o 载体 services／mcp 脚本进产物：清单声明的 .mjs 运行期脚本在 .build/next/carriers/<载体>/ 下逐一存在',
   runtimeScripts.length > 0 && missingRuntimeScripts.length === 0,
   missingRuntimeScripts.length
     ? `缺 ${missingRuntimeScripts.join(', ')}`
@@ -369,14 +478,15 @@ check('q @4 合同与 adopt 分支进产物：清单词表（@4／maxKernel／�
   missingV4Markers.length === 0,
   missingV4Markers.length ? `缺 ${missingV4Markers.join(' ')}` : `${v4Markers.length + adoptMarkers.length} 个标记齐`)
 
-// 批次53（门禁 r）：载体清单全部升 @4（批次60 合并后 11 份）——字段不是死声明，源清单的形状在这里核：
-//   r1 11/11 spec=@4 ＋ manifestVersion=4 ＋ license 显式（内置一律 free）；
+// 批次53（门禁 r）：载体清单全部升 @4——字段不是死声明，源清单的形状在这里核：
+//   r1 每一份装载回来的清单 spec=@4 ＋ manifestVersion=4 ＋ license 显式（内置一律 free）；
 //   r2 四组字段的清单面：槽语义（multiplicity／scope，keyed 必带 keyField）、资源认领
 //      （claims 命中的 pane 必须有合法 priority／takes，canOpen 若声明必须带 field）、
 //      渲染器注册与合同上界（若声明则形状合法；读取点由 q 在产物里核）。
-//      计数写理由：22 块认领 pane（批次60 合并后 11 载体各两块，除去 outline.widget／material.panel／comic.canvas 三块不认领文件）、
-//      keyed 1 块（worldbook.entries 按条目 path 各开各的）——数字变了先说明为什么，再改这里。
-//   r3 adopt 声明完整：走 adopt 的服务必须同时给 port 与 healthPath；内置十一块目前全是自起档
+//      批次65b（J2）去掉「11 份」「22 块」「keyed 1 块」这三枚数量断言：装载链路改了来源（从货架），
+//      块数由 n4/n6 与随包 id 清单对表守；这里把读数降级成**记账**（照常打印，不再当闸），
+//      加一块载体不必回来改数字，而字段不合法仍然当场红。
+//   r3 adopt 声明完整：走 adopt 的服务必须同时给 port 与 healthPath；内置目前全是自起档
 //      （comic 预览服务不 adopt），adopt 的正身由 acceptance 与 carrier-v4-adopt-supervisor 覆盖。
 const MULTIPLICITIES = ['single', 'list', 'keyed']
 const SCOPES = ['project', 'entry', 'session']
@@ -417,11 +527,11 @@ for (const plugin of BUILT_IN_CARRIER_PLUGINS) {
     if (!Number.isSafeInteger(service.port) || !service.healthPath) adoptOffenders.push(`${manifest.id}/service:${service.id}:adopt 缺 port/healthPath`)
   }
 }
-check('r1 11 份载体清单 @4：spec＝pinax-carrier@4、manifestVersion＝4、license 显式（内置 free）',
-  BUILT_IN_CARRIER_PLUGINS.length === 11 && specOffenders.length === 0,
-  specOffenders.join(', ') || '11/11 @4 + free')
-check('r2 四组字段落地：槽语义齐、认领 pane 的 priority／takes／canOpen 合法、keyed 必带 keyField',
-  fieldOffenders.length === 0 && panesWithClaims === 22 && keyedPanes === 1,
+check('r1 载体清单全部 @4（批次65b 起经装载器取货架，数量不钉）：spec＝pinax-carrier@4、manifestVersion＝4、license 显式（内置 free）',
+  BUILT_IN_CARRIER_PLUGINS.length > 0 && specOffenders.length === 0,
+  specOffenders.join(', ') || `${BUILT_IN_CARRIER_PLUGINS.length} 份 @4 + free`)
+check('r2 四组字段落地：槽语义齐、认领 pane 的 priority／takes／canOpen 合法、keyed 必带 keyField（认领 pane／keyed 读数只记账不当闸）',
+  fieldOffenders.length === 0,
   fieldOffenders.join(', ') || `认领 pane ${panesWithClaims}、keyed ${keyedPanes}`)
 check('r3 adopt 声明完整：走 adopt 的服务必须同时声明 port 与 healthPath（内置全为自起档，adopt=0）',
   adoptOffenders.length === 0,

@@ -8,7 +8,7 @@ import { setCarrierEnabled, setPrimaryCarrier } from './project/carriers.mjs'
 import { createAgentRuntime } from './runtime/agentRuntime.mjs'
 import { createFileSessionStore } from './sessionStore.mjs'
 import { createFileWorkspaceStore } from './workspaceStore.mjs'
-import { BUILT_IN_CARRIER_PLUGINS } from './carriers/index.mjs'
+import { loadBuiltInCarrierPlugins } from './carriers/index.mjs'
 
 /**
  * Pinax-Electron-Next 内核总入口。
@@ -27,30 +27,32 @@ export const KERNEL_INFO = Object.freeze({
 })
 
 export { createRegistry, createProject, initBareProject, openProject, fail, ok }
+// 批次65b（框架计划 J2）：内核入口不再转发明细清单/工厂——随包发布的东西只剩一份 id 清单，
+// 实现由装载器从盘上取（下面 createNextSession 的缺省装载就是那条路）。
+// 旧转发的 BUILT_IN_CARRIER_PLUGINS／NOVEL_*／DOSSIER_*／readSettingEntries 全撤：
+// 逐个 grep 过，本仓库除本文件外没有消费者（要清单的人直接 import 对应载体的 manifest.mjs）。
 export {
-  BUILT_IN_CARRIER_PLUGINS,
   BUILT_IN_CARRIER_IDS,
-  BUILT_IN_CLAIMED_TOOLS,
-  NOVEL_CARRIER,
-  NOVEL_CARRIER_ID,
-  NOVEL_TOOL_NAMES,
-  DOSSIER_CARRIER,
-  DOSSIER_CARRIER_ID,
-  DOSSIER_LEGACY_IDS,
-  DOSSIER_TOOL_NAMES,
-  readSettingEntries
+  loadBuiltInCarriers,
+  loadBuiltInCarrierPlugins
 } from './carriers/index.mjs'
+// 批次65b 调度方修正：这两个 id 常量有 createRequire 消费者（carrier-pane-real.spec 的 jsdom
+// 规避路径），require(esm) 对缺失命名导出不抛错只给 undefined——静默断链，Primary 缺失报错的真因。
+// 字面常量，不引载体本体（零静态 import 纪律不破）。
+export const NOVEL_CARRIER_ID = 'pinax.carrier.novel'
+export const DOSSIER_CARRIER_ID = 'pinax.carrier.dossier'
 export { createAdvisorRunner, ADVISOR_RUNNER_SOURCE } from './runtime/runnerAdvisor.mjs'
 export { buildRuntimeEnvelope, readOnlyTaskForProfile } from './runtime/contextProfiles.mjs'
 
 /**
- * 起一个会话：注册表 → 装载载体（M2 起默认随框架发布小说＋设定）→ 打开项目 → 拉起运行时。
+ * 起一个会话：注册表 → 装载载体（M2 起默认随框架发布小说＋设定；批次65b 起经装载器从盘上取，
+ * 内置只是「随包已安装」，与外部插件同一扇「从盘上发现」的门）→ 打开项目 → 拉起运行时。
  * 任一步失败都返回可渲染的失败载荷（外壳据此停在失败界面，不白屏、不崩）。
- * `plugins: []` 是空框架轨道（M1 验收仍走它）；不传 plugins 时用 BUILT_IN_CARRIER_PLUGINS。
+ * `plugins: []` 是空框架轨道（M1 验收仍走它）；不传 plugins 时按随包 id 清单从货架装载。
  */
 export async function createNextSession({ root, plugins, builtInCarriers = true, runtimeOptions = {}, autoOpen = true } = {}) {
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
-  const pluginList = plugins === undefined ? (builtInCarriers ? BUILT_IN_CARRIER_PLUGINS : []) : plugins
+  const pluginList = plugins === undefined ? (builtInCarriers ? await loadBuiltInCarrierPlugins() : []) : plugins
   const installed = []
   for (const plugin of pluginList) {
     const result = registry.install(plugin.manifest, plugin.impl ?? {}, plugin.meta ?? {})

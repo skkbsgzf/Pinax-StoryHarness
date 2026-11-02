@@ -7,7 +7,12 @@ import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
 import { CARRIER_SPEC_V4, PANE_KIND_WORDS, validateCarrierManifest } from '../kernel/carrierManifest.mjs'
 import { diagnoseCarrier, loadHostDescriptor } from '../doctor.mjs'
-import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
+import { loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
+
+// 批次65b（框架计划 J2「一切从磁盘装载，内置只是随包已安装」）：随包载体不再静态 import 实现数组，
+// 装载走 pluginLoader 从货架取（开发轨 next/carriers/，装机轨 next/.build/next/carriers/）。
+// 本文件的断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { WORLDBOOK_CARRIER } from '../carriers/worldbook/manifest.mjs'
 import { LEGACY_VIEW_BINDINGS, legacyBindingForPane } from '../shell/viewRegistry.mjs'
 import { collectAgentMdBlocks } from '../runtime/contextProfiles.mjs'

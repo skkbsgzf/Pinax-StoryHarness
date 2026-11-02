@@ -1,288 +1,71 @@
-import { fileURLToPath } from 'node:url'
-import { NOVEL_CARRIER, NOVEL_CARRIER_ID } from './novel/manifest.mjs'
-import { NOVEL_TOOL_NAMES, createNovelTools } from './novel/tools.mjs'
-import { createNovelBlocks } from './novel/context.mjs'
-import { OUTLINE_CARRIER, OUTLINE_CARRIER_ID } from './outline/manifest.mjs'
-import { OUTLINE_TOOL_NAMES, createOutlineTools } from './outline/tools.mjs'
-import { createOutlineBlocks } from './outline/context.mjs'
-import { NOTES_CARRIER, NOTES_CARRIER_ID } from './notes/manifest.mjs'
-import { NOTES_TOOL_NAMES, createNotesTools } from './notes/tools.mjs'
-import { WORLDBOOK_CARRIER, WORLDBOOK_CARRIER_ID } from './worldbook/manifest.mjs'
-import { WORLDBOOK_TOOL_NAMES, createWorldbookTools } from './worldbook/tools.mjs'
-import { createWorldbookBlocks, readWorldbookEntries } from './worldbook/context.mjs'
-import { SCRIPT_CARRIER, SCRIPT_CARRIER_ID } from './script/manifest.mjs'
-import { SCRIPT_TOOL_NAMES, createScriptTools } from './script/tools.mjs'
-import { createScriptBlocks } from './script/context.mjs'
-import { DOSSIER_CARRIER, DOSSIER_CARRIER_ID, DOSSIER_LEGACY_IDS } from './dossier/manifest.mjs'
-import { DOSSIER_TOOL_NAMES, createDossierTools } from './dossier/tools.mjs'
-import { createDossierBlocks } from './dossier/context.mjs'
-import { MATERIAL_CARRIER, MATERIAL_CARRIER_ID } from './material/manifest.mjs'
-import { MATERIAL_TOOL_NAMES, createMaterialTools } from './material/tools.mjs'
-import { COMIC_CARRIER, COMIC_CARRIER_ID } from './comic/manifest.mjs'
-import { COMIC_TOOL_NAMES, createComicTools } from './comic/tools.mjs'
-import { createComicBlocks, COMIC_CONTEXT_KINDS } from './comic/context.mjs'
-import { VIDEO_CARRIER, VIDEO_CARRIER_ID } from './video/manifest.mjs'
-import { VIDEO_TOOL_NAMES, createVideoTools } from './video/tools.mjs'
-import { EXPERIENCE_CARRIER, EXPERIENCE_CARRIER_ID } from './experience/manifest.mjs'
-import { EXPERIENCE_TOOL_NAMES, createExperienceTools } from './experience/tools.mjs'
-import { ONLINE_CARRIER, ONLINE_CARRIER_ID } from './online/manifest.mjs'
-import { ONLINE_TOOL_NAMES, createOnlineTools } from './online/tools.mjs'
+import { BUILT_IN_CARRIER_TRUST, loadBuiltInCarriersFromDir, resolveBuiltInCarriersDir } from '../kernel/pluginLoader.mjs'
 
 /**
- * 随框架发布的载体清单（M2 起；批次60 起十一块：设定／资料合并为「设定与资料」）。
- * M1 的口径是「carriers/ 目录为空，任何插件都不随框架发布」；M2 第一批放进两块：
- * 小说（正文/大纲/构思）与设定（世界书/约束）。
- * 工单G1 加第三块：资料（资料/，三把自有工具）——它补的是「资料/ 在骨架里却没人认领」的缺口；
- * 协议 v1.1-A（作者 2026-10-28 裁定）把混合板拆开：一个载体＝竖条一格＝一棵纯粹的本域内容树。
- *   novel      正文/（章节 ＋ 随正文的提案审阅）
- *   outline    大纲/（大纲树）
- *   notes      构思/（构思清单）
- *   worldbook  世界书/（条目树）
- *   script     剧本/（剧本篇目；批次26 M6 提前，排在 worldbook 之后）
- *   dossier    资料/ ＋ 约束/（批次60 由设定／资料两块合并而来，工具与能力面取并集）
- * 竖条顺序即注册顺序（v1.1-A：v1 按注册顺序＝小说/大纲/构思/世界书/剧本/设定与资料）。
- * 批次40 起再排五栏（M4／M5）：素材／漫画／视频／体验／联机——它们都是记录型载体
- * （一份 `<目录>/<载体>.json` ＋ list/read/save/remove 四把工具），数据落点见 jsonRecords.mjs。
- * 每个包＝一份清单 ＋ 一个 impl，impl 只有两个可选工厂：
- *   impl.tools(projectCtx)   —— 进运行时工具面的工具（项目打开后调用，要的是这个项目的文件服务）；
- *   impl.blocks(projectCtx)  —— 运行时组上下文信封时的素材块构建器（{ kind: async (askCtx) => 素材包 }）。
- * 两个工厂都在**项目打开后**才调用：工具与素材块拿的都是这个项目的文件服务句柄（三道闸在那边），
- * 不是进程级的全局句柄——这是「载体＝一块文件夹注册」在实现层的说法。
+ * 随框架发布的载体（批次65b 起＝**随包 id 清单**，不再是实现数组）。
+ *
+ * 批次65b 之前这里是三十一条静态 import ＋十一份手写工厂：装一块新载体要改这个中心文件，
+ * 门禁里还得钉一条「length === 11」。框架计划 J2 把这件事倒过来——**内置只是「随包已安装」**：
+ * 装载走 next/kernel/pluginLoader.mjs 的 `loadBuiltInCarriersFromDir`（与外部插件同一扇「从盘上发现」的门），
+ * 本文件只留三样东西：
+ *   1) 随包 id 清单（顺序有语义：竖条顺序＝注册顺序，协议 v1.1-A 钉死，readdir 给不了这个顺序）；
+ *   2) 装载入口 loadBuiltInCarriers / loadBuiltInCarrierPlugins（boot、验收、门禁都走它，一条路）；
+ *   3) 信任档 BUILT_IN_CARRIER_TRUST（第一方随包＝t1，与内核缺省一致）。
+ * 加一块载体从此＝往货架放一个目录 ＋ 在这里追加一枚 id（要让它进竖条的固有位置才需要动顺序）。
+ * 缺了第 2 步不会静默少一格：门禁「随包 id 清单与盘上目录一致」直接红。
+ *
+ * 历史口径（M2 起逐块加栏；批次60 起十一块：设定／资料合并为「设定与资料」）：
+ *   novel 正文/ · outline 大纲/ · notes 构思/ · worldbook 世界书/ · script 剧本/ · dossier 资料/＋约束/
+ *   material 素材/ · comic 漫画/ · video 视频/ · experience 体验/ · online 联机/（后五块都是记录型，M4／M5）
+ * 每块的清单与实现住在 next/carriers/<名字>/（manifest.mjs／tools.mjs／context.mjs），
+ * 面板页 ui/ 与作者须知 AGENT.md 也住在同一目录——装载器把那个目录原样登记成 meta.dir。
+ *
+ * impl 的两个可选工厂（约定，装载器按它取件）：
+ *   impl.tools(projectCtx)   —— 进运行时工具面的工具（项目打开后调用，拿这个项目的文件服务）；
+ *   impl.blocks(projectCtx)  —— 上下文信封的素材块构建器（没有 context.mjs 的栏＝不谎报素材块）。
  */
-export const NOVEL_CARRIER_TRUST = 't1'
-export const OUTLINE_CARRIER_TRUST = 't1'
-export const NOTES_CARRIER_TRUST = 't1'
-export const WORLDBOOK_CARRIER_TRUST = 't1'
-export const SCRIPT_CARRIER_TRUST = 't1'
-export const DOSSIER_CARRIER_TRUST = 't1'
-export const MATERIAL_CARRIER_TRUST = 't1'
-export const COMIC_CARRIER_TRUST = 't1'
-export const VIDEO_CARRIER_TRUST = 't1'
-export const EXPERIENCE_CARRIER_TRUST = 't1'
-export const ONLINE_CARRIER_TRUST = 't1'
-
-/**
- * 载体自己的资产目录（协议 v3 的 `entry` 面用）：面板页、服务脚本都住在这一块里。
- * 基准是**本文件**的位置，所以开发轨是 `next/carriers/<名字>/`、装机轨是 `next/.build/<名字>/`
- * （打包时把 `next/carriers/<名字>/ui` 原样拷到 `next/.build/<名字>/ui`，与技能目录同一套路）。
- * 宿主据此把 `pinax-plugin://<pluginId>/…` 解析到插件自己的目录，不越界。
- */
-function carrierDir(name) {
-  return fileURLToPath(new URL(`./${name}/`, import.meta.url))
-}
-
-export function novelCarrierPlugin() {
-  return {
-    manifest: NOVEL_CARRIER,
-    impl: {
-      source: 'next/carriers/novel',
-      tools: (context = {}) => createNovelTools({ ...context, pluginId: context.pluginId ?? NOVEL_CARRIER_ID }),
-      blocks: (context = {}) => createNovelBlocks({ ...context, pluginId: context.pluginId ?? NOVEL_CARRIER_ID })
-    },
-    meta: { trust: NOVEL_CARRIER_TRUST, source: 'next/carriers/novel', dir: carrierDir('novel') }
-  }
-}
-
-export function outlineCarrierPlugin() {
-  return {
-    manifest: OUTLINE_CARRIER,
-    impl: {
-      source: 'next/carriers/outline',
-      // 一把从内核认领的只读工具（pinax_outline_read）＋一把自有写入口（pinax_outline_save）；
-      // 一个上下文块提供者（outline）。读盘过文件服务的归属/作用域/并发三道闸。
-      tools: (context = {}) => createOutlineTools({ ...context, pluginId: context.pluginId ?? OUTLINE_CARRIER_ID }),
-      blocks: (context = {}) => createOutlineBlocks({ ...context, pluginId: context.pluginId ?? OUTLINE_CARRIER_ID })
-    },
-    meta: { trust: OUTLINE_CARRIER_TRUST, source: 'next/carriers/outline', dir: carrierDir('outline') }
-  }
-}
-
-export function notesCarrierPlugin() {
-  return {
-    manifest: NOTES_CARRIER,
-    impl: {
-      source: 'next/carriers/notes',
-      // 两把自有工具（列／写）。构思目前不提供上下文块：清单里 providers 是空数组，
-      // 这里也就不挂 blocks 工厂——声明一块不存在的素材比缺席更糟。
-      tools: (context = {}) => createNotesTools({ ...context, pluginId: context.pluginId ?? NOTES_CARRIER_ID })
-    },
-    meta: { trust: NOTES_CARRIER_TRUST, source: 'next/carriers/notes', dir: carrierDir('notes') }
-  }
-}
-
-export function worldbookCarrierPlugin() {
-  return {
-    manifest: WORLDBOOK_CARRIER,
-    impl: {
-      source: 'next/carriers/worldbook',
-      // 两把从内核认领的只读工具（世界书清单/读取）＋自有写入口 pinax_worldbook_save（带 meta 元数据口）；
-      // 一个上下文块提供者（worldbook）。约束不在这一栏（协议 v1.1-A）。
-      tools: (context = {}) => createWorldbookTools({ ...context, pluginId: context.pluginId ?? WORLDBOOK_CARRIER_ID }),
-      blocks: (context = {}) => createWorldbookBlocks({ ...context, pluginId: context.pluginId ?? WORLDBOOK_CARRIER_ID })
-    },
-    meta: { trust: WORLDBOOK_CARRIER_TRUST, source: 'next/carriers/worldbook', dir: carrierDir('worldbook') }
-  }
-}
-
-export function scriptCarrierPlugin() {
-  return {
-    manifest: SCRIPT_CARRIER,
-    impl: {
-      source: 'next/carriers/script',
-      // 三把自有工具（列／读／写）＋一个上下文块提供者（script／references 别名）：
-      // 剧本/ 的权限由这块板块自己申请，运行时不越过去开文件（与小说／资料同一条规矩）。
-      tools: (context = {}) => createScriptTools({ ...context, pluginId: context.pluginId ?? SCRIPT_CARRIER_ID }),
-      blocks: (context = {}) => createScriptBlocks({ ...context, pluginId: context.pluginId ?? SCRIPT_CARRIER_ID })
-    },
-    meta: { trust: SCRIPT_CARRIER_TRUST, source: 'next/carriers/script', dir: carrierDir('script') }
-  }
-}
-
-export function dossierCarrierPlugin() {
-  return {
-    manifest: DOSSIER_CARRIER,
-    impl: {
-      source: 'next/carriers/dossier',
-      // 批次60：设定与资料合并成一栏。六把工具沿用原名单（约束对＋资料三把＋检索），
-      // 上下文块也是三块并集（rules/style/references）——Agent 面与信封面都不因形体重排而缩水。
-      tools: (context = {}) => createDossierTools({ ...context, pluginId: context.pluginId ?? DOSSIER_CARRIER_ID }),
-      blocks: (context = {}) => createDossierBlocks({ ...context, pluginId: context.pluginId ?? DOSSIER_CARRIER_ID })
-    },
-    meta: { trust: DOSSIER_CARRIER_TRUST, source: 'next/carriers/dossier', dir: carrierDir('dossier') }
-  }
-}
-
-/** 记录型载体（M4／M5）：没有 blocks 工厂——清单里的 providers 是空数组，不谎报素材块。 */
-function recordsCarrierPlugin(manifest, createTools, trust, source) {
-  const name = source.split('/').pop()
-  return {
-    manifest,
-    impl: {
-      source,
-      tools: (context = {}) => createTools({ ...context, pluginId: context.pluginId ?? manifest.id })
-    },
-    meta: { trust, source, dir: carrierDir(name) }
-  }
-}
-
-export function materialCarrierPlugin() {
-  return recordsCarrierPlugin(MATERIAL_CARRIER, createMaterialTools, MATERIAL_CARRIER_TRUST, 'next/carriers/material')
-}
-
-export function comicCarrierPlugin() {
-  return {
-    manifest: COMIC_CARRIER,
-    impl: {
-      source: 'next/carriers/comic',
-      // 记录型载体里唯一带上下文块的一栏（批次48）：references 交漫画页清单。
-      tools: (context = {}) => createComicTools({ ...context, pluginId: context.pluginId ?? COMIC_CARRIER_ID }),
-      blocks: (context = {}) => createComicBlocks({ ...context, pluginId: context.pluginId ?? COMIC_CARRIER_ID })
-    },
-    meta: { trust: COMIC_CARRIER_TRUST, source: 'next/carriers/comic', dir: carrierDir('comic') }
-  }
-}
-
-export function videoCarrierPlugin() {
-  return recordsCarrierPlugin(VIDEO_CARRIER, createVideoTools, VIDEO_CARRIER_TRUST, 'next/carriers/video')
-}
-
-export function experienceCarrierPlugin() {
-  return recordsCarrierPlugin(EXPERIENCE_CARRIER, createExperienceTools, EXPERIENCE_CARRIER_TRUST, 'next/carriers/experience')
-}
-
-export function onlineCarrierPlugin() {
-  return recordsCarrierPlugin(ONLINE_CARRIER, createOnlineTools, ONLINE_CARRIER_TRUST, 'next/carriers/online')
-}
-
-/**
- * 竖条顺序＝注册顺序（协议 v1.1-A；批次26 起剧本排在 worldbook 之后；批次40 起 M4／M5 五栏排在最后）。
- * 批次60：设定／资料两块合并为「设定与资料」一栏（12 → 11），位置沿用原来的设定格。
- */
-export const BUILT_IN_CARRIER_PLUGINS = Object.freeze([
-  novelCarrierPlugin(),
-  outlineCarrierPlugin(),
-  notesCarrierPlugin(),
-  worldbookCarrierPlugin(),
-  scriptCarrierPlugin(),
-  dossierCarrierPlugin(),
-  materialCarrierPlugin(),
-  comicCarrierPlugin(),
-  videoCarrierPlugin(),
-  experienceCarrierPlugin(),
-  onlineCarrierPlugin()
-])
-export const BUILT_IN_CARRIER_IDS = Object.freeze(BUILT_IN_CARRIER_PLUGINS.map((item) => item.manifest.id))
-
-/** 随框架发布的载体认领面（门禁核「只增不减」和「认领的都是内核已有的名字」时用）。 */
-export const BUILT_IN_CLAIMED_TOOLS = Object.freeze([
-  ...NOVEL_TOOL_NAMES,
-  ...OUTLINE_TOOL_NAMES,
-  ...NOTES_TOOL_NAMES,
-  ...WORLDBOOK_TOOL_NAMES,
-  ...SCRIPT_TOOL_NAMES,
-  ...DOSSIER_TOOL_NAMES,
-  ...MATERIAL_TOOL_NAMES,
-  ...COMIC_TOOL_NAMES,
-  ...VIDEO_TOOL_NAMES,
-  ...EXPERIENCE_TOOL_NAMES,
-  ...ONLINE_TOOL_NAMES
+export const BUILT_IN_CARRIER_IDS = Object.freeze([
+  'pinax.carrier.novel',
+  'pinax.carrier.outline',
+  'pinax.carrier.notes',
+  'pinax.carrier.worldbook',
+  'pinax.carrier.script',
+  'pinax.carrier.dossier',
+  'pinax.carrier.material',
+  'pinax.carrier.comic',
+  'pinax.carrier.video',
+  'pinax.carrier.experience',
+  'pinax.carrier.online'
 ])
 
-export {
-  NOVEL_CARRIER,
-  NOVEL_CARRIER_ID,
-  NOVEL_TOOL_NAMES,
-  createNovelTools,
-  createNovelBlocks,
-  OUTLINE_CARRIER,
-  OUTLINE_CARRIER_ID,
-  OUTLINE_TOOL_NAMES,
-  createOutlineTools,
-  createOutlineBlocks,
-  NOTES_CARRIER,
-  NOTES_CARRIER_ID,
-  NOTES_TOOL_NAMES,
-  createNotesTools,
-  WORLDBOOK_CARRIER,
-  WORLDBOOK_CARRIER_ID,
-  WORLDBOOK_TOOL_NAMES,
-  createWorldbookTools,
-  createWorldbookBlocks,
-  readWorldbookEntries,
-  SCRIPT_CARRIER,
-  SCRIPT_CARRIER_ID,
-  SCRIPT_TOOL_NAMES,
-  createScriptTools,
-  createScriptBlocks,
-  DOSSIER_CARRIER,
-  DOSSIER_CARRIER_ID,
-  DOSSIER_LEGACY_IDS,
-  DOSSIER_TOOL_NAMES,
-  createDossierTools,
-  createDossierBlocks,
-  MATERIAL_CARRIER,
-  MATERIAL_CARRIER_ID,
-  MATERIAL_TOOL_NAMES,
-  createMaterialTools,
-  COMIC_CARRIER,
-  COMIC_CARRIER_ID,
-  COMIC_TOOL_NAMES,
-  COMIC_CONTEXT_KINDS,
-  createComicTools,
-  createComicBlocks,
-  VIDEO_CARRIER,
-  VIDEO_CARRIER_ID,
-  VIDEO_TOOL_NAMES,
-  createVideoTools,
-  EXPERIENCE_CARRIER,
-  EXPERIENCE_CARRIER_ID,
-  EXPERIENCE_TOOL_NAMES,
-  createExperienceTools,
-  ONLINE_CARRIER,
-  ONLINE_CARRIER_ID,
-  ONLINE_TOOL_NAMES,
-  createOnlineTools
+export { BUILT_IN_CARRIER_TRUST }
+
+/**
+ * 装载随包载体（boot／验收／门禁的唯一入口）。返回 { dir, loaded, skipped }——
+ * 原始实况，调用方自己决定怎么用；`loadBuiltInCarrierPlugins` 是它的「要么全装要么报错」版本。
+ */
+export async function loadBuiltInCarriers({ dir = null, registry = null, env = process.env, moduleDir = null } = {}) {
+  const base = dir ?? await resolveBuiltInCarriersDir(moduleDir ? { env, moduleDir } : { env })
+  const { loaded, skipped } = await loadBuiltInCarriersFromDir(base, { registry, order: BUILT_IN_CARRIER_IDS })
+  return { dir: base, loaded, skipped }
 }
 
-/** 旧名字（next/index.mjs 再导出）：世界书取数口迁去 worldbook/context.mjs 后保持同名可用。 */
-export { readWorldbookEntries as readSettingEntries } from './worldbook/context.mjs'
+/**
+ * 随包载体装载的「要么全装要么报错」版本：返回 `[{ manifest, impl, meta }]`（与批次65b 之前的
+ * BUILT_IN_CARRIER_PLUGINS 逐字同形，所以注册路径不必改），任一装不上就抛——
+ * 内置少一块不是局部故障，是竖条少一格、工具面少一把的装配事故，静默少一块比开机报错坏得多。
+ * 抛错里带 dir 与逐块理由，照着就能诊断（doctor 的外部装载判例同一套纪律：理由不许哑）。
+ */
+export async function loadBuiltInCarrierPlugins(options = {}) {
+  const { dir, loaded, skipped } = await loadBuiltInCarriers(options)
+  const missing = BUILT_IN_CARRIER_IDS.filter((id) => !loaded.some((entry) => entry.carrierId === id))
+  if (skipped.length || missing.length) {
+    const reasons = [
+      ...skipped.map((entry) => `跳过 ${entry.carrierId}（${entry.stage}）：${entry.reason}`),
+      ...missing.map((id) => `随包清单里的 ${id} 在盘上没有`)
+    ]
+    const error = new Error(`随包载体装载不完整（货架 ${dir}）：${reasons.join('；')}`)
+    error.details = { dir, skipped, missing }
+    throw error
+  }
+  return Object.freeze(loaded.map((entry) => Object.freeze({ manifest: entry.manifest, impl: entry.impl, meta: entry.meta })))
+}

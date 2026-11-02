@@ -8,13 +8,14 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { validateCarrierManifest } from '../kernel/carrierManifest.mjs'
-import { loadCarriersFromDir } from '../kernel/pluginLoader.mjs'
+import { loadCarriersFromDir, loadBuiltInCarriersFromDir, resolveBuiltInCarriersDir } from '../kernel/pluginLoader.mjs'
+import { BUILT_IN_CARRIER_IDS, loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
 import { createServiceSupervisor } from '../runtime/serviceSupervisor.mjs'
 import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { carrierOverridesPath, createFileCarrierOverridesStore } from '../carrierOverridesStore.mjs'
 import { createFileSettingsStore } from '../settingsStore.mjs'
 import { diagnoseCarrier, diagnoseExternalLoads, loadHostDescriptor } from '../doctor.mjs'
-import { COMIC_CARRIER } from '../carriers/comic/manifest.mjs'
+import { COMIC_CARRIER, COMIC_CARRIER_ID } from '../carriers/comic/manifest.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
 import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { createProject, initBareProject } from '../project/createProject.mjs'
@@ -23,7 +24,16 @@ import { externalPluginsDir, uninstallExternalPlugin } from '../project/external
 import { buildProjectDocument, writeProjectDocument } from '../project/projectManifest.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { buildRuntimeEnvelope } from '../runtime/contextProfiles.mjs'
-import { BUILT_IN_CARRIER_PLUGINS, COMIC_CARRIER_ID, DOSSIER_CARRIER_ID, EXPERIENCE_CARRIER_ID, MATERIAL_CARRIER_ID, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, ONLINE_CARRIER_ID, OUTLINE_CARRIER_ID, SCRIPT_CARRIER_ID, VIDEO_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
+import { DOSSIER_CARRIER_ID } from '../carriers/dossier/manifest.mjs'
+import { EXPERIENCE_CARRIER_ID } from '../carriers/experience/manifest.mjs'
+import { MATERIAL_CARRIER_ID } from '../carriers/material/manifest.mjs'
+import { NOTES_CARRIER_ID } from '../carriers/notes/manifest.mjs'
+import { NOVEL_CARRIER_ID } from '../carriers/novel/manifest.mjs'
+import { ONLINE_CARRIER_ID } from '../carriers/online/manifest.mjs'
+import { OUTLINE_CARRIER_ID } from '../carriers/outline/manifest.mjs'
+import { SCRIPT_CARRIER_ID } from '../carriers/script/manifest.mjs'
+import { VIDEO_CARRIER_ID } from '../carriers/video/manifest.mjs'
+import { WORLDBOOK_CARRIER_ID } from '../carriers/worldbook/manifest.mjs'
 import { FIXTURE_NOVEL } from './fixtures.mjs'
 import { probePort } from './harness.mjs'
 import { IPC_CHANNELS, createIpcDispatcher } from '../shell/ipcContract.mjs'
@@ -37,6 +47,12 @@ import { GESTURE_ACTIONS, GESTURE_FORMS } from '../shell/openTarget.mjs'
  * 这里刻意不注入模型运行器：外壳主进程才装 runner，验收要保住「没接模型就如实报缺」这条失败路径。
  */
 const results = []
+/**
+ * 批次65b（框架计划 J2）：随包载体经装载器从货架取（开发轨 next/carriers/，装机轨
+ * next/.build/next/carriers/），与真实 boot 同一条路。下面的断言与计数**一字未改**——
+ * 同实现换装载方式，工具数／清单数不该变；变了就是装载丢了东西。
+ */
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 const workspace = await mkdtemp(join(tmpdir(), 'pinax-next-accept-'))
 process.env.PINAX_APP_DATA = join(workspace, 'appdata')
 process.env.PINAX_MIRROR_ROOT = join(workspace, 'mirror')
@@ -376,13 +392,16 @@ try {
 
   // ── 批次52：@4 合同收口与 services.adopt（批次53：12 份清单已升 @4；批次60 合并后 11 份）─────
   // @4 校验器升级（合同上界改 major.minor、四组新字段）不许回头咬既有载体：
-  // 11 份清单统一写 @4 / minKernel:'1'，全部必须原样通过。这是回归闸，不是新功能计数。
+  // 清单统一写 @4 / minKernel:'1'，全部必须原样通过。这是回归闸，不是新功能计数。
+  // 批次65b（J2）：删掉 `length === 11` 这枚数量断言——判据换成「装载回来的每一份都过 @4 校验，
+  // 且装载没有静默跳过」。块数由货架与随包 id 清单一致性保证（plugin-loader ⑦＋打包门禁 n 系），
+  // 在这一条里再钉一次数字，等于给「加一块载体」设第二道人工闸。
   const v4Regressions = BUILT_IN_CARRIER_PLUGINS
     .map((plugin) => ({ id: plugin.manifest.id, spec: plugin.manifest.spec, result: validateCarrierManifest(plugin.manifest) }))
     .filter((entry) => entry.spec !== 'pinax-carrier@4' || !entry.result.ok)
-  record('批次53 @4 落地（批次60 合并后 11 份）：载体清单全部 spec=@4 / minKernel:1 并通过校验器，零误拒',
-    BUILT_IN_CARRIER_PLUGINS.length === 11 && v4Regressions.length === 0,
-    v4Regressions.length ? v4Regressions.map((entry) => `${entry.id}:${entry.spec}:${entry.result.error?.code}`).join(',') : `${BUILT_IN_CARRIER_PLUGINS.length}/${BUILT_IN_CARRIER_PLUGINS.length}`)
+  record('批次53 @4 落地（批次65b 起经装载器取货架）：随包清单全部 spec=@4 / minKernel:1 并通过校验器，零误拒零跳过',
+    BUILT_IN_CARRIER_PLUGINS.length > 0 && v4Regressions.length === 0,
+    v4Regressions.length ? v4Regressions.map((entry) => `${entry.id}:${entry.spec}:${entry.result.error?.code}`).join(',') : `${BUILT_IN_CARRIER_PLUGINS.length} 份`)
 
   // adopt 服务的正身（批次58 三独立体端口管理）：宿主只探活／状态灯／池记账，绝不 spawn。
   // 这里注入探针，锁住「start 会成功、pid 为空、spawnImpl 从未被调用」；真端口探活由
@@ -669,6 +688,19 @@ try {
     loaderRun.loaded.length === 1 && loaderRun.skipped.length === 1 && loaderRun.skipped[0].stage === 'manifest'
       && loaderVisible && loaderClean,
     `装入=${loaderRun.loaded.length} 跳过=${loaderRun.skipped.length}(${loaderRun.skipped[0]?.code ?? '-'}) 可见=${loaderVisible} 卸载干净=${loaderClean}`)
+
+  // ── 批次65b（框架计划 J2）：随包载体也是「从盘上装载」，与外部插件同一扇门 ────────────────
+  // 判三件事：① 货架定位给的是一个真实目录；② 装载零跳过，且装回来的 id 集＝盘上那批带清单的目录集
+  // （新增守卫「随包 id 清单与盘上目录一致」）；③ 顺序＝随包 id 清单顺序（竖条顺序＝注册顺序，协议 v1.1-A）。
+  const builtInShelf = await resolveBuiltInCarriersDir()
+  const shelfDirs = (await readdir(builtInShelf, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.')).map((entry) => entry.name)
+  const shelfRun = await loadBuiltInCarriersFromDir(builtInShelf, { order: BUILT_IN_CARRIER_IDS })
+  record('批次65b 装载轨：随包载体从货架发现，零跳过，装载目录集＝盘上目录集且顺序＝注册顺序',
+    (await stat(builtInShelf).then((info) => info.isDirectory(), () => false))
+      && shelfRun.skipped.length === 0
+      && [...shelfRun.loaded.map((entry) => entry.name)].sort().join('|') === [...shelfDirs].sort().join('|')
+      && shelfRun.loaded.map((entry) => entry.carrierId).join('|') === BUILT_IN_CARRIER_IDS.join('|'),
+    `货架=${builtInShelf} 目录=${shelfDirs.length} 装入=${shelfRun.loaded.length} 跳过=${shelfRun.skipped.length}${shelfRun.skipped.length ? `(${shelfRun.skipped.map((entry) => `${entry.carrierId}:${entry.stage}`).join(',')})` : ''}`)
 
   // ── 批次65a：外部声明型插件正式第一波（只有 manifest.json，宿主绝不执行第三方 JS）──────
   // 场景照项目层测试收一遍主链：真项目目录里放 4 份声明型夹具（含一份带 throw 探针的 impl.mjs 目录）

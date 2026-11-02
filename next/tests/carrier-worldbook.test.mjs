@@ -13,15 +13,16 @@ import { kernelToolNames } from '../runtime/mcpSurface.mjs'
 import { readOnlyTaskForProfile } from '../runtime/contextProfiles.mjs'
 import { AGENT_CONTEXT_PROFILES } from '../../shared/agentContextProfiles.js'
 import { parseWorldbookEntryFile, serializeWorldbookEntryFile } from '../../shared/worldbookFileContract.js'
-import {
-  BUILT_IN_CARRIER_IDS,
-  BUILT_IN_CARRIER_PLUGINS,
-  DOSSIER_CARRIER_ID,
-  WORLDBOOK_CARRIER,
-  WORLDBOOK_CARRIER_ID,
-  WORLDBOOK_TOOL_NAMES,
-  readWorldbookEntries
-} from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_IDS, loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
+import { DOSSIER_CARRIER_ID } from '../carriers/dossier/manifest.mjs'
+import { WORLDBOOK_CARRIER, WORLDBOOK_CARRIER_ID } from '../carriers/worldbook/manifest.mjs'
+import { WORLDBOOK_TOOL_NAMES } from '../carriers/worldbook/tools.mjs'
+import { readWorldbookEntries } from '../carriers/worldbook/context.mjs'
+
+// 批次65b（框架计划 J2「一切从磁盘装载，内置只是随包已安装」）：随包载体不再静态 import 实现数组，
+// 装载走 pluginLoader 从货架取（开发轨 next/carriers/，装机轨 next/.build/next/carriers/）。
+// 本文件的断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**

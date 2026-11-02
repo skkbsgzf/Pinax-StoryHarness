@@ -11,15 +11,15 @@ import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { kernelToolNames } from '../runtime/mcpSurface.mjs'
 import { readOnlyTaskForProfile } from '../runtime/contextProfiles.mjs'
-import {
-  BUILT_IN_CARRIER_IDS,
-  BUILT_IN_CARRIER_PLUGINS,
-  NOTES_CARRIER,
-  NOTES_CARRIER_ID,
-  NOTES_TOOL_NAMES,
-  NOVEL_CARRIER_ID,
-  createNotesTools
-} from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_IDS, loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
+import { NOTES_CARRIER, NOTES_CARRIER_ID } from '../carriers/notes/manifest.mjs'
+import { NOTES_TOOL_NAMES, createNotesTools } from '../carriers/notes/tools.mjs'
+import { NOVEL_CARRIER_ID } from '../carriers/novel/manifest.mjs'
+
+// 批次65b（框架计划 J2「一切从磁盘装载，内置只是随包已安装」）：随包载体不再静态 import 实现数组，
+// 装载走 pluginLoader 从货架取（开发轨 next/carriers/，装机轨 next/.build/next/carriers/）。
+// 本文件的断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**

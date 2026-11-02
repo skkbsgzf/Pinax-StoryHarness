@@ -12,25 +12,24 @@ import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { kernelToolNames } from '../runtime/mcpSurface.mjs'
 import {
-  BUILT_IN_CARRIER_PLUGINS,
-  COMIC_CARRIER,
-  COMIC_CARRIER_ID,
-  COMIC_TOOL_NAMES,
-  EXPERIENCE_CARRIER,
-  EXPERIENCE_CARRIER_ID,
-  EXPERIENCE_TOOL_NAMES,
-  MATERIAL_CARRIER,
-  MATERIAL_CARRIER_ID,
-  MATERIAL_TOOL_NAMES,
-  ONLINE_CARRIER,
-  ONLINE_CARRIER_ID,
-  ONLINE_TOOL_NAMES,
-  SCRIPT_CARRIER_ID,
-  SCRIPT_TOOL_NAMES,
-  VIDEO_CARRIER,
-  VIDEO_CARRIER_ID,
-  VIDEO_TOOL_NAMES
+  loadBuiltInCarrierPlugins
 } from '../carriers/index.mjs'
+import { COMIC_CARRIER, COMIC_CARRIER_ID } from '../carriers/comic/manifest.mjs'
+import { COMIC_TOOL_NAMES } from '../carriers/comic/tools.mjs'
+import { EXPERIENCE_CARRIER, EXPERIENCE_CARRIER_ID } from '../carriers/experience/manifest.mjs'
+import { EXPERIENCE_TOOL_NAMES } from '../carriers/experience/tools.mjs'
+import { MATERIAL_CARRIER, MATERIAL_CARRIER_ID } from '../carriers/material/manifest.mjs'
+import { MATERIAL_TOOL_NAMES } from '../carriers/material/tools.mjs'
+import { ONLINE_CARRIER, ONLINE_CARRIER_ID } from '../carriers/online/manifest.mjs'
+import { ONLINE_TOOL_NAMES } from '../carriers/online/tools.mjs'
+import { SCRIPT_CARRIER_ID } from '../carriers/script/manifest.mjs'
+import { SCRIPT_TOOL_NAMES } from '../carriers/script/tools.mjs'
+import { VIDEO_CARRIER, VIDEO_CARRIER_ID } from '../carriers/video/manifest.mjs'
+import { VIDEO_TOOL_NAMES } from '../carriers/video/tools.mjs'
+
+// 批次65b（框架计划 J2）：随包载体不再静态 import，装载走 pluginLoader 从盘上取——
+// 本文件其余断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { RECORD_CARRIERS, RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from '../shell/recordCarriers.mjs'
 import { MATERIAL_RECORD_CONFIG } from '../carriers/material/tools.mjs'
 import { COMIC_RECORD_CONFIG } from '../carriers/comic/tools.mjs'

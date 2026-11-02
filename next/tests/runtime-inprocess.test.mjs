@@ -8,7 +8,13 @@ import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime, RUNTIME_CONTRACT } from '../runtime/agentRuntime.mjs'
 import { kernelToolNames, toolOwnershipReport } from '../runtime/mcpSurface.mjs'
-import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
+import {
+  loadBuiltInCarrierPlugins
+} from '../carriers/index.mjs'
+
+// 批次65b（框架计划 J2）：随包载体不再静态 import，装载走 pluginLoader 从盘上取——
+// 本文件其余断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { FIXTURE_NOVEL } from '../testing/fixtures.mjs'
 import { createTempWorkspace, probePort } from '../testing/harness.mjs'
 

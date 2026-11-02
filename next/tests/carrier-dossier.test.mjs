@@ -11,21 +11,20 @@ import { createProject } from '../project/createProject.mjs'
 import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { kernelToolNames, toolOwnershipReport } from '../runtime/mcpSurface.mjs'
-import {
-  BUILT_IN_CARRIER_IDS,
-  BUILT_IN_CARRIER_PLUGINS,
-  DOSSIER_CARRIER,
-  DOSSIER_CARRIER_ID,
-  DOSSIER_LEGACY_IDS,
-  DOSSIER_TOOL_NAMES,
-  NOVEL_CARRIER_ID,
-  OUTLINE_CARRIER_ID,
-  NOTES_CARRIER_ID,
-  SCRIPT_CARRIER_ID,
-  WORLDBOOK_CARRIER_ID,
-  createDossierBlocks,
-  createDossierTools
-} from '../carriers/index.mjs'
+import { BUILT_IN_CARRIER_IDS, loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
+import { DOSSIER_CARRIER, DOSSIER_CARRIER_ID, DOSSIER_LEGACY_IDS } from '../carriers/dossier/manifest.mjs'
+import { DOSSIER_TOOL_NAMES, createDossierTools } from '../carriers/dossier/tools.mjs'
+import { NOVEL_CARRIER_ID } from '../carriers/novel/manifest.mjs'
+import { OUTLINE_CARRIER_ID } from '../carriers/outline/manifest.mjs'
+import { NOTES_CARRIER_ID } from '../carriers/notes/manifest.mjs'
+import { SCRIPT_CARRIER_ID } from '../carriers/script/manifest.mjs'
+import { WORLDBOOK_CARRIER_ID } from '../carriers/worldbook/manifest.mjs'
+import { createDossierBlocks } from '../carriers/dossier/context.mjs'
+
+// 批次65b（框架计划 J2「一切从磁盘装载，内置只是随包已安装」）：随包载体不再静态 import 实现数组，
+// 装载走 pluginLoader 从货架取（开发轨 next/carriers/，装机轨 next/.build/next/carriers/）。
+// 本文件的断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { createTempWorkspace } from '../testing/harness.mjs'
 
 /**

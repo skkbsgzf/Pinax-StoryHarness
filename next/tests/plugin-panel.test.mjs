@@ -9,11 +9,14 @@ import { openProject } from '../project/openProject.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { collectAgentMdBlocks } from '../runtime/contextProfiles.mjs'
 import {
-  BUILT_IN_CARRIER_PLUGINS,
-  COMIC_CARRIER_ID,
-  MATERIAL_CARRIER,
-  MATERIAL_CARRIER_ID
+  loadBuiltInCarrierPlugins
 } from '../carriers/index.mjs'
+import { COMIC_CARRIER_ID } from '../carriers/comic/manifest.mjs'
+import { MATERIAL_CARRIER, MATERIAL_CARRIER_ID } from '../carriers/material/manifest.mjs'
+
+// 批次65b（框架计划 J2）：随包载体不再静态 import，装载走 pluginLoader 从盘上取——
+// 本文件其余断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import {
   PLUGIN_PROTOCOL,
   contentTypeFor,

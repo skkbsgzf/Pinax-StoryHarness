@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { basename, dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import * as gitHistory from '../history/gitHistory.mjs'
-import { createNextSession } from '../index.mjs'
+import { createNextSession, loadBuiltInCarrierPlugins } from '../index.mjs'
 import { fail } from '../kernel/errors.mjs'
 import { createAdvisorRunner } from '../runtime/runnerAdvisor.mjs'
 import { createToolLoop } from '../runtime/toolLoop.mjs'
@@ -25,7 +25,6 @@ import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/kn
 import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
 import { buildSettingsSchema, createFileCarrierOverridesStore, readCarrierOverridesSync } from '../carrierOverridesStore.mjs'
-import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
@@ -48,15 +47,16 @@ const currentDir = dirname(fileURLToPath(import.meta.url))
  * 离线诊断（批次54 · 任务⑤）：`--dump-settings-schema` 把「清单默认 → 工程覆盖」合并后的
  * 设置项输出成 JSON Schema 到 stdout。不开窗、不建会话、不进运行时路径——纯读文件＋拼 schema。
  * 项目根：`--root=<项目目录>` 优先，其次 PINAX_NEXT_ROOT；都不给就只输出清单默认。
+ *
+ * 批次65b：清单不再从 carriers/index.mjs 静态 import（J2「内置只是随包已安装」），这里改经装载器
+ * 从货架读——所以本函数变 async。这条轨道本来就只读文件、不起窗，多一次动态 import 不改它的语义。
  */
-export function dumpSettingsSchema({ argv = process.argv } = {}) {
+export async function dumpSettingsSchema({ argv = process.argv } = {}) {
   const rootArg = argv.find((arg) => typeof arg === 'string' && arg.startsWith('--root='))
   const root = rootArg ? rootArg.slice('--root='.length).trim() : (process.env.PINAX_NEXT_ROOT || null)
   const overrideState = readCarrierOverridesSync(root || null)
-  const schema = buildSettingsSchema(
-    BUILT_IN_CARRIER_PLUGINS.map((plugin) => plugin.manifest),
-    overrideState.overrides
-  )
+  const plugins = await loadBuiltInCarrierPlugins()
+  const schema = buildSettingsSchema(plugins.map((plugin) => plugin.manifest), overrideState.overrides)
   if (overrideState.exists === false) schema['x-pinax-overrides'] = { exists: false }
   if (overrideState.warnings.length) schema.warnings = [...(schema.warnings ?? []), ...overrideState.warnings]
   return schema
@@ -65,7 +65,8 @@ export function dumpSettingsSchema({ argv = process.argv } = {}) {
 const dumpSchemaRequested = process.argv.includes('--dump-settings-schema')
 if (dumpSchemaRequested) {
   // 先写完 stdout 再退：pipe 下的写是异步的，直接 exit 会截断 JSON。
-  process.stdout.write(`${JSON.stringify(dumpSettingsSchema(), null, 2)}\n`, () => app.exit(0))
+  const schema = await dumpSettingsSchema()
+  process.stdout.write(`${JSON.stringify(schema, null, 2)}\n`, () => app.exit(0))
 }
 
 /**

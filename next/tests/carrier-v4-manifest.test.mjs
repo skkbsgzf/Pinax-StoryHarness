@@ -24,7 +24,12 @@ import { PREVIEW_LOADING_MODES, PREVIEW_MAX_BYTES_MAX } from '../kernel/carrierM
 import { diagnoseCarrier, loadHostDescriptor } from '../doctor.mjs'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
 import { PROJECT_KINDS } from '../kernel/projectSkeleton.mjs'
-import { BUILT_IN_CARRIER_PLUGINS } from '../carriers/index.mjs'
+import { loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
+
+// 批次65b（框架计划 J2「一切从磁盘装载，内置只是随包已安装」）：随包载体不再静态 import 实现数组，
+// 装载走 pluginLoader 从货架取（开发轨 next/carriers/，装机轨 next/.build/next/carriers/）。
+// 本文件的断言一字未动，只是拿到同一份 { manifest, impl, meta } 的方式换了。
+const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { NOVEL_CARRIER } from '../carriers/novel/manifest.mjs'
 import { FIXTURE_NOVEL, withMutation } from '../testing/fixtures.mjs'
 import { FIXTURE_V4 } from '../testing/fixtures/carrierV4.mjs'

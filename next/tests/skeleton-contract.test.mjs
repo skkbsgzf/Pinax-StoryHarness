@@ -6,7 +6,17 @@ import { fileURLToPath } from 'node:url'
 import { PROJECT_KINDS, validateRelativePath } from '../kernel/projectSkeleton.mjs'
 import { CAPABILITY_IDS } from '../kernel/capabilities.vocab.mjs'
 import { kernelToolNames } from '../runtime/mcpSurface.mjs'
-import { NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER } from '../carriers/index.mjs'
+import { NOVEL_CARRIER } from '../carriers/novel/manifest.mjs'
+import { OUTLINE_CARRIER } from '../carriers/outline/manifest.mjs'
+import { NOTES_CARRIER } from '../carriers/notes/manifest.mjs'
+import { WORLDBOOK_CARRIER } from '../carriers/worldbook/manifest.mjs'
+import { SCRIPT_CARRIER } from '../carriers/script/manifest.mjs'
+import { DOSSIER_CARRIER } from '../carriers/dossier/manifest.mjs'
+import { MATERIAL_CARRIER } from '../carriers/material/manifest.mjs'
+import { COMIC_CARRIER } from '../carriers/comic/manifest.mjs'
+import { VIDEO_CARRIER } from '../carriers/video/manifest.mjs'
+import { EXPERIENCE_CARRIER } from '../carriers/experience/manifest.mjs'
+import { ONLINE_CARRIER } from '../carriers/online/manifest.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(here, '..', '..')
