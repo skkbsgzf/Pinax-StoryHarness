@@ -142,4 +142,3 @@ export async function loadDeclarativeFromDir(dir, { registry = null } = {}) {
   }
   return { loaded, skipped }
 }
-
