@@ -40,6 +40,18 @@ export const EXPERIENCE_CARRIER = Object.freeze({
       // 槽语义（批次53）：编辑位绑一条会话记录（single＋entry），认领 体验/**/*.json 并以 extension 档接管。
       { slot: 'center', id: 'experience.editor', title: '体验', icon: 'adventure', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['体验/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'experience-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）。
+    // 本板块 centerPanes 只有一块（experience.editor），「开这一页」与「点竖条这一格」是同一条路，只留一条 open-board。
+    //   experience.open-board     board:pinax.carrier.experience ← 竖条点「体验」这一格（AppNext.selectBoard）
+    //   experience.reload-records data:loadRecords:experience    ← 索引窗的「刷新」（IndexWindow.vue:504）
+    //   experience.edit-record    data:editRecord                ← 「编辑」钮（CarrierPaneHost.vue:1645）
+    //   experience.save-record    data:saveRecord                ← 「保存」钮（CarrierPaneHost.vue:1641）
+    commands: [
+      { id: 'experience.open-board', title: '打开体验栏', run: 'board:pinax.carrier.experience' },
+      { id: 'experience.reload-records', title: '重新载入体验会话清单', run: 'data:loadRecords:experience' },
+      { id: 'experience.edit-record', title: '编辑当前体验会话', run: 'data:editRecord' },
+      { id: 'experience.save-record', title: '保存当前体验会话', run: 'data:saveRecord' }
+    ],
     settings: []
   }),
 

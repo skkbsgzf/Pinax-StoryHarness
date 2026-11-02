@@ -60,6 +60,21 @@ export const COMIC_CARRIER = Object.freeze({
       // 外壳的中栏切换条据此在两块中间切换（批次58 实拍的「双中栏无入口」由这里收口）。
       { slot: 'center', id: 'comic.canvas', title: 'Toonflow 画布', icon: 'comics', view: 'pinax.view.app', kind: 'external-app', multiplicity: 'single', scope: 'project', app: { url: 'http://127.0.0.1:3010' }, forms: ['dock', 'split', 'fullscreen', 'immersive'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）。
+    // 这块板有**两块** center pane（comic.editor／comic.canvas），所以 open-editor 与 open-board 不是同一条路：
+    // 前者经 routeOpen 直达画布／记录页，后者是竖条换板（落在切换条选中的那一块）。
+    //   comic.open-board     board:pinax.carrier.comic    ← 竖条点「漫画」这一格（AppNext.selectBoard）
+    //   comic.open-editor    pane:comic.editor            ← 顶部切换条点「漫画」那一枚（AppNext.chooseCenterPane → routeOpen）
+    //   comic.open-canvas    pane:comic.canvas            ← 切换条点「Toonflow 画布」那一枚（同上，批次53 的多中栏）
+    //   comic.reload-records data:loadRecords:comic       ← 索引窗的「刷新」（IndexWindow.vue:504）
+    //   comic.save-record    data:saveRecord              ← 「保存」钮（CarrierPaneHost.vue:1641）
+    commands: [
+      { id: 'comic.open-board', title: '打开漫画栏', run: 'board:pinax.carrier.comic' },
+      { id: 'comic.open-editor', title: '打开漫画记录这一页', run: 'pane:comic.editor' },
+      { id: 'comic.open-canvas', title: '打开 Toonflow 画布', run: 'pane:comic.canvas' },
+      { id: 'comic.reload-records', title: '重新载入漫画页清单', run: 'data:loadRecords:comic' },
+      { id: 'comic.save-record', title: '保存当前漫画页', run: 'data:saveRecord' }
+    ],
     settings: []
   }),
 

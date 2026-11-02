@@ -46,6 +46,22 @@ export const WORLDBOOK_CARRIER = Object.freeze({
       // 它认领 世界书/**/*.md 并以 extension 档接管：同一份条目同时命中类别树时，看板区赢。
       { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', multiplicity: 'keyed', scope: 'entry', keyField: 'path', claims: ['世界书/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['entry', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）：
+    //   worldbook.open-board    board:pinax.carrier.worldbook ← 竖条点「世界书」这一格（AppNext.selectBoard）
+    //   worldbook.open-entries  pane:worldbook.entries        ← 点条目页签／左树开一条（routeOpen 唯一通路）
+    //   worldbook.reload        data:loadEntries              ← 索引窗的「刷新」（IndexWindow.vue:494）
+    //   worldbook.edit-entry    data:editEntry                ← 条目详情头的「编辑」（EntryDetailPanel.vue:170）
+    //   worldbook.save-entry    data:saveEntry                ← 条目编辑位的「保存」（CarrierPaneHost.vue:887）
+    //   worldbook.filter-all    data:setEntriesFilterCat:     ← 分类树点「全部」那一行（EntriesCategoryTree.vue:29；
+    //                                                           结尾那个空串就是「不设分类筛选」这条既有动作的入参）
+    commands: [
+      { id: 'worldbook.open-board', title: '打开世界书栏', run: 'board:pinax.carrier.worldbook' },
+      { id: 'worldbook.open-entries', title: '打开条目这一页', run: 'pane:worldbook.entries' },
+      { id: 'worldbook.reload', title: '重新载入条目清单', run: 'data:loadEntries' },
+      { id: 'worldbook.edit-entry', title: '编辑当前条目', run: 'data:editEntry' },
+      { id: 'worldbook.save-entry', title: '保存当前条目', run: 'data:saveEntry' },
+      { id: 'worldbook.filter-all', title: '按全部分类列出条目', run: 'data:setEntriesFilterCat:' }
+    ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
   }),

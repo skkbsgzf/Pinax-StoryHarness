@@ -1,5 +1,6 @@
 import { fail, ok, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
-import { MENU_TEMPLATE, flattenMenuIds } from './menus.mjs'
+import { MENU_TEMPLATE, flattenMenuEntries } from './menus.mjs'
+import { HOTKEYS_VERSION, findHotkeyConflicts, normalizeHotkeys } from './hotkeys.mjs'
 import { RESERVED_SLOTS, orderActivityItems } from './slots.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
 import { BOOK_DIR, BOOK_MAX_CHARS, nextChapterName, parseDocumentTitle } from './bookText.mjs'
@@ -96,7 +97,14 @@ export const IPC_CHANNELS = Object.freeze({
   bookReplaceCurrent: 'pinax:agent:book:replace-current',
   bookImportDoc: 'pinax:agent:book:import-doc',
   bookExport: 'pinax:agent:book:export',
-  menuInvoke: 'pinax:agent:menu:invoke'
+  menuInvoke: 'pinax:agent:menu:invoke',
+  // 批次62 任务2：命令面。list 回「应用菜单动作 ∪ registry.commands()」这一张表
+  //（纯数据：id／title／owner／accelerator／run 落点名——run 是字符串，函数过不了 IPC 边界）。
+  commandList: 'pinax:agent:command:list',
+  // 批次62 任务4：快捷键表（.pinax/hotkeys.json）。整份读、整份写；
+  // 冲突在这道闸就拒并往服务与通知池记一条 warn，坏档回默认（净化在 next/shell/hotkeys.mjs）。
+  hotkeysLoad: 'pinax:agent:hotkeys:load',
+  hotkeysSave: 'pinax:agent:hotkeys:save'
 })
 
 /**
@@ -228,6 +236,9 @@ export function shellView(session) {
       panes: manifest.panes,
       // 载体声明的设置节（协议 P14）：统一设置二级页据此出目录项；空声明＝设置页不出这一格。
       settings: manifest.settings ?? [],
+      // 批次62：载体声明的命令（协议 @4 的 contributes.commands，校验器已保证 id／title／run 合法）。
+      // view 带着它，命令面板在「桥不可用」的开发／验收形态里仍能按同一份声明列出条目（不落第二份清单）。
+      commands: manifest.commands ?? [],
       // 协议 v3：清单代际与「插件会自己动手」的四张牌（面板入口／本地服务／外部 MCP／AGENT.md）。
       spec: manifest.spec,
       entry: manifest.entry ?? null,
@@ -311,11 +322,65 @@ export function shellView(session) {
  *                       批次54 的工程覆盖只读口（应用面 url／来源层展示）。不注入时如实报缺。
  */
 export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null }) {
-  const menuIds = new Set(flattenMenuIds(MENU_TEMPLATE).map((item) => item.id))
+  // 批次62 任务2：这条通道认的 id 集不再是「MENU_TEMPLATE 的拍平结果」这一份死集合，
+  // 而是 MENU_TEMPLATE ∪ registry.commands()，每次现算（载体可被启用／停用）。
+  // 见下方 acceptedMenuIds —— 全文件只有那一处口径。
   // 本轮提问的关联键：渲染层先自带一个（它要在事件到达时就认得出这是哪一问），
   // 没带就由这里发一个，并随回执回去——两条路都保证「事件与回答同一条 askId」。
   let askSeq = 0
   const nextAskId = () => `ask-${Date.now().toString(36)}-${(++askSeq).toString(36)}`
+
+  /**
+   * 命令面（批次62 任务2）。两件事都只有一处实现：
+   *   · `menu:invoke` 认的 id 集＝MENU_TEMPLATE ∪ registry.commands()——载体命令从此能走同一条分发回执，
+   *     但 C5 那条纪律没松：进的是**命令表**，不是原生顶层菜单（菜单模板本身一个字都没改）；
+   *     未知 id 照旧拒绝。集合每次现算，因为载体可以在运行中被启用／停用，写死在创建时就旧了。
+   *   · `command:list` 回同一张表的纯数据版（id／title／owner／accelerator／run 落点名）。
+   *     `run` 只能是字符串：函数过不了 ipcMain.handle 的结构化克隆（slimForIpc 会把它剪掉）。
+   * 键位这里给的是 MENU_TEMPLATE 那份默认值；作者改过键位后的实际 accelerator 由渲染层
+   * 用 hotkeys:load 的结果覆盖——两处都读同一张 hotkeys 表，不各写一份。
+   */
+  const menuEntries = flattenMenuEntries(MENU_TEMPLATE)
+  function acceptedMenuIds() {
+    const set = new Set(menuEntries.map((item) => item.id))
+    for (const command of session?.registry?.commands?.() ?? []) set.add(command.id)
+    return set
+  }
+
+  function commandTable() {
+    const accelerators = Object.fromEntries(menuEntries.map((item) => [item.id, item.accelerator ?? '']))
+    const titles = Object.fromEntries((session?.registry?.list?.() ?? []).map((manifest) => [manifest.id, manifest.title]))
+    const fromMenu = menuEntries.map((item) => ({
+      id: item.id,
+      title: item.label,
+      owner: 'app.menu',
+      ownerTitle: '应用菜单',
+      group: 'menu',
+      accelerator: item.accelerator ?? '',
+      run: `menu:${item.id}`
+    }))
+    const fromCarriers = (session?.registry?.commands?.() ?? []).map((command) => ({
+      id: command.id,
+      title: command.title,
+      owner: command.pluginId,
+      ownerTitle: titles[command.pluginId] ?? command.pluginId,
+      group: 'carrier',
+      accelerator: accelerators[command.id] ?? '',
+      // 清单层的 run 已由校验器保证是函数或非空串；串之外的东西在这里就是没接线，如实给空串。
+      run: typeof command.run === 'string' ? command.run : ''
+    }))
+    return [...fromMenu, ...fromCarriers]
+  }
+
+  /** 快捷键表的记账：冲突与坏档都往「服务与通知」池留一条 warn——被拒的写入不能只回一句错误。 */
+  function noteHotkeyIssue(level, message, data = {}) {
+    if (typeof serviceLogPool?.append !== 'function') return
+    try {
+      serviceLogPool.append({ source: { kind: 'hotkeys', id: 'hotkeys', carrierId: null }, level, message, data })
+    } catch {
+      // 记账失败不改变这条通道自己的裁决结果。
+    }
+  }
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
   async function notifyProjectOpened(result) {
@@ -439,6 +504,41 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         if (typeof session.saveWorkspace !== 'function') return fail('INVALID_INPUT', '工作区服务未接入（主进程未创建 workspaceStore）：这条通道现在只报缺')
         if (!session.projectRoot) return fail('INVALID_INPUT', '工作区落盘需要先打开一个项目')
         return session.saveWorkspace(input.snapshot)
+      }
+      // 批次62 任务4：快捷键表 `.pinax/hotkeys.json`。读写都跟当前项目根走（与工作区同一形状），
+      // 净化与冲突判定只在 next/shell/hotkeys.mjs 一处——存储实现（谁落盘）复用同一份，不各写一遍。
+      case IPC_CHANNELS.hotkeysLoad: {
+        if (typeof session.loadHotkeys !== 'function') return fail('INVALID_INPUT', '快捷键服务未接入（主进程未创建 hotkeysStore）：这条通道现在只报缺')
+        const loaded = await session.loadHotkeys()
+        if (!loaded?.ok) return loaded ?? fail('INVALID_INPUT', '快捷键读取失败：主进程没有回一份结果对象')
+        const stored = loaded.value && typeof loaded.value === 'object' ? loaded.value : {}
+        const normalized = normalizeHotkeys({ version: HOTKEYS_VERSION, bindings: stored.bindings ?? {} })
+        const warnings = [...(Array.isArray(stored.warnings) ? stored.warnings : []), ...normalized.warnings]
+        if (normalized.warnings.length) noteHotkeyIssue('warn', `快捷键表按默认值继续：${normalized.warnings.join('、')}`, { warnings: normalized.warnings })
+        return ok({ version: HOTKEYS_VERSION, bindings: normalized.bindings, warnings, exists: stored.exists !== false })
+      }
+      case IPC_CHANNELS.hotkeysSave: {
+        if (typeof session.saveHotkeys !== 'function') return fail('INVALID_INPUT', '快捷键服务未接入（主进程未创建 hotkeysStore）：这条通道现在只报缺')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '快捷键落盘需要先打开一个项目')
+        const submitted = input?.bindings && typeof input.bindings === 'object' && !Array.isArray(input.bindings)
+          ? input.bindings
+          : {}
+        // 冲突即拒：整份不落盘。「谁赢」没有正确答案，替作者选一个就是悄悄改了他的键位。
+        const conflicts = findHotkeyConflicts(submitted)
+        if (conflicts.length) {
+          const message = `快捷键冲突，写入被拒：${conflicts.map((item) => `${item.accelerator}（${item.ids.join('／')}）`).join('；')}`
+          noteHotkeyIssue('warn', message, { conflicts })
+          return fail('INVALID_INPUT', message, { conflicts })
+        }
+        const normalized = normalizeHotkeys({ version: HOTKEYS_VERSION, bindings: submitted })
+        const saved = await session.saveHotkeys(normalized.bindings)
+        if (!saved?.ok) return saved ?? fail('INVALID_INPUT', '快捷键落盘失败：主进程没有回一份结果对象')
+        return ok({ version: HOTKEYS_VERSION, bindings: normalized.bindings, warnings: normalized.warnings, result: saved.value ?? null })
+      }
+      // 批次62 任务2：命令表。面板与任何消费者读的都是这一句，渲染层不再自己拼第二份。
+      case IPC_CHANNELS.commandList: {
+        const commands = commandTable()
+        return ok({ commands, total: commands.length })
       }
       // 批次45：每插件配置。读的是当前项目 `.pinax/settings.json` 的全量 carriers 映射；
       // 写只走 store.set 的白名单闸（未声明／类型不符／section 一律拒，不落盘）。
@@ -717,8 +817,8 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return exportBookFile({ root: session.projectRoot, format, title: input.title ?? null })
       }
       case IPC_CHANNELS.menuInvoke: {
-        if (!menuIds.has(input.id)) {
-          return fail('INVALID_INPUT', `菜单项 ${String(input.id)} 不在应用菜单模板里；载体不得注入顶层菜单（C5）`, { id: input.id })
+        if (!acceptedMenuIds().has(input.id)) {
+          return fail('INVALID_INPUT', `指令 ${String(input.id)} 既不在应用菜单模板里，也不在任何已启用载体的命令表里：未知 id 一律拒绝（载体可以贡献命令，但不许注入顶层菜单——C5）`, { id: input.id })
         }
         if (onMenuInvoke) await onMenuInvoke(input.id)
         return ok({ id: input.id, handled: true })
@@ -728,5 +828,6 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
     }
   }
 
-  return { dispatch, menuIds: [...menuIds] }
+  // menuIds 现在是活的（载体命令随注册表进出），用 getter 而不是创建时拍平一次。
+  return { dispatch, get menuIds() { return [...acceptedMenuIds()] } }
 }

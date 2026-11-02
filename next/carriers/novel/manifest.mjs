@@ -53,6 +53,24 @@ export const NOVEL_CARRIER = Object.freeze({
       // 它认领 正文/**/*.md 并以 extension 档接管——同一章同时命中书稿时，编辑面赢。
       { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', multiplicity: 'single', scope: 'entry', claims: ['正文/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['chapter', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
+    // 批次62 任务一：命令面。**这六条全是既有动作的另一个入口，没有一条是新行为**——
+    // 逐条对照（评审按这张表核）：
+    //   novel.open-board        run=board:pinax.carrier.novel   ← 竖条点这一格（ActivityRail @select → AppNext.selectBoard）
+    //   novel.open-editor       run=pane:novel.editor           ← 点正文页签／左树开一章（AppNext.routeOpen 的唯一通路）
+    //   novel.reload-chapters   run=data:loadChapters           ← 窄栏「章节目录」的刷新（IndexWindow 现成的重列动作）
+    //   novel.export-current    run=section:export              ← 二级页目录里「文档 → 导出」那一节（现成的节入口 openSection）
+    //   novel.export-book       run=data:exportBookFile         ← 窄栏「整本导出」钮（不带参＝缺省 txt，与该钮选 txt 同一条调用）
+    //   novel.review-proposals  run=menu:project.reviewProposals ← 项目菜单「提案审阅…」（同一条 menuInvoke 分发）
+    // `run` 必须是字符串：函数过不了 ipcMain.handle 的结构化克隆。落点词表（board:/pane:/section:/data:/menu:/overlay:）
+    // 的解释只有一处——next/shell/AppNext.vue 的 resolveCommandRun。
+    commands: [
+      { id: 'novel.open-board', title: '打开小说栏', run: 'board:pinax.carrier.novel' },
+      { id: 'novel.open-editor', title: '打开正文这一页', run: 'pane:novel.editor' },
+      { id: 'novel.reload-chapters', title: '重新载入章节目录', run: 'data:loadChapters' },
+      { id: 'novel.export-current', title: '导出当前文档…', run: 'section:export' },
+      { id: 'novel.export-book', title: '整本导出（纯文本）', run: 'data:exportBookFile' },
+      { id: 'novel.review-proposals', title: '提案审阅…', run: 'menu:project.reviewProposals' }
+    ],
     // 协议 P14 → v2：v1 的 { id, title } 读成 section；「写作偏好」仍是目录项＋空态。
     settings: [{ id: 'novel.writing', title: '写作偏好', type: 'section' }]
   }),

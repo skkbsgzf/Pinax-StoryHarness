@@ -54,6 +54,21 @@ export const DOSSIER_CARRIER = Object.freeze({
       // canOpen 用 in：资料与约束在同一块编辑面里按 selection 换面孔，裁决不因半边不匹配而落空。
       { slot: 'center', id: 'dossier.editor', title: '资料与约束', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', multiplicity: 'single', scope: 'entry', claims: ['资料/**/*.md', '资料/**/*.txt', '约束/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['document', 'rule'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）：
+    //   dossier.open-board       board:pinax.carrier.dossier ← 竖条点「设定与资料」这一格（AppNext.selectBoard）
+    //   dossier.open-editor      pane:dossier.editor         ← 点资料页签／左树开一份（routeOpen 唯一通路）
+    //   dossier.reload-documents data:loadDocuments          ← 索引窗的「刷新」（IndexWindow.vue:497）
+    //   dossier.reload-rules     data:loadRules              ← 索引窗的「刷新」（IndexWindow.vue:498）
+    //   dossier.edit-document    data:editDocument           ← 文档头的「编辑」（CarrierPaneHost.vue:1553）
+    //   dossier.save-rule        data:saveRule               ← 约束编辑位的「保存」（CarrierPaneHost 的动作表）
+    commands: [
+      { id: 'dossier.open-board', title: '打开设定与资料栏', run: 'board:pinax.carrier.dossier' },
+      { id: 'dossier.open-editor', title: '打开资料与约束这一页', run: 'pane:dossier.editor' },
+      { id: 'dossier.reload-documents', title: '重新载入资料清单', run: 'data:loadDocuments' },
+      { id: 'dossier.reload-rules', title: '重新载入约束清单', run: 'data:loadRules' },
+      { id: 'dossier.edit-document', title: '编辑当前资料', run: 'data:editDocument' },
+      { id: 'dossier.save-rule', title: '保存当前约束', run: 'data:saveRule' }
+    ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格。
     settings: []
   }),

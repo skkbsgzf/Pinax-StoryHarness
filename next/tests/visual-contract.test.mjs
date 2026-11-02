@@ -763,10 +763,13 @@ test('批次61：workspace v3 页轴就位，v2 窗口 API 与旧位置四轴零
     assert.equal(app.includes(gone), false, `AppNext 仍有退役的窗口轴／形态入口：${gone}`)
   }
   assert.equal((app.match(/<PaneWindow/gu) ?? []).length, 2, '页＋浮窗一层、侧缘标签一层，全都走同一套 PaneWindow（〔铁律四〕不出第二套窗口壳）')
-  // 〔裁定①〕缺省落点是页：全文件只有两处开窗，唯一带 floating 的那处是索引窗标题行那枚显式「悬浮」钮。
+  // 〔裁定①〕缺省落点是页：全文件只有两处开窗。批次61 那句「唯一带 floating 的那处是显式悬浮钮」
+  // 在批次62 长了两条：Alt＋点击页签、Alt＋点击竖条——它们同样是作者明说的意图（手势＝显式），
+  // 变的是入口，没变的是「缺省不许浮出一扇窗」。所以这里把三处来源逐一点名，而不是放开计数。
   assert.equal((app.match(/hostWorkspace\.open\(/gu) ?? []).length, 2, '开页只该有两条口：routeOpen 与索引窗的悬浮钮')
-  assert.equal((app.match(/form:\s*'floating'/gu) ?? []).length, 1, '缺省落点不许是浮窗——除了显式那一枚，点载体不该凭空浮出一扇窗')
-  assert.match(app, /function toggleBoardOverlay[\s\S]{0,600}form: 'floating'/u, '唯一的浮窗落点＝索引窗那枚显式悬浮钮')
+  assert.equal((app.match(/form:\s*'floating'/gu) ?? []).length, 3, '浮窗只有三处来源：Alt＋点页签、Alt＋点竖条（批次62 的显式手势），以及索引窗那枚「悬浮」钮')
+  assert.match(app, /form: decision\.form \?\? 'page'/u, 'routeOpen 开页的缺省形态仍是页：floating 只能由 decision.form（＝手势传进来的入参）改写')
+  assert.match(app, /function toggleBoardOverlay[\s\S]{0,600}form: 'floating'/u, '索引窗那枚显式悬浮钮仍是浮窗落点之一')
 
   const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
   for (const needle of ['.nx-page-tabstrip', '.nx-page-tab', '.nx-pane-window.is-page', '.nx-pane-window.is-page.is-in-side', '.nx-pane-window-tab']) {

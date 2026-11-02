@@ -104,7 +104,7 @@ test('标题栏与页内菜单行（工单F）：overlay 留给原生窗控，�
 
   // 渲染层：页内菜单行用同一份模板渲染，点击走 menuInvoke 通道（与原生菜单同一条分发）。
   const appSource = await readFile(new URL('../shell/AppNext.vue', import.meta.url), 'utf-8')
-  assert.match(appSource, /import \{ MENU_TEMPLATE \} from '\.\/menus\.mjs'/, '页内菜单行必须用同一份 MENU_TEMPLATE 数据渲染')
+  assert.match(appSource, /import \{ MENU_TEMPLATE[^\n]*\} from '\.\/menus\.mjs'/, '页内菜单行必须用同一份 MENU_TEMPLATE 数据渲染')
   assert.match(appSource, /IPC_CHANNELS\.menuInvoke/, '页内菜单点击必须经 menuInvoke 通道分发')
   assert.match(appSource, /IPC_CHANNELS\.projectPickDir/, '打开项目必须先经系统目录对话框（project:pick-dir）')
   assert.match(appSource, /IPC_CHANNELS\.projectOpen/, '选中的目录必须经 project:open 打开')

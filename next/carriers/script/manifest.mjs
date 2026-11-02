@@ -48,6 +48,19 @@ export const SCRIPT_CARRIER = Object.freeze({
       // 槽语义（批次53）：编辑位绑一场剧本（single＋entry），认领 剧本/**/*.md 并以 extension 档接管。
       { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor', kind: 'script-editor', multiplicity: 'single', scope: 'entry', claims: ['剧本/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'script' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）：
+    //   script.open-board   board:pinax.carrier.script ← 竖条点「剧本」这一格（AppNext.selectBoard）
+    //   script.open-editor  pane:script.editor         ← 点页签／左树开一本（routeOpen 唯一通路）
+    //   script.reload-list  data:loadScripts           ← 索引窗的「刷新」（IndexWindow.vue:501）
+    //   script.edit-script  data:editScript            ← 「编辑」钮（CarrierPaneHost.vue:1587）
+    //   script.save-script  data:saveScript            ← 剧本编辑位的「保存」（CarrierPaneHost.vue:884）
+    commands: [
+      { id: 'script.open-board', title: '打开剧本栏', run: 'board:pinax.carrier.script' },
+      { id: 'script.open-editor', title: '打开剧本编辑这一页', run: 'pane:script.editor' },
+      { id: 'script.reload-list', title: '重新载入剧本清单', run: 'data:loadScripts' },
+      { id: 'script.edit-script', title: '编辑当前剧本', run: 'data:editScript' },
+      { id: 'script.save-script', title: '保存当前剧本', run: 'data:saveScript' }
+    ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
   }),

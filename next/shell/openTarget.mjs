@@ -15,14 +15,31 @@
  *   keyed  → 按 resource 各开一页（全仓现值只有 worldbook.entries，keyField:'path'）
  *   list   → 会话级覆层小部件，按 single 办事
  *
- * `gesture` 本批恒为空对象：留这个形参是为了批次62（修饰键／中键／拖出）不再改函数签名。
- * 现在没有任何调用方该往里传东西。
+ * `gesture`（批次62 起真吃值，词汇见下方 GESTURE_FORMS／GESTURE_ACTIONS）：
+ * 手势不改变「去哪一页」的判定，只改变「那一页以什么形态出现」，以及中键这种「就要关掉它」的直令。
  */
 
 import { instanceIdFor, parseInstanceId } from './workspace.mjs'
 
 /** 落点动作全集。 */
-export const OPEN_ACTIONS = Object.freeze(['reveal', 'replace-page', 'open-page', 'raise-tab', 'block'])
+export const OPEN_ACTIONS = Object.freeze(['reveal', 'replace-page', 'open-page', 'raise-tab', 'block', 'close-page'])
+
+/**
+ * 手势词汇（批次62 任务五）。批次61 留的 `gesture` 形参从今天起真吃值：
+ *
+ *   { form: 'floating' }  Alt+点击竖条图标／页签——**以另一形态执行同一动作**：
+ *     落点判定（reveal／replace-page／open-page／raise-tab）一条都不改，只在答案上多带一个
+ *     `form:'floating'`。调用方（AppNext.routeOpen）据此把那一页落成浮窗态。
+ *     之所以不改动作，是因为「去哪儿」与「以什么形态在那儿」是两条轴——混成六个新动作，
+ *     每条调用路径都要重判一次，v2 那七套各写一份的旧病就回来了。
+ *   { action: 'close', instance }  中键点击页签——关的必须是**被点的那一页**，
+ *     所以入口把页实例一起交进来；这里只核对它确实开着（不在页列表里就 block，不猜第二页）。
+ *
+ * 认不出的手势一律 `block` + 明确 reason，不悄悄忽略：作者按了一个没接住的组合键，
+ * 界面至少要能解释为什么什么都没发生。
+ */
+export const GESTURE_FORMS = Object.freeze(['floating'])
+export const GESTURE_ACTIONS = Object.freeze(['close'])
 
 /**
  * 页身份算法只有一处（铁律五〔裁定④后真吃 resource〕）。
@@ -66,42 +83,65 @@ function existingOf(pages, paneId) {
  *   resource     这页要装的文档标识（null＝该 pane 的缺省那份）
  *   pages        工作区当前全部页记录（list() 的原样输出）
  *   groups       { main, side, focus }：每组当前页与焦点组
- *   gesture      本批保留，恒空
- * 出参：{ action, instance, group, resource, pane, ...补充位 }
+ *   gesture      批次62 起真吃值：{ form:'floating' } 或 { action:'close', instance }
+ * 出参：{ action, instance, group, resource, pane, ...补充位 }；带手势形态时补 `form`
  */
 export function resolveOpenTarget({ pane, multiplicity = 'single', resource = null, pages = [], groups = {}, gesture = {} } = {}) {
   const id = String(pane ?? '').trim()
   if (!instanceIdFor(id)) return { action: 'block', instance: '', group: null, resource: null, pane: id, reason: 'INVALID_PANE' }
-  if (gesture && Object.keys(gesture).length) {
-    // 本批不实现手势：与其悄悄忽略一个已经传进来的修饰键，不如如实拒绝（批次62 解除这条）。
-    return { action: 'block', instance: '', group: null, resource: null, pane: id, reason: 'GESTURE_NOT_IMPLEMENTED' }
+  const keys = gesture && typeof gesture === 'object' ? Object.keys(gesture) : []
+  const gestureForm = gesture?.form ?? ''
+  const gestureAction = gesture?.action ?? ''
+  // instance 只是 close 的搭档（「关哪一页」），单独传它不构成一个手势。
+  const meaningful = keys.filter((key) => key !== 'instance' || (!gestureForm && !gestureAction))
+  if (meaningful.length) {
+    // 认不出的手势不悄悄忽略：作者按了一个没接住的组合键，界面至少能解释为什么什么都没发生。
+    if (gestureForm) {
+      if (!GESTURE_FORMS.includes(gestureForm)) {
+        return { action: 'block', instance: '', group: null, resource: null, pane: id, reason: 'GESTURE_FORM_UNSUPPORTED' }
+      }
+    } else if (gestureAction) {
+      if (gestureAction === 'close' && GESTURE_ACTIONS.includes(gestureAction)) {
+        const target = String(gesture.instance ?? '').trim()
+        const found = pages.find((page) => page.instance === target && page.pane === id)
+        if (!found) {
+          return { action: 'block', instance: target, group: null, resource: null, pane: id, reason: 'GESTURE_NO_TARGET' }
+        }
+        return { action: 'close-page', instance: found.instance, group: found.group, resource: found.resource, pane: id }
+      }
+      return { action: 'block', instance: '', group: null, resource: null, pane: id, reason: 'GESTURE_UNSUPPORTED' }
+    } else {
+      return { action: 'block', instance: '', group: null, resource: null, pane: id, reason: 'GESTURE_UNSUPPORTED' }
+    }
   }
   const kind = multiplicity === 'keyed' ? 'keyed' : 'single'
   const key = typeof resource === 'string' && resource.trim() ? resource.trim() : null
   const mine = existingOf(pages, id)
   const focusGroup = ['main', 'side'].includes(groups.focus) ? groups.focus : 'main'
+  // 带形态的手势：落点动作照常判，只在答案上多带一个 form（调用方据此把那一页落成那个形态）。
+  const withForm = (decision) => (gestureForm ? { ...decision, form: gestureForm } : decision)
 
   // 一、这一份文档已经开着 → 回到那一页（绝不新建）。
   const holder = key ? mine.find((page) => page.resource === key) : mine.find((page) => !page.resource)
   if (holder) {
-    return holder.form === 'tab'
+    return withForm(holder.form === 'tab'
       ? { action: 'raise-tab', instance: holder.instance, group: holder.group, resource: holder.resource, pane: id }
-      : { action: 'reveal', instance: holder.instance, group: holder.group, resource: holder.resource, pane: id, form: holder.form }
+      : { action: 'reveal', instance: holder.instance, group: holder.group, resource: holder.resource, pane: id, form: holder.form })
   }
 
   // 二、single 硬闸：这块 pane 只许一条记录，换文档＝换那一页装哪份稿子。
   if (mine.length && kind !== 'keyed') {
     const page = mine.find((item) => item.form === 'page') || mine[0]
-    return { action: 'replace-page', instance: page.instance, group: page.group, resource: key, pane: id, replaced: page.resource }
+    return withForm({ action: 'replace-page', instance: page.instance, group: page.group, resource: key, pane: id, replaced: page.resource })
   }
 
   // 三、没有这样一页：开一页，进焦点组
   //（焦点组空了状态机会退到另一组，见 workspace.afterShapeChange）。
-  return {
+  return withForm({
     action: 'open-page',
     instance: pageIdOf(id, key, { pages, multiplicity: kind }),
     group: focusGroup,
     resource: key,
     pane: id
-  }
+  })
 }

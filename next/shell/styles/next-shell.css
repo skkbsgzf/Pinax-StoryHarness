@@ -1761,3 +1761,107 @@ input.doc-title {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--archive-ink);
 }
+
+/* —— 命令面板（批次62 · 任务三）——————————————————————————————————————————
+ * 皮沿用统一二级页那三枚 token：遮罩 --surface-overlay、层级 --z-modal-backdrop／--z-modal、
+ * 圆角 --radius-surface（工单B0 的裁定：弹窗形态只有一套，这里不另起皮）。
+ * 但它不是第二枚「配置弹窗」：里面没有设置项，只有一条输入框与一张能跑的命令表；
+ * 焦点走 focusTrap.mjs 那一份实现（与 SettingsModal 同源），关掉即还给原焦点。
+ * 宽度用 min(560px, 92vw)——窄屏（手机／分屏那一半）不溢出，宽屏不铺满一整面。 */
+.nx-palette {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal-backdrop);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: var(--surface-overlay);
+}
+.nx-palette-panel {
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 92vw);
+  max-height: 56vh;
+  overflow: hidden;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-surface);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 18px 44px color-mix(in srgb, var(--archive-ink) 22%, transparent);
+}
+.nx-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline-soft);
+  color: var(--text-muted);
+}
+.nx-palette-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--nx-fs-lg);
+  font-family: inherit;
+}
+.nx-palette-input::placeholder {
+  color: var(--text-muted);
+}
+.nx-palette-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-palette-list {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+.nx-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: var(--nx-fs-md);
+}
+.nx-palette-item.is-active {
+  color: var(--text-primary);
+  background: var(--workbench-selected);
+}
+.nx-palette-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-palette-owner {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-palette-accel {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-palette-empty,
+.nx-palette-hint {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}

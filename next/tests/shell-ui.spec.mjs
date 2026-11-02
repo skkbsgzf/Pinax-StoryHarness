@@ -109,8 +109,9 @@ describe('空框架外壳', () => {
     // 渲染层的外呼只有这几条：view（读视图）、偏好（D2 主题迁移/持久化）、
     // 以及 M2.5-C 的工作区四轴（workspaceLoad／workspaceSave 是唯一落盘点，坐标与形态都走它）。
     // 批次49 起挂载时多一次服务日志池快照读（只读，竖条状态点与设置页共用）。
+    // 批次62 起再多一次快捷键表读取（hotkeysLoad，只读：Ctrl+P 那把键得先知道作者改过没有）。
     // 它拿不到内核实现，也就没有旁路写盘的可能。
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog]
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -1383,7 +1384,8 @@ describe('载体管理面板（工单A1）', () => {
     expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
     // 工作区通道（M2.5-C）随挂载就会走一次读：那是宿主状态，不是项目写入；
     // 服务日志池快照（批次49）同理，只读不写。
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog]
+    // 快捷键表（批次62）也是只读那一条：hotkeysLoad 不要求项目，hotkeysSave 才要求——这里只可能出现前者。
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -2736,6 +2738,120 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
       }
       globalThis.localStorage?.clear()
     }
+  })
+
+  /** 手势真按下去才算数：源码里有那句函数不够，得证明值确实流到 openTarget。 */
+  function altClick(node) {
+    node.element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0, altKey: true }))
+  }
+
+  function plainClick(node) {
+    node.element.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 }))
+  }
+
+  function middleDown(node) {
+    node.element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 1 }))
+  }
+
+  it('Alt＋点页签／竖条＝同一个动作换一形态（浮窗）；中键点页签＝关被点那一页（批次62 任务五）', async () => {
+    const workspace = { version: 3, entries: {} }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    expect(formOf('outline.editor#1')).toBe('page')
+    expect(hostWorkspace.list().filter((entry) => entry.form !== 'page')).toEqual([])
+
+    // 入口①：Alt＋点页签。落点判定没变（还是那一页），只有形态跟着手势走。
+    altClick(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]'))
+    await flushPromises()
+    expect(formOf('outline.editor#1')).toBe('floating')
+    expect(hostWorkspace.get('outline.editor#1').geometry).toBeTruthy()
+    expect(hostWorkspace.list().filter((entry) => entry.pane === 'outline.editor')).toHaveLength(1,
+      '手势不许另起一页：换形态是在原有那一页上换')
+
+    // 入口②：Alt＋点竖条那一格（小说板此刻那一页是页态）。
+    altClick(railByName(wrapper, '小说（夹具）'))
+    await flushPromises()
+    expect(formOf('novel.editor#1')).toBe('floating')
+
+    // 不带 Alt 的普通点击一次都不拦：还是「揭示那一页」，形态由右键菜单说了算（批次61 语义）。
+    plainClick(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]'))
+    await flushPromises()
+    expect(hostWorkspace.list().map((entry) => entry.instance).sort()).toEqual(['novel.editor#1', 'outline.editor#1'])
+    expect(formOf('outline.editor#1')).toBe('floating', '普通点击不换形态')
+    expect(hostWorkspace.snapshot().active.main, '两条都浮着时主组没有当前页：页位只由页态记录占据').toBe(null)
+
+    // 中键：关的就是被点的那一条签，别的页原地不动。
+    middleDown(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]'))
+    await flushPromises()
+    expect(hostWorkspace.get('outline.editor#1')).toBe(null)
+    expect(hostWorkspace.get('novel.editor#1')).toBeTruthy()
+    expect(wrapper.findAll('.nx-page-tab').map((tab) => tab.attributes('data-page-instance'))).toEqual(['novel.editor#1'])
+
+    // 中键落在非页签处（正文里）＝不关任何东西：认不出页签就整体让位。
+    middleDown(wrapper.find('.col-center'))
+    await flushPromises()
+    expect(hostWorkspace.get('novel.editor#1')).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('命令面板：Ctrl+P 唤起、子串过滤、Enter 经 command 通路执行；Esc 只收面板不收窗（批次62 任务三／四）', async () => {
+    const handlers = new Map([[IPC_CHANNELS.commandList, () => ({
+      ok: true,
+      value: {
+        total: 2,
+        commands: [
+          { id: 'project.proposals', title: '提案审阅…', owner: 'app.menu', ownerTitle: '应用菜单', group: 'menu', accelerator: 'CmdOrCtrl+Shift+R', run: 'menu:project.proposals' },
+          { id: 'outline.open-editor', title: '打开大纲编辑', owner: 'pinax.carrier.outline', ownerTitle: '大纲', group: 'carrier', accelerator: '', run: 'pane:outline.editor' }
+        ]
+      }
+    })]])
+    const bridge = pageBridge({ workspace: { version: 3, entries: {} }, handlers })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+    expect(formOf('outline.widget#1')).toBe('floating')
+    expect(wrapper.find('[data-test="command-palette"]').exists()).toBe(false, '面板不该常驻')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true }))
+    await flushPromises()
+    const palette = () => wrapper.find('[data-test="command-palette"]')
+    expect(palette().exists(), 'Ctrl+P（CmdOrCtrl+P 在非 mac 上就是 Ctrl）必须唤得起面板').toBe(true)
+    expect(palette().attributes('role')).toBe('dialog')
+    const listedIds = palette().findAll('.nx-palette-item').map((item) => item.attributes('data-palette-id'))
+    expect(listedIds).toContain('project.proposals', '表里必须有应用菜单动作')
+    expect(listedIds).toContain('outline.open-editor', '表里必须有载体声明的命令（数据源＝command:list，不是面板自己拼的）')
+    expect(listedIds.some((id) => String(id).startsWith('page.')), '表里还必须有当前焦点页可用的动作').toBe(true)
+    expect(palette().find('[data-palette-id="project.proposals"]').attributes('data-palette-group')).toBe('menu')
+
+    // 子串包含（本批只做这一档）：命中那条留下，其余整体消失。
+    await palette().find('[data-test="palette-input"]').setValue('打开大纲')
+    expect(palette().findAll('.nx-palette-item').map((item) => item.attributes('data-palette-id'))).toEqual(['outline.open-editor'])
+    await palette().find('[data-test="palette-input"]').setValue('不会有的词')
+    expect(palette().find('[data-test="palette-empty"]').exists()).toBe(true)
+    await palette().find('[data-test="palette-input"]').setValue('打开大纲')
+
+    // Enter＝执行：run 串 `pane:outline.editor` 落到宿主那条唯一的开窗通路（缺省形态仍是页，浮窗一条都不多）。
+    palette().find('[data-test="palette-input"]').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(palette().exists()).toBe(false, '执行完就收：面板不该留在页上面')
+    expect(formOf('outline.editor#1')).toBe('page')
+    expect(hostWorkspace.list().filter((entry) => entry.form === 'floating').map((entry) => entry.instance)).toEqual(['outline.widget#1'])
+
+    // Esc 的双重消费：面板开着时先关面板，叠序最高的那扇浮窗一条都不许动。
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', ctrlKey: true, bubbles: true }))
+    await flushPromises()
+    palette().find('[data-test="palette-input"]').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(palette().exists()).toBe(false)
+    expect(formOf('outline.widget#1')).toBe('floating', '同一次 Esc 不许既关面板又收窗')
+
+    // 面板关了以后，Esc 才回到它原来的那件事：收叠序最高的窗（批次61 语义）。
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('tab')
+    wrapper.unmount()
   })
 })
 

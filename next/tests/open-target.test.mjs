@@ -106,7 +106,7 @@ test('非法 pane 一律 block，不把空实例交给状态机', () => {
 })
 
 test('〔裁定①〕七条路径的缺省答案里没有「新建浮窗」', () => {
-  assert.deepEqual([...OPEN_ACTIONS], ['reveal', 'replace-page', 'open-page', 'raise-tab', 'block'])
+  assert.deepEqual([...OPEN_ACTIONS], ['reveal', 'replace-page', 'open-page', 'raise-tab', 'block', 'close-page'])
   const cases = [
     { pane: 'novel.editor', pages: [] },
     { pane: 'novel.editor', pages: [page('novel.editor#1', { pane: 'novel.editor' })], resource: '章节/第二章.md' },
@@ -120,9 +120,90 @@ test('〔裁定①〕七条路径的缺省答案里没有「新建浮窗」', ()
   }
 })
 
-test('gesture 本批不实现：传了修饰键就如实拒绝，不悄悄忽略（批次62 解除这条）', () => {
-  const withGesture = resolveOpenTarget({ pane: 'novel.editor', pages: [], groups: { focus: 'main' }, gesture: { meta: true } })
-  assert.equal(withGesture.action, 'block')
-  assert.equal(withGesture.reason, 'GESTURE_NOT_IMPLEMENTED')
-  assert.equal(resolveOpenTarget({ pane: 'novel.editor', pages: [], gesture: {} }).action, 'open-page')
+/* —— 批次62 任务五：gesture 从「预留形参」变成「真吃值」————————————————————
+ * 两条入口（界面侧的传值断言在 next/tests/command-face.test.mjs 与 carrier-pane.spec）：
+ *   Alt＋点击 → gesture:{ form:'floating' } ；中键点击页签 → gesture:{ action:'close', instance }。
+ * 这里钉的是口径本身：手势不改「去哪一页」的判定，只改那一页此刻以什么形态出现。
+ */
+
+test('〔批次62〕Alt＋点击：落点判定一条不改，只在答案上多带 form——绝不新建第二页', () => {
+  const pages = [page('novel.editor#1', { pane: 'novel.editor', resource: '章节/第一章.md' })]
+  const altReveal = resolveOpenTarget({
+    pane: 'novel.editor',
+    resource: '章节/第一章.md',
+    pages,
+    groups: { focus: 'main' },
+    gesture: { form: 'floating' }
+  })
+  assert.equal(altReveal.action, 'reveal', '已开着的那一页还是回到那一页')
+  assert.equal(altReveal.instance, 'novel.editor#1')
+  assert.equal(altReveal.form, 'floating', 'Alt 的语义＝以另一形态执行同一动作')
+
+  const altOpen = resolveOpenTarget({ pane: 'outline.tree', pages: [], groups: { focus: 'side' }, gesture: { form: 'floating' } })
+  assert.equal(altOpen.action, 'open-page')
+  assert.equal(altOpen.instance, 'outline.tree#1', '没开过时分配的仍是 #1，不因为手势多占一个序号')
+  assert.equal(altOpen.form, 'floating')
+
+  const altSingle = resolveOpenTarget({
+    pane: 'novel.editor',
+    multiplicity: 'single',
+    resource: '章节/第二章.md',
+    pages,
+    groups: { focus: 'main' },
+    gesture: { form: 'floating' }
+  })
+  assert.equal(altSingle.action, 'replace-page', 'single 硬闸不因为手势松掉')
+  assert.equal(altSingle.replaced, '章节/第一章.md')
+  assert.equal(altSingle.form, 'floating')
+})
+
+test('〔批次62〕中键点击页签＝关被点的那一页；那一页不在列表里就 block，不猜第二页', () => {
+  const pages = [
+    page('novel.editor#1', { pane: 'novel.editor', resource: '章节/第一章.md' }),
+    page('novel.editor#2', { pane: 'novel.editor', resource: '章节/第二章.md', order: 1 })
+  ]
+  const closed = resolveOpenTarget({
+    pane: 'novel.editor',
+    multiplicity: 'keyed',
+    pages,
+    groups: { focus: 'main' },
+    gesture: { action: 'close', instance: 'novel.editor#2' }
+  })
+  assert.equal(closed.action, 'close-page')
+  assert.equal(closed.instance, 'novel.editor#2', '关的必须是被点的那一条签，不是焦点页')
+  assert.equal(closed.resource, '章节/第二章.md')
+
+  const ghost = resolveOpenTarget({
+    pane: 'novel.editor',
+    pages,
+    groups: { focus: 'main' },
+    gesture: { action: 'close', instance: 'novel.editor#7' }
+  })
+  assert.equal(ghost.action, 'block')
+  assert.equal(ghost.reason, 'GESTURE_NO_TARGET')
+
+  const wrongPane = resolveOpenTarget({
+    pane: 'notes.editor',
+    pages: [page('notes.editor#1', { pane: 'notes.editor' })],
+    gesture: { action: 'close', instance: 'novel.editor#1' }
+  })
+  assert.equal(wrongPane.action, 'block', '签与 pane 对不上就是脏值，不顺手关别的板')
+  assert.equal(wrongPane.reason, 'GESTURE_NO_TARGET')
+})
+
+test('〔批次62〕认不出的手势如实拒绝，不悄悄忽略；instance 单独传不构成一个手势', () => {
+  const meta = resolveOpenTarget({ pane: 'novel.editor', pages: [], groups: { focus: 'main' }, gesture: { meta: true } })
+  assert.equal(meta.action, 'block')
+  assert.equal(meta.reason, 'GESTURE_UNSUPPORTED')
+  assert.equal(
+    resolveOpenTarget({ pane: 'novel.editor', pages: [], gesture: { form: 'docked' } }).reason,
+    'GESTURE_FORM_UNSUPPORTED',
+    '形态词汇表外的手势要指名道姓地拒'
+  )
+  assert.equal(
+    resolveOpenTarget({ pane: 'novel.editor', pages: [], gesture: { instance: 'novel.editor#1' } }).action,
+    'block',
+    '只带 instance（「关哪一页」的搭档）没有动作，仍是没接住的手势'
+  )
+  assert.equal(resolveOpenTarget({ pane: 'novel.editor', pages: [], gesture: {} }).action, 'open-page', '空手势＝没有手势')
 })

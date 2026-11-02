@@ -40,6 +40,18 @@ export const ONLINE_CARRIER = Object.freeze({
       // 槽语义（批次53）：编辑位绑一条房间记录（single＋entry），认领 联机/**/*.json 并以 extension 档接管。
       { slot: 'center', id: 'online.editor', title: '联机', icon: 'collaboration', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['联机/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'online-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）。
+    // 本板块 centerPanes 只有一块（online.editor），「开这一页」与「点竖条这一格」是同一条路，只留一条 open-board。
+    //   online.open-board     board:pinax.carrier.online   ← 竖条点「联机」这一格（AppNext.selectBoard）
+    //   online.reload-records data:loadRecords:online      ← 索引窗的「刷新」（IndexWindow.vue:504）
+    //   online.edit-record    data:editRecord              ← 「编辑」钮（CarrierPaneHost.vue:1645）
+    //   online.save-record    data:saveRecord              ← 「保存」钮（CarrierPaneHost.vue:1641）
+    commands: [
+      { id: 'online.open-board', title: '打开联机栏', run: 'board:pinax.carrier.online' },
+      { id: 'online.reload-records', title: '重新载入联机房间清单', run: 'data:loadRecords:online' },
+      { id: 'online.edit-record', title: '编辑当前联机房间', run: 'data:editRecord' },
+      { id: 'online.save-record', title: '保存当前联机房间', run: 'data:saveRecord' }
+    ],
     settings: []
   }),
 

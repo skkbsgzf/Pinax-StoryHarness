@@ -46,6 +46,19 @@ export const OUTLINE_CARRIER = Object.freeze({
       // 它不是资源的所有者（不认领文件），所以不带 claims／priority。
       { slot: 'overlay', id: 'outline.widget', title: '大纲', width: 300, view: 'pinax.view.tree', kind: 'outline-editor', multiplicity: 'list', scope: 'session' }
     ],
+    // 批次62 任务一：命令面（五条全是既有动作的另一个入口，映射逐条对照）：
+    //   outline.open-board   board:pinax.carrier.outline ← 竖条点「大纲」这一格（AppNext.selectBoard）
+    //   outline.open-editor  pane:outline.editor         ← 点页签／左树开节点（AppNext.routeOpen 唯一通路）
+    //   outline.reload       data:loadOutline            ← 大纲栏重列（IndexWindow.vue:490 同一条调用）
+    //   outline.new-draft    data:startOutline           ← 索引窗「新建大纲」那枚钮（IndexWindow.vue:767）
+    //   outline.save         data:saveOutline            ← 大纲编辑位的「保存」（CarrierPaneHost.vue:881）
+    commands: [
+      { id: 'outline.open-board', title: '打开大纲栏', run: 'board:pinax.carrier.outline' },
+      { id: 'outline.open-editor', title: '打开大纲编辑这一页', run: 'pane:outline.editor' },
+      { id: 'outline.reload', title: '重新载入大纲', run: 'data:loadOutline' },
+      { id: 'outline.new-draft', title: '新建大纲（起一份草稿）', run: 'data:startOutline' },
+      { id: 'outline.save', title: '保存大纲', run: 'data:saveOutline' }
+    ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
   }),

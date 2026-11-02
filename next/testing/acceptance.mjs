@@ -22,6 +22,10 @@ import { buildRuntimeEnvelope } from '../runtime/contextProfiles.mjs'
 import { BUILT_IN_CARRIER_PLUGINS, COMIC_CARRIER_ID, DOSSIER_CARRIER_ID, EXPERIENCE_CARRIER_ID, MATERIAL_CARRIER_ID, NOTES_CARRIER_ID, NOVEL_CARRIER_ID, ONLINE_CARRIER_ID, OUTLINE_CARRIER_ID, SCRIPT_CARRIER_ID, VIDEO_CARRIER_ID, WORLDBOOK_CARRIER_ID } from '../carriers/index.mjs'
 import { FIXTURE_NOVEL } from './fixtures.mjs'
 import { probePort } from './harness.mjs'
+import { IPC_CHANNELS, createIpcDispatcher } from '../shell/ipcContract.mjs'
+import { PANE_FORMS } from '../shell/paneForms.mjs'
+import { PAGE_FORMS } from '../shell/workspace.mjs'
+import { GESTURE_ACTIONS, GESTURE_FORMS } from '../shell/openTarget.mjs'
 
 /**
  * 验收跑（M1 空框架清单 ①–⑦ ＋ M2 真载体清单 ⑧–⑭），verify:next 链上的真门禁。
@@ -564,6 +568,41 @@ try {
       && !('_meta' in (outputWrite ?? {}))
       && outputMismatch.ok === true && outputMismatch.value.payload.text === 42,
     `装=${outputInstalled.ok ? 'ok' : outputInstalled.error?.code} 非法=${illegalInstalled.error?.code ?? '未拒'} meta=${outputRead?._meta ? '在' : '缺'} 返回体=${outputMismatch.value?.payload?.text ?? '-'}`)
+
+  // ── 批次62 任务6：命令面记账（只留数，不打回）───────────────────────────
+  // 十一块内置载体安装进一份干净注册表，命令表走**真通道**（command:list）而不是自己再拼一份——
+  // 面板读的就是这一句，这里核的是同一句。
+  const commandRegistry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
+  for (const plugin of BUILT_IN_CARRIER_PLUGINS) commandRegistry.install(plugin.manifest, plugin.impl, plugin.meta)
+  const commandDispatcher = createIpcDispatcher({
+    session: { kernel: {}, registry: commandRegistry, project: null, runtime: null, view: null, lastFailure: null }
+  })
+  const commandListed = await commandDispatcher.dispatch(IPC_CHANNELS.commandList, {})
+  const listed = commandListed.value?.commands ?? []
+  const carrierEntries = listed.filter((entry) => entry.group === 'carrier')
+  const ownerResolvable = carrierEntries.every((entry) => commandRegistry.commandOwner(entry.id) === entry.owner)
+  const runsAreStrings = listed.every((entry) => typeof entry.run === 'string' && entry.run.length > 0)
+  record('批次62 记账①：command:list 非空，且每条载体命令都能解析出 commandOwner（不打回，只留数）',
+    commandListed.ok === true && listed.length > 0 && carrierEntries.length > 0 && ownerResolvable && runsAreStrings,
+    `总数=${listed.length} 载体=${carrierEntries.length} 归属可解=${ownerResolvable} run 全字符串=${runsAreStrings}`)
+
+  // 命名空间与形态词表：命令 id 的前段（载体短名）不许和「形态／手势」的词汇撞名——
+  // 撞了以后 `page.floating`／`overlay.close` 这类 id 读起来到底是命令还是状态，没人说得清。
+  const FORM_WORDS = new Set([...PANE_FORMS, ...PAGE_FORMS, ...GESTURE_FORMS, ...GESTURE_ACTIONS])
+  const idNamespaces = carrierEntries.map((entry) => String(entry.id).split('.')[0])
+  const formCollisions = [...new Set(idNamespaces.filter((ns) => FORM_WORDS.has(ns)))]
+  const duplicateIds = listed.map((entry) => entry.id).filter((id, index, all) => all.indexOf(id) !== index)
+  record('批次62 记账②：命令 id 命名空间与 forms／gesture 词表无冲突，全量 id 不重复（不打回，只留数）',
+    formCollisions.length === 0 && duplicateIds.length === 0,
+    `词表=${[...FORM_WORDS].join('/')} 撞名=${formCollisions.join(',') || '无'} 重复=${[...new Set(duplicateIds)].join(',') || '无'}`)
+
+  const distribution = commandRegistry.commands().reduce((map, command) => {
+    const key = command.pluginId.replace(/^pinax\.carrier\./u, '')
+    map[key] = (map[key] ?? 0) + 1
+    return map
+  }, {})
+  console.log(`〔批次62 记账〕载体命令 ${carrierEntries.length} 条，应用菜单动作 ${listed.length - carrierEntries.length} 条；逐载体分布：`
+    + Object.entries(distribution).map(([key, count]) => `${key}=${count}`).join(' '))
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

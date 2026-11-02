@@ -39,6 +39,17 @@ export const NOTES_CARRIER = Object.freeze({
       // 槽语义（批次53）：编辑位绑一篇构思（single＋entry），认领 构思/**/*.md 并以 extension 档接管。
       { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', kind: 'notes-editor', multiplicity: 'single', scope: 'entry', claims: ['构思/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'note' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）：
+    //   notes.open-board   board:pinax.carrier.notes ← 竖条点「构思」这一格（AppNext.selectBoard）
+    //   notes.open-editor  pane:notes.editor         ← 点页签／左树开一篇（AppNext.routeOpen 唯一通路）
+    //   notes.reload       data:loadNotes            ← 构思清单重列（IndexWindow／CarrierPaneHost 现成的那一条）
+    //   notes.save         data:saveNote             ← 构思编辑位的「保存」（CarrierPaneHost 的动作表）
+    commands: [
+      { id: 'notes.open-board', title: '打开构思栏', run: 'board:pinax.carrier.notes' },
+      { id: 'notes.open-editor', title: '打开构思编辑这一页', run: 'pane:notes.editor' },
+      { id: 'notes.reload', title: '重新载入构思清单', run: 'data:loadNotes' },
+      { id: 'notes.save', title: '保存当前构思', run: 'data:saveNote' }
+    ],
     // 协议 P14：本载体暂无设置项——空数组＝设置页不出这一格（不按载体标题伪造占位节）。
     settings: []
   }),

@@ -51,6 +51,19 @@ export const MATERIAL_CARRIER = Object.freeze({
       // 槽语义（批次53）：面板是只读的第二看法，允许多开（list）且随会话存续（session）；不认领文件。
       { slot: 'overlay', id: 'material.panel', title: '素材面板', icon: 'image', view: 'pinax.view.custom', kind: 'custom-panel', width: 320, multiplicity: 'list', scope: 'session', forms: ['overlay'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）。
+    // 这个板块的 centerPanes 只有一块（material.editor），所以「打开这一页」与「点竖条这一格」是同一条路，
+    // 只留一条 open-board——多写一条就是第二条入口的假象，评审会问「这条落到哪个既有动作」。
+    //   material.open-board     board:pinax.carrier.material   ← 竖条点「素材」这一格（AppNext.selectBoard）
+    //   material.reload-records data:loadRecords:material      ← 索引窗／画廊的「刷新」（IndexWindow.vue:504、MaterialGallery.vue:38）
+    //   material.edit-record    data:editRecord                ← 「编辑」钮（CarrierPaneHost.vue:1645）
+    //   material.save-record    data:saveRecord                ← 「保存」钮（CarrierPaneHost.vue:1641）
+    commands: [
+      { id: 'material.open-board', title: '打开素材栏', run: 'board:pinax.carrier.material' },
+      { id: 'material.reload-records', title: '重新载入素材清单', run: 'data:loadRecords:material' },
+      { id: 'material.edit-record', title: '编辑当前素材', run: 'data:editRecord' },
+      { id: 'material.save-record', title: '保存当前素材', run: 'data:saveRecord' }
+    ],
     settings: []
   }),
 

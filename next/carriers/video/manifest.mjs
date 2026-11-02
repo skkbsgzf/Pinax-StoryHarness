@@ -37,6 +37,18 @@ export const VIDEO_CARRIER = Object.freeze({
       // 槽语义（批次53）：编辑位绑一条镜头／成片记录（single＋entry），认领 视频/**/*.json 并以 extension 档接管。
       { slot: 'center', id: 'video.editor', title: '视频', icon: 'film', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['视频/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'video-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
     ],
+    // 批次62 任务一：命令面（既有动作的另一个入口）。
+    // 本板块 centerPanes 只有一块（video.editor），「开这一页」与「点竖条这一格」是同一条路，只留一条 open-board。
+    //   video.open-board     board:pinax.carrier.video    ← 竖条点「视频」这一格（AppNext.selectBoard）
+    //   video.reload-records data:loadRecords:video       ← 索引窗／画廊的「刷新」（IndexWindow.vue:504）
+    //   video.edit-record    data:editRecord              ← 「编辑」钮（CarrierPaneHost.vue:1645）
+    //   video.save-record    data:saveRecord              ← 「保存」钮（CarrierPaneHost.vue:1641）
+    commands: [
+      { id: 'video.open-board', title: '打开视频栏', run: 'board:pinax.carrier.video' },
+      { id: 'video.reload-records', title: '重新载入镜头与成片清单', run: 'data:loadRecords:video' },
+      { id: 'video.edit-record', title: '编辑当前镜头记录', run: 'data:editRecord' },
+      { id: 'video.save-record', title: '保存当前镜头记录', run: 'data:saveRecord' }
+    ],
     settings: []
   }),
 

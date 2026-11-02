@@ -25,7 +25,9 @@ export const MENU_TEMPLATE = Object.freeze([
       { id: 'project.backup', label: '备份与恢复…' },
       { id: 'project.history', label: '当前文档历史…', accelerator: 'CmdOrCtrl+Shift+H' },
       // 工单B1（协议 v1.1-B）：提案审阅迁出小说板索引窗，落统一二级页「文档 → 提案审阅」。
-      { id: 'project.reviewProposals', label: '提案审阅…', accelerator: 'CmdOrCtrl+Shift+P' },
+      // 批次62（裁定 Q3）：accelerator 让位给命令面板——Ctrl+Shift+P 从此是面板的键，
+      // 提案审阅改 Ctrl+Shift+R。这一份模板同时是 next/shell/hotkeys.mjs 默认键位的唯一来源。
+      { id: 'project.reviewProposals', label: '提案审阅…', accelerator: 'CmdOrCtrl+Shift+R' },
       // 工单A：从「运行时」组迁来（那个组整体删了）。主进程收到后给渲染层发提案目录提示。
       { id: 'project.proposals', label: '打开提案目录' },
       { type: 'separator' },
@@ -79,6 +81,23 @@ export function flattenMenuIds(template = MENU_TEMPLATE) {
   const walk = (items) => {
     for (const item of items) {
       if (item.id) out.push({ id: item.id, label: item.label })
+      if (Array.isArray(item.submenu)) walk(item.submenu)
+    }
+  }
+  walk(template)
+  return out
+}
+
+/**
+ * 展平成一维 {id,label,accelerator}（批次62 任务2／3）。
+ * 命令面板与 `command:list` 要能把「这条动作现在挂在哪个键上」如实摊给作者；
+ * 键位只在这份模板里写一次，hotkeys 的默认值也从这里取——两处各写一份迟早会飘。
+ */
+export function flattenMenuEntries(template = MENU_TEMPLATE) {
+  const out = []
+  const walk = (items) => {
+    for (const item of items) {
+      if (item.id) out.push({ id: item.id, label: item.label, accelerator: item.accelerator ?? '' })
       if (Array.isArray(item.submenu)) walk(item.submenu)
     }
   }

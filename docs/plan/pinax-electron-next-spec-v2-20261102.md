@@ -255,6 +255,8 @@
 `board`（看板面）与 `app`（应用面）由批次44 加入，宿主视图从 6 变 8——**`carrierManifest.mjs:149,465,476` 三处注释仍写「宿主六种视图」，属陈旧注释，登记在台账待批次66 修**（本合同表以常量为准，注释不权威）。
 配对纪律（@3+）：`pinax.view.custom` ⟺ `kind:'custom-panel'`；`pinax.view.app` ⟺ `kind:'external-app'`（⟹ 必须给 `app.url`，只本机回环）。写一半即拒。
 
+**附·手势（批次62 接通，词汇 `openTarget.mjs:41-42`）**：`gesture:{form:'floating'}` ＝ **Alt＋点竖条格／点页签**——以另一形态执行同一个动作，落点判定（reveal／replace-page／open-page／raise-tab）一条都不改，只在答案上多带一个 `form`；`gesture:{action:'close', instance}` ＝ **中键点页签**——关的就是被点那一页（实例不在页列表里就 `block:GESTURE_NO_TARGET`，不猜第二页）。手势既不开新动作也不新增形态值：形态轴仍是 §4.2 那三值，认不出的组合一律 `block` ＋明确 reason。
+
 ---
 
 ## 5. 装载合同（现状 ＋ 桩2／批次65 的目标合同）

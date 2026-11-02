@@ -20,18 +20,28 @@ import ExportSection from './settings/ExportSection.vue'
 import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import ServicesSection from './settings/ServicesSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
+import CommandPalette from './CommandPalette.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from './ipcContract.mjs'
-import { MENU_TEMPLATE } from './menus.mjs'
+import { MENU_TEMPLATE, flattenMenuEntries } from './menus.mjs'
+import {
+  HOTKEY_COLLAPSE_TOP,
+  HOTKEY_PALETTE_OPEN,
+  HOTKEYS_VERSION,
+  acceleratorLabel,
+  defaultBindings,
+  matchHotkey,
+  normalizeHotkeys
+} from './hotkeys.mjs'
 import {
   hostWorkspace,
   instanceIdFor,
   subscribeWorkspace
 } from './workspace.mjs'
 import { resolveOpenTarget } from './openTarget.mjs'
-import { MENU_TARGET_FORM } from './paneForms.mjs'
+import { FORM_ACTIONS, MENU_TARGET_FORM, PAGE_ACTIONS } from './paneForms.mjs'
 import PaneTabStrip from './PaneTabStrip.vue'
 import PaneFormMenu from './PaneFormMenu.vue'
 import { layoutTemplateForBoard, templateHasTree } from './layoutTemplates.mjs'
@@ -556,6 +566,8 @@ async function openProjectFolder() {
  * 页面内的落点（开弹窗／换主题／打开项目）与原生菜单事件共用 menuActions。 */
 const openMenuLabel = ref(null)
 const menubarRoot = ref(null)
+/** 壳层根节点：手势的捕获监听挂在这里（批次62 任务五）。 */
+const shellRoot = ref(null)
 
 /** 模板里的角色项没有 label（原生菜单由 Electron 自己取名），页内菜单行补一份人话。 */
 const ROLE_LABELS = Object.freeze({
@@ -627,6 +639,167 @@ async function invokeMenu(item) {
   } catch {
     // 分发失败不收回已经摊开的弹窗：主进程侧各通道会各自如实报错。
   }
+}
+
+/**
+ * —— 命令面（批次62 任务三）——————————————————————————————————————
+ * 面板自己不认识任何一块载体：它只把这张表摊出来、把选中的那条回给宿主。
+ * 表的内容 ＝ 应用菜单动作 ∪ 载体清单声明的命令 ∪ 当前焦点页可用的形态动作。
+ * 前两块一律经 `command:list` 通道取（主进程那一份是唯一口径，见 ipcContract 的 commandTable）；
+ * 桥不在（jsdom 验收、无主进程的开发模式）就回落到本地按同样两条数据源重算——
+ * 回落用的仍是 MENU_TEMPLATE 与 view.carriers[].commands 这两处既有声明，不另立第三份清单。
+ */
+const paletteOpen = ref(false)
+const remoteCommands = ref([])
+const hotkeyBindings = ref(defaultBindings())
+
+/** 桥不在时的回落口径：与主进程 commandTable 同一条映射，两条数据源都是既有的声明。 */
+function localCommandEntries() {
+  const fromMenu = flattenMenuEntries(MENU_TEMPLATE).map((item) => ({
+    id: item.id,
+    title: item.label,
+    owner: 'app.menu',
+    ownerTitle: '应用菜单',
+    group: 'menu',
+    accelerator: item.accelerator ?? '',
+    run: `menu:${item.id}`
+  }))
+  const fromCarriers = []
+  for (const carrier of carriers.value) {
+    for (const command of carrier.commands ?? []) {
+      fromCarriers.push({
+        id: command.id,
+        title: command.title,
+        owner: carrier.id,
+        ownerTitle: carrier.title ?? carrier.id,
+        group: 'carrier',
+        accelerator: '',
+        run: typeof command.run === 'string' ? command.run : ''
+      })
+    }
+  }
+  return [...fromMenu, ...fromCarriers]
+}
+
+/** 键位显示走 hotkeys 那一张表：作者改了键位，面板上就跟着变，不抄第二份。 */
+function acceleratorOf(entry) {
+  const bound = hotkeyBindings.value[entry.id]
+  if (bound) return acceleratorLabel(bound, { mac: isMac })
+  return acceleratorHint(entry.accelerator ?? '')
+}
+
+/**
+ * 当前焦点页可用的动作：项来自这块 pane 清单声明的 `forms` ∩ 真能落地的 FORM_ACTIONS，
+ * 再加 PAGE_ACTIONS 那两条（收成标签／关闭）——与页签右键菜单同一份词汇、同一个落点
+ * （applyFormAction）。面板只是这套房形态动作的第三个入口，不是第四套逻辑。
+ */
+function pageCommandEntries() {
+  const instance = focusedInstance()
+  if (!instance) return []
+  const entry = hostWorkspace.get(instance)
+  if (!entry) return []
+  const descriptor = descriptorFor(entry.pane)
+  const label = descriptor?.title ?? entry.pane
+  const shape = (item) => ({
+    id: `page.${instance}.${item.action}`,
+    title: `${item.label}（${label}）`,
+    owner: 'host.page',
+    ownerTitle: '当前页',
+    group: 'page',
+    accelerator: '',
+    run: `page:${item.action}`,
+    instance
+  })
+  const formItems = (descriptor?.forms ?? []).map((form) => FORM_ACTIONS[form]).filter(Boolean).map(shape)
+  return [...formItems, ...PAGE_ACTIONS.map(shape)]
+}
+
+const commandEntries = computed(() => {
+  const base = remoteCommands.value.length ? remoteCommands.value : localCommandEntries()
+  const entries = base
+    .filter((item) => item && item.id)
+    .map((item) => ({ ...item, accelerator: acceleratorOf(item) }))
+  const seen = new Set(entries.map((item) => item.id))
+  return [...entries, ...pageCommandEntries().filter((item) => !seen.has(item.id))]
+})
+
+async function loadCommandTable() {
+  if (!props.bridge?.request) {
+    remoteCommands.value = []
+    return
+  }
+  try {
+    const result = await props.bridge.request(IPC_CHANNELS.commandList, {})
+    remoteCommands.value = result?.ok && Array.isArray(result.value?.commands) ? result.value.commands : []
+  } catch {
+    remoteCommands.value = []
+  }
+}
+
+function openPalette() {
+  paletteOpen.value = true
+  void loadCommandTable()
+}
+function closePalette() {
+  paletteOpen.value = false
+}
+
+/**
+ * `run` 串的词汇（清单注释里那张映射表的另一半）。这里只认六个前缀，
+ * 每个前缀都落到一个**已经存在**的函数上——命令面不开第二条做事的路（工单禁止边界）。
+ * 认不出的串如实返回 false，不猜、不静默。
+ */
+async function resolveCommandRun(run, entry = null) {
+  const text = String(run ?? '')
+  const split = text.indexOf(':')
+  const verb = split < 0 ? '' : text.slice(0, split)
+  const arg = split < 0 ? '' : text.slice(split + 1)
+  if (!verb || !arg) return false
+  switch (verb) {
+    case 'menu':
+      await invokeMenu({ id: arg })
+      return true
+    case 'section':
+      openSection(arg)
+      return true
+    case 'board':
+      selectBoard(arg)
+      return true
+    case 'overlay':
+      toggleBoardOverlay(arg)
+      return true
+    case 'pane':
+      await routeOpen({ pane: arg })
+      return true
+    case 'page': {
+      const instance = entry?.instance ?? focusedInstance()
+      if (!instance) return false
+      applyFormAction(instance, arg)
+      return true
+    }
+    case 'data': {
+      // data:<方法>[?:参数]——方法与索引窗／编辑位上那枚按钮点下去调的是同一个（useBoardData 的导出面）。
+      // 参数段允许是空串：`data:setEntriesFilterCat:` 的入参就是「不设分类筛选」（EntriesCategoryTree.vue:29）。
+      const colon = arg.indexOf(':')
+      const method = colon < 0 ? arg : arg.slice(0, colon)
+      const param = colon < 0 ? undefined : arg.slice(colon + 1)
+      const target = activeData()
+      if (!target || typeof target[method] !== 'function') return false
+      await (param === undefined ? target[method]() : target[method](param))
+      return true
+    }
+    default:
+      return false
+  }
+}
+
+async function runPaletteCommand(entry) {
+  closePalette()
+  if (!entry) return
+  const ran = await resolveCommandRun(entry.run, entry)
+  if (ran) return
+  // 执行不了要说得出为什么：run 串是清单里的原话，认不出＝清单写错（或那条动作此刻没有承载的页）。
+  data.notice = `命令「${entry.title}」未接线：落点 ${String(entry.run || '（空）')} 不是既有动作`
 }
 
 /** Esc 与点击外部收起下拉（页内菜单不能挡着内容）。 */
@@ -929,7 +1102,7 @@ async function openResourceInPage(page, paneId, resource) {
  * 换这一页装哪份文档（replace-page，single 硬闸的后果）、新开一页（open-page）、拒（block）。
  * **这里没有任何一档会新建浮窗**：浮窗只经 PaneFormMenu 的「浮出为窗」到达。
  */
-async function routeOpen({ pane, resource = null, opener = null }) {
+async function routeOpen({ pane, resource = null, opener = null, gesture = null }) {
   const descriptor = descriptorFor(pane)
   if (!descriptor) return { action: 'block', reason: 'UNKNOWN_PANE', pane }
   const decision = resolveOpenTarget({
@@ -937,16 +1110,25 @@ async function routeOpen({ pane, resource = null, opener = null }) {
     multiplicity: descriptor.multiplicity ?? 'single',
     resource,
     pages: pageRecords(),
-    groups: { focus: workspaceSnapshot.value.focus }
+    groups: { focus: workspaceSnapshot.value.focus },
+    gesture: gesture ?? {}
   })
   if (decision.action === 'block') return decision
+  // 〔批次62 任务五〕中键点页签：openTarget 判出 close-page，落到宿主那句既有的 close——
+  // 关窗仍只有 hostWorkspace.close 一条路，手势只是把它提前到「点哪一条签就关哪一页」。
+  if (decision.action === 'close-page') {
+    hostWorkspace.close(decision.instance)
+    return { ...decision }
+  }
   const instance = decision.instance
   const page = pageDataOf(instance)
   await ensurePaneData(instance, decision.pane)
-  if (decision.action === 'open-page') hostWorkspace.open(instance, { resource: decision.resource, group: decision.group })
+  if (decision.action === 'open-page') hostWorkspace.open(instance, { resource: decision.resource, group: decision.group, form: decision.form ?? 'page' })
   else if (decision.action === 'replace-page') hostWorkspace.setResource(instance, decision.resource)
   else if (decision.action === 'raise-tab') hostWorkspace.setForm(instance, 'page')
   else hostWorkspace.bringToFront(instance)
+  // 〔批次62 任务五〕Alt＋点：落点判定一个字没改，只是那一页要以手势指定的形态出现。
+  if (decision.form && decision.form !== hostWorkspace.get(instance)?.form) hostWorkspace.setForm(instance, decision.form)
   const settled = decision.resource ?? hostWorkspace.get(instance)?.resource ?? null
   if (pageResource.get(instance) !== settled) {
     if (opener) await opener(page)
@@ -1480,15 +1662,96 @@ watch([() => props.bridge, () => project.value?.root ?? ''], ([bridge, root]) =>
 
 /**
  * Esc＝把叠序最高的那扇窗收成侧缘标签（铁律二）。
- * 统一二级页或页内菜单开着时让位——那一层自己的 Esc 先走。
+ * 统一二级页／命令面板／页内菜单开着时让位——那一层自己的 Esc 先走。
+ */
+function collapseTopWindow() {
+  const top = hostWorkspace.list().filter((entry) => entry.form !== 'tab').pop()
+  if (!top) return false
+  hostWorkspace.setForm(top.instance, 'tab')
+  return true
+}
+
+/**
+ * 快捷键总线（批次62 任务四）。收编的只有点名的高频项，词汇来自 next/shell/hotkeys.mjs 那张表：
+ *   · palette.open          Ctrl+P   唤起命令面板
+ *   · workspace.collapse-top Esc     收叠序最高的那一扇（本批第一次有实现落在这条键位串上）
+ *   · project.reviewProposals Ctrl+Shift+R（Q3 裁定：Ctrl+Shift+P 让给面板）
+ * 表里还有别的菜单 id，将来收编一条就自动生效，不必再改这个函数。
+ * 上层（面板／二级页／菜单下拉）开着就整体让位：Esc 同时是「关面板」和「收窗」时，先关面板。
  */
 function onWindowKeydown(event) {
-  if (event.key !== 'Escape') return
-  if (settingsOpen.value || openMenuLabel.value) return
-  const top = hostWorkspace.list().filter((entry) => entry.form !== 'tab').pop()
-  if (!top) return
+  if (paletteOpen.value || settingsOpen.value || openMenuLabel.value) return
+  const id = matchHotkey(event, hotkeyBindings.value)
+  if (!id) return
   event.preventDefault()
-  hostWorkspace.setForm(top.instance, 'tab')
+  if (id === HOTKEY_PALETTE_OPEN) {
+    openPalette()
+    return
+  }
+  if (id === HOTKEY_COLLAPSE_TOP) {
+    collapseTopWindow()
+    return
+  }
+  runMenuAction(id)
+}
+
+/* —— 手势入口（批次62 任务五）——————————————————————————————————
+ * 竖条与页签这两个组件不在本工单的允许文件里，所以入口不写进它们内部，而是在壳层用
+ * **捕获阶段**的监听器认领那两个修饰：普通点击照常冒泡给组件自己（一次都不拦），
+ * 只有带手势的那一下被这里吃掉并 preventDefault＋stopPropagation。
+ * 认元素靠组件已有的稳定钩子：页签带 `data-page-instance`，竖条格带 `aria-label＝板块标题`。
+ */
+function gestureTabInstance(event) {
+  const tab = event.target?.closest?.('.nx-page-tab[data-page-instance]')
+  return tab?.getAttribute?.('data-page-instance') ?? null
+}
+
+/** Alt＋点击：竖条图标／页签 → 以浮窗态执行同一个动作（值就交给 openTarget 的 gesture 形参）。 */
+function onGestureKeyClick(event) {
+  if (event.button !== 0 || !event.altKey || event.defaultPrevented) return
+  const instance = gestureTabInstance(event)
+  if (instance) {
+    const entry = hostWorkspace.get(instance)
+    if (!entry) return
+    event.preventDefault()
+    event.stopPropagation()
+    void routeOpen({ pane: entry.pane, resource: entry.resource ?? null, gesture: { form: 'floating' } })
+    return
+  }
+  const rail = event.target?.closest?.('.nx-ribbon-item[aria-label]')
+  const title = rail?.getAttribute?.('aria-label') ?? ''
+  const board = boards.value.find((item) => item.title === title)
+  const pane = board ? chosenCenterPaneFor(board) : null
+  if (!pane) return
+  event.preventDefault()
+  event.stopPropagation()
+  void routeOpen({ pane: pane.id, gesture: { form: 'floating' } })
+}
+
+/** 中键点击页签＝关那一页（值走 gesture:{action:'close', instance}，落点仍是宿主那句 close）。 */
+function onGestureMiddleDown(event) {
+  if (event.button !== 1) return
+  const instance = gestureTabInstance(event)
+  if (!instance) return
+  event.preventDefault()
+  event.stopPropagation()
+  const entry = hostWorkspace.get(instance)
+  if (!entry) return
+  void routeOpen({ pane: entry.pane, gesture: { action: 'close', instance } })
+}
+
+/* —— 快捷键表读盘（批次62 任务四）：经主进程 hotkeys:load 取当前项目那一份，写口在合同侧（hotkeys:save），
+ *    本批的界面还没有改键位的地方，所以渲染层今天只读不写——不设「点了没反应」的假口。 ———— */
+async function hydrateHotkeys() {
+  if (!props.bridge?.request) return
+  try {
+    const result = await props.bridge.request(IPC_CHANNELS.hotkeysLoad, {})
+    if (result?.ok && result.value?.bindings) {
+      hotkeyBindings.value = normalizeHotkeys({ version: HOTKEYS_VERSION, bindings: result.value.bindings }).bindings
+    }
+  } catch {
+    // 读不到就用默认表：快捷键是便利，不是真相来源，不许因为它把外壳卡住。
+  }
 }
 
 /** 只申请只读作用域的板块适合默认随行：它贡献上下文块，不跟主载体抢写盘。 */
@@ -1757,6 +2020,11 @@ onMounted(() => {
   document.addEventListener('pointerdown', onTitlebarPointerDown)
   // Esc 收起叠序最高的窗口（统一二级页先走自己的 Esc）。
   window.addEventListener('keydown', onWindowKeydown, true)
+  // 批次62 任务五：手势入口挂在壳层的捕获阶段——竖条与页签这两个组件不在本工单的允许文件里，
+  // 但它们已有的稳定钩子（data-page-instance／aria-label）足够认出「被点的是哪一格」。
+  shellRoot.value?.addEventListener?.('click', onGestureKeyClick, true)
+  shellRoot.value?.addEventListener?.('mousedown', onGestureMiddleDown, true)
+  void hydrateHotkeys()
 })
 
 onBeforeUnmount(() => {
@@ -1782,13 +2050,15 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onTitlebarKeydown)
   document.removeEventListener('pointerdown', onTitlebarPointerDown)
   window.removeEventListener('keydown', onWindowKeydown, true)
+  shellRoot.value?.removeEventListener?.('click', onGestureKeyClick, true)
+  shellRoot.value?.removeEventListener?.('mousedown', onGestureMiddleDown, true)
   unsubscribeWorkspace()
   hostWorkspace.attachPersistence(null)
 })
 </script>
 
 <template>
-  <div class="nx-shell-root">
+  <div ref="shellRoot" class="nx-shell-root">
     <!-- —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
          全宽一条：左侧应用名＋页内菜单行（数据源＝menus.mjs 的 MENU_TEMPLATE，与原生菜单同一份），
          中间项目信息 chip，右侧给原生窗控 overlay 留空（主进程 titleBarOverlay，约 138px）。
@@ -2046,6 +2316,16 @@ onBeforeUnmount(() => {
         @set-primary="pickPrimary"
         @toggle-companion="toggleCompanion"
         @update:active-section="activeSection = $event"
+      />
+
+      <!-- 批次62 任务三：命令面板（Ctrl+P）。它不是「第二枚弹窗」的例外——
+           焦点走与 SettingsModal 同一份 focusTrap.mjs，条目表走 command:list 同一条口径。 -->
+      <CommandPalette
+        :open="paletteOpen"
+        :entries="commandEntries"
+        placeholder="输入命令名…（应用菜单／载体命令／当前页动作）"
+        @close="closePalette"
+        @run="runPaletteCommand"
       />
 
       <WorkbenchTooltip />
