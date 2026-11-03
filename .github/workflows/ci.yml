@@ -172,6 +172,8 @@ jobs:
   next-kernel:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -187,4 +189,16 @@ jobs:
         run: npm ci
 
       - name: Verify Next (空框架验收 ＋ 内核合同单测 ＋ 外壳界面测 ＋ lint ＋ 打包门禁)
-        run: npm run verify:next
+        run: |
+          npm run verify:next 2>&1 | tee /tmp/vn.log
+          test ${PIPESTATUS[0]} -eq 0
+
+      - name: Report failure tail into repo
+        if: failure()
+        run: |
+          git config user.email "ci-debug@pinax.local"
+          git config user.name "ci-debug"
+          tail -c 24000 /tmp/vn.log > ci-debug-report.md || true
+          git add ci-debug-report.md
+          git commit -m "ci-debug: verify:next failure tail" || echo "nothing to commit"
+          git push origin HEAD:ci-debug
