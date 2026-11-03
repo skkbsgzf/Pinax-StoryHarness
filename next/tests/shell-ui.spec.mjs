@@ -1086,6 +1086,284 @@ describe('运行时栏', () => {
     expect(trail.text()).toContain('AGENT_PROVIDER_CONFIG_INVALID')
     wrapper.unmount()
   })
+
+  /* —— 〔批次77 任务3〕输入区：一个 typeahead 吃三类 ＋ 技能 token ＋ 停止钮 ＋ 模式三档 ————
+   * 判定与组菜单的**规则**在 next/tests/composer-typeahead.test.mjs（纯函数，9 条）钉着；
+   * 这几条只问屏上那三件事：菜单真出得来吗、键真按得动吗、发出去的载荷对不对。
+   */
+
+  /** 带技能清单的运行时视图：形状照主进程那份 view（runtime.surface.skills.catalog，真装载的那几条）。 */
+  function runtimeViewWithSkills(catalog, { rejected = [] } = {}) {
+    return {
+      ...runtimeView(),
+      surface: { skills: { names: catalog.map((item) => item.name), rejected, catalog } }
+    }
+  }
+
+  /** 打字并把光标放到末尾（jsdom 的 selectionStart 不随 setValue 走，这里以现场为准喂判定函数）。 */
+  async function type(wrapper, text) {
+    const input = wrapper.find('.authoring-knowledge__input-row textarea')
+    await input.setValue(text)
+    input.element.setSelectionRange(text.length, text.length)
+    await input.trigger('click')
+    return input
+  }
+
+  const menuItems = (wrapper) => wrapper.findAll('[data-test="composer-menu"] [data-item-kind]')
+  const menuKinds = (wrapper) => menuItems(wrapper).map((item) => item.attributes('data-item-kind'))
+
+  it('〔批次77 任务3〕一个 typeahead 吃三类：/ 出命令与技能、@ 出素材、# 出那一句「暂无」（菜单头还教着键位）', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '收到' } })
+    })
+    const runtime = runtimeViewWithSkills([
+      { name: 'chapter-rewrite', description: '重写这一章的场次节奏', output: 'proposal' },
+      { name: 'jiangnan-style', description: '江南那种吐槽流的口吻', output: 'proposal', kind: 'style' }
+    ])
+    const wrapper = mount(RuntimeDock, {
+      props: {
+        runtime,
+        bridge,
+        references: [
+          { kind: 'chapter', title: '第一章 雪', path: '正文/第一章.md' },
+          { kind: 'entry', title: '雪落无声', path: '世界书/雪落无声.md' }
+        ]
+      }
+    })
+
+    // `/`：命令在前、技能在后，风格包单列一组（任务5 的 kind:style）。
+    await type(wrapper, '/')
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="composer-menu"]').text()).toContain('↑↓')
+    expect(menuKinds(wrapper)).toEqual(expect.arrayContaining(['command', 'skill']))
+    expect(wrapper.findAll('[data-item-kind="skill"]').map((item) => item.text())).toEqual([
+      expect.stringContaining('/chapter-rewrite'),
+      expect.stringContaining('/jiangnan-style')
+    ])
+
+    // `@`：按既有词表出素材，插的是 @《标题》。
+    await type(wrapper, '看看 @')
+    expect(menuKinds(wrapper)).toEqual(['reference', 'reference'])
+    expect(menuItems(wrapper)[0].text()).toContain('@《第一章 雪》')
+
+    // `#`：角色清单要等批次78——这一类只有那一句实话，而且它**不是一枚点不动的钮**（工单：不留死钮）。
+    await type(wrapper, '#')
+    expect(wrapper.findAll('[data-item-kind]').length).toBe(0)
+    expect(wrapper.find('[data-test="composer-empty"]').text()).toContain('批次78')
+
+    wrapper.unmount()
+  })
+
+  it('〔批次77 守卫⑧〕前导边界：中文正文中段的 / @ # 不误唤菜单（工单点名的「第3/章」）', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { text: '收到' } })
+    })
+    const runtime = runtimeViewWithSkills([{ name: 'chapter-rewrite', description: '重写这一章', output: 'proposal' }])
+    const wrapper = mount(RuntimeDock, { props: { runtime, bridge, references: [{ kind: 'chapter', title: '第一章 雪', path: '正文/第一章.md' }] } })
+
+    // 键盘序列也在这条里钉死：↑↓ 移动、Enter 选中、Tab 补全、Esc 关闭——老版是两套各写一遍，Tab 只有一边有。
+    await type(wrapper, '第3/章')
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(false, '数字后面的 / 不算 token')
+    await type(wrapper, '我去看了/然后')
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(false, '汉字后面的 / 不算 token')
+    await type(wrapper, 'mail a@b.com')
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(false, '行中的 @ 是邮箱')
+
+    // 换成行首那一段（空白之后）就出得来——负断言不许把正路一起打死。
+    await type(wrapper, '第3章 /ch')
+    expect(menuKinds(wrapper)).toEqual(['skill'])
+
+    // ↓ 走到第二条 would 越界（这一档只有一条），Enter 选中的还是它；Tab 补同一条。
+    await wrapper.find('.authoring-knowledge__input-row textarea').trigger('keydown', { key: 'ArrowDown' })
+    await wrapper.find('.authoring-knowledge__input-row textarea').trigger('keydown', { key: 'Enter' })
+    expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe('第3章 /chapter-rewrite ')
+
+    // Esc 关掉后不挡着作者继续打字；再打一个字菜单回来。
+    await wrapper.find('.authoring-knowledge__input-row textarea').trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(false)
+    await type(wrapper, '第3章 /chapter-rewrite 把这场')
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(false, 'token 后面有空格＝这一段敲完了，不再弹')
+    wrapper.unmount()
+  })
+
+  it('〔批次77 任务3〕技能选中＝草稿里那个 /技能名 文本；发送时抽出来当 payload.skill，没打 token 就一个都不塞', async () => {
+    const asks = []
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async (payload) => {
+        asks.push(payload)
+        return { ok: true, value: { source: 'in-process-runner', text: '改好了' } }
+      }
+    })
+    const runtime = runtimeViewWithSkills([
+      { name: 'chapter-rewrite', description: '重写这一章的场次节奏', output: 'proposal' },
+      { name: 'scene-expand', description: '把这段戏展开', output: 'proposal' }
+    ])
+    const wrapper = mount(RuntimeDock, { props: { runtime, bridge } })
+
+    await type(wrapper, '/scene')
+    await wrapper.find('.authoring-knowledge__input-row textarea').trigger('keydown', { key: 'Tab' })
+    expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe('/scene-expand ')
+    await type(wrapper, '/scene-expand 把这段戏展开')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    expect(asks).toHaveLength(1)
+    // 正文里**不留字面量**：喂给模型的 question 是作者那句话，不带 /scene-expand。
+    expect(asks[0].question).toBe('把这段戏展开')
+    expect(asks[0].question).not.toContain('scene-expand')
+    // 技能走的是既有那格（agentRuntime.ask 的 options.skill → 循环里 pinax_skill_read 取正文）。
+    expect(asks[0].skill).toBe('scene-expand')
+    // 会话里那条问句也是剥掉 token 后的正文——屏上留着一串斜杠是给模型看的，不是给作者看的。
+    expect(wrapper.find('.authoring-knowledge__question-row').text()).toContain('把这段戏展开')
+
+    // 反向（工单：payload.skill 未被前端硬塞）：普通一句没有 token，载荷里就不该出现 skill 这一格。
+    await type(wrapper, '这一章的节奏怎么样')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    expect(asks).toHaveLength(2)
+    expect(asks[1]).not.toHaveProperty('skill')
+    expect(asks[1].question).toBe('这一章的节奏怎么样')
+
+    // 没装载的那个名字不当技能（整包拒装的不该被前端认）：原样留在正文里。
+    await type(wrapper, '/not-loaded 这句话')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    expect(asks).toHaveLength(3)
+    expect(asks[2]).not.toHaveProperty('skill')
+    expect(asks[2].question).toBe('/not-loaded 这句话')
+    wrapper.unmount()
+  })
+
+  it('〔批次77 任务3〕停止钮：点了发的是 runtimeAskAbort（带 askId），status 由运行回执落成 stopped', async () => {
+    let settle = null
+    const calls = []
+    const response = new Promise((resolve) => { settle = resolve })
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        calls.push([channel, payload])
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        if (channel === IPC_CHANNELS.runtimeAsk) return response
+        if (channel === IPC_CHANNELS.runtimeAskAbort) return { ok: true, value: { askId: payload.askId, cancelled: true } }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      })
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    expect(wrapper.find('[data-test="composer-stop"]').exists()).toBe(false, '没在跑的时候不许摆一枚点不动的停止钮')
+
+    await type(wrapper, '把这一章跑一遍')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    const askId = calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1].askId
+    expect(wrapper.find('[data-test="composer-stop"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="composer-stop"]').trigger('click')
+    expect(calls).toContainEqual([IPC_CHANNELS.runtimeAskAbort, { askId }])
+
+    // 点下去那一刻界面**不许**先把这条改成「已停」：停没停要等运行那条链在轮次边界上收的手。
+    expect(wrapper.find('.authoring-knowledge__answer-status').exists()).toBe(false)
+
+    settle({ ok: true, value: { source: 'in-process-advisor', text: '已按作者要求停止（第 2 轮后不再续轮）。', askId, stopped: true } })
+    await flushPromises()
+
+    const status = wrapper.find('.authoring-knowledge__answer-status')
+    expect(status.text()).toBe('已停')
+    expect(status.attributes('data-status')).toBe('stopped')
+    // 落进会话的不只是屏上那一格：store 里那条的 status 真值是 stopped（重开窗口还在）。
+    const stored = wrapper.find('.authoring-knowledge__answer').attributes()
+    expect(stored).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('〔批次77 任务3〕模式三档：blocked 上有点得到的路，切过去被会话事件记下、提问载荷也带着它', async () => {
+    const saves = []
+    const asks = []
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        if (channel === IPC_CHANNELS.sessionsLoad) return { ok: true, value: { sessions: [], warnings: [], badLines: 0 } }
+        if (channel === IPC_CHANNELS.sessionsSave) {
+          saves.push(payload.snapshot)
+          return { ok: true, value: { saved: 1 } }
+        }
+        if (channel === IPC_CHANNELS.runtimeAsk) {
+          asks.push(payload)
+          return { ok: true, value: { source: 'in-process-runner', text: '只读着答' } }
+        }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      })
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge, projectRoot: 'D:/mode' } })
+    await flushPromises()
+
+    const badge = () => wrapper.find('.authoring-knowledge__mode-badge')
+    expect(badge().text()).toBe('审阅')
+    // 老代码这里只判 review／auto：锁定时徽标会错着 auto 的色。词表（WRITE_MODES）早就有三档，补上第三档的皮与路。
+    await badge().trigger('click')
+    await wrapper.find('[data-test="mode-blocked"]').trigger('click')
+    await flushPromises()
+    expect(badge().text()).toBe('锁定')
+    expect(badge().classes()).toContain('is-blocked')
+
+    await type(wrapper, '这块目录只读时问一句')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    expect(asks.at(-1)).toEqual(expect.objectContaining({ question: '这块目录只读时问一句', writeMode: 'blocked' }))
+
+    // 「被会话事件记下」：切换写模式这一条进的是会话事件流水，不是只改了一个显示值。
+    const latest = saves.at(-1)
+    const modeEvents = latest.sessions[0].events.filter((event) => event.kind === 'mode')
+    expect(modeEvents.map((event) => `${event.from}→${event.to}`)).toEqual(['review→blocked'])
+
+    // 从锁定回审阅不设闸（回到更保守的档位永远允许），也不留确认条。
+    await badge().trigger('click')
+    await flushPromises()
+    expect(badge().text()).toBe('审阅')
+    expect(wrapper.find('.authoring-knowledge__mode-confirm').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('〔批次77 任务3〕对话面那几条键位走 hotkeys 那张表，不在组件里硬编码按键', async () => {
+    const calls = []
+    let settle = null
+    const response = new Promise((resolve) => { settle = resolve })
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        calls.push([channel, payload])
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        if (channel === IPC_CHANNELS.hotkeysLoad) return { ok: true, value: { version: 1, bindings: { 'skill.menu': 'CmdOrCtrl+Shift+K' } } }
+        if (channel === IPC_CHANNELS.runtimeAsk) return response
+        if (channel === IPC_CHANNELS.runtimeAskAbort) return { ok: true, value: { askId: payload.askId, cancelled: true } }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      })
+    }
+    const runtime = runtimeViewWithSkills([{ name: 'chapter-rewrite', description: '重写这一章', output: 'proposal' }])
+    const wrapper = mount(RuntimeDock, { props: { runtime, bridge } })
+    await flushPromises()
+
+    // 作者把「唤起技能菜单」改成 Ctrl+Shift+K：表里改了键位，屏上就得按新键位响（读的是 hotkeys:load 那一份）。
+    const press = (init) => document.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init }))
+    press({ key: 'k', ctrlKey: true, shiftKey: true })
+    await flushPromises()
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(true, 'Ctrl+Shift+K 该唤出技能菜单')
+    expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe('/')
+
+    // 默认表里的 Ctrl+/ 这一档**不该**再响（那张表才是唯一来源）。
+    await type(wrapper, '')
+    press({ key: '/', ctrlKey: true })
+    await flushPromises()
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(false)
+
+    // 停止那条：在途时按键＝把 abort 发出去。
+    await type(wrapper, '跑一轮')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    const askId = calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1].askId
+    press({ key: 'Enter', ctrlKey: true, shiftKey: true })
+    await flushPromises()
+    expect(calls).toContainEqual([IPC_CHANNELS.runtimeAskAbort, { askId }])
+    settle({ ok: true, value: { text: '已按作者要求停止（第 1 轮后不再续轮）。', askId, stopped: true } })
+    await flushPromises()
+    wrapper.unmount()
+  })
 })
 
 describe('Obsidian 三栏', () => {

@@ -42,6 +42,13 @@ import { renderMarkdown } from './mdRender.mjs'
  *   - `/` 提示从「只显示」升级为可点/可 Enter 选中，选中把模板填进草稿（命令词不留在草稿里）；
  *   - `@` 弹层按类列出当前项目内容，点一条把 @《标题》 插进光标处。
  * 本组件不做命令路由与引用解析（那是 RuntimeDock 的事）：它只把草稿与选中的命令交上去。
+ *
+ * 〔批次77 任务3〕**两套键盘逻辑合一**：上面那两件（`/` 与 `@`）原本是两块各写一遍的并行状态
+ * （各自的 open／query／index／Esc），键位也就各判各的，`Tab` 只有一边有、中文正文中段的 `/`
+ * 还会误触。现在三类触发符（`/` 技能与命令、`@` 素材、`#` 工作流角色）走**同一条**判定与菜单：
+ * `detectComposerToken` 认光标前那一段（含前导边界），`buildComposerMenu` 出菜单，
+ * `applyComposerToken` 管回填。判定全在 `composerTypeahead.mjs`（纯函数，node:test 直测），
+ * 这一层只把菜单摆出来并把手上的键分派过去——与任务4 的时间线同一口径「组件只负责摆」。
  */
 const props = defineProps({
   /** 会话面：[{ id, role:'user'|'agent', text, findings:[], actions:[], command, notes:[], failed:boolean, at:string }] */
@@ -61,34 +68,55 @@ const props = defineProps({
   placeholder: { type: String, default: '就当前项目问一句话…' },
   /** 折叠层的工具名清单（默认不展开）。 */
   tools: { type: Array, default: () => [] },
-  /** 当前模式：review（提案制）或 auto（直写）。 */
+  /** 当前模式：review（提案制）／auto（直写）／blocked（这块目录只读，写入被拒也不出提案）。 */
   mode: { type: String, default: 'review' },
   /** 会话列表摘要：[{ id, title, updatedAt, messageCount }]（agentSessions.list()）。 */
   sessions: { type: Array, default: () => [] },
   activeSessionId: { type: String, default: '' },
   /** @ 引用清单：[{ kind, title, path }]，由外壳从 board data 组一份传下来。 */
   references: { type: Array, default: () => [] },
+  /**
+   * 〔批次77 任务3〕`/` 菜单里的技能清单：运行时装载那一份（surface.skills.catalog）。
+   * 只给**真装载**的——整包拒装的（工具不在面上）不该出现在这里，作者要去设置里的技能库看原因。
+   */
+  skills: { type: Array, default: () => [] },
+  /** 〔批次77 任务3〕`#` 工作流角色清单：产出方是批次78，本批恒为空 → 菜单只出那一句「暂无」。 */
+  roles: { type: Array, default: () => [] },
+  /** 〔批次77 任务3〕键位表（hotkeys.mjs 那张）：宿主读一份经 props 递下来，本组件不硬编码按键。 */
+  hotkeys: { type: Object, default: () => ({}) },
   /** 统一二级页开着时为 true：Esc 先归它（照 FloatingWidget 的 suspendEsc 先例）。 */
   suspendEsc: { type: Boolean, default: false }
 })
-const emit = defineEmits(['send', 'retry', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate'])
+const emit = defineEmits(['send', 'retry', 'stop', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate'])
 
 const draft = ref('')
 const threadRef = ref(null)
 const textareaRef = ref(null)
 const sessionRoot = ref(null)
-const mode = computed(() => props.mode)
 
 /**
  * 切到 auto 需要一次显式确认（M2.5-B）：这是「AI 产出直接写正文」的那一档，
  * 一次误点不该把后面所有提问都改成直写。review 回退不需要确认——回到更安全的档位永远允许。
+ *
+ * 〔批次77 任务3〕第三档 `blocked`（词表源 `writePolicy.WRITE_MODES`，本批之前只有 UI 判前两档）：
+ * 「这块目录只读，写入被拒也不出提案」。它**不塞进 auto 那条确认行**当默认项——
+ * 确认行讲的那句话是「会直接写入正文」，把最保守的一档挂在同一句下面会读反。
+ * 落点是徽标本身：review 点＝开确认行（auto 那一档），blocked 点＝直接回 review（回保守档不设闸），
+ * auto 点＝回 review（既有口径一字不动，那条用例钉着）。blocked 的**进**走确认行里新加的那枚钮。
  */
 const pendingAuto = ref(false)
 const modeLabel = computed(() => ({ review: '审阅', auto: '自动', blocked: '锁定' }[props.mode] ?? '审阅'))
+const modeClass = computed(() => (props.mode === 'auto' ? 'is-auto' : props.mode === 'blocked' ? 'is-blocked' : 'is-review'))
+const modeTitle = computed(() => ({
+  review: '审阅模式：AI 产出走提案，确认后才落盘',
+  auto: '自动模式：AI 产出直接写入（慎用）',
+  blocked: '锁定模式：写入一律被拒，也不出提案（这块目录只读）'
+}[props.mode] ?? '审阅模式：AI 产出走提案，确认后才落盘'))
 watch(() => props.mode, () => { pendingAuto.value = false })
 
 function requestMode() {
-  if (props.mode === 'auto') {
+  // 从两档「更 unsafe」的档位回 review 都不设闸：点一下就回，不留确认条（既有口径）。
+  if (props.mode === 'auto' || props.mode === 'blocked') {
     pendingAuto.value = false
     emit('update:mode', 'review')
     return
@@ -101,6 +129,12 @@ function confirmAuto() {
   emit('update:mode', 'auto')
 }
 
+/** 切到锁定：写族一律被拒（主进程 writePolicy 判 blocked），这一档不需要二次确认——它比 review 更保守。 */
+function confirmBlocked() {
+  pendingAuto.value = false
+  emit('update:mode', 'blocked')
+}
+
 function cancelAuto() {
   pendingAuto.value = false
 }
@@ -111,30 +145,94 @@ function cancelAuto() {
  */
 const pendingCommand = ref(null)
 
-/* —— / 命令提示：可点、可 Enter 选中 —— */
-const slashCommands = SLASH_COMMANDS
-const slashClosed = ref(false)
-const slashIndex = ref(0)
-const slashOpen = computed(() => !slashClosed.value && !refOpen.value && isSlashDraft(draft.value))
+/* —— 〔批次77 任务3〕一个 typeahead 吃三类：`/` 命令与技能、`@` 素材、`#` 工作流角色 ——
+ * 判定／组菜单／回填三件事全在 composerTypeahead.mjs（纯函数）。这里只剩四样状态：
+ * 当前 token、菜单是否被 Esc 关掉（只管那一下，重新打字给回一次机会）、高亮序号、草稿。
+ */
+const composerToken = ref(null)
+const menuClosed = ref(false)
+const menuIndex = ref(0)
 
-/* —— @ 引用弹层 —— */
-const MAX_REFERENCE_PER_KIND = 8
-const refOpen = ref(false)
-const refQuery = ref('')
-const refIndex = ref(0)
-const referenceGroups = computed(() => {
-  const query = refQuery.value.trim()
-  const groups = []
-  for (const kind of REFERENCE_KIND_ORDER) {
-    const items = (props.references ?? [])
-      .filter((item) => item?.kind === kind)
-      .filter((item) => item?.title && (!query || String(item.title).includes(query)))
-      .slice(0, MAX_REFERENCE_PER_KIND)
-    if (items.length) groups.push({ kind, label: referenceKindLabel(kind), items })
-  }
-  return groups
+const composerMenu = computed(() => {
+  const token = composerToken.value
+  if (!token || menuClosed.value) return null
+  return buildComposerMenu({
+    trigger: token.trigger,
+    query: token.query,
+    commands: SLASH_COMMANDS,
+    skills: props.skills,
+    references: props.references,
+    roles: props.roles,
+    referenceKindOrder: REFERENCE_KIND_ORDER,
+    referenceKindLabels: REFERENCE_KIND_LABELS
+  })
 })
-const referenceOptions = computed(() => referenceGroups.value.flatMap((group) => group.items))
+/** 键盘那一条扁平序列（顺序＝屏上顺序，与 buildComposerMenu 同源）。 */
+const composerItems = computed(() => composerMenu.value?.items ?? [])
+
+/** 光标前那一段重算一次（输入、点击、键盘移动光标都走这里，判定只有一处）。 */
+function refreshComposer() {
+  const element = textareaRef.value
+  const caret = typeof element?.selectionStart === 'number' ? element.selectionStart : draft.value.length
+  const token = detectComposerToken(draft.value, caret)
+  const previous = composerToken.value
+  composerToken.value = token
+  if (!token) {
+    menuClosed.value = false
+    menuIndex.value = 0
+    return
+  }
+  // 换了一个 token（换触发符或改了查询词）＝作者重新在敲一个东西：上一轮 Esc 关掉的菜单给回一次机会。
+  if (previous?.trigger !== token.trigger || previous?.query !== token.query) {
+    menuClosed.value = false
+    menuIndex.value = 0
+    return
+  }
+  if (menuIndex.value >= Math.max(1, composerItems.value.length)) menuIndex.value = 0
+}
+
+function moveComposer(step) {
+  const total = composerItems.value.length
+  if (!total) return
+  menuIndex.value = (menuIndex.value + step + total) % total
+}
+
+/**
+ * 选中一条菜单项：
+ *   · 命令＝老口径（模板填进草稿，命令词不留在草稿里，路由靠 pendingCommand 带过去）；
+ *   · 技能／素材／角色＝把正在敲的那一段换成 token 文本（`/技能名`、`@《标题》`），光标落到它后面。
+ * 技能那条是工单第 1 条的「只插文本」：正文与注入都不长在这个对话框里。
+ */
+function pickComposerItem(item) {
+  if (!item) return
+  if (item.kind === 'command') {
+    pendingCommand.value = item.source ?? null
+    draft.value = String(item.source?.template ?? '')
+    menuClosed.value = true
+    caretToEnd()
+    return
+  }
+  const token = composerToken.value
+  if (!token || !item.value) return
+  const next = applyComposerToken(draft.value, token, item.value)
+  draft.value = next.draft
+  menuClosed.value = true
+  nextTick(() => {
+    const element = textareaRef.value
+    element?.focus?.()
+    element?.setSelectionRange?.(next.caret, next.caret)
+    refreshComposer()
+  })
+}
+
+function caretToEnd() {
+  nextTick(() => {
+    const element = textareaRef.value
+    element?.focus?.()
+    element?.setSelectionRange?.(draft.value.length, draft.value.length)
+    refreshComposer()
+  })
+}
 
 /* —— 会话弹层 —— */
 const sessionOpen = ref(false)
@@ -147,54 +245,39 @@ function submit() {
   emit('send', { text, command: pendingCommand.value })
   draft.value = ''
   pendingCommand.value = null
-  slashClosed.value = false
-  refOpen.value = false
+  composerToken.value = null
+  menuClosed.value = false
+  menuIndex.value = 0
 }
 
-/** 老版的口径：Enter 发送，Shift+Enter 换行，中文输入法组字时不抢键。
- *  229 是老 Chromium 在组字期把 keyCode 打成占位值的那条兜底——Safari／旧 Electron 上
- *  event.isComposing 有时是 false 但 keyCode 仍是 229，只判前半个就会把「还没选完的字」当发送按出去。
- *  老前端 8 处同一口径（如 src/components/authoring/AuthoringBlockComposer.vue:202、
- *  AuthoringManuscriptImport.vue:451、AuthoringRehearsalPanel.vue:93），这里照抄不发明。 */
+/**
+ * 键位合一（工单第 1 条）：菜单开着时 ↑↓ 移动、Enter／Tab 选中、Esc 关菜单；
+ * 菜单不在（或那一句是空态、没有可选项）时 Enter 才是发送，Shift+Enter 换行。
+ * 中文输入法组字时不抢键：`isComposing` 之外还要兜 `keyCode === 229`——
+ * 229 是老 Chromium 在组字期把 keyCode 打成占位值的那条兜底，Safari／旧 Electron 上
+ * event.isComposing 有时是 false 但 keyCode 仍是 229，只判前半个就会把「还没选完的字」当发送按出去。
+ * 老前端 8 处同一口径（如 src/components/authoring/AuthoringBlockComposer.vue:202、
+ * AuthoringManuscriptImport.vue:451、AuthoringRehearsalPanel.vue:93），这里照抄不发明。
+ */
 function onKeydown(event) {
   if (event.isComposing || event.keyCode === 229) return
-  if (slashOpen.value) {
+  const items = composerItems.value
+  if (items.length) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
-      const step = event.key === 'ArrowDown' ? 1 : -1
-      slashIndex.value = (slashIndex.value + step + slashCommands.length) % slashCommands.length
-      return
-    }
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      pickSlash(slashCommands[slashIndex.value])
+      moveComposer(event.key === 'ArrowDown' ? 1 : -1)
       return
     }
     if (event.key === 'Escape') {
       event.preventDefault()
-      slashClosed.value = true
+      menuClosed.value = true
       return
     }
-  }
-  if (refOpen.value) {
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    // Tab＝补全（把高亮那条的文本换进草稿，光标留给作者继续敲）；Enter＝选中同一条。
+    // Shift+Enter 不换这条：它是换行，菜单开着也不抢（作者要的就是那一行空白）。
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
       event.preventDefault()
-      const total = referenceOptions.value.length
-      if (!total) return
-      const step = event.key === 'ArrowDown' ? 1 : -1
-      refIndex.value = (refIndex.value + step + total) % total
-      return
-    }
-    if (event.key === 'Enter') {
-      const item = referenceOptions.value[refIndex.value]
-      if (!item) return
-      event.preventDefault()
-      insertReference(item)
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      refOpen.value = false
+      pickComposerItem(items[menuIndex.value] ?? items[0])
       return
     }
   }
@@ -203,56 +286,69 @@ function onKeydown(event) {
   submit()
 }
 
-/** 选中命令：模板填进草稿，命令词不留在草稿里（路由靠 pendingCommand 带过去）。 */
-function pickSlash(command) {
-  if (!command) return
-  pendingCommand.value = command
-  draft.value = command.template
-  slashClosed.value = true
-  nextTick(() => textareaRef.value?.focus?.())
-}
-
-/** 每次键入都重算 @ 触发：光标前最后一个 token 形如 `@query` 才弹；敲到空白外就收。 */
+/** 每次键入都重算：草稿空了命令就作废，token 没了菜单就收。 */
 function onInput() {
   if (!draft.value.trim()) pendingCommand.value = null
-  // 上一轮 Esc 关掉的提示，重新打字就再给一次机会（Esc 只管那一下）。
-  slashClosed.value = false
-  updateRefMenu()
+  refreshComposer()
 }
 
-function updateRefMenu() {
+/** 唤起技能菜单（`skill.menu` 那条键位）：把光标处插进一个 `/`，剩下的交给同一条判定。 */
+function openSkillMenu() {
   const element = textareaRef.value
-  const caret = element?.selectionStart ?? draft.value.length
-  const before = draft.value.slice(0, caret)
-  const match = /(?:^|\s)@([^\s@]*)$/u.exec(before)
-  if (!match) {
-    refOpen.value = false
-    refQuery.value = ''
+  element?.focus?.()
+  if (composerToken.value?.trigger === '/') {
+    menuClosed.value = false
     return
   }
-  refOpen.value = true
-  refQuery.value = match[1] ?? ''
-  refIndex.value = 0
+  const caret = typeof element?.selectionStart === 'number' ? element.selectionStart : draft.value.length
+  draft.value = `${draft.value.slice(0, caret)}/${draft.value.slice(caret)}`
+  menuClosed.value = false
+  nextTick(() => {
+    element?.setSelectionRange?.(caret + 1, caret + 1)
+    refreshComposer()
+  })
 }
 
-/** 把 @《标题》 插进光标处，替换掉正在输入的 `@query`。 */
-function insertReference(item) {
-  const element = textareaRef.value
-  const value = draft.value
-  const caret = element?.selectionStart ?? value.length
-  const before = value.slice(0, caret)
-  const after = value.slice(caret)
-  const token = `@《${item.title}》`
-  const start = Math.max(0, before.length - refQuery.value.length - 1)
-  const head = value.slice(0, start)
-  draft.value = `${head}${token} ${after.replace(/^\s*/u, '')}`
-  refOpen.value = false
-  refQuery.value = ''
-  const position = head.length + token.length + 1
-  nextTick(() => {
-    element?.focus?.()
-    element?.setSelectionRange?.(position, position)
-  })
+/**
+ * 〔批次77 任务3〕宿主键位表落点（六条里除「提案审阅」走原生菜单外，这五条都归对话框）：
+ * 键位串只在 hotkeys.mjs 那张表里有一份，这里只按 id 分派到上面那几个既有动作，
+ * 不在这儿重打一遍按键——作者改了键位，屏上这条也跟着变。
+ */
+function onChatHotkey(event) {
+  if (props.suspendEsc) return false
+  const id = matchHotkey(event, props.hotkeys)
+  if (!id || !CHAT_HOTKEY_IDS.includes(id)) return false
+  if (id === HOTKEY_CHAT_OPEN) {
+    event.preventDefault()
+    textareaRef.value?.focus?.()
+    return true
+  }
+  if (id === HOTKEY_CHAT_SEND) {
+    if (props.busy || props.disabled) return true
+    event.preventDefault()
+    submit()
+    return true
+  }
+  if (id === HOTKEY_CHAT_STOP) {
+    // 停止只在真有一问在途时才有意义：没在跑的时候按它，不许把「停了」这件事演出来。
+    if (!props.busy) return true
+    event.preventDefault()
+    emit('stop')
+    return true
+  }
+  if (id === HOTKEY_CHAT_MODE) {
+    if (props.disabled) return true
+    event.preventDefault()
+    requestMode()
+    return true
+  }
+  if (id === HOTKEY_SKILL_MENU) {
+    if (props.busy || props.disabled) return true
+    event.preventDefault()
+    openSkillMenu()
+    return true
+  }
+  return false
 }
 
 function toggleSessions() {
@@ -431,13 +527,20 @@ function regenerate(message) {
 function setDraft(text) {
   draft.value = String(text ?? '')
   pendingCommand.value = null
-  nextTick(() => textareaRef.value?.focus?.())
+  menuClosed.value = false
+  nextTick(() => {
+    const element = textareaRef.value
+    element?.focus?.()
+    element?.setSelectionRange?.(draft.value.length, draft.value.length)
+    refreshComposer()
+  })
 }
 
 defineExpose({ setDraft })
 
-/** Esc：会话弹层先收（统一二级页开着时让位，照 FloatingWidget 的 suspendEsc）。 */
+/** 文档级键盘口：先给宿主键位表（对话面那五条），没命中再走老那条「Esc 收会话弹层」。 */
 function onDocumentKeydown(event) {
+  if (onChatHotkey(event)) return
   if (event.key !== 'Escape' || props.suspendEsc) return
   if (!sessionOpen.value) return
   event.preventDefault()
@@ -458,12 +561,9 @@ watch(() => props.messages.length, async () => {
   if (threadRef.value) threadRef.value.scrollTop = threadRef.value.scrollHeight
 }, { immediate: true })
 
-watch(slashOpen, (open) => {
-  if (open) slashIndex.value = 0
-})
-
-watch(referenceOptions, () => {
-  refIndex.value = 0
+// 菜单项数量随 query 变（过滤后可能一条不剩）：高亮序号不许停在越界的那一格上。
+watch(() => composerItems.value.length, (total) => {
+  if (menuIndex.value >= total) menuIndex.value = 0
 })
 
 onMounted(() => {
@@ -502,8 +602,8 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="authoring-knowledge__mode-badge"
-          :class="mode === 'review' ? 'is-review' : 'is-auto'"
-          :title="mode === 'review' ? '审阅模式：AI 产出走提案，确认后才落盘' : '自动模式：AI 产出直接写入（慎用）'"
+          :class="modeClass"
+          :title="modeTitle"
           :aria-pressed="pendingAuto.toString()"
           @click="requestMode"
         >{{ modeLabel }}</button>
@@ -551,9 +651,18 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div v-if="pendingAuto" class="authoring-knowledge__mode-confirm" role="alertdialog" aria-label="切换到自动模式">
+    <div v-if="pendingAuto" class="authoring-knowledge__mode-confirm" role="alertdialog" aria-label="切换写模式">
       <span class="authoring-knowledge__mode-confirm-text">自动模式下，AI 的产出会直接写入正文，不再走提案。只对当前项目生效。</span>
       <button type="button" class="authoring-knowledge__mode-confirm-ok" @click="confirmAuto">确认切换</button>
+      <!-- 〔批次77 任务3〕第三档 blocked 的入口（词表已有、UI 只判前两档那处补齐）：
+           它与 auto 是相反方向（更保守），所以不进那句「直接写入」的确认语，单列一枚钮说明白。 -->
+      <button
+        type="button"
+        class="authoring-knowledge__mode-confirm-blocked"
+        data-test="mode-blocked"
+        title="锁定模式：写入一律被拒，也不出提案（比审阅更保守，不需要确认）"
+        @click="confirmBlocked"
+      >切到锁定（只读）</button>
       <button type="button" class="authoring-knowledge__mode-confirm-cancel" @click="cancelAuto">取消</button>
     </div>
 
@@ -702,6 +811,38 @@ onBeforeUnmount(() => {
       </details>
 
       <div class="authoring-knowledge__input-row">
+        <!-- 〔批次77 任务3〕typeahead 弹层：三类触发符共用这一层（判定与菜单在 composerTypeahead.mjs）。
+             头一行教键位——↑↓／Enter／Tab／Esc 这四件事在老版是两套各写一遍的键盘逻辑，
+             谁能用哪个键没人说得清；现在只有一条序列，就把那条序列写在菜单头上。 -->
+        <div
+          v-if="composerMenu"
+          class="authoring-knowledge__typeahead"
+          data-test="composer-menu"
+          role="listbox"
+          :aria-label="`补全菜单（${composerToken?.trigger ?? ''}）`"
+        >
+          <p class="authoring-knowledge__typeahead-keys">↑↓ 移动 · Enter 选中 · Tab 补全 · Esc 关闭</p>
+          <p v-if="composerMenu.empty" class="authoring-knowledge__typeahead-empty" data-test="composer-empty">{{ composerMenu.empty.label }}</p>
+          <template v-for="group in composerMenu.groups" :key="`${group.kind}-${group.label}`">
+            <p class="authoring-knowledge__typeahead-group">{{ group.label }}</p>
+            <button
+              v-for="item in group.items"
+              :key="item.key"
+              type="button"
+              class="authoring-knowledge__typeahead-item"
+              :class="{ 'is-active': composerItems[menuIndex] === item }"
+              role="option"
+              :aria-selected="(composerItems[menuIndex] === item).toString()"
+              :data-item-kind="item.kind"
+              @mousedown.prevent
+              @click="pickComposerItem(item)"
+            >
+              <span class="authoring-knowledge__typeahead-label">{{ item.label }}</span>
+              <span v-if="item.hint" class="authoring-knowledge__typeahead-hint">{{ item.hint }}</span>
+            </button>
+          </template>
+        </div>
+
         <textarea
           ref="textareaRef"
           v-model="draft"
@@ -711,51 +852,27 @@ onBeforeUnmount(() => {
           :disabled="disabled || busy"
           @keydown="onKeydown"
           @input="onInput"
-          @click="updateRefMenu"
-          @blur="refOpen = false"
+          @click="refreshComposer"
+          @keyup.arrow-left="refreshComposer"
+          @keyup.arrow-right="refreshComposer"
+          @blur="composerToken = null"
         />
 
-        <!-- @ 引用弹层：按类列出当前项目内容（每类最多 8 条），点一条插进光标处。 -->
-        <div v-if="refOpen" class="authoring-knowledge__ref-pop" role="listbox" aria-label="引用项目内容">
-          <p class="authoring-knowledge__ref-head">引用项目内容（@）</p>
-          <p v-if="!referenceOptions.length" class="authoring-knowledge__ref-empty">当前项目还没有可引用的内容（打开对应栏目后这里就有）。</p>
-          <template v-for="group in referenceGroups" :key="group.kind">
-            <p class="authoring-knowledge__ref-group">{{ group.label }}</p>
-            <button
-              v-for="item in group.items"
-              :key="`${group.kind}-${item.path ?? item.title}`"
-              type="button"
-              class="authoring-knowledge__ref-item"
-              :class="{ 'is-active': referenceOptions[refIndex] === item }"
-              role="option"
-              :aria-selected="(referenceOptions[refIndex] === item).toString()"
-              @mousedown.prevent
-              @click="insertReference(item)"
-            >
-              <span class="authoring-knowledge__ref-title">@《{{ item.title }}》</span>
-              <span class="authoring-knowledge__ref-kind">{{ group.label }}</span>
-            </button>
-          </template>
-        </div>
-
-        <!-- / 命令提示：可点、可上下键选、可 Enter 选中（选中把模板填进草稿）。 -->
-        <div v-if="slashOpen" class="authoring-knowledge__slash-hint" role="listbox" aria-label="可用命令">
-          <button
-            v-for="(command, index) in slashCommands"
-            :key="command.name"
-            type="button"
-            class="authoring-knowledge__slash-item"
-            :class="{ 'is-active': index === slashIndex }"
-            role="option"
-            :aria-selected="(index === slashIndex).toString()"
-            @mousedown.prevent
-            @click="pickSlash(command)"
-          >
-            <code>{{ command.name }}</code> {{ command.desc }}
-          </button>
-        </div>
-
         <div class="authoring-knowledge__composer-actions">
+          <!-- 〔批次77 任务3〕停止钮：只在真有一问在途时出现。点下去的动作是「问主进程把这一问标成已取消」，
+               落不落得停由运行那条链在轮次边界上说了算——界面不自己先把状态改成「已停」。 -->
+          <button
+            v-if="busy"
+            type="button"
+            class="authoring-knowledge__stop"
+            data-test="composer-stop"
+            aria-label="停止这一问"
+            title="停止：这一轮跑完后不再续轮（已跑的部分照常留在会话里）"
+            :disabled="disabled"
+            @click="emit('stop')"
+          >
+            <WorkbenchIcon name="stop" :size="17" />
+          </button>
           <button
             type="button"
             class="authoring-knowledge__send"
@@ -884,10 +1001,11 @@ onBeforeUnmount(() => {
 .authoring-knowledge__mode-confirm-text { flex: 1 1 180px; }
 .authoring-knowledge__mode-confirm-ok, .authoring-knowledge__mode-confirm-cancel { flex: none; display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
 .authoring-knowledge__mode-confirm-ok { color: var(--signal-warm, currentColor); border-color: color-mix(in srgb, var(--signal-warm, currentColor) 32%, transparent); }
-.authoring-knowledge__slash-hint { display: flex; flex-wrap: wrap; gap: 6px 8px; padding: 6px 4px 0; font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
-.authoring-knowledge__slash-item { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); cursor: pointer; }
-.authoring-knowledge__slash-item.is-active, .authoring-knowledge__slash-item:hover { color: var(--archive-ink); background: var(--nav-hover); border-color: var(--border-strong); }
-.authoring-knowledge__slash-item code { color: var(--accent, var(--accent)); font-weight: 600; margin-right: 4px; }
+/* 〔批次77 任务3〕第三档 blocked：徽标与确认行都认得它（老代码只判 review／auto，
+   锁定时徽标会错着 auto 的色）。这一档比审阅更保守，所以它是冷色，不借用 auto 那支暖色。 */
+.authoring-knowledge__mode-badge.is-blocked { color: var(--control-danger); border-color: color-mix(in srgb, var(--control-danger) 32%, transparent); }
+.authoring-knowledge__mode-confirm-blocked { flex: none; display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
+.authoring-knowledge__mode-confirm-blocked:hover { color: var(--control-danger); border-color: color-mix(in srgb, var(--control-danger) 32%, transparent); }
 </style>
 
 <style scoped>
@@ -918,15 +1036,17 @@ onBeforeUnmount(() => {
 .authoring-knowledge__command-badge { margin-right: 6px; padding: 1px 6px; border-radius: var(--nx-radius-xs); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-size: var(--nx-fs-2xs); }
 p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.5; }
 
-/* @ 引用弹层：贴在输入行上缘（弹层在输入行内部，input-row 已是 relative）。 */
-.authoring-knowledge__ref-pop { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: var(--z-popover); max-height: 300px; overflow-y: auto; padding: 6px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: var(--surface-workbench-raised); box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent); scrollbar-width: thin; }
-.authoring-knowledge__ref-head { margin: 2px 8px 4px; color: var(--text-muted); font-size: var(--nx-fs-2xs); letter-spacing: .04em; }
-.authoring-knowledge__ref-group { margin: 6px 8px 2px; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
-.authoring-knowledge__ref-item { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--archive-ink); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
-.authoring-knowledge__ref-item.is-active, .authoring-knowledge__ref-item:hover { background: var(--nav-hover); }
-.authoring-knowledge__ref-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.authoring-knowledge__ref-kind { flex: none; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
-.authoring-knowledge__ref-empty { margin: 4px 8px; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.6; }
+/* 〔批次77 任务3〕typeahead 弹层：三类触发符共用这一层（老版是 ref-pop 与 slash-hint 两层、两套键盘）。
+   位置仍贴输入行上缘（input-row 已是 relative），词汇与层序沿用那一份。 */
+.authoring-knowledge__typeahead { position: absolute; left: 0; right: 0; bottom: calc(100% + 6px); z-index: var(--z-popover); max-height: 300px; overflow-y: auto; padding: 6px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: var(--surface-workbench-raised); box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent); scrollbar-width: thin; }
+.authoring-knowledge__typeahead-keys { margin: 2px 8px 4px; color: var(--text-muted); font-size: var(--nx-fs-2xs); letter-spacing: .04em; }
+.authoring-knowledge__typeahead-group { margin: 6px 8px 2px; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__typeahead-item { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; padding: 5px 8px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--archive-ink); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
+.authoring-knowledge__typeahead-item.is-active, .authoring-knowledge__typeahead-item:hover { background: var(--nav-hover); }
+.authoring-knowledge__typeahead-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.authoring-knowledge__typeahead-hint { flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+/* 空态那一行是**一句实话**，不是一枚点不动的钮（工单：不留死钮）——所以它没有 button 皮，也不参与高亮序列。 */
+.authoring-knowledge__typeahead-empty { margin: 4px 8px; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.6; }
 </style>
 
 <style scoped>
@@ -955,4 +1075,10 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='streaming'] { color: var(--accent); }
 /* 会话级用量（输入区右上）：一行的极淡小字，数值只记账、不当任何闸。 */
 .authoring-knowledge__composer-usage { margin: 0 2px 4px; text-align: end; color: var(--text-muted); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; }
+
+/* 〔批次77 任务3〕停止钮：与发送钮同族同尺寸（命中区走既有 --workspace-control-height，
+   不自立一档数值），只是配色取「会被拒」那一支——它是收手，不是提交。 */
+.authoring-knowledge__stop { display: grid; flex: none; width: var(--workspace-control-height, 36px); height: var(--workspace-control-height, 36px); place-items: center; border: 1px solid color-mix(in srgb, var(--control-danger) 32%, transparent); border-radius: 50%; background: transparent; color: var(--control-danger); cursor: pointer; }
+.authoring-knowledge__stop:hover:not(:disabled) { background: color-mix(in srgb, var(--control-danger) 10%, transparent); }
+.authoring-knowledge__stop:disabled { color: var(--text-muted); border-color: var(--hairline-soft); cursor: default; }
 </style>

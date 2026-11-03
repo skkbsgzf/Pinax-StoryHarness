@@ -12,6 +12,8 @@ import {
   trailStageLabel
 } from './agentSessions.mjs'
 import { resolveSlash, slashMessageFields } from './slashCommands.mjs'
+import { extractSkillToken, skillNameList } from './composerTypeahead.mjs'
+import { HOTKEYS_VERSION, defaultBindings, normalizeHotkeys } from './hotkeys.mjs'
 import { matchReference, parseRefs, referenceKindLabel, resolveRefs, withRefs } from './agentReferences.mjs'
 import { legacyLocalStorage, migrateLegacySessions } from './sessionMigration.mjs'
 
@@ -31,6 +33,9 @@ import { legacyLocalStorage, migrateLegacySessions } from './sessionMigration.mj
  *   4) 提问：把问题送进 runtime:ask 通道、把回答排成会话、记住最后一轮以便重试。
  *   5) 运行过程（批次29）：提问期间接主进程推来的真实阶段事件，busy 期换阶段语，
  *      答完把整条轨迹随消息落进会话（答下方的「过程」折叠层），刷新后还在。
+ *   6) 〔批次77 任务3〕技能与停止：发送那一刻从正文抽出 `/技能名` token（只认真装载的那份清单，
+ *      抽完把字面量从正文里去掉），并把「按 askId 取消」的请求发给主进程——停没停由运行回执说，
+ *      这一层不自己把消息改成「已停」。
  * 工具面之类的开发者向事实折在对话框底部的折叠层里——老版就是这么处理的。
  */
 const props = defineProps({
@@ -118,6 +123,33 @@ const activeSessionId = computed(() => snapshot.value.activeId)
 const busy = computed(() => snapshot.value.busy)
 const canAsk = computed(() => Boolean(props.bridge?.request))
 const tools = computed(() => props.runtime.tools.map((tool) => ({ name: tool.name })))
+/**
+ * 〔批次77 任务3〕`/` 菜单要的技能清单：主进程运行时**真装载**的那一份
+ * （`surfaceInfo().skills.catalog`，来源是 loadSkills）。整包拒装的那些不在这里——
+ * 它们连方法都没有，摆进菜单就是一枚点了会报错的假项；拒装原因归设置里的技能库那一面（任务5）。
+ */
+const skillCatalog = computed(() => props.runtime?.surface?.skills?.catalog ?? [])
+/**
+ * 〔批次77 任务3〕键位表：宿主（AppNext）自己已经读过一份，但那份在壳层，
+ * 对话框这块要的是同一张表而不是第二份硬编码——这里再读一次（同一条只读通道、同一份净化），
+ * 读不到就退回默认表：快捷键是便利，不许因为它把对话卡住。
+ */
+const hotkeyBindings = ref(defaultBindings())
+let hotkeySeq = 0
+async function hydrateHotkeys(bridge = props.bridge) {
+  const seq = ++hotkeySeq
+  if (!bridge?.request) return
+  try {
+    const result = await bridge.request(IPC_CHANNELS.hotkeysLoad, {})
+    if (seq !== hotkeySeq) return
+    if (result?.ok && result.value?.bindings) {
+      hotkeyBindings.value = normalizeHotkeys({ version: HOTKEYS_VERSION, bindings: result.value.bindings }).bindings
+    }
+  } catch {
+    // 保持默认表：这一条不是数据真相来源。
+  }
+}
+watch(() => props.bridge, (bridge) => { void hydrateHotkeys(bridge) }, { immediate: true })
 /** 写模式是**会话真值**（M2.5-B）：徽章显示 store 里那一条，不是组件默认值。 */
 const writeMode = computed(() => snapshot.value.writeMode ?? 'review')
 
@@ -249,6 +281,9 @@ async function callTool(name, args) {
  *   '一句话'                            —— 老路径（兼容直接调用）
  *   { text, command }                   —— 对话框来的：command 是提示层选中那条（可能为 null）
  * 命令路由都在这里做：草稿自带命令词优先，其次才是提示层选中的那条。
+ * 〔批次77 任务3〕技能 token 也在这里抽（不在对话框里）：对话框只负责把 `/技能名` 摆进草稿，
+ * 「这一问用哪个方法」是发送那一刻从**正文**里认出来的——所以 `payload.skill` 只可能来自真打了的那一个 token，
+ * 前端不替作者塞一个默认技能（工单：不硬塞）。
  */
 async function ask(input) {
   const draft = String((typeof input === 'string' ? input : input?.text) ?? '').trim()
@@ -258,9 +293,14 @@ async function ask(input) {
   const routed = resolveSlash(draft) ?? (picked ? { command: picked, rest: draft } : null)
   // 只敲了命令词就发：用模板本身当正文（否则这一问是空的）。
   const body = routed ? (routed.rest || routed.command.template) : draft
+  // 只认「装载清单里真有的名字」；整包没装的那个名字不会被当技能（它会原样留在正文里）。
+  const skillPick = extractSkillToken(body, skillNameList(skillCatalog.value))
+  // 抽完什么都没了（作者只打了个技能 token）就退回原文：那还是一问，不许发一条空问句出去。
+  const asked = skillPick.text || body
   const fields = routed
-    ? slashMessageFields(routed.command, body)
-    : { text: body, command: '', omit: [] }
+    ? slashMessageFields(routed.command, asked)
+    : { text: asked, command: '', omit: [] }
+  const skill = skillPick.skill || routed?.command?.skill || null
 
   // 这一问归哪个会话，此刻就定下：提问后作者换会话，晚到的回答不该落到新会话里。
   const sessionId = snapshot.value.activeId
@@ -278,7 +318,7 @@ async function ask(input) {
       if (notes.length) store.updateLast({ notes }, sessionId)
     }
 
-    await runQuestion(withRefs(fields.text, resolved), fields.omit, sessionId, routed?.command?.skill ?? null)
+    await runQuestion(withRefs(fields.text, resolved), fields.omit, sessionId, skill)
   } finally {
     endWork()
   }
@@ -319,7 +359,10 @@ async function runQuestion(question, omit = [], sessionId = null, skill = null) 
       // usage 可能是 null（上游没回报／非工具循环那条链）——原样存 null，界面不替它编一个 0。
       runId: value.askId ?? '',
       usage: value.usage ?? null,
-      status: 'completed'
+      // 批次77 任务3：被作者按停的那一问落 `stopped`，不是 completed。
+      // 判据是**运行那条链的回执**（只有工具循环那条链观测得到轮次边界，才会回 stopped:true）；
+      // 渲染层不因为「我点过停止」就先把这条改成已停——按了没停下来才是真的按下钮说谎。
+      status: value.stopped ? 'stopped' : 'completed'
     }, sessionId)
     return
   }
@@ -335,6 +378,24 @@ async function runQuestion(question, omit = [], sessionId = null, skill = null) 
     trail,
     at: formatClock(Date.now())
   }, sessionId)
+}
+
+/**
+ * 〔批次77 任务3〕停止这一问：把「按 askId 标记取消」这条请求发给主进程，别的什么都不做。
+ * 口径要说清两件事，否则这枚钮就是假的：
+ *   1) 这里**不**改会话状态。真正收手发生在主进程那条工具循环的轮次边界上，
+ *      它会把这一问以 `stopped:true` 答回来，消息那一条的 status 由回执落成 stopped（见 runQuestion）；
+ *      正在跑的这一轮照常跑完，只是之后不再续轮。
+ *   2) 请求发不出去（没桥／通道报错）就当没停成：不许界面先把「已停」画出来再等现实追上。
+ */
+async function stopAsk() {
+  const askId = String(liveAskId.value ?? '')
+  if (!askId || !busy.value || !canAsk.value) return
+  try {
+    await props.bridge.request(IPC_CHANNELS.runtimeAskAbort, { askId })
+  } catch {
+    // 停不停由那条在途的回答自己说：这里连「失败」都不许冒充成「已停止」。
+  }
 }
 
 function retry() {
@@ -426,9 +487,12 @@ function removeSession(id) {
       :sessions="sessions"
       :active-session-id="activeSessionId"
       :references="references"
+      :skills="skillCatalog"
+      :hotkeys="hotkeyBindings"
       :suspend-esc="suspendEsc"
       @send="ask"
       @retry="retry"
+      @stop="stopAsk"
       @edit="editQuestion"
       @regenerate="regenerateAnswer"
       @update:mode="changeMode"
