@@ -105,6 +105,9 @@ export function createKitToolTurn({ complete = forwardComplete, timeoutMs = 100_
       kind: calls.length ? 'tool_calls' : 'final_ready',
       calls,
       text: calls.length ? '' : String(result?.content ?? ''),
+      // 批次77 任务2：上游那份归一化 usage（kitModelGateway.js:225 的 inputTokens/outputTokens/totalTokens）
+      // 原样带回去。这一层不猜、不估、不改名——没有就是 null，由 toolLoop 汇总、由界面如实说「未回报用量」。
+      usage: result?.usage ?? null,
       finishReason: result?.finishReason ?? null
     }
   }

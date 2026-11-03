@@ -38,7 +38,7 @@ lastOpenFiles 首版内容样例；12 清单 forms 清理对照表。
 
 ### 任务达成态（四条）
 
-1. **形态词表收敛（Q2 落地）——达成**。`PANE_FORMS` 三值（dock/split/overlay），`fullscreen`/`immersive` 从词表、`FORM_ACTIONS`、`host-descriptor.json`、清单校验词表全部退净；全仓 `fullscreen`/`immersive` 零声明（acceptance 用 `RETIRED_FORM_WORDS` 扫源码目录断言）。workspace v3 的 form 轴（page/floating/tab）逐字未动。**「清单 forms ⊆ 词表」既有校验保持，新加「词表与状态机落点同构」断言**：`carrierFormTable()` 逐载体读 `manifest.contributes.panes[*].forms` 反查 `FORM_ACTIONS`，并断言 `Object.keys(FORM_ACTIONS).length === PANE_FORMS.length`——三值与三个落点动作一一同构，菜单里不存在「点了没差别」的项。批次61 limitation 2 随之闭合（spec v2 §4.2 的 J4 由「待裁」转「达成」）。
+1. **形态词表收敛（Q2 落地）——达成**。`PANE_FORMS` 三值（dock/split/overlay），`fullscreen`/`immersive` 从词表、`FORM_ACTIONS`、`host-descriptor.json`、清单校验词表全部退净。**「声明形态必有落点」的守卫分三层**（工单守卫标记要求的「全仓零声明」按声明面落实）：①`doctor.test.mjs` 逐份扫 11 份 `carriers/*/manifest.mjs` 的 `forms: [...]` 串，命中旧词即红，并钉 `dirs.length === 11`（守卫写法失效会当场报，不静默）＋两份词表（`PANE_FORM_WORDS`／`PANE_FORMS`）与 `host-descriptor.json` 的 `forms` 必须同为三值；②`pane-forms.test.mjs` 负向断言：旧词喂进 `sanitizePaneForms`／`formActionsFor`／`formMenuItems` 都出不来任何动作；③`acceptance.mjs` 的 `RETIRED_FORM_WORDS` 对货架清单声明做零命中判定。workspace v3 的 form 轴（page/floating/tab）逐字未动。**「清单 forms ⊆ 词表」既有校验保持，新加「词表与状态机落点同构」断言**：`carrierFormTable()` 逐载体读 `manifest.contributes.panes[*].forms` 反查 `FORM_ACTIONS`，并断言 `Object.keys(FORM_ACTIONS).length === PANE_FORMS.length`——三值与三个落点动作一一同构，菜单里不存在「点了没差别」的项。批次61 limitation 2 随之闭合（spec v2 §4.2 的 J4 由「待裁」转「达成」）。
    - 计数偏差照实记账：工单写「12 份清单」，注册表实际可装载的清单是 **11 份**（`host-descriptor.json` 的 carriers 数即 11）；11 份的 forms 数组清理对照表见批次记录记账②。
 2. **lastOpenFiles——达成**。`open()`/`setResource()` 真实变更时 `noteRecent(entry)` 记 `{pane, resource}`，`pushRecentFile` 去重最近优先、`LAST_OPEN_FILES_LIMIT=20` 封顶滚动；`close()` 不记也不删——**关闭的文档留在列表里**。恢复语义＝**预填不自动开**：`load()` 把 lastOpenFiles 原样带进快照，`recentFiles()` 只读，不产生任何 `open()` 调用。记账①已打到封顶（25 次打开含 3 次重开 → 20 条、去重、置顶）。
 3. **逐视图状态（folder 模板树态）——达成**。`viewState` 落在 workspace v3 的**每页条目**上（`normalizeViewState`：键为字符串数组、单键值去重、整条目封顶 200；空集归 `null` 不写占位）。索引窗树「展开态（collapsed 卷名）＋选中 resource」按页记、重启恢复；其它视图与滚动位置登记不做（见 limitations）。
@@ -54,7 +54,8 @@ lastOpenFiles 首版内容样例；12 清单 forms 清理对照表。
 
 ### 门禁读数
 
-`npm run verify:next` 五段全绿；分段为 acceptance 44/44、`node --test` 727 pass、vitest 201 passed（14 files，`--no-file-parallelism`）、`lint:next` 零警告、bundleAssertions 全过（宿主描述符 forms 3，未改任何计数）。
+`npm run verify:next` 五段全绿（exit 0）：acceptance 44/44、`node --test` 727 pass / 0 fail、vitest 201 passed（14 files，`--no-file-parallelism`）、`lint:next` 零警告、bundleAssertions 全部通过（宿主描述符 `forms 3`，未改任何计数）。
+一次如实登记的偶发：**同树第一次**跑第五段红 7 项，报的全是「产物文件不在盘」（`.build/skills/*/SKILL.md`、部分载体 `.mjs` 缺，目录在），与本批源码无关；原地重跑第五段即全绿，之后连续两次完整 `verify:next` 均 exit 0。两个已核实的结构性事实与候选根治面都在批次记录「复现」段，改法涉及 `bundleAssertions.mjs`／vite 配置，不在本批允许文件内——**请调度方按偶发处置，勿当本批回归**。
 
 ## §8 调度方验收
 

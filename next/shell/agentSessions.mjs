@@ -37,7 +37,15 @@ export const SESSION_TITLE_CHARS = 24
  */
 export const MAX_TRAIL_EVENTS = 32
 
-/** 运行过程事件只有这五种阶段（与 next/runtime/runnerAdvisor.mjs 的发射点一一对应）。 */
+/**
+ * 运行过程事件的阶段白名单（与 `next/runtime/runnerAdvisor.mjs`、`next/runtime/toolLoop.mjs` 的发射点一一对应）。
+ * 〔批次77 任务4 订正〕这行注释以前写的是「只有这五种阶段」——那是批次29 的事实，M2.5-A 接上工具循环后
+ * 早就不是了，本次又加了子代理／工作流两段。名单以外的一律不进轨迹（白名单是闸，不是装饰）：
+ * `subagent`／`workflow-step` 现在是**认得**（来了就收、就渲染），但本批运行时还没人发——
+ * 这是给批次78 预留的 schema 位，不是造假事件：没人发，屏上就一条都不会多出。
+ * 〔批次77 任务3〕`stopped` 与那两段不同：工具循环已经真发它（作者按下停止、轮次边界收手），
+ * 白名单不扩这条，轨迹里就永远看不见「收手在哪一轮」。
+ */
 export const TRAIL_STAGES = Object.freeze([
   'start',
   'envelope',
@@ -50,6 +58,11 @@ export const TRAIL_STAGES = Object.freeze([
   'tool-dropped',
   'tool-unknown',
   'proposal-created',
+  // 批次77 任务4：子代理／工作流段进白名单（产出方＝批次78）。
+  'subagent',
+  'workflow-step',
+  // 批次77 任务3：作者按停止后，工具循环在轮次边界真发的一条（不扩进来，轨迹里就看不到「收手在哪」）。
+  'stopped',
   'answer',
   'failed'
 ])
@@ -115,6 +128,15 @@ function cleanCount(value) {
  * 实现按语义落成 `atStage`：「stage 说这是失败，atStage 说断在哪一步」。
  */
 export function sanitizeTrailEvent(raw) {
+  const event = sanitizeTrailEventBody(raw)
+  if (!event) return null
+  // 〔批次77 任务4〕事件到达时刻：只在给了有限数时才多这一格——老会话（没 at 的 JSONL）读回来形状一字不变。
+  // 打点方是 RuntimeDock（外壳收到那一刻），所以它说的是「外壳看到的首尾差」，不是端到端耗时。
+  const at = Number(raw?.at)
+  return Number.isFinite(at) && at >= 0 ? { ...event, at: Math.round(at) } : event
+}
+
+function sanitizeTrailEventBody(raw) {
   if (!raw || typeof raw !== 'object' || !TRAIL_STAGES.includes(raw.stage)) return null
   if (raw.stage === 'start') {
     return { stage: 'start', questionChars: cleanCount(raw.questionChars) }
@@ -186,6 +208,29 @@ export function sanitizeTrailEvent(raw) {
       proposalId: cleanText(raw.proposalId, 120)
     }
   }
+  if (raw.stage === 'subagent') {
+    // 批次78 的产出位：谁在写、哪一次调用、干什么、成了没（ok 只认真布尔）。
+    return {
+      stage: 'subagent',
+      name: cleanText(raw.name, 80),
+      callId: cleanText(raw.callId, 80),
+      task: cleanText(raw.task, 120),
+      ok: raw.ok === true
+    }
+  }
+  if (raw.stage === 'workflow-step') {
+    return {
+      stage: 'workflow-step',
+      name: cleanText(raw.name, 80),
+      callId: cleanText(raw.callId, 80),
+      step: cleanCount(raw.step)
+    }
+  }
+  if (raw.stage === 'stopped') {
+    // 批次77 任务3：只留 step——它说的是「跑完几轮后收的手」。
+    // 不带 code、不带原因：停止不是错误，作者是按下钮的那个人，不需要被解释。
+    return { stage: 'stopped', step: cleanCount(raw.step) }
+  }
   return {
     stage: 'failed',
     code: cleanText(raw.code, 80),
@@ -215,6 +260,9 @@ export function trailStageLabel(stage) {
     'tool-dropped': '工具未披露',
     'tool-unknown': '越界工具',
     'proposal-created': '生成提案',
+    subagent: '子代理',
+    'workflow-step': '工作流步骤',
+    stopped: '已停止',
     answer: '回答'
   }
   return labels[stage] ?? '未知步骤'
@@ -265,6 +313,24 @@ export function describeTrailEvent(event) {
   if (event.stage === 'proposal-created') {
     return { stage: event.stage, label: '生成提案', detail: `${event.name} · ${event.proposalId}` }
   }
+  // 批次77 任务4：这两段本批还没人发（发的人是批次78），但**认得**——判读与渲染先长好，
+  // 78 一接上就有色。这里不做任何「没有事件也摆一块」的事：没有就一行都不出。
+  if (event.stage === 'subagent') {
+    // 名字没有就只说「子代理」，不许拼出「子代理 子代理」这种重复字。
+    const who = event.name ? `子代理 ${event.name}` : '子代理'
+    return { stage: event.stage, label: who, detail: event.task || (event.ok ? '已完成' : '未回报结果') }
+  }
+  if (event.stage === 'workflow-step') {
+    return { stage: event.stage, label: `工作流第 ${event.step} 步`, detail: event.name }
+  }
+  // 批次77 任务3：作者按下停止。这一条只说事实——跑完了几轮、之后没再续轮。
+  if (event.stage === 'stopped') {
+    return {
+      stage: event.stage,
+      label: '已停止',
+      detail: event.step > 0 ? `第 ${event.step} 轮后不再续轮` : '第一轮还没发起就收了手'
+    }
+  }
   return null
 }
 
@@ -278,7 +344,12 @@ export function describeRuntimeProgress(event) {
   if (event.stage === 'model-round') return `模型第 ${event.round} 轮`
   if (event.stage === 'step') return `工具第 ${event.step} 步`
   if (event.stage === 'tool-start') return `正在调用 ${event.name}`
+  // 批次77 任务4：白名单加了段，进度语就得跟着认——「扩白名单不是扩沉默」（trail-tool-events 那条老原则）。
+  if (event.stage === 'subagent') return event.name ? `正在交给子代理 ${event.name}` : '正在交给子代理'
+  if (event.stage === 'workflow-step') return `工作流第 ${event.step} 步`
   if (event.stage === 'proposal-created') return '已生成提案，等你采纳'
+  // 批次77 任务3：停止也是真实事件，进度语要认——不然按下停止后界面还挂着「正在调用某工具」那句旧话。
+  if (event.stage === 'stopped') return event.step > 0 ? `已停止（第 ${event.step} 轮后不再续轮）` : '已停止'
   if (event.stage === 'answer') return '正在整理回答'
   if (event.stage === 'failed') return '这一步中断了'
   return ''
@@ -313,8 +384,39 @@ export function sanitizeSessionEvent(raw) {
  * 字段沿用 RuntimeDock 既有那份（{ id, role, text, findings, actions, failed, at }），
  * 批次27 只多两个界面字段：command（slash 命令徽章）与 notes（引用取不到的如实标注）。
  * 批次29 多一个 trail：这一问真实的运行过程事件（封顶 32 条），刷新后答下方的「过程」折叠层还在。
+ * 批次77 任务2 多三格：runId（哪一轮运行产出的这条）、usage（本轮 token 用量，没有就是 null）、
+ * status（这一条现在的状态）。failed 保留兼容，读的时候走 messageStatus()。
  * 未知字段一律不带进存储——localStorage 里不该长出一份随版本漂移的影子 schema。
  */
+
+/** 消息状态闭集：流中／完成／被停／出错。写入模式那三档（WRITE_MODES）与它无关。 */
+export const MESSAGE_STATUSES = Object.freeze(['streaming', 'completed', 'stopped', 'error'])
+
+/**
+ * 用量归一：只认运行时报的 `{ input, output, total }`（正整数），缺 total 时用 input+output 补。
+ * 一个数都没有 → null。这里没有任何估算口径：字数不换算成 token。
+ */
+export function sanitizeUsage(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  const pick = (value) => (Number.isSafeInteger(Number(value)) && Number(value) >= 0 ? Number(value) : null)
+  const input = pick(raw.input)
+  const output = pick(raw.output)
+  if (input === null && output === null) return null
+  const total = pick(raw.total) ?? ((input ?? 0) + (output ?? 0))
+  return { input: input ?? 0, output: output ?? 0, total }
+}
+
+/**
+ * 读出一条消息的状态（批次77 任务2 的兼容口径）：
+ * 老存档没有 status，但有 failed——按「出错」读；两者都没有才是 completed。
+ * 这一条是唯一的判读处，界面不许再各自 `failed ? … : …` 猜一遍。
+ */
+export function messageStatus(message) {
+  const status = MESSAGE_STATUSES.includes(message?.status) ? message.status : null
+  if (status) return status
+  return message?.failed === true ? 'error' : 'completed'
+}
+
 export function sanitizeSessionMessage(raw) {
   if (!raw || typeof raw !== 'object') return null
   const role = raw.role === 'user' || raw.role === 'agent' ? raw.role : null
@@ -338,7 +440,11 @@ export function sanitizeSessionMessage(raw) {
     command: typeof raw.command === 'string' ? cleanText(raw.command, 40) : '',
     trail: sanitizeTrail(raw.trail),
     failed: raw.failed === true,
-    at: cleanText(raw.at, 40)
+    at: cleanText(raw.at, 40),
+    runId: typeof raw.runId === 'string' ? cleanText(raw.runId, 80) : '',
+    usage: sanitizeUsage(raw.usage),
+    // 没写 status 的旧消息按 failed 归位，落盘一次就把三态补齐（读侧仍走 messageStatus，双保险）。
+    status: MESSAGE_STATUSES.includes(raw.status) ? raw.status : (raw.failed === true ? 'error' : 'completed')
   }
 }
 
@@ -348,7 +454,8 @@ function copyMessage(message) {
     findings: message.findings.map((item) => ({ ...item })),
     actions: [...message.actions],
     notes: [...message.notes],
-    trail: message.trail.map((event) => ({ ...event }))
+    trail: message.trail.map((event) => ({ ...event })),
+    usage: message.usage ? { ...message.usage } : null
   }
 }
 
@@ -638,6 +745,24 @@ export function createSessionStore(projectRoot, options = {}) {
     return true
   }
 
+  /**
+   * 从某一条开始（含它）截断到末尾——批次77 任务2「编辑重发」那一步的历史动作。
+   * 返回截掉的条数；找不到那个 id 就回 0，调用方据此决定要不要动（不静默改历史）。
+   * 这是本 store 唯一的破坏性动作，界面上只有「编辑重发」走它——重新生成用的是 dropLast。
+   */
+  function dropFrom(messageId, sessionId = null) {
+    const session = targetSession(sessionId)
+    if (!session?.messages.length) return 0
+    const index = session.messages.findIndex((message) => message.id === messageId)
+    if (index < 0) return 0
+    const removed = session.messages.length - index
+    session.messages.splice(index)
+    session.updatedAt = stamp()
+    persist()
+    notify()
+    return removed
+  }
+
   function setBusy(value) {
     const next = Boolean(value)
     if (next === busy) return
@@ -710,6 +835,7 @@ export function createSessionStore(projectRoot, options = {}) {
     append,
     updateLast,
     dropLast,
+    dropFrom,
     setWriteMode,
     recordEvent,
     setBusy,

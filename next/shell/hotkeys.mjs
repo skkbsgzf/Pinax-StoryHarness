@@ -33,6 +33,32 @@ export const HOTKEY_PALETTE_OPEN = 'palette.open'
 /** Esc 收窗：落点就是批次61 那条「叠序最高的窗收成侧缘标签」，不新造行为。 */
 export const HOTKEY_COLLAPSE_TOP = 'workspace.collapse-top'
 
+/**
+ * 〔批次77 任务3〕对话面五条新键位。
+ *
+ * 它们都**不在应用菜单里**（菜单那几组是项目／编辑／设置／帮助，对话是右栏运行时的事），
+ * 所以键位只能在这张表里有个家；也因此不会进 `nativeAcceleratedIds()`——
+ * 没有 Electron 那半边替它们办事，总线（与对话框自己的监听）就是唯一生效点。
+ *
+ * 落点（工单：六条键位里四条落在对话框自己那块，AppNext.vue 本批不动）：
+ *   · chat.open   唤起对话 → AssistantDialog 内的文档级监听，聚焦输入框；
+ *   · chat.send / chat.stop / chat.mode / skill.menu → 同一个监听按 id 分派到对话框既有动作。
+ * 键位表经 RuntimeDock 从 `hotkeys:load` 读一份、以 props 递下去（渲染层不各自硬编码按键）。
+ */
+export const HOTKEY_CHAT_OPEN = 'chat.open'
+export const HOTKEY_CHAT_SEND = 'chat.send'
+export const HOTKEY_CHAT_STOP = 'chat.stop'
+export const HOTKEY_CHAT_MODE = 'chat.mode'
+export const HOTKEY_SKILL_MENU = 'skill.menu'
+/** 落在对话框那四＋一条里、除「唤起对话」外都要求输入区在场的那一组（组件据此判「这张表我要不要管」）。 */
+export const CHAT_HOTKEY_IDS = Object.freeze([
+  HOTKEY_CHAT_OPEN,
+  HOTKEY_CHAT_SEND,
+  HOTKEY_CHAT_STOP,
+  HOTKEY_CHAT_MODE,
+  HOTKEY_SKILL_MENU
+])
+
 /** 键位词汇表（修饰键名沿用 Electron；`CmdOrCtrl` 在 mac 上是 Cmd，其它平台是 Ctrl）。 */
 const MODIFIER_KEYS = Object.freeze(['CmdOrCtrl', 'Cmd', 'Ctrl', 'Alt', 'Shift'])
 const SPECIAL_KEYS = Object.freeze({
@@ -78,7 +104,18 @@ export function defaultBindings() {
     [HOTKEY_COLLAPSE_TOP]: 'Esc',
     // 只保留收编进这条总线的那一条菜单键位（提案审阅，批次62 改 Ctrl+Shift+R）；
     // 其余菜单 accelerator 仍由原生菜单自己生效，不在这里重复注册——重复注册＝两处各写一遍。
-    'project.reviewProposals': fromMenu['project.reviewProposals'] ?? 'CmdOrCtrl+Shift+R'
+    'project.reviewProposals': fromMenu['project.reviewProposals'] ?? 'CmdOrCtrl+Shift+R',
+    // 〔批次77 任务3〕对话面五条：都不在菜单模板里，所以这五行就是它们唯一的键位来源。
+    // 选键的三条约束（台账 Q3 与既有菜单不许撞）：让位 Ctrl+P／Ctrl+Shift+R，
+    // 不碰编辑区已有的 Ctrl+S／Ctrl+F，也不碰角色默认 accelerator 那批（Ctrl+Z／C／V／A／W／R）。
+    // Enter 是「发送」的既有裸键（Shift+Enter 换行），这里补的是**带修饰**那一档：
+    // 菜单开着时 Enter 归菜单选中，Ctrl+Enter 才是那条不受弹层影响的发送路。
+    [HOTKEY_CHAT_OPEN]: 'CmdOrCtrl+Shift+A',
+    [HOTKEY_CHAT_SEND]: 'CmdOrCtrl+Enter',
+    [HOTKEY_CHAT_STOP]: 'CmdOrCtrl+Shift+Enter',
+    [HOTKEY_CHAT_MODE]: 'CmdOrCtrl+Shift+M',
+    // 技能菜单用 `Ctrl+/` 而不是 `Ctrl+Shift+/`：后者在多数布局上要按出 `?`，跨键盘会飘（不拿布局差异当键位）。
+    [HOTKEY_SKILL_MENU]: 'CmdOrCtrl+/'
   }
 }
 

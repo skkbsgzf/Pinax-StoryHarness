@@ -88,5 +88,12 @@ test('折叠层与进度语认识新段：扩白名单不是扩沉默', () => {
   assert.equal(describeTrailEvent({ stage: 'tool-unknown', name: 'rm_rf', callId: 'c4' }).detail, 'rm_rf（未执行）')
   assert.equal(describeRuntimeProgress({ stage: 'tool-start', name: 'pinax_outline_read' }), '正在调用 pinax_outline_read')
   assert.equal(describeRuntimeProgress({ stage: 'proposal-created' }), '已生成提案，等你采纳')
-  assert.equal(describeTrailEvent({ stage: 'subagent' }), null, '链上不存在的段仍然不认')
+  // 〔批次77 任务4 改断言·理由〕这条原来是 `describeTrailEvent({ stage: 'subagent' }) === null`
+  // （"链上不存在的段仍然不认"）。子代理／工作流两段本批进了白名单（产出方＝批次78），
+  // 按本文件立的老原则「扩白名单不是扩沉默」，进度语必须跟着认识它们；
+  // 真正不认的段换成下面那条 `subagent-start`（名单外，照旧回空串／null）。
+  assert.equal(describeRuntimeProgress({ stage: 'subagent', name: '研究员' }), '正在交给子代理 研究员')
+  assert.equal(describeRuntimeProgress({ stage: 'workflow-step', step: 1 }), '工作流第 1 步')
+  assert.equal(describeTrailEvent({ stage: 'subagent-start' }), null, '名单外的段仍然不认')
+  assert.equal(describeRuntimeProgress({ stage: 'subagent-start' }), '', '名单外的段不许编阶段语')
 })

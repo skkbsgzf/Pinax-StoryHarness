@@ -69,7 +69,8 @@ function onFrameError() {
 <template>
   <section class="nx-external-app" data-test="external-app">
     <div class="nx-external-app-head">
-      <h2 class="doc-title">{{ pane?.title ?? '外部应用' }}</h2>
+      <!-- 〔批次76 裁定A〕应用名不在这里自绘第二行标题：窗头那一行「载体 · 面板名」归一了。
+           这一行剩下来的是真正只有这里才有的读数——地址与它的来源层。 -->
       <!-- 地址摆出来：内嵌浏览器跑的是谁的端口，作者要能一眼看见（也能自己复制出去单开）。 -->
       <span class="nx-external-app-url" :title="url">{{ url }}</span>
       <!-- 来源层：这个地址是清单写死的还是工程覆盖改过的，作者要能一眼分清。 -->

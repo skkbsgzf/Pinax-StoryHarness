@@ -246,7 +246,10 @@ describe('记录型载体的中栏（批次40）', () => {
       props: { pane: { id: 'material.editor', view: 'pinax.view.editor' }, data }
     })
     await flushPromises()
-    expect(wrapper.find('.doc-title').text()).toBe('雨夜参考图')
+    // 〔批次76 裁定A〕原判据「.doc-title 文本＝雨夜参考图」改判：记录名不再在内容层自绘，
+    // 它归窗头那一行「素材 · 雨夜参考图」（本用例挂裸 CarrierPaneHost，只查「不再自绘」；
+    // 带窗头的那条端到端断言在 shell-ui.spec 的批次76 用例里）。
+    expect(wrapper.find('.doc-title').exists()).toBe(false)
     expect(wrapper.find('[aria-label="记录正文"]').text()).toContain('巷口一盏灯')
     expect(wrapper.text()).toContain('标签：雨夜')
     expect(wrapper.text()).toContain('引用：资料/参考/雨夜.png')

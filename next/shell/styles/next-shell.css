@@ -1052,21 +1052,173 @@ input.doc-title {
   padding: 8px;
   scrollbar-width: thin;
 }
-/* 收起态：右侧缘一枚竖排小标签，点它还原（几何不动）。 */
-.nx-pane-window-tab {
-  position: absolute;
-  right: 0;
-  z-index: var(--z-floating-dock);
-  writing-mode: vertical-rl;
-  padding: 10px 4px;
+/* —— 收起态＝右下角悬浮球（批次76 · 〔裁定B〕）——————————————————————————
+   原来这里是右缘一竖列竖排文字标签（`writing-mode: vertical-rl`），
+   靠 `top: 120 + tabIndex * 36` 硬排——5 扇同时收起就叠成 6 对、后面的点不到（遍历专章）。
+   整段规则连选择器一起删除，收起态不再在屏幕上占一列；呈现与落点统一归 CollapseOrb。
+   层级只用既有档位表里的 `--z-floating-action`（260）：本批不给 --z-* 新增任何一档。 */
+.nx-collapse-orb {
+  position: fixed;
+  right: 24px;
+  bottom: 54px; /* 让开底栏状态栏那一条（26px）再留 28px 余量。 */
+  z-index: var(--z-floating-action);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+.nx-collapse-orb-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
   border: 1px solid var(--hairline-soft);
-  border-right: 0;
-  border-radius: var(--radius-control) 0 0 var(--radius-control);
+  border-radius: 50%;
   background: var(--surface-workbench-raised);
   color: var(--archive-ink);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--archive-ink) 16%, transparent);
+}
+.nx-collapse-orb-button:hover:not(:disabled),
+.nx-collapse-orb-button.is-open {
+  background: var(--workbench-selected);
+}
+.nx-collapse-orb-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: var(--radius-control);
+  background: var(--archive-ink);
+  color: var(--surface-workbench-raised);
   font-size: var(--nx-fs-2xs);
-  letter-spacing: 0.08em;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--archive-ink) 14%, transparent);
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: center;
+}
+/* 通知是另一档信息：红点＋数字分开画（〔工单任务2〕「红点＝有通知、数字＝收起面板数，两态视觉分开」）。 */
+.nx-collapse-orb-dot {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--control-danger);
+}
+.nx-collapse-orb-panel {
+  width: 300px;
+  max-height: 60vh;
+  overflow: auto;
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  color: var(--text-secondary);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-collapse-orb-group-title {
+  margin: 0 0 4px;
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+.nx-collapse-orb-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nx-collapse-orb-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+/* 主键整行命中区 ≥44×44（外部审计 H／OD craft 判据的「主键」档）。 */
+.nx-collapse-orb-open {
+  flex: 1 1 auto;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  text-align: start;
+  color: var(--text-secondary);
+}
+.nx-collapse-orb-open:hover:not(:disabled) {
+  background: var(--workbench-selected);
+  color: var(--archive-ink);
+}
+.nx-collapse-orb-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-collapse-orb-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.nx-collapse-orb-close {
+  flex: none;
+  width: 24px;
+  min-width: 24px;
+  min-height: 44px;
+  padding: 0;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.nx-collapse-orb-close:hover:not(:disabled) {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
+}
+.nx-collapse-orb-empty {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.nx-collapse-orb-jump {
+  min-height: 24px;
+  align-self: flex-start;
+  padding: 0 6px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+.nx-collapse-orb-jump:hover:not(:disabled) {
+  background: var(--workbench-selected);
+}
+/* —— 拖拽吸附的预览（批次76 · 〔裁定A〕「拖到侧边可以吸附」）——————————————
+   指针进命中圈才画这一块（无预览不落位＝工单守卫④）；预览只是提示，不参与排版。 */
+.nx-pane-snap-preview {
+  position: absolute;
+  z-index: var(--z-floating-dock);
+  pointer-events: none;
+  border: 2px dashed var(--signal-warm);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--signal-warm) 12%, transparent);
+}
+.nx-pane-snap-preview[data-snap-target="orb"] {
+  border-radius: 50%;
+  border-color: var(--control-danger);
+  background: color-mix(in srgb, var(--control-danger) 14%, transparent);
+}
+.nx-pane-window.is-dragging {
+  cursor: grabbing;
 }
 /* —— 页签栏（批次61 · 〔铁律四〕）——————————————————————————————
    它不是第二套窗口壳：一条横向签列，只回答「哪一页是当前页」。
@@ -1134,8 +1286,10 @@ input.doc-title {
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 18px;
-  min-height: 18px;
+  /* 〔批次76 任务4-4〕遍历实测这枚「关闭这一页」是 20×36：横向 20px 不够 24 这条线。
+     页签本身有 36px 高（--nav-row-height 那一档），只把宽补到 24、min-height 同步抬到 24。 */
+  width: 24px;
+  min-height: 24px;
   padding: 0;
   border-radius: var(--radius-control);
   color: var(--text-muted);
@@ -1342,6 +1496,11 @@ input.doc-title {
   text-decoration-style: dashed;
   text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
   cursor: pointer;
+  /* 〔批次76 任务4-4〕遍历实测「可点链接行」整行只有 19px 高：inline 锚点的可点区就是那一行字。
+     inline 元素的纵向 padding 不改行盒高度（排版不动），但会把命中区向上下各扩 3px——
+     这是唯一能在不打断正文行距的前提下把命中区抬到 ≈25px 的写法。 */
+  padding: 3px 2px;
+  text-underline-offset: 2px;
 }
 .nx-wikilink:hover { text-decoration-style: solid; }
 /* 反向链接行：跟 doc-meta-hint 同一档小字，chip 是 quiet 钮（点开跳那条）。 */
@@ -1547,6 +1706,11 @@ input.doc-title {
   align-items: center;
 }
 .nx-tools-toggle {
+  /* 〔批次76 任务4-4〕快捷词入口实测 45×22：宽度够、纵向差 2px。补 min-height 到 24，
+     改 inline-flex 居中让文字位置不变（字号仍走 --nx-fs-2xs，不动刻度）。 */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   padding: 3px 8px;
   font-size: var(--nx-fs-2xs);
   color: var(--text-secondary);
@@ -1578,6 +1742,11 @@ input.doc-title {
   padding-bottom: 4px;
 }
 .nx-tools-tab {
+  /* 〔批次76 任务4-4〕弹层里的每一条可点件都过 24 这条线（tab／快捷词 chip／换一批）：
+     实测 chip 45×22、tab 高 20，差的是纵向那 2–4px；宽度由内容撑，不动字号。 */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   padding: 2px 8px;
   font-size: var(--nx-fs-2xs);
   color: var(--text-muted);
@@ -1621,6 +1790,9 @@ input.doc-title {
   gap: 4px;
 }
 .nx-tools-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   padding: 2px 8px;
   border: 1px solid var(--hairline-soft);
   border-radius: var(--radius-control);
@@ -1649,6 +1821,9 @@ input.doc-title {
 }
 .nx-tools-roll {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
   padding: 2px 8px;
   font-size: var(--nx-fs-2xs);
 }

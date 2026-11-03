@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { recordCarrierOfPaneId } from './recordCarriers.mjs'
 
@@ -12,6 +12,13 @@ import { recordCarrierOfPaneId } from './recordCarriers.mjs'
  *   - 点一张卡＝开这条记录的素材窗（走既有 openRecord → PaneWindow），不在画廊里就地编辑。
  *
  * 图库模板由 layoutTemplates.mjs 按 pane id 前缀（material.）推断，宿主据此不渲染 IndexWindow。
+ *
+ * 〔批次76 · 任务4-3〕空态从「一句话就把作者打发走」补成「一句话＋真的建得了档」：
+ * 遍历实测素材板点了像没反应——图库模板按裁定只换板、不凭空开窗（AppNext.vue selectBoard()
+ * 那条分支不动），于是零记录时整面墙只剩「素材还没有内容（素材/素材.json）」，作者没有下一步。
+ * 这里给一枚「新建素材」入口：仍走 useBoardData.createRecord（先起名再建档这条边界与目录窗
+ * IndexWindow.vue:498-511 一致，不发明第二套建档路径），建完 emit('open') 让新记录出窗——
+ * 出窗的是作者这一次点击的结果，不是换板时的自动开窗，裁定A 的口径不破。
  */
 const props = defineProps({
   /** 当前板的视图（useBoardData 的 view.boards 那一块）。 */
@@ -58,6 +65,32 @@ async function openCard(item) {
   await props.data.openRecord?.(key.value, item)
   emit('open')
 }
+
+/**
+ * 空态里的「新建素材」（〔批次76 · 任务4-3〕）。
+ * 建档只走 useBoardData.createRecord 这一条路（它自己带 expectedRevision、建完 openRecord），
+ * 这里不重复实现一套写盘。createRecord 失败只写 data.error（文档级错误位，不在 recordSets 里），
+ * 所以本组件把「长度没变」当成失败信号，把那一句 error 就地显出来——作者点了没动静是最坏的反馈。
+ */
+const newTitle = ref('')
+const createError = ref('')
+const isBusy = computed(() => props.data?.busy === true)
+const canCreate = computed(() => Boolean(key.value) && typeof props.data?.createRecord === 'function')
+
+async function createFirstRecord() {
+  const title = String(newTitle.value ?? '').trim()
+  if (!title || !canCreate.value || isBusy.value) return
+  createError.value = ''
+  const before = set.value.records.length
+  await props.data.createRecord(key.value, title)
+  if (set.value.records.length === before) {
+    createError.value = String(props.data?.error ?? '新建没成功，再试一次。')
+    return
+  }
+  newTitle.value = ''
+  // 建完让这条记录出窗：驱动是作者这次点击，不是换板自动开窗（裁定A 的「不凭空开窗」不动）。
+  emit('open')
+}
 </script>
 
 <template>
@@ -68,9 +101,30 @@ async function openCard(item) {
     </header>
     <p v-if="set.error" class="nx-index-error">{{ set.error }}</p>
     <p v-else-if="!set.loaded" class="nx-index-empty">正在载入素材…</p>
-    <p v-else-if="!set.records.length" class="nx-index-empty">
-      素材还没有内容（{{ carrier?.dir }}/{{ carrier?.file }}）。
-    </p>
+    <div v-else-if="!set.records.length" class="nx-material-empty" data-test="material-empty">
+      <p class="nx-material-empty-line">
+        {{ carrier ? `${carrier.title}这一栏还是空的。记录写在项目的 ${carrier.dir}/${carrier.file} 里，建第一条就有卡片了。` : '这块板没有可登记的记录载体。' }}
+      </p>
+      <p class="nx-material-empty-hint">先起名再建档：填好标题按回车，或点「新建{{ carrier?.title ?? '素材' }}」。</p>
+      <div v-if="canCreate" class="nx-material-empty-actions">
+        <input
+          v-model="newTitle"
+          class="nx-field nx-material-new-title"
+          data-test="material-new-title"
+          :placeholder="`第 1 条${carrier?.title ?? '素材'}的名字`"
+          :disabled="isBusy"
+          @keydown.enter.prevent="createFirstRecord"
+        >
+        <button
+          type="button"
+          class="control-secondary nx-material-create"
+          data-test="material-create"
+          :disabled="isBusy || !newTitle.trim()"
+          @click="createFirstRecord"
+        >{{ isBusy ? '正在新建…' : `新建${carrier?.title ?? '素材'}` }}</button>
+      </div>
+      <p v-if="createError" class="nx-index-error" data-test="material-create-error">{{ createError }}</p>
+    </div>
     <div v-else class="nx-material-grid">
       <button
         v-for="item in set.records"
@@ -122,6 +176,50 @@ async function openCard(item) {
   font-size: var(--nx-fs-2xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
+}
+/* 空态（〔批次76 · 任务4-3〕）：一句话＋真建得了档的入口。
+   命中区按任务4-4 口径给：输入框走全局 .nx-field（min-height 38px），按钮 min-height 32px、
+   横向 padding 14px——都过 24×24 这条线。 */
+.nx-material-empty {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 460px;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+}
+.nx-material-empty-line {
+  margin: 0;
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink);
+}
+.nx-material-empty-hint {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-material-empty-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.nx-material-new-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.nx-material-create {
+  flex: none;
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: var(--nx-fs-md);
+  cursor: pointer;
+}
+.nx-material-create:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 .nx-material-grid {
   display: grid;

@@ -402,7 +402,9 @@ function rowHint(item) {
   justify-content: flex-start;
   gap: 2px;
   width: 100%;
-  min-height: 20px;
+  /* 〔批次76 任务4-4〕表头这五枚「按 X 排序」实测 20–21 高：宽度吃了 th（width:100%），
+     纵向就差那 4px。抬到 24，字号与 padding 不动，表头不会被撑出第二行。 */
+  min-height: 24px;
   padding: 0;
   font-size: var(--nx-fs-2xs);
   font-weight: 500;

@@ -6,11 +6,13 @@ import {
   MAX_SESSIONS,
   MAX_SESSION_MESSAGES,
   MAX_TRAIL_EVENTS,
+  MESSAGE_STATUSES,
   SESSION_TITLE_CHARS,
   agentSessionStorageKey,
   createSessionStore,
   describeRuntimeProgress,
   describeTrailEvent,
+  messageStatus,
   sanitizeSessionMessage,
   sanitizeTrail,
   sanitizeTrailEvent
@@ -204,9 +206,16 @@ test('持久化往返：多会话与 activeId 落盘，消息形状是 JSON 安�
   assert.equal(saved.sessions.length, 2)
 
   const firstMessage = saved.sessions[0].messages[0]
+  // 〔批次77 任务2 断言漂移，理由如实记〕schema 多了 runId／usage／status 三格：
+  // 「这一条是哪一轮跑的、这轮报了多少 token、现在是什么状态」要能跨刷新说得出，
+  // 才有消息行上的状态字与用量 chip。这三格由 sanitizeSessionMessage 统一裁（usage 只能缺省成 null，
+  // status 只能落进 MESSAGE_STATUSES 闭集），仍是 JSON 安全的固定字段——不是把未知字段放进来。
   assert.deepEqual(Object.keys(firstMessage).sort(),
-    ['actions', 'at', 'command', 'failed', 'findings', 'id', 'notes', 'role', 'text', 'trail'],
+    ['actions', 'at', 'command', 'failed', 'findings', 'id', 'notes', 'role', 'runId', 'status', 'text', 'trail', 'usage'],
     '消息只落 schema 里那几个字段（未知字段不进存储）')
+  assert.equal(firstMessage.runId, '', '没带 runId 就是空串，不编一个')
+  assert.equal(firstMessage.usage, null, '上游没回报用量时是 null，不是 0')
+  assert.equal(firstMessage.status, 'completed', '缺 status 的老写法归一成 completed')
   assert.equal(firstMessage.command, '/资料')
   assert.equal(firstMessage.notes.length, 1)
   assert.deepEqual(Object.keys(saved.sessions[0].messages[1].findings[0]).sort(), ['message', 'severity'])
@@ -250,9 +259,54 @@ test('晚到的回答落回出发的那个会话：切走之后 append(id) 不�
   assert.equal(store.append({ role: 'agent', text: '孤儿回答' }, first.id), null)
 })
 
+/**
+ * 〔批次77 任务2〕dropFrom 是「从某一条起往后截断」的唯一入口（编辑重发用它，
+ * 任务6 的「分支＝截断前先把这一支存下」也接在同一处，不长第二套）。
+ * 三条都要钉死：命中才动、动多少报多少、点名别的会话时不许动当前会话。
+ */
+test('dropFrom：从命中那条起往后整段截掉，报出删掉的条数；查无此 id 与会话隔离都不误伤', () => {
+  const saver = recorder()
+  const store = createSessionStore('D:/dropfrom', { save: saver.save, now: stepClock() })
+  const first = store.list()[0]
+  const second = store.create('B 会话')
+  store.append({ role: 'user', text: 'B 的开头' }, second.id)
+  // list() 是摘要面（没有 messages），取 id 要走 active()——create 之后当前会话就是 B。
+  const bStartId = store.active().messages[0].id
+
+  // A 会话攒四条：问／答／问／答。
+  store.switchTo(first.id)
+  store.append({ role: 'user', text: '第一问' })
+  store.append({ role: 'agent', text: '第一答' })
+  store.append({ role: 'user', text: '第二问' })
+  store.append({ role: 'agent', text: '第二答' })
+  const anchorId = store.active().messages[1].id
+
+  // 查无此 id：返回 0，一条都不动（编辑重发的过期点击走的就是这一档）。
+  assert.equal(store.dropFrom('不存在的 id'), 0)
+  assert.equal(store.active().messages.length, 4)
+
+  // 命中：把这一条**连同它之后**的截掉，报出删了几条（这里是「第一答＋第二问＋第二答」＝3）。
+  assert.equal(store.dropFrom(anchorId), 3)
+  assert.deepEqual(store.active().messages.map((message) => message.text), ['第一问'])
+
+  // 点名别的会话：动 B，A（作者此刻看着的）一根手指都不碰。
+  assert.equal(store.snapshot().activeId, first.id, '截 B 之前当前会话仍是 A')
+  assert.equal(store.dropFrom(bStartId, second.id), 1)
+  assert.deepEqual(store.active().messages.map((message) => message.text), ['第一问'], '别处的 id 不许顺手截当前会话')
+  store.switchTo(second.id)
+  assert.deepEqual(store.active().messages, [])
+
+  // 截断是一次状态变化：整份快照交出去，落盘的那一份与内存一致。
+  const saved = saver.latest()
+  const savedFirst = saved.sessions.find((session) => session.id === first.id)
+  assert.deepEqual(savedFirst.messages.map((message) => message.text), ['第一问'])
+})
+
 test('消息清洗：角色必须是 user/agent，非字符串字段不进存储', () => {
   assert.equal(sanitizeSessionMessage(null), null)
   assert.equal(sanitizeSessionMessage({ role: 'system', text: 'x' }), null)
+  // 整份形状钉住（批次77 任务2 加了 runId／usage／status 三格：usage 没回报就是 null，
+  // status 缺省按 failed 归位。改名、漏格、把 null 变成 0 都会在这里红，不会静默漂移。）
   assert.deepEqual(sanitizeSessionMessage({ role: 'agent', text: 42, findings: 'nope', actions: [1, 'ok'] }), {
     id: '',
     role: 'agent',
@@ -263,14 +317,58 @@ test('消息清洗：角色必须是 user/agent，非字符串字段不进存储
     command: '',
     trail: [],
     failed: false,
-    at: ''
+    at: '',
+    runId: '',
+    usage: null,
+    status: 'completed'
   })
   assert.equal(sanitizeSessionMessage({ role: 'user', failed: 'yes' }).failed, false, 'failed 只认布尔真值')
+  assert.equal(sanitizeSessionMessage({ role: 'agent', failed: true }).status, 'error', 'failed 的老存档读成 error')
+})
+
+test('〔批次77 任务2〕用量与状态：只认回报的数，缺回报是 null 不是 0；状态闭集外回落', () => {
+  const withUsage = sanitizeSessionMessage({ role: 'agent', text: '答', usage: { input: 1200, output: 380 } })
+  assert.deepEqual(withUsage.usage, { input: 1200, output: 380, total: 1580 }, 'total 缺时用 input+output 补')
+  assert.deepEqual(sanitizeSessionMessage({ role: 'agent', usage: { input: 5, output: 2, total: 9 } }).usage, { input: 5, output: 2, total: 9 })
+  // 负断言：没有回报／回报不是数／负数／小数——一律 null，界面不许拿它当 0 用。
+  assert.equal(sanitizeSessionMessage({ role: 'agent', usage: null }).usage, null)
+  assert.equal(sanitizeSessionMessage({ role: 'agent', usage: { chars: 900 } }).usage, null, '字数不换算成 token')
+  assert.equal(sanitizeSessionMessage({ role: 'agent', usage: { input: -3 } }).usage, null)
+  assert.equal(sanitizeSessionMessage({ role: 'agent', usage: { input: 1.5 } }).usage, null, '非整数不认')
+  assert.equal(sanitizeSessionMessage({ role: 'agent', usage: { input: 0, output: 0 } }).usage.input, 0, '真回报的 0 保留')
+  // runId 与 status：闭集外的值不进气泡，只回落归位。
+  assert.equal(sanitizeSessionMessage({ role: 'agent', runId: 'ask-7' }).runId, 'ask-7')
+  assert.equal(sanitizeSessionMessage({ role: 'agent', runId: 42 }).runId, '', '非字符串 runId 不进存储')
+  assert.equal(sanitizeSessionMessage({ role: 'agent', status: 'stopped' }).status, 'stopped')
+  assert.equal(sanitizeSessionMessage({ role: 'agent', status: 'paused' }).status, 'completed', '闭集外当 completed 读')
+  assert.deepEqual(MESSAGE_STATUSES, ['streaming', 'completed', 'stopped', 'error'])
+  assert.equal(messageStatus({ status: 'streaming' }), 'streaming')
+  assert.equal(messageStatus({ failed: true }), 'error', '没有 status 的旧消息按 failed 判读')
+  assert.equal(messageStatus({}), 'completed')
 })
 
 test('运行过程轨迹（批次29）：事件按白名单清洗、封顶 32 条、随消息持久化', () => {
-  // 白名单：只认五种阶段。链上不存在的子代理／hook 不许在这里长出假事件。
-  assert.equal(sanitizeTrailEvent({ stage: 'subagent', name: '研究员' }), null)
+  // 〔批次77 任务4 改断言·理由写在下面〕这两条原来是反向断言：
+  //   assert.equal(sanitizeTrailEvent({ stage: 'subagent', name: '研究员' }), null)
+  // 理由是批次29 那句「链上不存在的子代理／hook 不许在这里长出假事件」。本批按工单把
+  // `subagent`／`workflow-step` 进了白名单（产出方＝批次78），**认得**它们不再是造假：
+  // 没人发时轨迹里仍是一条都不多（反向断言换成了下面的「未知段仍不认」），
+  // 一旦 78 开始发，渲染侧已经长好了，不必再动 schema。
+  assert.deepEqual(sanitizeTrailEvent({ stage: 'subagent', name: '研究员' }), {
+    stage: 'subagent',
+    name: '研究员',
+    callId: '',
+    task: '',
+    ok: false
+  })
+  assert.deepEqual(sanitizeTrailEvent({ stage: 'workflow-step', name: '分段执笔', step: '2', junk: 1 }), {
+    stage: 'workflow-step',
+    name: '分段执笔',
+    callId: '',
+    step: 2
+  })
+  // 白名单仍是闸：名单外的段（哪怕是「听起来像子代理」的）照旧丢掉。
+  assert.equal(sanitizeTrailEvent({ stage: 'subagent-start', name: '研究员' }), null)
   assert.equal(sanitizeTrailEvent(null), null)
   assert.deepEqual(
     sanitizeTrailEvent({
@@ -336,5 +434,22 @@ test('运行过程轨迹（批次29）：事件按白名单清洗、封顶 32 �
     label: '中断',
     detail: 'PINAX_DEPENDENCY_UNMET · 断在模型轮次'
   })
-  assert.equal(describeTrailEvent({ stage: 'subagent' }), null)
+  // 〔批次77 任务4 改断言·理由〕原来这条是 `describeTrailEvent({ stage: 'subagent' }) === null`，
+  // 挂在同一条老原则上（「链上不存在的段不认」）。段现在在册，判读要跟着长出来——
+  // 「扩白名单不是扩沉默」是 trail-tool-events 那份测试立的老规矩；无名时不许拼成「子代理 子代理」。
+  assert.deepEqual(describeTrailEvent({ stage: 'subagent', name: '研究员', task: '查前三章伏笔' }), {
+    stage: 'subagent',
+    label: '子代理 研究员',
+    detail: '查前三章伏笔'
+  })
+  assert.equal(describeTrailEvent({ stage: 'subagent' }).label, '子代理')
+  assert.deepEqual(describeTrailEvent({ stage: 'workflow-step', name: '分段执笔', step: 3 }), {
+    stage: 'workflow-step',
+    label: '工作流第 3 步',
+    detail: '分段执笔'
+  })
+  // 真·不认的段仍然一行都不出（白名单没被放宽成「什么都收」）。
+  assert.equal(describeTrailEvent({ stage: 'subagent-start' }), null)
+  assert.equal(describeRuntimeProgress({ stage: 'subagent', name: '研究员' }), '正在交给子代理 研究员')
+  assert.equal(describeRuntimeProgress({ stage: 'workflow-step', step: 2 }), '工作流第 2 步')
 })

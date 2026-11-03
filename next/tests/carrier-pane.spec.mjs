@@ -61,6 +61,9 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
     documents: documents.map((item) => ({ ...item })),
     scripts: scripts.map((item) => ({ ...item })),
     materials: materials.map((item) => ({ ...item })),
+    // 〔批次76 · 任务4-3〕画廊空态要真的建档，假桥就得按真工具那条修订号闸走：
+    // list 给几版，save 就得带回几版；测试里手动 +1 就能演「盘上换过版」的 STALE。
+    materialRevision: 1,
     entries: entries ?? [
       { id: 'wb-1', name: '人物·柯秒', type: 'character', tags: ['主角'], aliases: ['柯秒'], chars: 18, path: '世界书/人物·柯秒.md', revision: 1, contract: true, summary: '雪夜醒来的主角，袖中有一枚停摆的表。' },
       { id: null, name: '随手记', type: 'general', tags: [], aliases: [], chars: 9, path: '世界书/随手记.md', revision: 1, contract: false }
@@ -232,12 +235,43 @@ function fakeTools({ stale = false, chapterCount = 2, chapterText = '雨从檐�
       }
       if (payload.tool === 'pinax_material_list') {
         // 批次60：素材改图库模板后，卡片墙仍走同一条 list（limit 500，syncCurrent:false）。
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: 1, total: state.materials.length, records: state.materials, truncated: false } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: state.materialRevision, total: state.materials.length, records: state.materials, truncated: false } } }
       }
       if (payload.tool === 'pinax_material_read') {
         const hit = state.materials.find((item) => item.id === payload.args.id)
         if (!hit) return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: false, code: 'PINAX_INVALID_INPUT', message: `「素材/素材.json」里没有 id=${payload.args.id} 的记录` } } }
-        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: 1, record: { ...hit, body: hit.body ?? '' } } } }
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: state.materialRevision, record: { ...hit, body: hit.body ?? '' } } } }
+      }
+      if (payload.tool === 'pinax_material_save') {
+        // 与真工具同一条口径（carriers/jsonRecords.mjs 的 _save）：新建不带 id、只改传进来的字段、
+        // expectedRevision 与账上不符即 PINAX_STALE_REVISION（不覆盖、不合并），成功回 { revision, created, record }。
+        if (payload.args.expectedRevision !== state.materialRevision) {
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: false, code: 'PINAX_STALE_REVISION', message: '「素材/素材.json」在盘上已经换到别的版本，这次写入被拒绝' } } }
+        }
+        state.materialRevision += 1
+        const stamp = '2026-11-03T00:00:00.000Z'
+        const fields = {
+          title: String(payload.args.title ?? ''),
+          type: String(payload.args.type ?? ''),
+          status: String(payload.args.status ?? ''),
+          body: String(payload.args.body ?? ''),
+          tags: payload.args.tags ?? [],
+          refs: payload.args.refs ?? [],
+          updatedAt: stamp
+        }
+        const index = payload.args.id ? state.materials.findIndex((item) => item.id === payload.args.id) : -1
+        if (index >= 0) {
+          state.materials[index] = { ...state.materials[index], ...fields }
+          return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: state.materialRevision, created: false, record: state.materials[index] } } }
+        }
+        const record = {
+          id: `mat-${String(state.materials.length + 1).padStart(2, '0')}`,
+          order: state.materials.length,
+          createdAt: stamp,
+          ...fields
+        }
+        state.materials.push(record)
+        return { ok: true, value: { tool: payload.tool, owner: 'pinax.carrier.material', payload: { ok: true, file: '素材/素材.json', revision: state.materialRevision, created: true, record } } }
       }
       if (payload.tool === 'pinax_outline_read') {
         // 与真工具同一条口径：大纲目录空着（既没有 outline.json 也没有 大纲.md）就按 INVALID_INPUT 拒。
@@ -375,22 +409,26 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
-  it('文档头归一（批次33 → 批次43）：头部只有一行 .doc-title；底部那行只在有话可说时才出现', async () => {
+  it('文档头归一（批次33 → 批次43 → 批次76 改判）：标题面只剩窗头一行，内容层不自绘、底部那行只在有话可说时才出现', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
     const pane = wrapper.find('[data-pane-id="novel.editor"]')
-    // 头部＝一行标题：没有「正文」那一层，也没有常驻 meta。
-    expect(pane.find('.doc-head .doc-title').text()).toBe('第002章')
+    // 〔批次76 裁定A〕原判据「头部只有一行 .doc-title＝第002章」改判：文档名已经从内容层撤走，
+    // 内容层头部只剩右端那一行动作；同屏那一份文档名归窗头（下一条断言）。理由写在这里，不静默删。
+    expect(pane.find('.doc-head .doc-title').exists()).toBe(false)
     expect(pane.find('.pane-sub').exists()).toBe(false)
     expect(pane.find('.editor-meta').exists()).toBe(false)
     // 批次43：底部那行不再摆路径 · 第 N 版 · N 字；没有未落盘的改动时整行都不出现。
     expect(pane.find('.doc-meta-hint').exists()).toBe(false)
-    // 位置：标题在正文之上。
-    const html = pane.element.innerHTML
-    expect(html.indexOf('doc-title')).toBeLessThan(html.indexOf('chapter-rendered'))
+    // 唯一标题面＝窗头，且它在正文之前（原「标题在正文之上」的同义改写，只是那一行换了位置）。
+    const head = wrapper.find('.nx-pane-window-title')
+    expect(head.exists(), '窗头标题行是批次76 之后唯一的标题面').toBe(true)
+    expect(head.text()).toContain('小说')
+    const shellHtml = wrapper.element.innerHTML
+    expect(shellHtml.indexOf('nx-pane-window-title')).toBeLessThan(shellHtml.indexOf('chapter-rendered'))
     wrapper.unmount()
   })
 
@@ -403,8 +441,9 @@ describe('小说载体', () => {
 
     // 工单H1：四个编辑面不再有常驻保存按钮，保存由编辑器聚焦时的 Ctrl+S 触发。
     expect(wrapper.find('.editor-foot .pane-btn.is-primary').exists()).toBe(false)
-    // 工单C（P2）：编辑面头部统一进 .doc-head 容器；批次33 起头部只有一行 .doc-title。
-    expect(wrapper.find('.doc-head .doc-title').exists()).toBe(true)
+    // 〔批次76 裁定A〕原判据「头部只有一行 .doc-title」反过来了：内容层不再自绘标题，
+    // 文档名归窗头那一行（挂载的是裸 CarrierPaneHost，没有窗头可查，这里只查「不再自绘」）。
+    expect(wrapper.find('.doc-head .doc-title').exists()).toBe(false)
     // 批次43：正文面默认是阅读态（md 渲染过的一篇文），要动它先按头部那枚「编辑」。
     expect(wrapper.find('.editor-area').exists()).toBe(false)
     await enterEditing(wrapper)
@@ -588,8 +627,10 @@ describe('小说载体', () => {
     const outlineRow = wrapper.findAll('.nx-tree-item').find((row) => row.text().includes('开场：雨夜进城'))
     await outlineRow.trigger('click')
     await flushPromises()
-    // 批次43：大纲面默认是阅读态——头部一行标题（节点名本身），正文是渲染出来的备注。
-    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
+    // 〔批次76 裁定A〕原判据「阅读态头部一行标题＝节点名本身」改判：那一行撤了，节点名归窗头。
+    // 换判据的理由写在这行——同名文档名同屏只留一处，内容层从备注正文开始。
+    expect(wrapper.find('[data-test="outline-reading-title"]').exists()).toBe(false)
+    expect(wrapper.find('.nx-pane-window-title').text()).toBe('大纲 · 开场：雨夜进城')
     expect(wrapper.find('[aria-label="大纲节点标题"]').exists()).toBe(false)
     expect(wrapper.find('.control-primary').exists()).toBe(false)
     // 批次43：底部那行不再摆路径 · 版本 · 节点数（没有未落盘的改动时整行都不在）。
@@ -733,9 +774,12 @@ describe('小说载体', () => {
     await staleChip.find('.nx-save-chip-action').trigger('click')
     await flushPromises()
     expect(stale.find('.nx-save-chip').exists()).toBe(false)
-    // 批次43：重新载入＝按磁盘重读，回到阅读态（编辑态不跨文档），标题回到盘上那一个。
+    // 批次43：重新载入＝按磁盘重读，回到阅读态（编辑态不跨文档）。
+    // 〔批次76 裁定A〕原判据「读态标题那一行回到盘上那一个」改判：那一行已经不在内容层，
+    // 判据换成「编辑框收了＋备注回到渲染态」——节点名归窗头（裸 CarrierPaneHost 没有窗头，查不了那一行）。
     expect(stale.find('[aria-label="大纲节点标题"]').exists()).toBe(false)
-    expect(stale.find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
+    expect(stale.find('[data-test="outline-reading-title"]').exists(), '内容层不再自绘节点标题').toBe(false)
+    expect(stale.find('[data-test="outline-rendered"]').exists()).toBe(true)
     stale.unmount()
 
     // ② 条目：编辑态 Ctrl+S 落盘；保存后回到阅读态，chip 在动作位与「编辑」并排。
@@ -858,8 +902,10 @@ describe('小说载体', () => {
     expect(wrapper.find('[data-test="settings-panel-proposals"]').exists()).toBe(false)
     expect(tools.calls.some((call) => call.tool === 'pinax_proposal_read')).toBe(true)
     const pane = wrapper.find('[data-pane-id="novel.editor"]')
-    // 批次33：文档头只有一行标题「提案审阅 · 文件名」，目标章沉到底部 hint。
-    expect(pane.text()).toContain(`提案审阅 · ${PROPOSAL.name}`)
+    // 〔批次76 裁定A〕原判据「文档头一行『提案审阅 · 文件名』」改判：审阅面不再自绘标题行，
+    // 提案名归窗头那一行「小说 · 提案名」（.json 尾巴不上屏——批次43 同口径，那是开发者信息）。
+    expect(pane.text()).not.toContain('提案审阅 ·')
+    expect(wrapper.text()).toContain(`小说 · ${PROPOSAL.name.replace(/\.json$/u, '')}`)
     expect(pane.find('.doc-meta-hint').text()).toContain('正文/第002章.md')
     expect(pane.text()).toContain('提案说明：把雨提前一段')
     expect(pane.text()).toContain('当前正文')
@@ -1692,7 +1738,7 @@ describe('素材载体（批次60：图库模板，无左栏）', () => {
     wrapper.unmount()
   })
 
-  it('素材空库：画廊说清「还没有内容」，不退回左树', async () => {
+  it('素材空库：画廊说清「还是空的」并给一枚真建得了档的入口，不退回左树', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: galleryShellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -1700,8 +1746,50 @@ describe('素材载体（批次60：图库模板，无左栏）', () => {
 
     await openBoard(wrapper, '素材')
     expect(wrapper.find('.nx-index-window').exists()).toBe(false)
-    expect(wrapper.find('[data-test="material-gallery"]').text()).toContain('素材还没有内容（素材/素材.json）')
+    const gallery = wrapper.find('[data-test="material-gallery"]')
+    // 〔批次76 · 任务4-3〕原判据只钉「素材还没有内容（素材/素材.json）」这一句死话；
+    // 现在这句要讲清「空在哪、去哪建」，并且真的带一枚能建的入口。
+    expect(gallery.text()).toContain('素材这一栏还是空的')
+    expect(gallery.text()).toContain('素材/素材.json')
     expect(wrapper.findAll('[data-test="material-card"]')).toHaveLength(0)
+    // 换板不凭空开窗这条裁定不因为多了入口而破：没点之前仍然没有素材窗。
+    expect(wrapper.find('.nx-pane-window[data-window-pane="material.editor"]').exists()).toBe(false)
+    // 先起名再建档：标题没填，钮就是死的（不建一条无名记录）。
+    const create = wrapper.find('[data-test="material-create"]')
+    expect(create.exists()).toBe(true)
+    // 布尔属性在 jsdom 里读出来是空串（falsy 但存在），判「禁用」要看 DOM 属性而不是 attr 文本。
+    expect(create.element.disabled).toBe(true)
+
+    await wrapper.find('[data-test="material-new-title"]').setValue('雪夜的渡船')
+    await create.trigger('click')
+    await flushPromises()
+    const save = tools.calls.find((call) => call.tool === 'pinax_material_save')
+    expect(save.args.title).toBe('雪夜的渡船')
+    expect(save.args.type).toBe('inspiration')
+    expect(save.args.expectedRevision).toBe(1)
+    expect(wrapper.findAll('[data-test="material-card"]')).toHaveLength(1)
+    expect(wrapper.find('[data-test="material-create-error"]').exists()).toBe(false)
+    // 建完出窗：驱动是这次点击（与点卡同一条 openRecord → showBoardWindow），不是换板自动开窗。
+    expect(wrapper.find('.nx-pane-window[data-window-pane="material.editor"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('空库新建被盘拒（修订号不符）：画廊就地说明白，不许点了没动静', async () => {
+    const tools = fakeTools()
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: galleryShellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    await openBoard(wrapper, '素材')
+    await wrapper.find('[data-test="material-new-title"]').setValue('雪夜的渡船')
+    // 读过 list 之后盘上换到别的版本（真项目里＝并行会话或作者手改文件）：写闸必须拒。
+    tools.state.materialRevision += 1
+    await wrapper.find('[data-test="material-create"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="material-create-error"]').text()).toContain('已经换到别的版本')
+    expect(wrapper.findAll('[data-test="material-card"]')).toHaveLength(0)
+    expect(wrapper.find('.nx-pane-window[data-window-pane="material.editor"]').exists()).toBe(false)
     wrapper.unmount()
   })
 })
@@ -2174,7 +2262,10 @@ describe('应用面（批次44）：外部端口上的网页由内嵌浏览器�
     // 地址摆出来：作者要能一眼看见自己开的是哪个端口（也能复制出去单开）。
     expect(wrapper.find('.nx-external-app-url').text()).toBe('http://127.0.0.1:8188/')
     expect(wrapper.find('[data-test="app-copy-url"]').exists(), '要另给「复制地址单开」').toBe(true)
-    expect(wrapper.find('.doc-title').text()).toBe('ComfyUI')
+    // 〔批次76 裁定A〕原判据「.doc-title 文本＝ComfyUI」改判：面板名不再在内容层自绘第二行标题，
+    // 它归窗头那一行「载体 · 面板名」（本用例挂的是裸 CarrierPaneHost，没有窗头，只查「不再自绘」）；
+    // 这一行剩下的是只有这里才有的读数——地址与来源层。
+    expect(wrapper.find('.doc-title').exists()).toBe(false)
     wrapper.unmount()
   })
 

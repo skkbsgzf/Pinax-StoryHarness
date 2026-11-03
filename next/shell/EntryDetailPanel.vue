@@ -159,7 +159,7 @@ const entryMetaLine = computed(() => {
 <template>
   <div v-if="data.entry" class="entry-body">
     <div class="doc-head">
-      <h2 class="doc-title">{{ data.entry.name }}</h2>
+      <!-- 〔批次76 裁定A〕条目名不再在这里自绘：窗头那一行「世界书 · 条目名」就是唯一标题面。 -->
       <span class="nx-pane-actions">
         <!-- 保存 chip：保存的唯一常驻形态（批次31 · P18）。 -->
         <span v-if="chipVisible && chip" class="nx-save-chip" :class="`is-${chip.status}`" role="status" aria-label="保存状态">

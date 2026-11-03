@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createToolLoop } from '../runtime/toolLoop.mjs'
+import { absorbUsage, createToolLoop, createUsageTally, usageOf } from '../runtime/toolLoop.mjs'
 import { createWritePolicy } from '../runtime/writePolicy.mjs'
 import { CARRIER_WRITE_CLASS, KERNEL_WRITE_CLASS } from '../runtime/kernelWriteGuard.mjs'
 
@@ -208,4 +208,61 @@ test('接线级：review 转提案、auto 直写、blocked 被拒，模型都收
   assert.equal(blockedToolMessage.parts[0].isError, true)
   assert.match(blockedToolMessage.content, /WRITE_BLOCKED/u)
   assert.equal(blocked.result.kind, 'final', '被拒也要让循环收尾，不挂死')
+})
+
+/**
+ * 〔批次77 任务2〕token 用量的累计口径：只加真回报，一条都没回报时交出去的是 null。
+ * 这不是洁癖——上游（server/services/kitModelGateway.js:225 那条归一）有的网关整块不回 usage，
+ * 有的回全 0。落一个 0 到屏上，就等于告诉作者这一轮白跑。字数与 token 不同源，也不许换算。
+ */
+test('用量累计：两轮各报一次就相加（缺 totalTokens 用 in+out 补），一条都没报时是 null 不是 0', async () => {
+  const call = { kind: 'tool_calls', calls: [{ id: 'c1', name: 'pinax_outline_read', arguments: {} }] }
+  const turn = scriptedTurn([
+    { ...call, usage: { inputTokens: 900, outputTokens: 120, totalTokens: 1020 } },
+    // 第二轮只报 in/out：total 由两者相加补齐（归一口缺 total 时的既有约定）。
+    { kind: 'final_ready', text: '大纲一共三卷。', usage: { inputTokens: 300, outputTokens: 80 } }
+  ])
+  const loop = createToolLoop({ turn: turn.turn, callTool: async () => ({ ok: true }) })
+  const result = await loop.run({ question: '大纲什么样', tools: TOOLS })
+  assert.equal(result.kind, 'final')
+  assert.deepEqual(result.usage, { input: 1200, output: 200, total: 1400, rounds: 2 })
+
+  // 一次回报都没有：usage 必须是 null（chip 据此说「本轮未回报用量」）。
+  const silent = scriptedTurn([
+    call,
+    { kind: 'final_ready', text: '三卷。' }
+  ])
+  const silentResult = await createToolLoop({ turn: silent.turn, callTool: async () => ({ ok: true }) })
+    .run({ question: '大纲什么样', tools: TOOLS })
+  assert.equal(silentResult.usage, null, '没回报就交 null，不许落 0 冒充测过')
+})
+
+test('用量累计：步数耗尽也要把已发生的那几轮报出来，坏数字与全 0 不进累计', () => {
+  // 全 0（网关回了但没数）：算一轮，但不算「有回报」——三条一起看才是真相。
+  const tally = createUsageTally()
+  absorbUsage(tally, { inputTokens: 0, outputTokens: 0, totalTokens: 0 })
+  assert.equal(usageOf(tally), null, '全 0 那一轮不算回报')
+  assert.equal(tally.rounds, 1, '轮次照记：这是跑过的一轮，只是没报数')
+
+  // 坏数字（NaN／负数／字符串里的鬼话）：整块忽略，一个字节都不加。
+  absorbUsage(tally, { inputTokens: Number.NaN, outputTokens: 5 })
+  absorbUsage(tally, { inputTokens: -100, outputTokens: 5 })
+  assert.deepEqual({ ...tally }, { input: 0, output: 0, total: 0, rounds: 1, reported: 0 })
+
+  // 真回报进来才开口：之后 usageOf 给出累计值。
+  absorbUsage(tally, { inputTokens: 10, outputTokens: 4 })
+  assert.deepEqual(usageOf(tally), { input: 10, output: 4, total: 14, rounds: 2 })
+
+  // 步数耗尽那一档：已经报过的轮次不能因为没收尾就丢掉（花了就是花了）。
+  // 两轮各报一次不同数额，累计才是这两轮的真相。
+  const looping = scriptedTurn([
+    { kind: 'tool_calls', calls: [{ id: 'c1', name: 'pinax_outline_read', arguments: {} }], usage: { inputTokens: 500, outputTokens: 60, totalTokens: 560 } },
+    { kind: 'tool_calls', calls: [{ id: 'c2', name: 'pinax_outline_read', arguments: {} }], usage: { inputTokens: 300, outputTokens: 40, totalTokens: 340 } }
+  ])
+  return createToolLoop({ turn: looping.turn, callTool: async () => ({ ok: true }), maxSteps: 2 })
+    .run({ question: '一直读', tools: TOOLS })
+    .then((result) => {
+      assert.equal(result.kind, 'step-budget')
+      assert.deepEqual(result.usage, { input: 800, output: 100, total: 900, rounds: 2 })
+    })
 })

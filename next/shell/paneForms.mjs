@@ -41,9 +41,13 @@ export const PANE_FORM_LABELS = Object.freeze({
   overlay: '浮窗'
 })
 
-/** 右键菜单里「页操作」那一组：不属于 forms 词表（v3 自有形态与关闭），故恒在。 */
+/**
+ * 右键菜单里「页操作」那一组：不属于 forms 词表（v3 自有形态与关闭），故恒在。
+ * 〔批次76 裁定B〕文案换口径：收起的落点不再是右缘那一竖列标签，而是右下角悬浮球；
+ * `action:'tab'` 这个键不动（它是 v3 状态轴的形态名，不是界面词）。
+ */
 export const PAGE_ACTIONS = Object.freeze([
-  { action: 'tab', label: '收成侧缘标签' },
+  { action: 'tab', label: '收进悬浮球' },
   { action: 'close', label: '关闭这一页' }
 ])
 

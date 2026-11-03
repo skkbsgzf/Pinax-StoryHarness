@@ -1380,9 +1380,11 @@ watch(() => props.board?.id, () => {
 }
 .nx-index-icon-btn {
   flex: none;
-  width: 22px;
-  height: 22px;
-  min-height: 22px;
+  /* 〔批次76 任务4-4〕「新建资料／新建约束」这一族行内图标钮实测 22×22，差 2px 不到 24 这条线。
+     只抬尺寸（图标本身仍 14，靠 justify-content 居中），不改钮的显隐逻辑与 hover 语义。 */
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
   padding: 0;
   justify-content: center;
   border-radius: var(--nx-radius-xs);

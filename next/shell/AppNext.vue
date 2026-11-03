@@ -22,6 +22,7 @@ import ServicesSection from './settings/ServicesSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import CommandPalette from './CommandPalette.vue'
 import StatusBar from './StatusBar.vue'
+import CollapseOrb from './CollapseOrb.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
@@ -43,6 +44,7 @@ import {
 } from './workspace.mjs'
 import { resolveOpenTarget } from './openTarget.mjs'
 import { FORM_ACTIONS, MENU_TARGET_FORM, PAGE_ACTIONS } from './paneForms.mjs'
+import { snapPlan } from './paneSnap.mjs'
 import PaneTabStrip from './PaneTabStrip.vue'
 import PaneFormMenu from './PaneFormMenu.vue'
 import { layoutTemplateForBoard, templateHasTree } from './layoutTemplates.mjs'
@@ -67,7 +69,11 @@ import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs
  *     工单B1：索引窗不再摆提案区——「文档」组新增「提案审阅」节（协议 v1.1-B），
  *     列表在设置里看、点开即关窗并把 selection 置为该提案，核心区沿用既有审阅面。
  *     批次59（协议 v1.3）：中间 doc 区是窗口管理器——任何打开的内容都是一扇 PaneWindow，
- *     宿主统一 chrome（收起／分屏／×）；浮窗可叠、可拖可缩放，分屏对半贴，收起成侧缘标签。
+ *     宿主统一 chrome；浮窗可叠、可拖可缩放，分屏对半贴。
+ *     批次76（作者两条审美裁定改了这里的 chrome）：① 窗头只剩一枚 ×，收起／分屏两枚钮撤掉，
+ *     换形态走「拖到边缘吸附」（applySnapTarget）＋右键菜单（applyFormAction）那两条活路；
+ *     ② 收起态不再在右缘排一竖列文字标签，统一收进右下角悬浮球（CollapseOrb），
+ *     放出来回到**收起前**那一档（workspace 的 expand 读页记录的 restore 格）。
  *     左树不再是每载体标配：folder 模板才渲染 IndexWindow，web／gallery 由宿主模板决定
  *     （layoutTemplates.mjs）。竖条点击＝开／还原该载体的文档窗。
  *
@@ -141,6 +147,12 @@ function paneInstance(paneId) {
  * 认领表要喂给每一页，否则 noteClaim／claimDecision 在页面上读不到裁决事实。
  */
 const pageDataMap = new Map()
+/**
+ * 〔批次76〕页数据面的「多一页／少一页」计数。`pageDataMap` 是普通 Map，Vue 追不到它新增，
+ * 而窗头标题现在要从这一页自己的数据面回读文档名（`record:`／`outline:node:` 那两类 resource 只有 id）。
+ * 创建／摘除页数据面时拨一下这个 ref，依赖它的 computed 才会保证重算——它只是重算触发器，不是第五条状态轴。
+ */
+const pageDataVersion = ref(0)
 /** instance → 这页此刻materialize 的是哪份文档；用来判「已载入就别重取」（会冲掉手上草稿）。 */
 const pageResource = new Map()
 let claimPanesSnapshot = []
@@ -152,6 +164,7 @@ function pageDataOf(instance) {
     page = useBoardData(props.bridge)
     page.declareClaimPanes?.(claimPanesSnapshot)
     pageDataMap.set(instance, page)
+    pageDataVersion.value += 1
   }
   return page
 }
@@ -164,6 +177,7 @@ function prunePageData() {
     pageDataMap.get(instance).dispose?.()
     pageDataMap.delete(instance)
     pageResource.delete(instance)
+    pageDataVersion.value += 1
   }
 }
 
@@ -240,6 +254,16 @@ watch(() => {
 
 
 const project = computed(() => view.value?.project ?? null)
+/**
+ * 载体合同的修订号——〔批次76 任务4-1 顺出来的同源硬 bug〕。
+ * `pinax-project@3` 把这一格记在 `carriers.revision`：归一出来的项目形状（`next/project/projectManifest.mjs:46-58`）
+ * 根本没有顶层 `revision`，而外壳原来三处都读 `project.revision ?? 0`。内核那道闸是
+ * `expectedRevision !== carriers.revision` 就 fail('STALE_REVISION')（同文件 :108-115），
+ * 所以真项目（大梦实测第 6 版）每次「启用／停用板块」「换主载体」都送 0，提交必被拒。
+ * 老档（@1／@2）只有顶层那一格，所以读法是先 `carriers.revision` 再回落 `revision`——
+ * 顶栏 chip 与两条写路径共用这一个口径，不再各读各的。
+ */
+const carrierRevision = computed(() => Number(project.value?.carriers?.revision ?? project.value?.revision) || 0)
 const runtime = computed(() => view.value?.runtime ?? { tools: [], started: false, title: 'Pi-Agent', budgetPriority: 0, writeSurface: '.pinax/proposals/', reservedSlotReason: '' })
 const leftItems = computed(() => view.value?.left ?? [])
 const centerPanes = computed(() => view.value?.center ?? [])
@@ -262,7 +286,8 @@ watch(
 const rejected = computed(() => view.value?.rejected ?? [])
 const needsPrimary = computed(() => Boolean(view.value?.needsPrimary))
 const openError = computed(() => view.value?.openError ?? null)
-const kinds = computed(() => view.value?.kernel?.kinds ?? [])
+// 〔批次76 任务4-1〕这里原来是 `kinds = view.kernel.kinds`（内核中英词表）。它不再上屏——
+// 类型的人话由载体标题给（见 projectChip 与 PrimaryCarrierSection），props 通道也一并撤了。
 
 /**
  * 当前文档（D2 历史面板的锚点）：此刻聚焦那一页选中什么，历史就查什么。
@@ -461,7 +486,7 @@ const statusPageGroup = computed(() => {
   return group ? STATUS_GROUP_LABELS[group] ?? String(group) : ''
 })
 
-/** 「1＋N 的 N」：此刻在册的窗数（页／浮窗／侧缘标签都算）。 */
+/** 「1＋N 的 N」：此刻在册的窗数（页／浮窗／收进悬浮球的那些都算）。 */
 const statusWindows = computed(() => openWindows.value.length)
 
 /** 编辑面与草稿位的对照：草稿非空就读草稿（作者手上那份），否则读盘上那份的 totalChars。 */
@@ -493,6 +518,9 @@ const statusDoc = computed(() => {
 const carrierSectionComponents = computed(() => ({
   'novel.writing': {
     component: WritingPrefsSection,
+    // 〔批次76 任务4-2〕这一节面上有哪几行，只有内容组件自己知道——把字段标签交给目录当搜索词表，
+    // 作者输「字号」才不该出现「左目录空、右栏还挂着正文字号那一节」的自相矛盾。
+    keywords: ['正文字号', '字号', '正文行高', '行高', '段落间距', '首行缩进', '打字机滚动', '段落聚焦', '写作偏好'],
     props: {
       bridge: props.bridge,
       fontSize: writingPrefs.value.fontSize,
@@ -524,7 +552,7 @@ const settingsSections = computed(() => [
   // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
   { id: 'import', title: '导入既有稿', group: '项目', keywords: ['带稿上车', '稿子目录', '项目位置', '导入计划', '原文件只新增不修改'], component: ImportSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
   { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹'], component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
-  { id: 'primary', title: '主载体选择', group: '项目', keywords: ['这个项目要创作什么', '创作小说还是剧本'], component: PrimaryCarrierSection, props: { carriers: carriers.value, kinds: kinds.value, companions: companions.value, extraEnabled: extraEnabled.value } },
+  { id: 'primary', title: '主载体选择', group: '项目', keywords: ['这个项目要创作什么', '创作小说还是剧本'], component: PrimaryCarrierSection, props: { carriers: carriers.value, companions: companions.value, extraEnabled: extraEnabled.value } },
   // 文档
   { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
   // 工单B1（协议 v1.1-B）：提案审阅迁出小说板索引窗，收进统一二级页的「文档」组。
@@ -636,14 +664,26 @@ function menuLabel(item) {
   return item?.label ?? ROLE_LABELS[item?.role] ?? String(item?.role ?? '')
 }
 
-/** 项目信息 chip（作者反馈①）：有项目给「名称 · 类型 · 第 N 版」，没有就明说未打开。 */
+/**
+ * 项目信息 chip（作者反馈①）：有项目给「名称 · 类型 · 第 N 版」，没有就明说未打开。
+ * 〔批次76 任务4-1〕原判据拼的是 `project.kind`——那是内核词表里的内部 id（'novel'／'screenplay'），
+ * 实测顶栏念成「大梦 · novel · 第 6 版」。类型这一格现在只端**人话**：项目自己声明的主载体 → 那份清单里的
+ * 中文标题（各载体 manifest.mjs 的 title，载体即插件，标题由载体自己负责，不在外壳另建一张对照表）；
+ * 还没选定主载体就明说「未定主载体」，绝不回落成内部 token。
+ * 修订号同理：@3 的账记在 `carriers.revision`，顶层 `revision` 是 @1／@2 老档那一格，读得到才算得准。
+ */
 const projectChip = computed(() => {
   const current = project.value
   if (!current) return '未打开项目'
   const name = current.name ?? '未命名项目'
-  const kind = current.kind ?? '未定类型'
-  const revision = Number.isFinite(current.revision) ? current.revision : 0
-  return `${name} · ${kind} · 第 ${revision} 版`
+  const declaredPrimary = current.carriers?.primary
+  // @3 的账明确说了主载体是谁：清单里查不到就是「未定」，不拿 kind 猜一块像的顶上去（猜错等于撒谎）。
+  // @1／@2 的老档没有这一格，才按 project.kind 去清单里找声明了同一 projectKind 的载体。
+  const declared = declaredPrimary
+    ? carriers.value.find((item) => item.id === declaredPrimary)
+    : carriers.value.find((item) => item.primary?.projectKind === current.kind)
+  const kindLabel = declared?.title ?? '未定主载体'
+  return `${name} · ${kindLabel} · 第 ${carrierRevision.value} 版`
 })
 
 const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform ?? '')
@@ -1170,7 +1210,7 @@ async function openResourceInPage(page, paneId, resource) {
 /**
  * 开窗的唯一通路（〔铁律二〕缺省＝切换；升档只从右键菜单进来）。
  * 竖条、左树、看板卡、蓝链、检索命中、图谱节点、命令——七条路径都只问这里一次，
- * 结果只有五种：回到已开着的那一页（reveal）、展开侧缘标签（raise-tab）、
+ * 结果只有五种：回到已开着的那一页（reveal）、把收进悬浮球的那一页放出来（raise-tab）、
  * 换这一页装哪份文档（replace-page，single 硬闸的后果）、新开一页（open-page）、拒（block）。
  * **这里没有任何一档会新建浮窗**：浮窗只经 PaneFormMenu 的「浮出为窗」到达。
  */
@@ -1197,7 +1237,7 @@ async function routeOpen({ pane, resource = null, opener = null, gesture = null 
   await ensurePaneData(instance, decision.pane)
   if (decision.action === 'open-page') hostWorkspace.open(instance, { resource: decision.resource, group: decision.group, form: decision.form ?? 'page' })
   else if (decision.action === 'replace-page') hostWorkspace.setResource(instance, decision.resource)
-  else if (decision.action === 'raise-tab') hostWorkspace.setForm(instance, 'page')
+  else if (decision.action === 'raise-tab') expandWindow(instance)
   else hostWorkspace.bringToFront(instance)
   // 〔批次62 任务五〕Alt＋点：落点判定一个字没改，只是那一页要以手势指定的形态出现。
   if (decision.form && decision.form !== hostWorkspace.get(instance)?.form) hostWorkspace.setForm(instance, decision.form)
@@ -1223,8 +1263,8 @@ function showBoardWindow(board, { maximize = null } = {}) {
   const instance = paneInstance(pane.id)
   const existing = hostWorkspace.get(instance)
   if (existing) {
-    // 已开着：回到那一页（侧缘标签先展开），不动它此刻装的文档。
-    if (existing.form === 'tab') hostWorkspace.setForm(instance, 'page')
+    // 已开着：回到那一页（收着的先按「收起前那一档」放出来），不动它此刻装的文档。
+    if (existing.form === 'tab') expandWindow(instance)
     else hostWorkspace.bringToFront(instance)
     void ensurePaneData(instance, pane.id)
     if (existing.resource) pageResource.set(instance, existing.resource)
@@ -1270,28 +1310,19 @@ const openWindows = computed(() => Object.values(workspaceSnapshot.value.entries
   .filter((item) => item.pane)
   .sort((a, b) => formRank(a.entry.form) - formRank(b.entry.form) || a.entry.z - b.entry.z || a.entry.order - b.entry.order))
 
-/** 渲染序：页态 → 浮窗 → 侧缘标签（标签不是窗，只留一条记录给页签栏与侧缘列）。 */
+/** 渲染序：页态 → 浮窗 → 收起态（〔批次76 裁定B〕标签不再是屏幕上的一列，只留一条记录给悬浮球与页签栏）。 */
 function formRank(form) {
   return form === 'page' ? 0 : form === 'floating' ? 1 : 2
 }
 
-/** 侧缘标签那一竖列的排位：只看标签态的记录，按叠序依次下移。 */
-function tabOrdinal(instance) {
-  let ordinal = 0
-  for (const win of openWindows.value) {
-    if (win.entry.instance === instance) return ordinal
-    if (win.entry.form === 'tab') ordinal += 1
-  }
-  return ordinal
-}
-
-/* —— 中心区的三层渲染（批次61 · 〔铁律一〕页是一等对象）————————————————
+/* —— 中心区的三层渲染（批次61 · 〔铁律一〕页是一等对象；批次76 裁定B 收口第三层）————
  * 页签栏列全部页；页层（page 层）只放两组各自的当前页——同组还有第二页时它不占屏，
  * 但签上有名，点一下就揭示（这正是作者要的「首先考虑切换」）；
- * 浮窗层与侧缘标签层各按自己的形态渲染，都用同一个 PaneWindow，不出第二套窗口壳。
+ * 浮窗层与页层共用 PaneWindow；收起态（form:'tab'）**不再渲染缘签**，统一由右下角悬浮球呈现。
  */
 const pageTierWindows = computed(() => [activePageWindow('main'), activePageWindow('side')].filter(Boolean))
 const floatWindows = computed(() => openWindows.value.filter((win) => win.entry.form === 'floating'))
+/** 收进悬浮球的那些页（〔批次76 裁定B〕原先它们是右缘一竖列文字标签）。 */
 const sideTabWindows = computed(() => openWindows.value.filter((win) => win.entry.form === 'tab'))
 /** 摆在屏幕上的那些页：页层（两组各占其当前页）＋浮窗层。同组没被选中的页只出现在页签栏。 */
 const visibleWindows = computed(() => [...pageTierWindows.value, ...floatWindows.value])
@@ -1304,19 +1335,47 @@ function activePageWindow(group) {
   return openWindows.value.find((win) => win.entry.instance === instance) ?? null
 }
 
-/** 一条 resource 的短标签（页签与窗头用它区分同 pane 的两页）：取路径末段，去掉 md／json 尾巴。 */
-function resourceLabel(resource) {
+/**
+ * 一条 resource 的短标签（页签与窗头用它区分同 pane 的两页）。
+ * 〔批次76 裁定A〕这一行只许端出「作者读得懂的名字」：路径取末段、去掉 md／json 尾巴；
+ * `record:`／`outline:node:` 这种只有数字 id 的，去这一页自己的数据面把标题取回来——
+ * 取不到就返回空串（窗头随之只显示载体名），绝不把 `record:material:7` 里那个 7 当标题。
+ */
+function resourceLabel(resource, page = null) {
   const text = String(resource ?? '')
   if (!text) return ''
-  const tail = text.split(':').filter(Boolean).pop() ?? ''
+  const [kind, ...rest] = text.split(':')
+  if (kind === 'record') {
+    const carrier = rest[0] ?? ''
+    const id = rest[rest.length - 1] ?? ''
+    const item = (page?.recordSets?.[carrier]?.records ?? []).find((record) => String(record.id) === id)
+    return String(item?.title ?? item?.name ?? '')
+  }
+  if (kind === 'outline') {
+    const index = Number.parseInt(rest[1] ?? rest[0] ?? '', 10)
+    const node = Number.isInteger(index) ? (page?.outline ?? [])[index] : null
+    return String(node?.title ?? '')
+  }
+  const tail = rest.filter(Boolean).pop() ?? ''
   return tail.split('/').pop()?.replace(/\.(md|json)$/u, '') ?? ''
 }
 
-/** 页签与窗头的标题：载体名打底，装了具体文档就补上文档名。 */
+/**
+ * 窗头与页签的标题＝唯一那一行标题面（〔批次76 裁定A〕作者口径「小说 第一章」）：
+ * 载体中文名（清单顶层 title）＋ 这一页的文档名；解析不出文档名就只显示载体名。
+ * 内容层不再自绘第二行标题（`h2.doc-title` 已全部撤掉），页签的 `pane.title`（如「正文」）
+ * 不再进窗头——它回答的是「哪块 pane」，而作者要的那一行是「哪个载体的哪份文档」。
+ */
 function windowTitle(win) {
-  const base = win.pane.title ?? win.entry.pane
-  const label = resourceLabel(win.entry.resource)
-  return label ? `${base} · ${label}` : base
+  const carrierName = win.pane.pluginTitle ?? win.pane.carrierTitle ?? win.pane.title ?? win.entry.pane
+  // 读一下页数据面的计数：它是普通 Map，新增那一下 Vue 追不到，不拨这一下标题会停在「只有载体名」。
+  void pageDataVersion.value
+  const page = pageDataMap.get(win.entry.instance) ?? null
+  // resource 还没落进页记录（例如作者是在索引窗里点的行，同步那条 watch 排在下一帧）时，
+  // 直接问这一页自己的 selection 装的是哪份——窗头报的是作者此刻看见的那篇，不是台账里那条旧账。
+  const label = resourceLabel(win.entry.resource || selectionResource(page), page)
+    || ((win.pane.title && win.pane.title !== carrierName) ? win.pane.title : '')
+  return label ? `${carrierName} · ${label}` : carrierName
 }
 
 /** 页签栏的数据源：全部页记录（四种形态都在内），高亮跟着作者此刻那一页。 */
@@ -1448,7 +1507,7 @@ const formMenuTarget = computed(() => {
 function revealPage(instance) {
   const entry = hostWorkspace.get(instance)
   if (!entry) return null
-  if (entry.form === 'tab') hostWorkspace.setForm(instance, 'page')
+  if (entry.form === 'tab') expandWindow(instance)
   else if (entry.form === 'floating') hostWorkspace.bringToFront(instance)
   else hostWorkspace.setActive(entry.group, instance)
   const board = boardForPane(entry.pane)
@@ -1485,19 +1544,57 @@ async function openKnowledge(target) {
 }
 provide('pinaxOpenKnowledge', openKnowledge)
 
-/** 收成侧缘标签（v3 的 form:'tab'）——右键菜单与窗头「—」钮共用这一句。 */
+/** 收进悬浮球（v3 的 form:'tab'）——右键菜单、Esc 与拖到右下角命中圈共用这一句。 */
 function collapseWindow(instance) {
   return hostWorkspace.setForm(instance, 'tab')
 }
 
+/**
+ * 从悬浮球里点开一条＝回到**收起前**那一档（〔批次76 裁定B〕「弹出到上次记忆的位置」）。
+ * 回原形态这一步归状态机（workspace.mjs 的 expand 读页记录的 restore 字段），宿主只管板高亮；
+ * 老数据没有 restore 时它退成「落成页态」，与批次76 之前的行为一致。
+ */
 function expandWindow(instance) {
   const entry = hostWorkspace.get(instance)
   if (!entry) return null
-  const result = hostWorkspace.setForm(instance, 'page')
+  const result = hostWorkspace.expand(instance)
   const board = boardForPane(entry.pane)
   if (board) activeBoardId.value = board.id
   return result ?? entry
 }
+
+/**
+ * 拖拽吸附的落点（〔批次76 裁定A〕「拖到侧边可以吸附」＝把形态切换从按钮改成手势）。
+ * 窗体只在松手时报「亮的是哪一块圈」＋那一圈的预览矩形；**落什么形态由 paneSnap 的 snapPlan 定**，
+ * 与右键菜单走的是同一套状态机动作（〔铁律四〕不出第二套迁移逻辑）。无预览不落位那条判据在窗体里，
+ * 这里只可能被叫到已有目标的落位。
+ */
+function applySnapTarget(instance, payload) {
+  const entry = hostWorkspace.get(instance)
+  const plan = snapPlan(payload?.target, entry ?? {})
+  if (!entry || !plan) return null
+  if (plan.form === 'tab') {
+    const moved = collapseWindow(instance)
+    if (moved && moved.ok === false) return moved
+  } else if (plan.form && plan.form !== entry.form) {
+    const moved = hostWorkspace.setForm(instance, plan.form)
+    if (moved && moved.ok === false) return moved
+  }
+  if (plan.form !== 'tab' && plan.group) hostWorkspace.moveToGroup(instance, plan.group)
+  // 最大化只属于浮窗档（状态机对页态直接拒）；页天然铺满所在页组，落点不碰这一格。
+  if (plan.form === 'floating' && typeof plan.maximized === 'boolean') hostWorkspace.setMaximized(instance, plan.maximized)
+  const settled = hostWorkspace.get(instance)
+  const board = settled ? boardForPane(settled.pane) : null
+  if (board) activeBoardId.value = board.id
+  return settled
+}
+
+/** 悬浮球的那一列：所有 form:'tab' 的页，标题与窗头同一个口径（载体 · 文档）。 */
+const collapsedOrbItems = computed(() => sideTabWindows.value.map((win) => ({
+  instance: win.entry.instance,
+  title: windowTitle(win),
+  paneId: win.entry.pane
+})))
 
 /** 浮窗的双击标题栏：占满中栏是浮窗的子态，页态没有这一档（天然铺满）。 */
 function toggleWindowMaximized(instance) {
@@ -1511,22 +1608,10 @@ function saveWindowGeometry(instance, geometry) {
 }
 
 /**
- * 分屏（〔铁律一〕side 是页组不是形态）：把这页搬到对面那一组，两组各占一半。
- * 已经在对面组／已是页态在同一组的另一侧，就搬回来——一条动作，没有「半对」这种残留态。
+ * 〔批次76 裁定A〕这里原来有一句 `splitWindow()`（窗头「分屏」钮的实现）。那颗钮随裁定撤掉了——
+ * 「移到对面那一组」只剩两条入口，且都走同一套状态机动作：右键菜单的 `side` 项（见下面 applyFormAction）
+ * 与拖到左／右缘命中圈的落位（见上面 applySnapTarget）。留着它＝第三条没人按的旁路，故删，不改为 no-op。
  */
-function splitWindow(instance) {
-  const entry = hostWorkspace.get(instance)
-  if (!entry) return null
-  const target = entry.group === 'main' ? 'side' : 'main'
-  if (entry.form === 'page') {
-    // 页态点分屏：已经在对面组就是「解除」（搬回主组），否则就是移到对面。
-    const opposite = entry.group === 'main' ? 'side' : 'main'
-    return hostWorkspace.moveToGroup(instance, opposite)
-  }
-  const moved = hostWorkspace.setForm(instance, 'page')
-  if (!moved?.ok) return moved
-  return hostWorkspace.moveToGroup(instance, target)
-}
 
 function closeWindow(instance) {
   return hostWorkspace.close(instance)
@@ -1610,7 +1695,7 @@ const activeCenterPane = computed(() => chosenCenterPaneFor(activeBoard.value))
 /** 同一块板有两块以上中栏 pane 时才出切换条（单 pane 的板维持原样，不新增视觉噪声）。 */
 const centerPaneTabs = computed(() => (activeCenterPanes.value.length > 1 ? activeCenterPanes.value : []))
 /**
- * 同载体双中栏 pane 的切换：旧窗收成侧缘标签、新窗接着占位。
+ * 同载体双中栏 pane 的切换：旧窗收进悬浮球、新窗接着占位。
  * 二者仍是同一套 PaneWindow，只是内容 pane 换了。
  * （批次61 v3：页态天然铺满所在页组，原来那句「旧窗最大化则新窗也最大化」没有对应落点，删。）
  */
@@ -1622,7 +1707,7 @@ function chooseCenterPane(paneId) {
   for (const pane of board.centerPanes ?? []) {
     if (pane.id === id) continue
     const instance = paneInstance(pane.id)
-    if (hostWorkspace.get(instance)) hostWorkspace.setForm(instance, 'tab')
+    if (hostWorkspace.get(instance)) collapseWindow(instance)
   }
   showBoardWindow(board)
   return id
@@ -1829,13 +1914,13 @@ watch([boards, overlayPanes], () => syncWorkspaceForView(), { immediate: true })
 watch([() => props.bridge, () => project.value?.root ?? ''], ([bridge, root]) => { void hydrateWorkspace(bridge, root) }, { immediate: true })
 
 /**
- * Esc＝把叠序最高的那扇窗收成侧缘标签（铁律二）。
+ * Esc＝把叠序最高的那扇窗收进悬浮球（铁律二；〔批次76 裁定B〕收的是球，不是右缘那一竖列标签）。
  * 统一二级页／命令面板／页内菜单开着时让位——那一层自己的 Esc 先走。
  */
 function collapseTopWindow() {
   const top = hostWorkspace.list().filter((entry) => entry.form !== 'tab').pop()
   if (!top) return false
-  hostWorkspace.setForm(top.instance, 'tab')
+  collapseWindow(top.instance)
   return true
 }
 
@@ -1977,7 +2062,7 @@ function selectBoard(id) {
 
 async function pickPrimary(pluginId) {
   if (!props.bridge?.request) return
-  const revision = project.value?.revision ?? 0
+  const revision = carrierRevision.value
   await props.bridge.request(IPC_CHANNELS.carrierSetPrimary, { pluginId, expectedRevision: revision })
   await refresh()
 }
@@ -2005,7 +2090,7 @@ async function setCarrierEnabled(carrier) {
   if (!props.bridge?.request || carrier.isPrimary) return
   const enabling = !carrier.isEnabled
   if (!enabling) releaseCarrierPanes(carrier)
-  const revision = project.value?.revision ?? 0
+  const revision = carrierRevision.value
   await props.bridge.request(IPC_CHANNELS.carrierSetEnabled, {
     pluginId: carrier.id,
     enabled: enabling,
@@ -2354,7 +2439,8 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- 中间 doc 区＝页底座（批次61 · 〔铁律一〕）：页签栏在上，页层按页组排版，
-             浮窗与侧缘标签叠在同一层里，全都走同一个 PaneWindow（〔铁律四〕不出第二套窗口壳）。 -->
+             浮窗叠在同一层里，全都走同一个 PaneWindow（〔铁律四〕不出第二套窗口壳）；
+             收起态（form:'tab'）在这一层不渲染任何东西，呈现归右下角那颗球（〔裁定B〕）。 -->
         <PaneTabStrip
           :pages="tabStripPages"
           :current-instance="currentInstance"
@@ -2374,8 +2460,12 @@ onBeforeUnmount(() => {
           <p v-else-if="!visibleWindows.length && !sideTabWindows.length" class="center-empty">
             中心区还没有页。点竖条上的载体，或在左树里点一份文档。
           </p>
+          <p v-else-if="!visibleWindows.length" class="center-empty">
+            核心区的页都收进右下角那颗球了。点球或者点页签，把它放回来。
+          </p>
           <!-- 页层与浮窗层同一条 v-for（〔铁律四〕PaneWindow 是唯一窗口壳，排版差异交给 CSS：
-               页态 flex 占位、主／侧两组各半＝原来的分屏；浮窗态绝对定位可拖可缩）。 -->
+               页态 flex 占位、主／侧两组各半＝原来的分屏；浮窗态绝对定位可拖可缩）。
+               〔批次76 裁定A〕窗头只剩一枚 ×；换形态改由拖拽吸附（@snap）与右键菜单承担。 -->
           <PaneWindow
             v-for="win in visibleWindows"
             :key="win.entry.instance"
@@ -2387,15 +2477,12 @@ onBeforeUnmount(() => {
             :geometry="win.entry.geometry"
             :maximized="win.entry.maximized"
             :z="win.entry.z"
-            :tab-index="0"
             :suspend-esc="settingsOpen"
             @close="closeWindow(win.entry.instance)"
-            @collapse="collapseWindow(win.entry.instance)"
-            @expand="expandWindow(win.entry.instance)"
             @maximize="toggleWindowMaximized(win.entry.instance)"
-            @split="splitWindow(win.entry.instance)"
             @focus="hostWorkspace.bringToFront(win.entry.instance)"
             @geometry="saveWindowGeometry(win.entry.instance, $event)"
+            @snap="applySnapTarget(win.entry.instance, $event)"
             @menu="openFormMenu(win.entry.instance, $event)"
           >
             <template v-if="win.entry.pane === 'outline.widget'">
@@ -2424,23 +2511,6 @@ onBeforeUnmount(() => {
               @history="openHistoryFor"
             />
           </PaneWindow>
-          <!-- 侧缘标签列：收起≠关掉，一扇窗收成一条缘签，点它展开（页签栏里也有一条签）。 -->
-          <PaneWindow
-            v-for="win in sideTabWindows"
-            :key="win.entry.instance"
-            :instance="win.entry.instance"
-            :pane-id="win.entry.pane"
-            :title="windowTitle(win)"
-            :form="win.entry.form"
-            :group="win.entry.group"
-            :geometry="null"
-            :maximized="false"
-            :z="win.entry.z"
-            :tab-index="tabOrdinal(win.entry.instance)"
-            :suspend-esc="settingsOpen"
-            @expand="expandWindow(win.entry.instance)"
-            @menu="openFormMenu(win.entry.instance, $event)"
-          />
         </div>
         <PaneFormMenu
           v-if="formMenuTarget"
@@ -2450,6 +2520,17 @@ onBeforeUnmount(() => {
           :group="formMenuTarget.group"
           @action="applyFormAction(formMenuTarget.instance, $event)"
           @dismiss="closeFormMenu"
+        />
+        <!-- 右下角悬浮球（批次76 · 〔裁定B〕）：收起态不再在右缘排一竖列文字标签，
+             所有 form:'tab' 的页统一在这颗球里管；通知那一节只转述状态栏服务灯那份读数，
+             点开的落点是设置里既有的两节——球不产生通知，也不另记一份未读账。 -->
+        <CollapseOrb
+          :items="collapsedOrbItems"
+          :notices="statusLights"
+          @expand="expandWindow"
+          @close="closeWindow"
+          @open-services="openSection('services')"
+          @open-proposals="openSection('proposals')"
         />
       </div>
 

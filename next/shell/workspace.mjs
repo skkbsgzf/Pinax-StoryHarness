@@ -218,7 +218,28 @@ export function normalizeEntry(value, fallbackInstance = '') {
     geometry: geometry ?? (form === 'floating' ? { ...DEFAULT_FLOATING_GEOMETRY } : null),
     z: Number.isSafeInteger(value.z) && value.z >= 0 ? value.z : 0,
     maximized: form === 'floating' && value.maximized === true,
+    // 〔批次76 裁定B〕只有收进悬浮球的那一页才带这份「收起前的样子」；别的形态一律为 null。
+    restore: form === 'tab' ? normalizeRestore(value.restore) : null,
     viewState: normalizeViewState(value.viewState)
+  }
+}
+
+/**
+ * 收起前的形态读数归一（〔批次76 裁定B〕悬浮球「点插件则弹出到上次记忆的位置」的那份记忆）。
+ *
+ * 三条口径写死在这里，免得它变成第五个状态轴：
+ *   · 目标形态只认 page／floating——tab 自己不能是「收起前」，认了就死循环；不认识的回落 page；
+ *   · 矩形只在来源是浮窗时保留（页态由页组排版，记 rectangle 是留一份没人读的假真相）；
+ *   · 这一格不是台账，不记时间戳、不记「谁收的」，展开即清空（setForm 里那三行）。
+ */
+export function normalizeRestore(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const form = raw.form === 'floating' ? 'floating' : 'page'
+  return {
+    form,
+    group: isPageGroup(raw.group) ? raw.group : DEFAULT_GROUP,
+    geometry: form === 'floating' ? (normalizeGeometry(raw.geometry) ?? { ...DEFAULT_FLOATING_GEOMETRY }) : null,
+    maximized: form === 'floating' && raw.maximized === true
   }
 }
 
@@ -389,6 +410,10 @@ function cloneEntry(entry) {
   return {
     ...entry,
     geometry: entry.geometry ? { ...entry.geometry } : null,
+    // 收起前那份记忆也得深拷贝：否则快照外头改一笔就把台账里的矩形改了（浮窗拖动的 localGeometry 就在这个面上）。
+    restore: entry.restore
+      ? { ...entry.restore, geometry: entry.restore.geometry ? { ...entry.restore.geometry } : null }
+      : null,
     viewState: entry.viewState ? { collapsed: [...entry.viewState.collapsed] } : null
   }
 }
@@ -651,9 +676,12 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
   }
 
   /**
-   * 形态迁移的唯一入口：页 ⇄ 浮窗 ⇄ 侧缘标签。
+   * 形态迁移的唯一入口：页 ⇄ 浮窗 ⇄ 悬浮球里的收起态（form:'tab'）。
    * 进浮窗才给几何（沿用原矩形，没有就级联一个新的）；出浮窗几何收成 null。
-   * 侧缘标签不占页组，但仍留着它的 home group——「占为页」时回到原来那一侧。
+   * 侧缘收起不占页组，但仍留着它的 home group——「占为页」时回到原来那一侧。
+   *
+   * 〔批次76 裁定B〕进 tab 前先把「收起前的样子」写进 `restore`（形态＋页组＋矩形＋最大化），
+   * 离开 tab 的任何一条路都把这一格清空——它是悬浮球展开按钮的落点依据，不是第二份状态轴。
    */
   function setForm(instance, form) {
     if (!isPageForm(form)) {
@@ -668,23 +696,59 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     const group = entry.group
     // 级联步数只数「已经在浮着的别人」：先算再改形态，否则第一扇浮窗会白错开一格。
     const floatingCount = Object.values(entries).filter((item) => item.form === 'floating').length
+    // 收起前的样子：从非 tab 态收起来才现记；本来就收着的（tab→tab 不会走到这）沿用它自己那份。
+    const remembered = previous === 'tab'
+      ? normalizeRestore(entry.restore)
+      : {
+        form: previous,
+        group: entry.group,
+        geometry: previous === 'floating' && entry.geometry ? { ...entry.geometry } : null,
+        maximized: previous === 'floating' && entry.maximized === true
+      }
     entry.form = form
     if (form === 'floating') {
       entry.geometry = entry.geometry ?? cascadeGeometry(floatingCount)
       entry.z = nextZ()
+      entry.restore = null
     } else if (form === 'tab') {
       entry.geometry = null
       entry.maximized = false
+      entry.restore = remembered
     } else {
       entry.geometry = null
       entry.maximized = false
       entry.order = nextOrder(group)
       active[group] = entry.instance
       focus = group
+      entry.restore = null
     }
     afterShapeChange([group])
     commit()
     return { ok: true, changed: true, instance: entry.instance, form, previous, group: entry.group }
+  }
+
+  /**
+   * 〔批次76 裁定B〕从悬浮球里把一页放出来＝回到它收起前的那一档。
+   * 迁移仍只有 setForm 一个入口，这里只负责「按 `restore` 那一格挑目标」：
+   * 原来是浮窗就回浮窗并带回原矩形与最大化，原来是页就回原来那一侧的页组；没有记忆就回页态（旧档如实如此）。
+   */
+  function expand(instance) {
+    const parsed = parseInstanceId(instance)
+    if (!parsed) return { ok: false, error: { code: 'INVALID_INSTANCE', message: '展开需要 <paneId>#<n> 形式的实例 id' } }
+    const entry = entries[parsed.id]
+    if (!entry) return { ok: false, error: { code: 'UNKNOWN_INSTANCE', message: '这一页没有打开' } }
+    if (entry.form !== 'tab') return { ok: true, changed: false, instance: entry.instance, form: entry.form, restored: false }
+    const remembered = normalizeRestore(entry.restore)
+    const target = remembered?.form === 'floating' ? 'floating' : 'page'
+    const result = setForm(entry.instance, target)
+    if (!result?.ok) return result
+    if (target === 'floating') {
+      if (remembered?.geometry) setGeometry(entry.instance, remembered.geometry)
+      if (remembered?.maximized) setMaximized(entry.instance, true)
+    } else if (remembered?.group && entry.group !== remembered.group) {
+      moveToGroup(entry.instance, remembered.group)
+    }
+    return { ...result, restored: true, restoredFrom: remembered }
   }
 
   /** 分屏＝把一页搬进对面页组（对半就是两组各占一半，不需要另一套几何）。 */
@@ -920,6 +984,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     openInstance,
     close,
     setForm,
+    expand,
     moveToGroup,
     setActive,
     setResource,

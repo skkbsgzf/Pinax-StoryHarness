@@ -12,7 +12,8 @@ import { PAGE_ACTIONS, formMenuItems } from './paneForms.mjs'
  * 项的来源只有一处：这块 pane 清单声明的 `forms` ∩ 词表能落地的形态
  * （`dock`／`split`／`overlay`）。批次66 前置裁定 Q2 把两个无落点的旧词从词表删除
  * （登记未采用照 chain 先例），三值与 FORM_ACTIONS 一一同构，菜单里不存在「点了没差别」的项。
- * 「收成侧缘标签／关闭这一页」属于页操作，不在 forms 词表里，所以恒在。
+ * 「收进悬浮球／关闭这一页」属于页操作，不在 forms 词表里，所以恒在
+ * （〔批次76 裁定B〕改的是文案：收起的落点从右缘那一竖列标签换成右下角那颗球，动作键 `tab` 不动）。
  */
 const props = defineProps({
   /** 锚点（视口坐标）：{ x, y }，来自 contextmenu 事件。 */

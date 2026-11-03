@@ -91,6 +91,14 @@ function onPointerUp(event) {
 /* —— hover 高亮邻边；点节点打开条目（拖拽过的那一下不算点） —— */
 const hoverName = ref(null)
 
+/**
+ * 〔批次76 任务4-6〕零边要说出来，不许静默画一圈散点。
+ * 判据不动：边仍然只认 `relations[].to`（entriesView.mjs 的 entryEdges）——「什么算一条关系」是待裁项，
+ * 本批不擅自放宽（比如按名字包含造边）。这里只加一句诚实文案：《大梦》实测 13 节点 0 连线，
+ * 作者看到的是散点，没有任何地方说「这是因为还没登记关系」。
+ */
+const noRelations = computed(() => (model.value.lines?.length ?? 0) === 0 && (model.value.points?.length ?? 0) > 0)
+
 function isEdgeHi(line) {
   return hoverName.value !== null && (line.source === hoverName.value || line.target === hoverName.value)
 }
@@ -143,6 +151,9 @@ function openPoint(point) {
         </g>
       </g>
     </svg>
+    <p v-if="noRelations" class="nx-entry-graph-empty" data-test="entries-graph-no-relations">
+      这些条目之间还没有登记关系。
+    </p>
     <p class="nx-entry-graph-legend" data-test="entries-graph-legend">
       <span v-for="item in legend" :key="item.key" class="nx-entry-graph-legend-item">
         <i class="nx-entry-graph-legend-dot" :style="{ background: item.color }" aria-hidden="true"></i>{{ item.label }}
@@ -158,6 +169,7 @@ function openPoint(point) {
 /* 图谱画布：索引窗窄栏里的一块方形 SVG（viewBox 固定，滚轮/拖拽只动 transform）。
    颜色全走 token；字号走 --nx-fs-* 刻度；其余 px 都是布局尺寸。 */
 .nx-entry-graph {
+  position: relative;
   margin: 0 0 8px;
 }
 .nx-entry-graph-canvas {
@@ -172,6 +184,22 @@ function openPoint(point) {
 }
 .nx-entry-graph-canvas:active {
   cursor: grabbing;
+}
+/* 〔批次76 任务4-6〕零边时钉在图右上角的一句话：absolutely 定位在画布上（图内角落），
+   不吃指针（点节点／拖拽照旧），底色压一层画布底，散点不会被它盖住读数。 */
+.nx-entry-graph-empty {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 1;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: var(--nx-radius-xs);
+  background: color-mix(in srgb, var(--surface-workbench-raised) 88%, transparent);
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  pointer-events: none;
 }
 .nx-entry-graph-edge {
   stroke: var(--archive-ink-soft);

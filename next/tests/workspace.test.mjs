@@ -103,6 +103,7 @@ test('开页＝记录存在，且缺省落主组当前页：页态天然没有�
     geometry: null,
     z: 1,
     maximized: false,
+    restore: null, // 〔批次76 裁定B〕新增一格：非收起态就是 null，页记录形状整份钉住，别让脏字段静默漂进来
     viewState: null
   })
   assert.equal(store.snapshot().active.main, 'outline.tree#1', '新开的一页就是该组当前页')
@@ -264,6 +265,80 @@ test('形态迁移的唯一入口：进浮窗才给几何，出浮窗收成 null
   assert.equal(store.setForm('outline.widget#1', 'bubble').error.code, 'UNKNOWN_FORM')
   assert.equal(store.setForm('outline.widget#9', 'page').error.code, 'UNKNOWN_INSTANCE')
   assert.equal(store.setForm('正文#1', 'page').error.code, 'INVALID_INSTANCE')
+})
+
+test('〔批次76 裁定B〕收起→展开往返：进 tab 记 restore，expand 按记忆回原档，离开 tab 清空（守卫②）', () => {
+  const store = createWorkspaceStore()
+
+  // 页态收起来：记的是「页＋那一侧的页组」，没有矩形（页天然铺满所在页组）。
+  store.open('notes.editor#1', { group: 'side' })
+  assert.equal(store.get('notes.editor#1').restore, null, '非收起态不许留记忆这一格')
+  store.setForm('notes.editor#1', 'tab')
+  assert.deepEqual(store.get('notes.editor#1').restore, { form: 'page', group: 'side', geometry: null, maximized: false })
+  const backToPage = store.expand('notes.editor#1')
+  assert.equal(backToPage.restored, true)
+  assert.equal(backToPage.form, 'page')
+  assert.equal(store.get('notes.editor#1').group, 'side', '回的是收起前那一侧，不是硬写主组')
+  assert.equal(store.get('notes.editor#1').restore, null, '出了 tab 就清掉：这一格只服务「从球里放出来」这一次')
+
+  // 浮窗收起来：矩形与最大化一起记；tab 态本身不藏矩形（工单口径「只有浮窗持有几何」）。
+  // 组籍写死 main，别跟上面那条 side 页抢 focus——开页缺省落焦点组，这里要验的是「记忆认 home 组」。
+  store.open('outline.widget#1', { form: 'floating', group: 'main', geometry: { x: 300, y: 200, w: 420, h: 520 } })
+  store.setMaximized('outline.widget#1', true)
+  store.setForm('outline.widget#1', 'tab')
+  assert.equal(store.get('outline.widget#1').geometry, null)
+  assert.deepEqual(store.get('outline.widget#1').restore, {
+    form: 'floating',
+    group: 'main',
+    geometry: { x: 300, y: 200, w: 420, h: 520 },
+    maximized: true
+  })
+  const backToFloat = store.expand('outline.widget#1')
+  assert.equal(backToFloat.form, 'floating', '原判据「展开一律回页态」会丢这一档——〔裁定B〕要的是回到上次记忆的位置')
+  assert.deepEqual(store.get('outline.widget#1').geometry, { x: 300, y: 200, w: 420, h: 520 })
+  assert.equal(store.get('outline.widget#1').maximized, true)
+  assert.equal(store.get('outline.widget#1').restore, null)
+
+  // 非 tab 态调 expand：不改任何东西（幂等，免得球外那条路误清 restore）。
+  assert.equal(store.expand('outline.widget#1').restored, false)
+  assert.equal(store.expand('outline.widget#9').error.code, 'UNKNOWN_INSTANCE')
+
+  // 老档与脏值：没有 restore／restore 里是词表外的形态／浮窗却没有矩形——一律如实回落。
+  const legacy = createWorkspaceStore()
+  legacy.load(normalizeWorkspace({
+    version: 3,
+    entries: {
+      'novel.editor#1': { pane: 'novel.editor', form: 'tab', group: 'main' },
+      'notes.editor#1': { pane: 'notes.editor', form: 'tab', group: 'main', restore: { form: 'bubble' } },
+      'outline.editor#1': { pane: 'outline.editor', form: 'tab', group: 'main', restore: { form: 'floating' } }
+    }
+  }))
+  assert.equal(legacy.get('novel.editor#1').restore, null, 'v3 旧档没有这一格：读回来就是 null')
+  assert.equal(legacy.expand('novel.editor#1').form, 'page', '没有记忆就回页态（与批次76 之前的行为一致）')
+  assert.deepEqual(legacy.get('notes.editor#1').restore, { form: 'page', group: 'main', geometry: null, maximized: false }, '词表外的记忆折成页态，不报错也不留脏值')
+  assert.equal(legacy.expand('notes.editor#1').form, 'page')
+  assert.equal(legacy.expand('outline.editor#1').form, 'floating', '浮窗记忆缺矩形：级联一个默认矩形，不折成页态')
+  assert.deepEqual(legacy.get('outline.editor#1').geometry, { ...DEFAULT_FLOATING_GEOMETRY })
+
+  // 落盘往返：restore 随页记录一起写、一起读，快照里那条收起态不是内存独享。
+  const disk = createWorkspaceStore()
+  disk.open('script.editor#1', { form: 'floating', geometry: { x: 40, y: 60, w: 320, h: 300 } })
+  disk.setForm('script.editor#1', 'tab')
+  const written = JSON.parse(JSON.stringify(disk.snapshot()))
+  assert.deepEqual(written.entries['script.editor#1'].restore, {
+    form: 'floating',
+    group: 'main',
+    geometry: { x: 40, y: 60, w: 320, h: 300 },
+    maximized: false
+  })
+  disk.load(written)
+  assert.deepEqual(disk.get('script.editor#1').restore, written.entries['script.editor#1'].restore)
+
+  // 快照是拷贝：拿出去改嵌套的 geometry 不会污染状态机里那份记忆。
+  disk.setForm('script.editor#1', 'tab')
+  const copy = disk.snapshot().entries['script.editor#1'].restore
+  copy.geometry.x = 999
+  assert.equal(disk.get('script.editor#1').restore.geometry.x, 40)
 })
 
 test('浮窗子态：最大化只属于浮窗，页态与侧缘标签一律拒；几何留着供还原', () => {
@@ -853,7 +928,9 @@ test('逐视图状态：每页自己一份，树的折叠集落盘读回；同�
   assert.equal(again.changed, false, '同值不该写盘')
 
   // 「选中哪份文档」不在 viewState 里：那一格就是 entry.resource（批次61〔D〕），不另存第二份真相。
-  assert.deepEqual(Object.keys(revived.get('novel.shelf#1')), ['instance', 'pane', 'resource', 'group', 'order', 'form', 'geometry', 'z', 'maximized', 'viewState'])
+  // 〔批次76 裁定B〕页记录多出一格 `restore`（收起前的形态／页组／矩形）：与 geometry、viewState 同一纪律——
+  // 非收起态也带着 null 这一格落盘，读回来形状一致；schema 仍 version:3（批次75 那张 v4 的表没动，加格不升版）。
+  assert.deepEqual(Object.keys(revived.get('novel.shelf#1')), ['instance', 'pane', 'resource', 'group', 'order', 'form', 'geometry', 'z', 'maximized', 'restore', 'viewState'])
 })
 
 test('逐视图状态净化：全展开＝收成 null（没有值得落盘的东西）；重复卷名去掉；坏形状不脏状态机', () => {

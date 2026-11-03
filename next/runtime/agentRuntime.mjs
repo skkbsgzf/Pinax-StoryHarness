@@ -33,6 +33,20 @@ export function createAgentRuntime(options = {}) {
   let serviceFailures = []
   /** 外部 MCP 的实时状态（按 id 收）；池的每载体行用它判断红／橙／灰。 */
   let mcpLive = new Map()
+  /** 批次69：关闭链与工具面的故障账（环形，最近 50 条）——被转成信封的拒绝必须在这里留名。 */
+  const runtimeFaults = []
+
+  function noteFault(line) {
+    runtimeFaults.push(String(line))
+    while (runtimeFaults.length > 50) runtimeFaults.shift()
+    if (serviceLogPool?.append) {
+      try {
+        serviceLogPool.append({ source: { kind: 'service', id: 'runtime', carrierId: null }, level: 'warn', message: String(line) })
+      } catch {
+        // 记账失败不改变这条故障本身——它已经在 runtimeFaults() 里了。
+      }
+    }
+  }
 
   /**
    * 把一次项目变更交给每个订阅载体的 impl.onProjectEvent（批次37，M2.5-C 承诺的兑现）。
@@ -104,6 +118,35 @@ export function createAgentRuntime(options = {}) {
       })
     }
     return declarations
+  }
+
+  /**
+   * 关闭链的记账（批次69）：drain 硬关、SDK 打回后转成信封的在途拒绝、client/server 关闭失败，
+   * 三样都写进「服务与通知」池；一条都不落的时候不写（没发生的事不该占作者的通知面）。
+   * 池不在（纯内核测试／无服务形态）就只留在 lastCloseReport 上——报告本身永远在，不静默。
+   */
+  function accountRuntimeStop(drain, stopErrors) {
+    const converted = link?.stats?.()?.converted ?? []
+    const forced = drain?.forced ?? 0
+    const closedErrors = drain?.errors ?? []
+    const lines = [...stopErrors, ...closedErrors]
+    if (!forced && !converted.length && !lines.length) return false
+    const message = forced
+      ? `运行时关闭时 drain 超时，硬关 ${forced} 条在途 MCP 请求（${(drain?.forcedLabels ?? []).join('、') || '未记名'}）`
+      : `运行时关闭链上有 ${converted.length} 条在途请求被 SDK 打回并转成失败信封（drain 等了 ${drain?.waitedMs ?? 0}ms）`
+    if (serviceLogPool?.append) {
+      try {
+        serviceLogPool.append({
+          source: { kind: 'service', id: 'runtime-close', carrierId: null },
+          level: 'warn',
+          message: lines.length ? `${message}；另有 ${lines.length} 条关闭失败：${lines.slice(0, 2).join('；')}` : message,
+          data: { waitedMs: drain?.waitedMs ?? 0, pendingAtClose: drain?.pendingAtClose ?? 0, forced, converted: converted.slice(0, 8), errors: lines.slice(0, 8) }
+        })
+      } catch {
+        // 记账失败不该挡住关闭本身——这条已经留在 lastCloseReport 里，门禁读得到。
+      }
+    }
+    return true
   }
 
   const runtime = {
@@ -192,13 +235,24 @@ export function createAgentRuntime(options = {}) {
     },
 
     async stop() {
-      // 订阅先退：换项目／关运行时之后，旧根的事件不该再投给这块载体。
+      // 批次69：这一路是「换项目／关窗」的清理链，每一段失败都必须带回报告而不是就地吞掉——
+      // 吞掉的错误没人看得见，就等于没发生过（工单的「不许掩盖」）。
+      const stopErrors = []
+      // 订阅先退：换项目／关运行时之后，旧根的事件不该再投给别的载体。
       if (detachProjectEvents) {
-        detachProjectEvents()
+        try {
+          detachProjectEvents()
+        } catch (error) {
+          stopErrors.push(`项目事件退订失败：${String(error?.message ?? error)}`)
+        }
         detachProjectEvents = null
       }
       if (supervisor) {
-        await supervisor.stop().catch(() => {})
+        try {
+          await supervisor.stop()
+        } catch (error) {
+          stopErrors.push(`服务监督器停止失败：${String(error?.message ?? error)}`)
+        }
         supervisor = null
         serviceFailures = []
       }
@@ -207,13 +261,40 @@ export function createAgentRuntime(options = {}) {
       mcpLive = new Map()
       if (serviceLogPool?.setMcpStatuses) serviceLogPool.setMcpStatuses([])
       if (serviceLogPool?.setDeclarations) serviceLogPool.setDeclarations([])
-      if (!link) return ok({ stopped: false })
-      await link.close()
+      if (!link) return ok({ stopped: false, errors: stopErrors, drain: null })
+      // drain 在这一层发生：等在途工具调用落定（带上限超时）才关进程内 MCP 链路。
+      let drain = null
+      try {
+        drain = await link.close({ drainTimeoutMs: options.drainTimeoutMs })
+      } catch (error) {
+        // link.close() 自己不抛（它把失败写进 report.errors）；留这一道是防止实现换人后静默炸在清理链上。
+        stopErrors.push(`进程内 MCP 链路关闭异常：${String(error?.message ?? error)}`)
+      }
+      if (drain?.errors?.length) stopErrors.push(...drain.errors)
+      runtime.lastCloseReport = drain ?? null
+      // 关闭链上的任何硬关／打回／关闭失败都进「服务与通知」池：作者看得见，门禁也读得到——
+      // 只往报告里塞数字不算记账，那等于只在测试眼里存在。
+      accountRuntimeStop(drain, stopErrors)
       // 外部 MCP 的子进程／长连接不归聚合面收：它由这里逐一关闭。
-      if (typeof surfaceState?.external?.close === 'function') await surfaceState.external.close().catch(() => {})
+      if (typeof surfaceState?.external?.close === 'function') {
+        try {
+          await surfaceState.external.close()
+        } catch (error) {
+          stopErrors.push(`外部 MCP 关闭失败：${String(error?.message ?? error)}`)
+        }
+      }
       link = null
       toolCache = null
-      return ok({ stopped: true })
+      return ok({ stopped: true, errors: stopErrors, drain })
+    },
+
+    /** 上一次 stop() 的关闭报告（drain 等了多久、有没有硬关、哪些拒绝被转成信封）。门禁与外壳读这一格。 */
+    lastCloseReport: null,
+
+    /** 链路的实时读数：在途请求数／累计调用／被 drain 兜住的拒绝记账。没有链路时是空表，不是 null。 */
+    transportStats() {
+      if (!link) return { attached: false, lastCloseReport: runtime.lastCloseReport ?? null }
+      return { attached: true, ...link.stats(), closeReports: link.closeReports() }
     },
 
     /** 服务状态（右栏与 IPC 读这一份；没有服务时是空数组，不是一个 null）。 */
@@ -270,7 +351,15 @@ export function createAgentRuntime(options = {}) {
       return runtime.surfaceInfo().carrierToolNames.includes(name) ? owner : 'kernel'
     },
 
-    /** 工具调用：载体在服务面上的工具先过它的 agent:ask 授权；其余一律走内核实现。 */
+    /**
+     * 工具调用：载体在服务面上的工具先过它的 agent:ask 授权；其余一律走内核实现。
+     * 批次69 的第二道闸：这一层的 promise **只落信封、不落拒绝**。
+     * 原因不是怕报错，是形态问题——`pinax:agent:tool-call` 的消费端有相当一部分是「点了就翻页」的旁路调用
+     * （正文分页／双链词表／事件刷新），Vue 的 watch 回调与事件处理器不会 await 返回的 promise，
+     * 一条协议层拒绝（-32000 这类）从这儿冒出去就是 Unhandled Rejection，界面上什么都看不见。
+     * 拒绝转成 `{ok:false, code, message}` 后：原话进 message、码进 code、每一笔记进 runtimeFaults，
+     * 消费端本来就读 `payload.ok === false`（useBoardData 的那句注释「不吞错」），界面照常出话——账也在。
+     */
     async callTool(name, args = {}) {
       if (!link) return fail('INVALID_INPUT', '运行时尚未启动（先 start()）')
       const owner = runtime.ownerOf(name)
@@ -278,8 +367,19 @@ export function createAgentRuntime(options = {}) {
         const grant = canPerform(registry.grantFor(owner), { type: 'agent', action: 'ask' })
         if (!grant.ok) return grant
       }
-      const result = await link.callTool(name, args)
+      let result = null
+      try {
+        result = await link.callTool(name, args)
+      } catch (error) {
+        noteFault(`callTool(${name}) 抛到运行时外面：${String(error?.message ?? error)}`)
+        return fail('PINAX_MCP_CALL_FAILED', `工具 ${name} 的进程内调用失败：${String(error?.message ?? error)}`, { tool: name, owner })
+      }
       return ok({ tool: name, owner, ...result })
+    },
+
+    /** 关闭链与工具面的故障账（最近 50 条）：不弹窗、不改语义，只给「看得见」留一个读数面。 */
+    runtimeFaults() {
+      return [...runtimeFaults]
     },
 
     /**
@@ -315,7 +415,7 @@ export function createAgentRuntime(options = {}) {
         }
         let answered = null
         try {
-          answered = await runner({ question: text, context, runtime, onEvent, writeMode, skill })
+          answered = await runner({ question: text, context, runtime, onEvent, writeMode, skill, abort: options?.abort ?? null })
         } catch (error) {
           return fail('IO_FAILED', `运行时执行失败：${String(error?.message || error)}`, { code: error?.code ?? NEXT_ERROR_CODES.IO_FAILED })
         }

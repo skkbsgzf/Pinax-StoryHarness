@@ -111,6 +111,8 @@ watch(
 )
 
 const messages = computed(() => snapshot.value.messages)
+/** 对话框实例：编辑重发要把问句回填输入框，那是它内部的草稿态，只经它 expose 出来的 setDraft。 */
+const dialogRef = ref(null)
 const sessions = computed(() => snapshot.value.sessions)
 const activeSessionId = computed(() => snapshot.value.activeId)
 const busy = computed(() => snapshot.value.busy)
@@ -144,11 +146,23 @@ function onAskEvent(payload) {
   const askId = String(payload?.askId ?? '')
   const bucket = askId ? pendingTrails.get(askId) : null
   if (!bucket) return
-  const event = sanitizeTrailEvent(payload?.event)
+  const event = sanitizeTrailEvent(stampArrival(payload?.event))
   if (!event) return
   bucket.push(event)
   if (bucket.length > MAX_TRAIL_EVENTS) bucket.splice(0, bucket.length - MAX_TRAIL_EVENTS)
   if (askId === liveAskId.value) liveTrail.value = bucket.slice()
+}
+
+/**
+ * 〔批次77 任务4〕给事件盖上「外壳收到那一刻」的时间戳。
+ * 口径要说得准：这一格量的是**外壳看到的首尾差**，主进程内部排队多久不算在里面——
+ * 上游自己带了 `at` 就尊重上游的，不覆盖。渲染层拿不到主进程的时刻，所以只补这一种，
+ * 别把它当端到端耗时读（工单记账指标里的「停止钮落盘毫秒数」用的也是同一个钟）。
+ */
+function stampArrival(event) {
+  if (!event || typeof event !== 'object') return event
+  if (Number.isFinite(Number(event.at))) return event
+  return { ...event, at: Date.now() }
 }
 
 function bindAskEvents(bridge) {
@@ -300,7 +314,12 @@ async function runQuestion(question, omit = [], sessionId = null, skill = null) 
       findings: (answer?.issues ?? []).filter((item) => item && typeof item.message === 'string'),
       actions: (answer?.action ?? []).filter((item) => typeof item === 'string'),
       trail,
-      at: formatClock(Date.now())
+      at: formatClock(Date.now()),
+      // 批次77 任务2：这一条是哪一轮跑出来的、这轮真报了多少 token。
+      // usage 可能是 null（上游没回报／非工具循环那条链）——原样存 null，界面不替它编一个 0。
+      runId: value.askId ?? '',
+      usage: value.usage ?? null,
+      status: 'completed'
     }, sessionId)
     return
   }
@@ -311,6 +330,7 @@ async function runQuestion(question, omit = [], sessionId = null, skill = null) 
     id: '',
     role: 'agent',
     failed: true,
+    status: 'error',
     text: broken ? `${message}（断在：${broken}）` : message,
     trail,
     at: formatClock(Date.now())
@@ -325,6 +345,53 @@ function retry() {
   beginWork()
   // 重试发生在作者此刻看着的会话里：这条失败的回答就在这儿。
   void runQuestion(last.question, last.omit, snapshot.value.activeId, last.skill ?? null).finally(() => endWork())
+}
+
+/**
+ * 编辑重发（批次77 任务2）：把这句问句回填输入框，并截掉这一条之后的历史。
+ *
+ * 乐观失效保护（抄 DeepWrite 那条）：调用方给的原文＋角色＋时间戳必须还能对上会话里那一条，
+ * 对不上就一个字节都不动。理由很具体——动作条是 hover 才显形的，作者点下去的那一瞬间
+ * 会话可能已经被另一问推进／被别的会话切换换过内容，拿一次过期点击去截现在是破坏。
+ * 截断走 store.dropFrom 这一个入口（任务6 的「分支＝截断前先存一支」也接在同一处，不长第二套）。
+ */
+function editQuestion(payload) {
+  if (busy.value || !canAsk.value) return
+  const id = String(payload?.id ?? '')
+  const target = messages.value.find((message) => message.id === id)
+  if (!target) return
+  if (target.role !== 'user') return
+  if (target.text !== payload?.text || target.at !== payload?.at) return
+  const sessionId = snapshot.value.activeId
+  if (!store.dropFrom(id, sessionId)) return
+  dialogRef.value?.setDraft?.(String(payload.text ?? ''))
+}
+
+/**
+ * 重新生成（批次77 任务2）：最后一条回答用同一个问题再跑一轮。
+ *
+ * 只对最后一条开（界面上那枚钮也是这么禁的）：换掉中间某一条＝把后面的历史丢掉，
+ * 那要等任务6 的消息树——分支先留一条退路，才有资格谈「重跑这一条」。
+ * 问题原文优先用本轮记住的那一问（omit／skill 都在里面）；重开窗口后内存清了，
+ * 就退回用会话里那条问句原文再问一次——slash 剪裁与引用摘要不再重放，这一条如实记账。
+ */
+function regenerateAnswer(payload) {
+  if (busy.value || !canAsk.value) return
+  const list = messages.value
+  const index = list.findIndex((message) => message.id === String(payload?.id ?? ''))
+  if (index < 0 || index !== list.length - 1) return
+  const question = [...list.slice(0, index)].reverse().find((message) => message.role === 'user')
+  if (!question) return
+  const sessionId = snapshot.value.activeId
+  const remembered = lastQuestion.value
+  const reuse = remembered && String(remembered.question ?? '').includes(question.text) ? remembered : null
+  store.dropLast(sessionId)
+  beginWork()
+  if (reuse) {
+    void runQuestion(reuse.question, reuse.omit, sessionId, reuse.skill ?? null).finally(() => endWork())
+    return
+  }
+  void runQuestion(question.text, [], sessionId, null).finally(() => endWork())
 }
 
 function newSession() {
@@ -347,11 +414,13 @@ function removeSession(id) {
 <template>
   <aside class="dock" aria-label="Agent 对话">
     <AssistantDialog
+      ref="dialogRef"
       :messages="messages"
       :busy="busy"
       :disabled="!canAsk"
       :title="runtime.title"
       :thinking="thinkingText"
+      :live-trail="liveTrail"
       :tools="tools"
       :mode="writeMode"
       :sessions="sessions"
@@ -360,6 +429,8 @@ function removeSession(id) {
       :suspend-esc="suspendEsc"
       @send="ask"
       @retry="retry"
+      @edit="editQuestion"
+      @regenerate="regenerateAnswer"
       @update:mode="changeMode"
       @new-session="newSession"
       @switch-session="switchSession"

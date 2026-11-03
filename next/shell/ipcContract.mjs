@@ -41,6 +41,10 @@ export const IPC_CHANNELS = Object.freeze({
   carrierSetEnabled: 'pinax:agent:carrier:set-enabled',
   carrierSetPrimary: 'pinax:agent:carrier:set-primary',
   runtimeAsk: 'pinax:agent:runtime:ask',
+  // 批次77 任务3：停止在途提问。与 runtimeAsk 同一命名族（一条提问、一条停它）。
+  // 载荷 `{ askId }`——askId 就是这一轮运行的身份（渲染层自带或回执里拿到的那一个）。
+  // 语义边界：只标记取消，正在跑的那一轮照常跑完；轮次边界之后不再续轮（掐不回已经发出的 HTTP 请求）。
+  runtimeAskAbort: 'pinax:agent:runtime:ask-abort',
   runtimeToolCall: 'pinax:agent:runtime:tool-call',
   runtimePropose: 'pinax:agent:runtime:propose',
   // 协议 v3 的 services 面：看服务状态／重启一颗服务。渲染层只读状态，重启要走主进程。
@@ -331,6 +335,13 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
   const nextAskId = () => `ask-${Date.now().toString(36)}-${(++askSeq).toString(36)}`
 
   /**
+   * 在途提问登记表（批次77 任务3）：askId → 取消令牌。
+   * 只在这条分发器闭包里活，随进程走——它是「哪一问还在跑」的事实源，不是持久状态；
+   * 停错了（问已经答完）不硬编一条错误，回执里 `cancelled:false` 加那句实话，界面据此说「这一问已经不在跑了」。
+   */
+  const inFlightAsks = new Map()
+
+  /**
    * 命令面（批次62 任务2）。两件事都只有一处实现：
    *   · `menu:invoke` 认的 id 集＝MENU_TEMPLATE ∪ registry.commands()——载体命令从此能走同一条分发回执，
    *     但 C5 那条纪律没松：进的是**命令表**，不是原生顶层菜单（菜单模板本身一个字都没改）；
@@ -473,14 +484,38 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
           : null
         // writeMode／skill 只从载荷进：写模式是会话真值（未知值由运行时回落 review），
         // 技能是 slash 选中后带上的方法名；两者都不在这里猜。
-        const result = await session.runtime.ask(input.question, input.context ?? {}, {
-          ...(onEvent ? { onEvent } : {}),
-          ...('writeMode' in input ? { writeMode: input.writeMode } : {}),
-          ...('skill' in input ? { skill: input.skill } : {})
-        })
+        // 取消令牌在提问进运行器**之前**登记、之后无论成败都摘掉：
+        // 摘晚了会出现「这一问早就结束了还能被停」的假象，摘早了停止钮点了没东西接。
+        const token = { cancelled: false, cancelledAt: null }
+        inFlightAsks.set(askId, token)
+        let result
+        try {
+          result = await session.runtime.ask(input.question, input.context ?? {}, {
+            ...(onEvent ? { onEvent } : {}),
+            ...('writeMode' in input ? { writeMode: input.writeMode } : {}),
+            ...('skill' in input ? { skill: input.skill } : {}),
+            abort: () => token.cancelled
+          })
+        } finally {
+          // 只摘自己这一枚：同一 askId 被新一轮覆盖时不能把别人那枚删掉。
+          if (inFlightAsks.get(askId) === token) inFlightAsks.delete(askId)
+        }
         // askId 随回执回去：渲染层据此把「本次 busy 期」的事件串到这一条回答上（晚到的事件对不上号就丢）。
         if (result?.ok) return { ...result, value: { ...(result.value ?? {}), askId } }
         return result
+      }
+      // 批次77 任务3：按 askId 标记取消。这里只置位不抛错——真正「不再续轮」发生在
+      // next/runtime/toolLoop.mjs 的轮次边界，那边才会发 stage:'stopped'（主进程真事件，渲染层不代造）。
+      case IPC_CHANNELS.runtimeAskAbort: {
+        const askId = typeof input.askId === 'string' ? input.askId.trim().slice(0, 80) : ''
+        if (!askId) return fail('INVALID_INPUT', '停止提问要带上是哪一问（askId）：没有它不知道该取消哪一次运行')
+        const token = inFlightAsks.get(askId)
+        if (!token) {
+          return ok({ askId, cancelled: false, reason: '这一问不在途：要么已经答完，要么根本没进运行器——没有需要停止的东西' })
+        }
+        if (!token.cancelled) token.cancelledAt = new Date().toISOString()
+        token.cancelled = true
+        return ok({ askId, cancelled: true, at: token.cancelledAt, note: '正在跑的这一轮照常跑完，轮次边界之后不再续轮' })
       }
       case IPC_CHANNELS.sessionsLoad:
         return typeof session.loadSessions === 'function'

@@ -8,6 +8,7 @@
 - **协议词表三值**：`paneForms.mjs` 的 `PANE_FORMS` 与 `carrierManifest.mjs` 的 `PANE_FORM_WORDS`、`host-descriptor.json` 的 `forms` 三处同删（`fullscreen`/`immersive` 不再出现在任何一份词表里，也**不进兼容读**——`sanitizePaneForms`／校验器一律按「不在词表」处置，不猜近义）。
 - **随包清单删值**：`next/carriers/*/manifest.mjs` **11 份**（工单写「12 份」，实测口径见「与工单口径的差」）各删去这两个值，只动 `forms` 数组，其余字段一字未改。清理后 11 份一律声明 `dock / overlay / split`。
 - **新守卫（进闸）**：`acceptance.mjs`〔批次66 任务1〕同时断言 ①词表恰是三值 ②每份清单声明的 `forms` ⊆ 词表且**至少声明一种**（防空转：删空了也算过）③零退役值命中 ④**词表与落点同构**——`Object.keys(FORM_ACTIONS)` 与 `PANE_FORMS` 逐项相等且每个词都带 `action`＋`label`。这条把批次61 limitation 2 的待裁闭合：菜单里从此不可能存在「点了没差别」的项。
+- **守卫按声明面分三层落**（工单守卫标记的「词表三值断言」＋「`fullscreen`/`immersive` 全仓零声明」）：①`doctor.test.mjs` 逐份扫 11 份 `carriers/*/manifest.mjs` 的 `forms: [...]` 串——命中旧词即红，且先钉 `dirs.length === 11`（扫描写法失效会当场报，不会静默变成「扫了个空所以通过」）；同一用例还钉两份词表 `PANE_FORM_WORDS`／`PANE_FORMS` 与 `host-descriptor.json` 的 `forms` 三者同为三值。②`pane-forms.test.mjs` 负向断言：旧词喂进 `sanitizePaneForms`／落点表／`formMenuItems` 都产不出任何动作（`['fullscreen','immersive']` → 空菜单）。③`acceptance.mjs` 对货架（装载后的清单）做零退役值判定。口径说明：扫的是**声明面**，注释里讲历史不算违规；盘上老存档的字符串比较不算入口（见下条）。
 - **v3 状态轴未动**：`PAGE_FORMS` 仍是 `page / floating / tab`，`MENU_TARGET_FORM` 未增删。窗口系统行为（批次59/61 语义）零改动。
 - **老存档仍认**：`workspace.mjs` 的 v1 `placement` 与 v2 `form` 迁移分支里保留着 `fullscreen`/`immersive` 这两个**字符串比较**——那是读作者盘上那份旧 `.pinax/workspace.json`（把它们收成「最大化／浮窗」），不是协议入口。删掉它们等于把老存档的整条记录读丢。
 - 顺带关闭台账 NOTE-1：`carrierManifest.mjs` 三处「宿主六种视图」陈旧文案（两处注释＋一处给作者看的 `RESERVED_VIEW_TYPE` 报错）改为不带数字的「宿主自带的视图」；**判定逻辑一字未动**，只测 code 的用例不受影响。
@@ -71,6 +72,9 @@ npm run lint:next                                                    # 零警告
 node next/testing/bundleAssertions.mjs                               # 全部通过
 # 或直接：npm run verify:next（五段全绿）
 ```
+
+**一次真实抖动，先记在这里免得调度方复跑被吓到（成因未定，如实登记）**：本批最后一次端到端 `npm run verify:next` 的**第一轮**第五段红 7 项（m／m2／n／n3／n4／n6／o），报的全是「产物文件不在盘」这类判定，与本批源码无关；当时 `next/.build/skills/<技能>/` 目录在、`SKILL.md` 不在，`.build/next/carriers/comic|dossier/` 目录在、`.mjs` 不在。同一棵树**原地重跑第五段即全绿**，随后两次完整 `verify:next` 均 exit 0（44/44、727、201、lint 0 警、打包全过），第三次完整复跑也全绿——所以这是**首趟产物拷贝没落全**的偶发，不是判定逻辑坏。
+两个已核实的结构性事实（都指向「这份拷贝天生要跑两趟才稳」，但没有一条能解释「第二趟必好」）：①`bundleAssertions.mjs:79` 的 `copySkillsToBuild()` 排在主进程构建之前，而 `vite.next.main.config.mjs:16` 是 `emptyOutDir: true` —— 那次拷贝会被紧接着的构建整目录抹掉，全靠外壳构建 `closeBundle`（`vite.next.shell.config.mjs:166-184`）再补一遍；②补的这遍同样是「先 `rm` 再 `cp`」，Windows 上目录被索引/杀软占住时容易出现「空壳目录留下、文件没进来」。根治办法（拷贝挪到最后／失败即重拷／`cp` 后逐份 `stat` 自检）都涉及 `bundleAssertions.mjs` 与 vite 配置，**不在本批允许文件内**，登记待处置。工单前置里批次65b 的 CI run 124 偶发红／125·126 同树绿，症状面（并行竞态）与此不同，但同类「同树重跑即好」的先例已在案。
 
 ## §8 调度方验收（Zcode）
 

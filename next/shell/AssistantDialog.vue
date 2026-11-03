@@ -1,9 +1,26 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
-import { SLASH_COMMANDS, isSlashDraft } from './slashCommands.mjs'
-import { REFERENCE_KIND_ORDER, referenceKindLabel } from './agentReferences.mjs'
-import { formatRelativeTime, describeTrailEvent } from './agentSessions.mjs'
+import { SLASH_COMMANDS } from './slashCommands.mjs'
+import { REFERENCE_KIND_LABELS, REFERENCE_KIND_ORDER } from './agentReferences.mjs'
+import {
+  applyComposerToken,
+  buildComposerMenu,
+  detectComposerToken
+} from './composerTypeahead.mjs'
+import {
+  CHAT_HOTKEY_IDS,
+  HOTKEY_CHAT_MODE,
+  HOTKEY_CHAT_OPEN,
+  HOTKEY_CHAT_SEND,
+  HOTKEY_CHAT_STOP,
+  HOTKEY_SKILL_MENU,
+  matchHotkey
+} from './hotkeys.mjs'
+import { formatRelativeTime, messageStatus } from './agentSessions.mjs'
+import { buildTimelineBlocks, timelinePath } from './conversationTimeline.mjs'
+import ConversationTimeline from './ConversationTimeline.vue'
+import { renderMarkdown } from './mdRender.mjs'
 
 /**
  * Agent 对话框：从老前端的作品资料助手抽出来的纯会话面。
@@ -32,6 +49,12 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
   /** busy 期那一行字：外壳按最新一条真实运行事件换（没有事件时是固定语）。 */
   thinking: { type: String, default: '正在核对项目资料…' },
+  /**
+   * 〔批次77 任务4〕**正在跑的这一问**的运行事件（还没定格的轨迹）。
+   * 回答落地后它会被定格进 message.trail，这里就空了——所以这块只在 busy 期出，平铺不折叠：
+   * 作者正盯着它跑，再套一层「点开才看得见」等于没做。
+   */
+  liveTrail: { type: Array, default: () => [] },
   /** 没有桥（渲染层没接主进程）时为真：输入框禁用。 */
   disabled: { type: Boolean, default: false },
   title: { type: String, default: 'Pi-Agent' },
@@ -48,7 +71,7 @@ const props = defineProps({
   /** 统一二级页开着时为 true：Esc 先归它（照 FloatingWidget 的 suspendEsc 先例）。 */
   suspendEsc: { type: Boolean, default: false }
 })
-const emit = defineEmits(['send', 'retry', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session'])
+const emit = defineEmits(['send', 'retry', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate'])
 
 const draft = ref('')
 const threadRef = ref(null)
@@ -128,9 +151,13 @@ function submit() {
   refOpen.value = false
 }
 
-/** 老版的口径：Enter 发送，Shift+Enter 换行，中文输入法组字时不抢键。 */
+/** 老版的口径：Enter 发送，Shift+Enter 换行，中文输入法组字时不抢键。
+ *  229 是老 Chromium 在组字期把 keyCode 打成占位值的那条兜底——Safari／旧 Electron 上
+ *  event.isComposing 有时是 false 但 keyCode 仍是 229，只判前半个就会把「还没选完的字」当发送按出去。
+ *  老前端 8 处同一口径（如 src/components/authoring/AuthoringBlockComposer.vue:202、
+ *  AuthoringManuscriptImport.vue:451、AuthoringRehearsalPanel.vue:93），这里照抄不发明。 */
 function onKeydown(event) {
-  if (event.isComposing) return
+  if (event.isComposing || event.keyCode === 229) return
   if (slashOpen.value) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault()
@@ -258,10 +285,156 @@ function relativeTime(timestamp) {
   return formatRelativeTime(timestamp, Date.now())
 }
 
-/** 答下方「过程」折叠层的数据：每条事件 → 一行（阶段＋关键数字），认不出的阶段跳过。 */
-function trailRows(trail) {
-  return (Array.isArray(trail) ? trail : []).map(describeTrailEvent).filter(Boolean)
+/**
+ * 〔批次77 任务4〕每条回答的运行块序列。判定与归组全在 `conversationTimeline.mjs`（纯函数、node:test 直测），
+ * 这里只做一次「按折叠层键索引」的映射：Vue 的 computed 在 messages 没换引用前不重算，
+ * 比自建缓存少一处「什么时候作废」要操心（轨迹在回答落地时定格，定格之后不再变）。
+ */
+const timelines = computed(() => {
+  const map = new Map()
+  for (const message of (Array.isArray(props.messages) ? props.messages : [])) {
+    map.set(timelinePath(message?.id), buildTimelineBlocks(message?.trail))
+  }
+  return map
+})
+
+/** 在途那一问：streaming=true，最后一块没有终态事件就报「正在」，不许替它宣布完成。 */
+const liveTimeline = computed(() => buildTimelineBlocks(props.liveTrail, { streaming: true }))
+
+/**
+ * 助手消息的正文（批次77 任务1）：走的是与阅读面同一条 mdRender（`mdRender.mjs` 的
+ * `renderMarkdown`，marked＋DOMPurify／无 DOM 时走 fallbackSanitize），不在本组件里再拼一套
+ * ——守卫⑥「正文渲染单一来源」钉的就是这件事。
+ * 用户消息**不**走这里：作者输入的 `**字**` 必须原样是他打的那几个字，不然复制回去就变了味。
+ */
+function answerHtml(text) {
+  return renderMarkdown(String(text ?? ''))
 }
+
+/**
+ * 正文里的链接（批次77 任务1 附带）：md 一旦渲染成 HTML，`[官网](https://…)` 就是真 <a>。
+ * 外壳只装了 `setWindowOpenHandler`（主进程 main.mjs:358，拦新窗口改交系统浏览器），
+ * 没有 `will-navigate`——也就是说**同标签**点一下链接会把整个外壳导航掉，一轮会话没了。
+ * 所以这里一律拦下默认行为，再把 URL 走 `window.open`：那条通路正好落在已有的
+ * openExternal handler 上，作者看到的是系统浏览器，窗口留在原地。
+ * 相对链接／页内锚点不开窗（open 它会得到一个无意义的地址），只拦默认行为。
+ */
+function onAnswerClick(event) {
+  const anchor = event.target?.closest?.('a[href]')
+  if (!anchor) return
+  event.preventDefault()
+  const url = String(anchor.getAttribute('href') ?? '').trim()
+  if (!/^(?:https?:|mailto:)/i.test(url)) return
+  if (typeof globalThis.window?.open !== 'function') return
+  globalThis.window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+/* —— 消息行上的元信息与动作件（批次77 任务2） ——————————————————————————————
+ * 口径抄 DeepWrite：常驻的只有「谁·几点·这一条现在的状态」，动作条 hover／键盘聚焦才显形，
+ * 且**预留高度**（min-height）——显形时不许把下面的内容顶一下（跳版＝最廉价的抖动）。
+ */
+
+/** 状态那一格的中文字（闭集在 agentSessions.MESSAGE_STATUSES，读判只在 messageStatus 一处）。 */
+const STATUS_LABELS = { streaming: '正在写', completed: '已完成', stopped: '已停', error: '出错' }
+
+/** 原始状态值（进 data-status，样式按这一格分色）。判读只走 agentSessions 的 messageStatus 一处。 */
+function statusOf(message) {
+  return messageStatus(message)
+}
+
+function statusLabel(message) {
+  return STATUS_LABELS[messageStatus(message)] ?? '已完成'
+}
+
+/**
+ * token chip（守卫⑦）：上游真回报才有数；没有就是那六个字「本轮未回报用量」。
+ * 这里没有任何换算——字数不是 token，缺回报时也不许落一个 0 冒充测过。
+ */
+function usageText(message) {
+  const usage = message?.usage
+  if (!usage) return '本轮未回报用量'
+  return `${usage.input} in／${usage.output} out`
+}
+
+/** 会话级用量指示（输入区右上）：取最近一条**真带 usage** 的助手消息，没有就不画这一格。 */
+const sessionUsage = computed(() => {
+  const list = Array.isArray(props.messages) ? props.messages : []
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const message = list[index]
+    if (message?.role === 'agent' && message.usage) return message.usage
+  }
+  return null
+})
+
+const copiedId = ref('')
+let copyTimer = null
+
+/**
+ * 复制这一条原文：图标转 check 1.5 秒，aria-label 同步变「已复制」。
+ * 剪贴板不可用／被拒时什么都不假装——不变形、不许「看起来复制成功了」。
+ */
+function copyMessage(message) {
+  const writeText = globalThis.navigator?.clipboard?.writeText
+  if (typeof writeText !== 'function') return
+  writeText.call(globalThis.navigator.clipboard, String(message?.text ?? '')).then(() => {
+    copiedId.value = String(message?.id ?? '')
+    if (copyTimer) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      copiedId.value = ''
+      copyTimer = null
+    }, 1500)
+  }, () => {
+    // 失败留在原地：这一条没被改动，动作条下次还能再点（不弹假提示）。
+  })
+}
+
+/* 过程折叠层的展开态：**只在组件内存里**（〔批次77 任务4〕守卫⑨——折叠态不进 store、不落 JSONL，
+   会话换回来是同一份内存，重开外壳回缺省「收起」）。
+   键用 timelinePath（`<messageId>#trail`）而不是裸 message.id：以后一条消息要挂好几层可折叠的东西
+   （思维链／子代理明细），键空间先留出，别到时候改一半留一半。
+   动作条那个钮与原生 summary 走同一个 details.open，@toggle 是唯一同步口——两条路都点都不会说谎。 */
+const trailOpen = ref({})
+
+function onTimelineToggle(path, open) {
+  trailOpen.value = { ...trailOpen.value, [String(path)]: Boolean(open) }
+}
+
+function isOpen(path) {
+  return Boolean(trailOpen.value[timelinePath(path)])
+}
+
+/**
+ * 钮只管「把那一层翻开/合上」：改 details.open，并把手上的这一次状态同时记进 Map。
+ * 为什么两条路都要写——真浏览器里改 `open` 会补发一个 toggle 事件（那时 @toggle 口会再写一次同样的值，幂等），
+ * 但 jsdom 不发这一枪：只靠 DOM 事件，钮点完 aria-label 还说「展开过程」，等于界面在说谎。
+ */
+function toggleTrail(message, event) {
+  const host = event?.currentTarget?.closest?.('article')
+  const details = host?.querySelector?.('details.authoring-knowledge__trail')
+  if (!details) return
+  const nextOpen = !details.open
+  details.open = nextOpen
+  trailOpen.value = { ...trailOpen.value, [timelinePath(message?.id)]: nextOpen }
+}
+
+/** 编辑重发：把这一条问句交回宿主（回填输入框＋截断之后的历史由 RuntimeDock 做，那里才有 store）。 */
+function editQuestion(message) {
+  emit('edit', { id: message.id, text: message.text, at: message.at })
+}
+
+/** 重新生成：只对最后一条回答开（把中间的某一条换掉＝把后面的历史弄丢，本批不做）。 */
+function regenerate(message) {
+  emit('regenerate', { id: message.id })
+}
+
+/** 宿主回填输入框用（编辑重发）：不新开一条通道，直接改草稿。 */
+function setDraft(text) {
+  draft.value = String(text ?? '')
+  pendingCommand.value = null
+  nextTick(() => textareaRef.value?.focus?.())
+}
+
+defineExpose({ setDraft })
 
 /** Esc：会话弹层先收（统一二级页开着时让位，照 FloatingWidget 的 suspendEsc）。 */
 function onDocumentKeydown(event) {
@@ -301,6 +474,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   globalThis.document?.removeEventListener?.('keydown', onDocumentKeydown)
   globalThis.document?.removeEventListener?.('pointerdown', onDocumentPointerDown)
+  // 复制图标那 1.5 秒的回位定时器：组件走了就不能再改响应式状态。
+  if (copyTimer) {
+    clearTimeout(copyTimer)
+    copyTimer = null
+  }
 })
 </script>
 
@@ -385,8 +563,30 @@ onBeforeUnmount(() => {
       </div>
 
       <div ref="threadRef" class="authoring-knowledge__thread" aria-live="polite">
-        <template v-for="message in messages" :key="message.id">
+        <template v-for="(message, messageIndex) in messages" :key="message.id">
           <div v-if="message.role === 'user'" class="authoring-knowledge__question-row" :data-message-id="message.id">
+            <!-- 批次77 任务2：问句这行的动作件（时间戳＋复制＋编辑重发）平时不占视线，
+                 hover／键盘聚焦才显形；位置常驻（min-height 预留），显形不许把气泡顶跳。 -->
+            <div class="authoring-knowledge__row-actions">
+              <time v-if="message.at" class="authoring-knowledge__row-time">{{ message.at }}</time>
+              <button
+                type="button"
+                class="authoring-knowledge__row-btn"
+                data-test="question-copy"
+                :aria-label="copiedId === String(message.id) ? '已复制' : '复制这句提问'"
+                :title="copiedId === String(message.id) ? '已复制' : '复制这句提问'"
+                @click="copyMessage(message)"
+              ><WorkbenchIcon :name="copiedId === String(message.id) ? 'check' : 'copy'" :size="13" /></button>
+              <button
+                type="button"
+                class="authoring-knowledge__row-btn"
+                data-test="question-edit"
+                :disabled="disabled || busy"
+                aria-label="编辑重发"
+                title="编辑重发（这条之后的历史会截断）"
+                @click="editQuestion(message)"
+              ><WorkbenchIcon name="pencil" :size="13" /></button>
+            </div>
             <div class="authoring-knowledge__question">
               <p>
                 <span v-if="message.command" class="authoring-knowledge__command-badge">{{ message.command }}</span>{{ message.text }}
@@ -402,13 +602,20 @@ onBeforeUnmount(() => {
             <div class="authoring-knowledge__answer-meta">
               <span>助手</span>
               <time v-if="message.at">{{ message.at }}</time>
+              <!-- 批次77 任务2：这一条现在的状态（流中／完成／被停／出错）。读判只在 messageStatus 一处，
+                   老的 failed 布尔还在，兼容期两种写法都能出同一个字。 -->
+              <span class="authoring-knowledge__answer-status" :data-status="statusOf(message)">{{ statusLabel(message) }}</span>
             </div>
             <div v-if="message.failed" class="authoring-knowledge__error" role="alert">
               <span>{{ message.text }}</span>
               <button type="button" class="authoring-knowledge__error-retry" @click="emit('retry')">重试</button>
             </div>
             <template v-else>
-              <div class="authoring-knowledge__answer-text">{{ message.text }}</div>
+              <div
+                class="authoring-knowledge__answer-text authoring-knowledge__markdown nx-rendered-md"
+                @click="onAnswerClick"
+                v-html="answerHtml(message.text)"
+              ></div>
               <div v-if="message.findings?.length" class="authoring-knowledge__findings">
                 <p class="authoring-knowledge__findings-label">审稿意见</p>
                 <ul class="authoring-knowledge__findings-list">
@@ -424,27 +631,69 @@ onBeforeUnmount(() => {
                 </ul>
               </div>
             </template>
-            <!-- 批次29：这一问真实的运行过程（阶段＋数字）。开发者向的事实，默认收起——
-                 屏上只留问—答主线，要看过程就展开。失败的回答也带这条轨迹（断在哪一步）。 -->
-            <details v-if="message.trail?.length" class="authoring-knowledge__trail">
-              <summary><WorkbenchIcon name="chevron-down" :size="12" />过程（{{ message.trail.length }} 步）</summary>
-              <ul class="authoring-knowledge__trail-list">
-                <li v-for="(step, index) in trailRows(message.trail)" :key="`t-${index}`" class="authoring-knowledge__trail-row">
-                  <span class="authoring-knowledge__trail-stage">{{ step.label }}</span>
-                  <span v-if="step.detail" class="authoring-knowledge__trail-detail">{{ step.detail }}</span>
-                </li>
-              </ul>
-            </details>
+            <!-- 批次77 任务2：回答这行的动作条（复制／展开过程／重新生成／token chip）。
+                 「分支」不在这里——它要等任务6 的消息树一起长出来，先摆一枚点不动的钮正是本批要消灭的东西。 -->
+            <div class="authoring-knowledge__row-actions authoring-knowledge__row-actions--answer" data-test="answer-actions">
+              <button
+                type="button"
+                class="authoring-knowledge__row-btn"
+                data-test="answer-copy"
+                :aria-label="copiedId === String(message.id) ? '已复制' : '复制这条回答'"
+                :title="copiedId === String(message.id) ? '已复制' : '复制这条回答'"
+                @click="copyMessage(message)"
+              ><WorkbenchIcon :name="copiedId === String(message.id) ? 'check' : 'copy'" :size="13" /></button>
+              <button
+                v-if="message.trail?.length"
+                type="button"
+                class="authoring-knowledge__row-btn"
+                data-test="answer-trail-toggle"
+                :aria-label="isOpen(message.id) ? '收起过程' : '展开过程'"
+                :title="isOpen(message.id) ? '收起这一问的运行过程' : '展开这一问的运行过程'"
+                @click="toggleTrail(message, $event)"
+              ><WorkbenchIcon name="list" :size="13" /></button>
+              <button
+                v-if="!message.failed"
+                type="button"
+                class="authoring-knowledge__row-btn"
+                data-test="answer-regenerate"
+                :disabled="disabled || busy || messageIndex !== messages.length - 1"
+                :title="messageIndex !== messages.length - 1 ? '只有最后一条回答能重新生成（换中间那条会把后面的历史弄丢，分支还没做）' : '用同一个问题再生成一次'"
+                aria-label="重新生成"
+                @click="regenerate(message)"
+              ><WorkbenchIcon name="refresh" :size="13" /></button>
+              <span class="authoring-knowledge__usage" data-test="usage-chip" :title="message.usage ? '本轮模型回报的用量' : '上游这一轮没有回报用量'">{{ usageText(message) }}</span>
+            </div>
+            <!-- 批次29 起这一层就叫「过程」；〔批次77 任务4〕把它从「一叠事件行」升级成「运行块时间线」：
+                 五类块（梳理上下文／给出回答／调用的工具／只读并组／子代理）＋四态文案＋缺省收起的那一层。
+                 判定与归组在 conversationTimeline.mjs，本组件只把 blocks 递下去。失败的回答也带这一层（断在哪一步）。 -->
+            <ConversationTimeline
+              v-if="message.trail?.length"
+              :blocks="timelines.get(timelinePath(message.id)) || []"
+              :trail="message.trail"
+              :expanded="isOpen(message.id)"
+              :path="timelinePath(message.id)"
+              @toggle="onTimelineToggle"
+            />
           </article>
         </template>
 
         <div v-if="busy" class="authoring-knowledge__thinking" role="status">
           <span aria-hidden="true"></span>{{ thinking }}
         </div>
+        <!-- 〔批次77 任务4〕在途那一问：平铺（不折叠）的时间线——作者正看着它跑，
+             再套一层「点开才看得见」等于没做。回答落地后这一问定格进上面的 message.trail，这里就空了。 -->
+        <div v-if="busy && liveTrail.length" class="authoring-knowledge__live-trail" data-test="live-timeline">
+          <ConversationTimeline flat streaming :blocks="liveTimeline" :trail="liveTrail" />
+        </div>
       </div>
     </div>
 
     <footer class="authoring-knowledge__composer">
+      <!-- 会话级用量（批次77 任务2）：取最近一条真带 usage 的助手消息——这是 DeepWrite 那条
+           「上下文圆环只看最近同模型那一轮」的口径，不做累计估算。数值只记账，不当任何闸。 -->
+      <p v-if="sessionUsage" class="authoring-knowledge__composer-usage" data-test="session-usage">
+        最近一轮 {{ sessionUsage.input }} in／{{ sessionUsage.output }} out（计 {{ sessionUsage.total }}）
+      </p>
       <details v-if="tools.length" class="authoring-knowledge__agent-detail">
         <summary><WorkbenchIcon name="chevron-down" :size="12" />工具面（{{ tools.length }}）</summary>
         <ul class="authoring-knowledge__agent-list">
@@ -548,7 +797,31 @@ onBeforeUnmount(() => {
 .authoring-knowledge__answer-meta > span { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-weight: 500; }
 .authoring-knowledge__answer-meta time { color: var(--text-muted); font-size: 12px; }
 .authoring-knowledge__answer-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.85 var(--font-interface, var(--font-sans)); }
+/* 批次77 任务1：助手正文走 mdRender（与阅读面同一条渲染链）。下面这一组逐条抄自
+   src/components/authoring/AuthoringKnowledgeAssistant.vue:740-757 的 :deep() md 规则——
+   老版会话面的 md 度量就是它，不再另立一套。markdown 版式自己管段落间距，
+   所以先把上面那条 pre-wrap 关掉（否则 marked 出的 <p> 会把源码里的换行再折一次）。 */
+.authoring-knowledge__markdown { white-space: normal; }
+.authoring-knowledge__markdown :deep(p) { margin: 0 0 1em; }
+.authoring-knowledge__markdown :deep(> :first-child) { margin-top: 0; }
+.authoring-knowledge__markdown :deep(> :last-child) { margin-bottom: 0; }
+.authoring-knowledge__markdown :deep(h1), .authoring-knowledge__markdown :deep(h2), .authoring-knowledge__markdown :deep(h3), .authoring-knowledge__markdown :deep(h4), .authoring-knowledge__markdown :deep(h5), .authoring-knowledge__markdown :deep(h6) { margin: 1.3em 0 .55em; color: var(--text-primary); font-size: 1.08em; font-weight: 600; line-height: 1.5; }
+.authoring-knowledge__markdown :deep(strong) { font-weight: 600; }
+.authoring-knowledge__markdown :deep(ul), .authoring-knowledge__markdown :deep(ol) { margin: .6em 0 1em; padding-inline-start: 1.5em; }
+.authoring-knowledge__markdown :deep(li) { margin: .35em 0; padding-inline-start: .2em; }
+.authoring-knowledge__markdown :deep(li > p) { margin: .35em 0; }
+.authoring-knowledge__markdown :deep(hr) { margin: 1.3em 0; border: 0; border-top: 1px solid var(--hairline-soft); }
+.authoring-knowledge__markdown :deep(blockquote) { margin: 1em 0; padding-inline-start: 1em; border-inline-start: 2px solid var(--hairline-soft); color: var(--text-secondary); }
+.authoring-knowledge__markdown :deep(a) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.authoring-knowledge__markdown :deep(pre) { max-width: 100%; overflow-x: auto; margin: 1em 0; padding: 12px; background: var(--surface-workbench-muted); border-radius: var(--radius-control); font-size: .88em; line-height: 1.6; }
+.authoring-knowledge__markdown :deep(code) { font-family: var(--font-mono, monospace); white-space: pre-wrap; }
+.authoring-knowledge__markdown :deep(pre code) { white-space: pre; }
+.authoring-knowledge__markdown :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+.authoring-knowledge__markdown :deep(th), .authoring-knowledge__markdown :deep(td) { padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); text-align: start; }
+.authoring-knowledge__markdown :deep(img) { max-width: 100%; height: auto; }
 .authoring-knowledge__thinking { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+/* 〔批次77 任务4〕在途那一问的平铺时间线：紧跟状态行，自己不额外撑出一段空。 */
+.authoring-knowledge__live-trail { margin-top: 4px; }
 .authoring-knowledge__thinking span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-primary, var(--accent)); animation: knowledge-pulse 900ms ease-in-out infinite alternate; }
 .authoring-knowledge__error { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: var(--archive-paper); color: var(--text-secondary); font-size: 13px; text-align: start; }
 .authoring-knowledge__error-retry { border: 0; background: transparent; color: var(--accent-primary, var(--accent)); cursor: pointer; }
@@ -602,12 +875,14 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* 批次22：模式标签（审阅/自动）＋ slash 命令提示。全 token。 */
-.authoring-knowledge__mode-badge { flex: none; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
+/* 〔批次76 任务4-4〕模式徽标实测 40×23、确认行那两枚 40 上下×22：都差纵向那 1–2px。
+   抬到 min-height 24 并 inline-flex 居中（padding 与字号不动，徽标不会被撑成两行）。 */
+.authoring-knowledge__mode-badge { flex: none; display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
 .authoring-knowledge__mode-badge.is-review { color: var(--accent, var(--accent)); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
 .authoring-knowledge__mode-badge.is-auto { color: var(--signal-warm, var(--signal-warm)); border-color: color-mix(in srgb, var(--signal-warm) 32%, transparent); }
 .authoring-knowledge__mode-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--signal-warm, currentColor) 32%, transparent); border-radius: var(--nx-radius-xs, 8px); background: color-mix(in srgb, var(--signal-warm, currentColor) 6%, transparent); font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
 .authoring-knowledge__mode-confirm-text { flex: 1 1 180px; }
-.authoring-knowledge__mode-confirm-ok, .authoring-knowledge__mode-confirm-cancel { flex: none; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
+.authoring-knowledge__mode-confirm-ok, .authoring-knowledge__mode-confirm-cancel { flex: none; display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
 .authoring-knowledge__mode-confirm-ok { color: var(--signal-warm, currentColor); border-color: color-mix(in srgb, var(--signal-warm, currentColor) 32%, transparent); }
 .authoring-knowledge__slash-hint { display: flex; flex-wrap: wrap; gap: 6px 8px; padding: 6px 4px 0; font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
 .authoring-knowledge__slash-item { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); cursor: pointer; }
@@ -652,4 +927,32 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .authoring-knowledge__ref-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .authoring-knowledge__ref-kind { flex: none; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
 .authoring-knowledge__ref-empty { margin: 4px 8px; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.6; }
+</style>
+
+<style scoped>
+/* —— 批次77 任务2：消息行的元信息与动作条 ————————————————————————————————
+   抄的是 DeepWrite renderer/src/styles.css:1921-1960 那条口径：动作件缺省不可见，
+   行 hover 或键盘聚焦（:focus-within，纯键盘也点得着）才显形；但**位置常驻**——
+   预留 min-height 让显形时不把他条内容顶一下。配色一律走老 token，字号一律走 --nx-* 刻度。
+   命中区按批次76 那条度量口径给到 28×28（图标 13px，钮自己撑开）。 */
+.authoring-knowledge__row-actions { display: flex; align-items: center; gap: 2px; min-height: 28px; opacity: 0; transition: opacity 120ms ease; }
+.authoring-knowledge__row-actions--answer { justify-content: flex-end; margin-top: 2px; }
+.authoring-knowledge__question-row:hover > .authoring-knowledge__row-actions,
+.authoring-knowledge__answer:hover .authoring-knowledge__row-actions,
+.authoring-knowledge__row-actions:focus-within { opacity: 1; }
+/* 键盘 Tab 进来也要看得见：这一条不是装饰，是「点得到」的底线。 */
+.authoring-knowledge__row-btn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--text-muted); cursor: pointer; }
+.authoring-knowledge__row-btn:hover:not(:disabled) { color: var(--text-primary); background: var(--nav-hover); }
+.authoring-knowledge__row-btn:focus-visible { outline: 2px solid var(--workbench-selected); outline-offset: 1px; color: var(--text-primary); }
+.authoring-knowledge__row-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+.authoring-knowledge__row-time { margin-inline-end: 4px; color: var(--text-muted); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; }
+/* token chip：也是 hover 才现的一格。没有回报时是那六个字，不是 0（守卫⑦）。 */
+.authoring-knowledge__usage { margin-inline-start: 6px; color: var(--text-muted); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* 状态那一格（常驻）：盖过 legacy-copied 块里 `.answer-meta > span` 的那一份强调样式。 */
+.authoring-knowledge__answer-meta > .authoring-knowledge__answer-status { margin-inline-start: auto; color: var(--text-muted); font-weight: 400; font-size: var(--nx-fs-2xs); letter-spacing: .02em; }
+.authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='error'] { color: var(--danger); }
+.authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='stopped'] { color: var(--signal-warm); }
+.authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='streaming'] { color: var(--accent); }
+/* 会话级用量（输入区右上）：一行的极淡小字，数值只记账、不当任何闸。 */
+.authoring-knowledge__composer-usage { margin: 0 2px 4px; text-align: end; color: var(--text-muted); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; }
 </style>

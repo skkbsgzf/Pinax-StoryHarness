@@ -52,7 +52,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['close', 'changed', 'theme', 'set-enabled', 'set-primary', 'toggle-companion', 'writing-prefs', 'update:activeSection'])
 
-/** 目录搜索（工单B）：只过滤左栏，不换右栏当前节。 */
+/** 目录搜索（工单B）：左栏按词表滤；右栏同进同退（见下面 panelSection 那条〔批次76 任务4-2〕）。 */
 const searchQuery = ref('')
 
 /**
@@ -84,8 +84,9 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
         kind: mapped?.component || generic ? 'carrier-settings-content' : 'carrier-settings',
         carrierId: carrier.id,
         settingId: setting.id,
-        // 浅匹配只用已知字段：载体标题／声明标题／「设置」／它认领的数据目录名；不做渲染文本深搜。
-        keywords: [carrier.title, setting.title, '设置', ...(Array.isArray(carrier.dataDirs) ? carrier.dataDirs : [])]
+        // 浅匹配只用已知字段：载体标题／声明标题／「设置」／它认领的数据目录名，
+        // 再加上内容组件自己报上来的字段标签（〔批次76 任务4-2〕mapped.keywords）——仍不做渲染文本深搜。
+        keywords: [carrier.title, setting.title, '设置', ...(Array.isArray(mapped?.keywords) ? mapped.keywords : []), ...(Array.isArray(carrier.dataDirs) ? carrier.dataDirs : [])]
       }
       if (mapped?.component) {
         section.component = mapped.component
@@ -100,11 +101,25 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
 
 const allSections = computed(() => [...props.sections, ...carrierSections.value])
 
-/** 当前节：目录里没有的 id 回落第一节，右栏不出现空窗。搜索不过滤当前节（右栏不跟着空）。 */
+/** 当前节：目录里没有的 id 回落第一节，右栏不出现空窗。 */
 const current = computed(() => allSections.value.find((section) => section.id === props.activeSection) ?? allSections.value[0] ?? null)
 const currentProps = computed(() => current.value?.props ?? {})
 
 const normalizedQuery = computed(() => searchQuery.value.trim().toLowerCase())
+
+/**
+ * 〔批次76 任务4-2〕右栏那一节到底给不给看，跟着搜索走。
+ * 原判据自陈「搜索不过滤当前节（右栏不跟着空）」，实测就是作者点出来的自相矛盾：
+ * 输「字号」时左目录空了，右栏却还挂着含「正文字号」的那一节——目录说没有，内容说有。
+ * 现在两栏同进同退：查询把当前节滤出去了，右栏就换成一问一答的空态（带「清除搜索」的退路），
+ * 不再让一栏装聋。D1 硬闸（needsPrimary 落 primary 且不可关）不受影响：那是「没有查询词」的那一档。
+ */
+const panelSection = computed(() => {
+  const section = current.value
+  if (!section) return null
+  if (normalizedQuery.value && !matchesQuery(section)) return null
+  return section
+})
 
 /** 浅匹配（v1）：目录项标题＋注册表里的已知标题/描述关键词；不读挂载后的渲染文本。 */
 function matchesQuery(section) {
@@ -132,11 +147,16 @@ const groupedSections = computed(() => {
 
 const visibleIds = computed(() => visibleSections.value.map((section) => section.id))
 
-/** roving tabindex 的 0 位：当前节被搜索滤掉时落到第一个可见项（右栏当前节不变）。 */
+/** roving tabindex 的 0 位：当前节被搜索滤掉时落到第一个可见项（右栏同进同退，见 panelSection）。 */
 const focusId = computed(() => (visibleIds.value.includes(current.value?.id) ? current.value.id : visibleIds.value[0] ?? null))
 
 function select(id) {
   if (id !== props.activeSection) emit('update:activeSection', id)
+}
+
+/** 空态那条退路：清掉查询词，两栏一起回到「没在搜」的样子。 */
+function clearSearch() {
+  searchQuery.value = ''
 }
 
 /** 方向键在目录上换节（roving tabindex，抄老版 SettingsPopup.vue:489-501）——只走可见项。 */
@@ -204,22 +224,22 @@ function onTablistKeydown(event) {
 
       <div class="settings-modal__body">
         <section
-          v-if="current"
-          :id="`settings-panel-${current.id}`"
+          v-if="panelSection"
+          :id="`settings-panel-${panelSection.id}`"
           class="settings-section"
           role="tabpanel"
-          :aria-label="current.title"
-          :data-test="`settings-panel-${current.id}`"
+          :aria-label="panelSection.title"
+          :data-test="`settings-panel-${panelSection.id}`"
         >
           <!-- 载体设置节：查到内容组件（P14 第三步）就渲染真内容；没查到的声明仍是空态（当前真实现）。 -->
           <p
-            v-if="current.kind === 'carrier-settings'"
+            v-if="panelSection.kind === 'carrier-settings'"
             class="pane-hint"
             data-test="carrier-settings-empty"
           >该载体的设置项还没有内容</p>
           <component
             v-else
-            :is="current.component"
+            :is="panelSection.component"
             v-bind="currentProps"
             @close="emit('close')"
             @changed="emit('changed')"
@@ -230,6 +250,13 @@ function onTablistKeydown(event) {
             @toggle-companion="(pluginId) => emit('toggle-companion', pluginId)"
           />
         </section>
+        <!-- 〔批次76 任务4-2〕搜索把当前节也滤掉了：右栏同步收，给一句人话与一条退路。 -->
+        <div v-else class="settings-search-blank" data-test="settings-search-blank">
+          <p class="pane-hint">
+            没有与「{{ searchQuery.trim() }}」匹配的设置项{{ visibleSections.length ? '，左侧目录里是剩下的那些' : '' }}。
+          </p>
+          <button type="button" class="control-secondary" data-test="settings-search-clear" @click="clearSearch">清除搜索</button>
+        </div>
       </div>
     </div>
   </WorkbenchModal>

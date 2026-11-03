@@ -40,7 +40,7 @@ export function createAdvisorRunner({
   // M2.5-A：工具循环默认关。注入 { run } 后由它接管模型往返；不注入时这一层与今天一字不差。
   toolLoop = null
 } = {}) {
-  return async function advisorRunner({ question, context = {}, runtime, onEvent: perAskEvent = null, writeMode = null, skill = null } = {}) {
+  return async function advisorRunner({ question, context = {}, runtime, onEvent: perAskEvent = null, writeMode = null, skill = null, abort = null } = {}) {
     // 单次提问的事件口优先：外壳每一问都要带自己的 askId，不能靠 runner 创建时绑死的那一个。
     const emit = createEventEmitter(typeof perAskEvent === 'function' ? perAskEvent : onEvent)
     emit({ stage: 'start', questionChars: String(question ?? '').length })
@@ -92,6 +92,8 @@ export function createAdvisorRunner({
           skill,
           writeMode,
           onEvent: emit,
+          // 取消谓词原样交给循环：它只在轮次边界读这一个布尔，运行时这一层不自己造「已停止」。
+          abort: typeof abort === 'function' ? abort : null,
           buildUserMessage: ({ question: asked, envelope }) => {
             const base = buildOpenClawUserMessage(envelope, asked, {
               taskType: payload.taskType,
@@ -141,14 +143,26 @@ export function createAdvisorRunner({
       if (skill?.name) meta.skill = String(skill.name)
     }
     let advice = String(run?.advice ?? '')
-    if (loopResult && loopResult.kind === 'step-budget') {
+    // 作者按下停止（批次77 任务3）：正文要说清是运行时收的手，不是模型说到一半不说了。
+    // 只有工具循环那条路真有「轮次边界」可停；直答链（单次 runAgent）没有这个边界，
+    // 所以它永远不产出 stopped——不假装能停。
+    const stopped = loopResult?.kind === 'stopped'
+    if (stopped) {
+      const rounds = Number.isSafeInteger(loopResult.stoppedAt) ? loopResult.stoppedAt : meta.roundsUsed
+      advice = rounds > 0
+        ? `已按作者要求停止（第 ${rounds} 轮后不再续轮）。`
+        : '已按作者要求停止：第一轮还没发起就收了手，模型一个字都没说。'
+    } else if (loopResult && loopResult.kind === 'step-budget') {
       // 循环没有收敛时不能把空串当回答：如实说清是运行时截断的，不是模型没说话。
       advice = `工具调用已达本轮上限（${meta.toolLoop.steps} 步），没有形成最终回答；请缩小这次请求的范围后重试。`
     }
     const rawAdvice = advice
     let result = null
     let structured = false
-    if (loopResult?.kind === 'step-budget') {
+    if (stopped) {
+      // 停止回执不是模型的产出：不送结构化解析，免得这段话冒充审稿意见。
+      meta.resultParsing = '按作者要求停止，未形成回答，不做结构化解析'
+    } else if (loopResult?.kind === 'step-budget') {
       // 运行时截断的话不送结构化解析：这段不是模型的产出，别让它冒充审稿意见。
       meta.resultParsing = '未形成回答（步数用尽），不做结构化解析'
     } else {
@@ -165,13 +179,21 @@ export function createAdvisorRunner({
       }
     }
     emit({ stage: 'answer', chars: String(advice).length, structured, roundsUsed: meta.roundsUsed })
+    // 本轮 token 用量（批次77 任务2）：只有工具循环那条路真有回报——单次 runAgent 的
+    // provider 只回一段文本（server/services/textModelAgentProvider.js:33 那条链把 usage 丢了），
+    // 改它要动 server/**，属本批禁止边界。所以这里可能是 null：界面据此说「本轮未回报用量」，不显 0。
+    const usage = loopResult?.usage ?? null
+    meta.usage = usage
     return {
       ok: true,
       source: ADVISOR_RUNNER_SOURCE,
       text: advice,
       answer: advice,
       result,
+      usage,
       meta,
+      // 停止的那一回带真值上去：渲染层据此把这条消息落成 status:'stopped'，不是靠正文文案猜。
+      ...(stopped ? { stopped: true } : {}),
       context: { profile: payload.profile, providerKinds: payload.providerKinds, missingKinds: payload.missingKinds }
     }
   }

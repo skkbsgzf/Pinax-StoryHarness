@@ -10,7 +10,6 @@ import { computed } from 'vue'
  */
 const props = defineProps({
   carriers: { type: Array, default: () => [] },
-  kinds: { type: Array, default: () => [] },
   /** 只申请只读作用域的伴生板块（外壳按同一口径筛好传入）。 */
   companions: { type: Array, default: () => [] },
   /** 新建项目时随行的伴生板块 id（与新建项目节共用一份，状态在外壳）。 */
@@ -26,8 +25,12 @@ const primaryCapable = computed(() => props.carriers.filter((item) => item.prima
 <template>
   <div>
     <h3 class="settings-panel-heading">这个项目要创作什么？</h3>
+    <!-- 〔批次76 任务4-1〕原来这里念 `kinds.join(' / ')`（内核词表：novel / screenplay / generic），
+         按钮尾巴上还挂着 `carrier.primary.projectKind`——两处都是内部 id 上屏。
+         类型的人话本来就是**载体标题**（清单里的 title：小说／剧本／漫画……），外壳不再另建一张中英对照表；
+         所以这两处只留标题，词表这一格整条撤掉，连 `kinds` 这个 prop 一起退场（没人读了就不必再传）。 -->
     <p class="wizard-note">
-      主载体决定这个项目是哪一类（{{ kinds.join(' / ') }}）。
+      主载体决定这个项目创作的是哪一类内容；下面每一块都是能担任主载体的板块，选定之后项目目录按它的口径建。
     </p>
     <div v-if="canPickPrimary" class="wizard-list">
       <button
@@ -37,7 +40,7 @@ const primaryCapable = computed(() => props.carriers.filter((item) => item.prima
         class="wizard-item control-secondary"
         @click="emit('set-primary', carrier.id)"
       >
-        {{ carrier.title }} <small>{{ carrier.primary.projectKind }}</small>
+        {{ carrier.title }}
       </button>
     </div>
     <p v-else class="wizard-empty">

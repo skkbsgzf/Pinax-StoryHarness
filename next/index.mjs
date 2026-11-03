@@ -64,6 +64,20 @@ export async function createNextSession({ root, plugins, builtInCarriers = true,
     return result
   }
 
+  /**
+   * 退役一份运行时（批次69：close 链的唯一收口）。
+   * 换项目／刷新／关会话三条路都从这里走，把 stop() 的关闭报告（drain 等了多久、有没有硬关、
+   * 哪些在途拒绝被转成信封）留在 session.lastRuntimeStop 上——失败要看得见，不许就地丢掉。
+   */
+  async function retireRuntime() {
+    if (!session.runtime) return null
+    const runtime = session.runtime
+    session.runtime = null
+    const stopped = await runtime.stop()
+    session.lastRuntimeStop = stopped.ok ? stopped.value : { stopped: false, errors: [`${stopped.error?.code ?? 'STOP_FAILED'}：${stopped.error?.message ?? '运行时停止失败'}`] }
+    return session.lastRuntimeStop
+  }
+
   const session = {
     kernel: KERNEL_INFO,
     registry,
@@ -170,7 +184,7 @@ export async function createNextSession({ root, plugins, builtInCarriers = true,
       session.view = opened.value.view
       // 换项目＝换运行时：上一份的进程内 MCP 链路必须先关掉（与 refresh() 同一条规矩），
       // 否则「新建后再打开」这种顺序会在主进程里攒出多余的运行时段。
-      if (session.runtime) await session.runtime.stop()
+      await retireRuntime()
       session.runtime = createAgentRuntime({
         registry,
         fileService: opened.value.fileService,
@@ -201,17 +215,19 @@ export async function createNextSession({ root, plugins, builtInCarriers = true,
       session.lastFailure = null
       session.project = reopened
       session.view = reopened.value.view
-      if (session.runtime) await session.runtime.stop()
+      await retireRuntime()
       session.runtime = createAgentRuntime({ registry, fileService: reopened.value.fileService, view: reopened.value.view, ...runtimeOptions })
       const started = await session.runtime.start()
       return ok({ ...reopened.value, document: document ?? reopened.value.document, runtime: started.value })
     },
 
     async close() {
-      if (session.runtime) await session.runtime.stop()
-      session.runtime = null
-      return ok({ closed: true })
-    }
+      const stopReport = await retireRuntime()
+      return ok({ closed: true, runtime: stopReport })
+    },
+
+    /** 最近一次运行时退役的关闭报告（drain／硬关／被转成信封的拒绝）——外壳与门禁读这一格，不靠猜。 */
+    lastRuntimeStop: null,
   }
 
   if (root && autoOpen) {

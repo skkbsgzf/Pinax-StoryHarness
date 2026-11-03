@@ -239,8 +239,14 @@ test('载体面板 P2/P3（协议 §1）：头部统一进 .doc-head，保存按
   const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
   const headers = (pane.match(/class="doc-head"/g) ?? []).length
   assert.ok(headers >= 5, `.doc-head 只落了 ${headers} 处：五个视图的头部都要归一进这个容器`)
-  const titles = (pane.match(/class="doc-title[ "]/g) ?? []).length
-  assert.ok(titles >= 5, `.doc-title 只找到 ${titles} 处：每个视图头部都要有一行标题（P2）`)
+  const titles = (pane.match(/<h2\s[^>]*class="doc-title/gu) ?? []).length
+  // 〔批次76 裁定A 改判 P2 的第 1 条〕文档头那一行标题整体上移到窗头（AppNext.windowTitle＝「载体 · 文档」）：
+  // 内容层不许再自绘 h2 展示体，否则同一份文档名同屏念两遍、层级也乱掉。
+  assert.equal(titles, 0, `内容层还自绘 ${titles} 处 h2.doc-title（批次76 裁定A：唯一标题面＝窗头那一行）`)
+  // 白名单只有一处，而且它是「控件」不是标题层级：大纲改名的输入框沿用 .doc-title 的度量。
+  // 例外须登记（批次44 口径）——要再加一处，先改这条并写理由。
+  assert.equal((pane.match(/class="doc-title outline-title"/gu) ?? []).length, 1,
+    '大纲改名输入框是唯一的 doc-title 例外，丢了或多了都是判据漂移')
 })
 
 test('选中色分级全部来自老版原件：Next 不许抄一份公式', async () => {
@@ -435,12 +441,14 @@ test('next/shell 源码不得出现 localStorage（例外只有 theme 过渡双�
 /**
  * 批次59 · 铁律一／二：任何打开的内容＝一扇 PaneWindow；chrome 归宿主一个组件。
  * 三条边界都可机读：
- *   1) PaneWindow 是唯一窗口壳——拖动／四角缩放／收起／分屏／×／最大化都在它身上；
+ *   1) PaneWindow 是唯一窗口壳——拖动／四角缩放／×／最大化都在它身上；
  *      窗口状态（geometry／z／minimized／maximized／贴靠）的真相在 workspace.json v2；
  *   2) 中间 doc 区＝窗口管理器：AppNext 只接线内容，不维护硬编码坐标表；
  *   3) 旧宿主容器 FloatingWidget 已并入 PaneWindow（文件不存在）。
+ * 批次76 〔裁定A／B〕改了这份 chrome 的两处：窗头三枚钮收成一枚 ×（形态切换改走拖拽吸附＋右键菜单），
+ * 收起态不再由 PaneWindow 画缘签（呈现归 CollapseOrb）——下面的判据此同步改判并留理由。
  */
-test('批次59：PaneWindow 是唯一窗口壳（拖动／缩放／收起／分屏／×／最大化都在宿主）', async () => {
+test('批次59：PaneWindow 是唯一窗口壳（拖动／缩放／吸附／×／最大化都在宿主）', async () => {
   const windowPath = join(shellDir, 'PaneWindow.vue')
   assert.equal(await exists(windowPath), true, 'next/shell/PaneWindow.vue 必须存在（统一窗口）')
   const widget = await readFile(windowPath, 'utf-8')
@@ -449,23 +457,29 @@ test('批次59：PaneWindow 是唯一窗口壳（拖动／缩放／收起／分�
     'startResize',
     'pointerdown',
     "emit('close')",
-    "emit('collapse')",
-    "emit('split')",
-    "emit('expand')",
     "emit('maximize')",
     "emit('geometry',",
+    "emit('snap'",
+    'snapTargetAt',
+    'snapPreviewBox',
+    'nx-pane-snap-preview',
     'getBoundingClientRect',
     'data-window-instance',
     'data-window-state',
-    'props.geometry',
-    'nx-pane-window-tab'
+    'props.geometry'
   ]) {
     assert.ok(widget.includes(needle), `PaneWindow 缺窗口职责：${needle}`)
   }
   assert.ok(widget.includes('<slot />'), '内容经插槽由外壳注入，宿主不自造载体内容')
-  // 铁律一／五：右上角只有三枚钮（收起／分屏／×），不再有每 pane 定制的窗口按钮。
+  // 〔批次76 裁定A〕铁律一／五：右上角只剩一枚 ×（删记录），形态钮一律不进 chrome——
+  // 原判据是 ['collapse','split','close'] 三枚常驻钮，随「相关的页面形态转换按钮用拖拽的形式去做」改判。
   const actions = [...widget.matchAll(/data-window-action="([^"]+)"/gu)].map((match) => match[1])
-  assert.deepEqual(actions, ['collapse', 'split', 'close'], '窗口动作只此三枚，别的一律不进 chrome')
+  assert.deepEqual(actions, ['close'], '窗口动作只剩 ×；收起／分屏两枚钮不进 chrome（改走拖拽与右键菜单）')
+  // 三条「不该再长回来」的反向断言卡在真代码上（注释里提旧名不算违规，故用正则而不是 includes）：
+  // ①缘签零渲染（守卫①）、②窗头只剩 ×、③窗口壳不再发收起／分屏／展开那三个动作。
+  assert.equal(/data-window-action="(collapse|split)"/u.test(widget), false, '窗头不许再有收起／分屏钮（裁定A）')
+  assert.equal(/class="[^"]*nx-pane-window-tab/u.test(widget), false, '竖排缘签的渲染必须整条退役（守卫①）')
+  assert.equal(/emit\('(collapse|split|expand)'/u.test(widget), false, '形态钮撤了，窗口壳不再发那三个动作')
   const corners = [...widget.matchAll(/data-window-resize="([^"]+)"/gu)].map((match) => match[1])
   assert.deepEqual(corners, ['corner'], '四角把手用 v-for 生成（模板里不应硬列四枚）')
   assert.ok(widget.includes("['nw', 'ne', 'sw', 'se']"), '浮窗要有四角缩放把手')
@@ -495,9 +509,16 @@ test('批次59：AppNext 挂窗口层与 PaneWindow，不含旧形态入口与�
   assert.ok(app.includes('<PaneWindow'), '外壳要挂统一窗口')
   assert.ok(app.includes('class="nx-window-layer"'), '中间 doc 区是窗口层')
   assert.ok(app.includes(':geometry="win.entry.geometry"'), '几何来自工作区记录（不是外壳的坐标表）')
-  assert.ok(app.includes('@collapse="collapseWindow'), '收起接到工作区状态机')
-  assert.ok(app.includes('@split="splitWindow'), '分屏接到工作区状态机')
+  // 〔批次76 裁定A〕原判据 `@collapse="collapseWindow"`／`@split="splitWindow"` 随窗头两枚钮撤销：
+  // 形态动作在宿主只剩「拖拽吸附（@snap）」与「右键菜单（applyFormAction）」两条，两条都通向同一个状态机。
+  assert.ok(app.includes('@snap="applySnapTarget'), '拖拽吸附的落点接到工作区状态机')
+  assert.ok(app.includes('snapPlan'), '吸附落点什么形态只从 paneSnap 那张表读（宿主不另写一套）')
   assert.ok(app.includes('@close="closeWindow'), '关窗接到工作区状态机')
+  // 〔批次76 裁定B〕收起态的唯一呈现是右下角悬浮球；缘签那条 v-for 与它的排位函数一起没了。
+  assert.ok(app.includes('<CollapseOrb'), '外壳挂悬浮球（收起态归它管）')
+  assert.ok(app.includes('hostWorkspace.expand'), '从球里放出来走状态机的 expand（按 restore 回原形态）')
+  assert.equal(app.includes('tabOrdinal'), false, '缘签的硬编码排位函数（top: 120 + i*36）应随缘签一起删除')
+  assert.equal(/v-for="win in sideTabWindows"/u.test(app), false, '收起态不再渲染一竖列窗体')
 
   assert.equal(app.includes('<FloatingWidget'), false, '旧宿主容器已并入 PaneWindow')
   assert.equal(app.includes('CenterSlotHost'), false, '中栏不再走旧的单槽宿主')
@@ -518,9 +539,25 @@ test('批次59：窗口层与窗口壳的样式就位；层序低于统一二级
   const rule = ruleBody(layout, '.nx-pane-window {')
   assert.ok(rule, 'next-shell.css 里没有 .nx-pane-window 规则')
   assert.match(rule, /position:\s*absolute/u, '窗口是 absolute 定位卡片')
-  const tab = ruleBody(layout, '.nx-pane-window-tab {')
-  assert.ok(tab, '收起态要有侧缘小标签（点击还原）')
-  assert.match(tab, /z-index:\s*var\(--z-floating-dock\)/u, '标签层序走 --z-floating-dock（低于统一二级页）')
+  // 〔批次76 裁定B〕原判据「收起态要有侧缘小标签（.nx-pane-window-tab，层序 --z-floating-dock）」随缘签退役：
+  // 作者口径是「用文字代表吸附、还存在堆叠，看不清也点不到」→ 呈现统一归右下角悬浮球。这里反向断言它不再回来。
+  assert.equal(ruleBody(layout, '.nx-pane-window-tab {'), null, '竖排缘签的样式必须整条删除（守卫①）')
+  assert.equal(layout.includes('.nx-pane-window-tab'), false, 'next-shell.css 里不许再出现 .nx-pane-window-tab 选择器')
+  const orb = ruleBody(layout, '.nx-collapse-orb {')
+  assert.ok(orb, 'next-shell.css 里没有悬浮球规则')
+  assert.match(orb, /position:\s*fixed/u, '悬浮球钉在视口右下角')
+  assert.match(orb, /z-index:\s*var\(--z-floating-action\)/u, '球走既有档位 --z-floating-action，本批不新增层级')
+  const orbButton = ruleBody(layout, '.nx-collapse-orb-button {')
+  assert.ok(orbButton, '悬浮球本体缺样式')
+  assert.match(orbButton, /width:\s*48px/u, '球本体 48×48（判据下限 44 之上）')
+  const orbRow = ruleBody(layout, '.nx-collapse-orb-open {')
+  assert.ok(orbRow, '球里那条列表缺样式')
+  assert.match(orbRow, /min-height:\s*44px/u, '列表每一条整行命中区 ≥44（可点件判据）')
+  const snap = ruleBody(layout, '.nx-pane-snap-preview {')
+  assert.ok(snap, '拖拽吸附要有预览样式')
+  assert.match(snap, /pointer-events:\s*none/u, '预览只是提示，不吃指针')
+  // 〔工单验收〕本批不给层级档位表新增任何一档：next-shell.css 只许「用」--z-*，不许「定义」新的。
+  assert.equal(/--z-[a-z-]+\s*:/u.test(layout), false, 'next-shell.css 里不许定义新的 --z-* 档位（只读复用 src/styles/main.css 那张表）')
   const tokens = await readFile(join(repoRoot, 'src', 'styles', 'main.css'), 'utf-8')
   const overlayZ = Number(/--z-floating-dock:\s*(\d+)/u.exec(tokens)?.[1])
   const modalZ = Number(/--z-modal:\s*(\d+)/u.exec(tokens)?.[1])
@@ -611,13 +648,19 @@ test('P18 文档为主：正文去框、常驻保存按钮拆净、节点操作�
  *   B. 索引窗 IDE 化：行＝名字（没有「1. 」数字前缀）、版本／字数只在行的 title 里、
  *      历史钮与区头 ＋ 默认不显示（hover／键盘聚焦才显形）、新建走临时输入行。
  */
-test('批次33 文档头归一：一行 .doc-title ＋ 底部 .doc-meta-hint，双层头与聚焦蓝框都不在', async () => {
+test('批次33 文档头归一（批次76 改判后）：标题面只剩窗头一行，内容层只留动作行＋底部 .doc-meta-hint', async () => {
   const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  const appNext = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
 
-  // ① 头部只剩一行标题；meta 在底部 hint 上。
-  assert.match(pane, /class="doc-head"/u, '编辑面头部要用 .doc-head（一行标题＋右端 quiet 动作）')
-  assert.match(pane, /class="doc-title"/u, '头部要有 .doc-title 展示体（章节名／条目名／资料名／剧本名／规则名）')
+  // ① 头部只剩动作行，标题面归窗头（〔批次76 裁定A〕原合同「头部只有一行 .doc-title」已改判：
+  //    作者 2026-11-03 的口径是「打开的第一章显示成『小说 第一章』就行，避免冗余层级」——
+  //    那一行整体上移到 PaneWindow 的窗头，内容层不再自绘展示体标题；meta 仍在底部 hint 上）。
+  assert.match(pane, /class="doc-head"/u, '编辑面头部要用 .doc-head（保存 chip＋编辑那一行动作）')
+  assert.ok(!/<h2\s[^>]*class="doc-title/u.test(pane), '内容层还在自绘 h2.doc-title（标题面唯一＝窗头，批次76 裁定A）')
+  assert.match(appNext, /function windowTitle\(win\)/u, '窗头标题的唯一出处是 AppNext.windowTitle（批次76 裁定A 的落点）')
+  assert.ok(appNext.includes('`${carrierName} · ${label}`'),
+    '窗头必须是「载体名 · 文档名」那一条拼接（批次76 裁定A），不许换回 pane 名或内部 id')
   assert.ok((pane.match(/class="doc-meta-hint"/g) ?? []).length >= 5,
     `.doc-meta-hint 只落了 ${(pane.match(/class="doc-meta-hint"/g) ?? []).length} 处：每个文档面的 meta 都要沉到底部`)
 
@@ -713,13 +756,17 @@ test('批次61：workspace v3 页轴就位，v2 窗口 API 与旧位置四轴零
   }
   // 只钉「API 还在不在」，不钉字段名：tiledWith／minimized 必须还能被迁移读出来，
   // 但谁都不许再当状态轴用（函数声明形式写死，读旧档的 value.tiledWith 不算违规）。
+  // 〔批次76 裁定B〕改判：`function expand` 从这一列移出——v2 那个 expand 是「最小化窗还原成页」，
+  // 这一批的 expand 是「从悬浮球里放出来＝回到 restore 记的那一档」，同名不同义，判据换成正向钉（见下）。
   for (const gone of [
     'PLACEMENTS', 'restorePlacement', 'setPinned', 'dockPane', 'place(',
-    'function minimize', 'function expand', 'function tile', 'function untile',
+    'function minimize', 'function tile', 'function untile',
     'reconcileTiles', 'MINIMIZED_MODES', 'DEFAULT_MINIMIZED', 'isMinimized'
   ]) {
     assert.equal(workspace.includes(gone), false, `退役的窗口 API 又回来了：${gone}`)
   }
+  assert.ok(workspace.includes('function expand'), '〔裁定B〕悬浮球要有唯一放出口：expand(instance) 认 restore')
+  assert.ok(workspace.includes('function normalizeRestore'), '收起前那份记忆要有净化入口，脏值不许进状态机')
   assert.equal(workspace.includes('export function normalizeEntry'), true)
   assert.equal(workspace.includes("const geometry = form === 'floating' ? normalizeGeometry(value.geometry) : null"), true,
     '只有浮窗持有矩形：页态藏几何＝重启后位置玄学')
@@ -759,11 +806,21 @@ test('批次61：workspace v3 页轴就位，v2 窗口 API 与旧位置四轴零
   for (const gone of [
     'sanitizePaneForms', 'setPaneForm', 'nx-context-menu', 'nx-split', 'nx-form-bar',
     'CenterSlotHost', 'FloatingWidget', '打开方式',
-    '.minimize(', '.expand(', '.tile(', 'tiledWith', 'tileSide'
+    '.minimize(', '.tile(', 'tiledWith', 'tileSide'
   ]) {
     assert.equal(app.includes(gone), false, `AppNext 仍有退役的窗口轴／形态入口：${gone}`)
   }
-  assert.equal((app.match(/<PaneWindow/gu) ?? []).length, 2, '页＋浮窗一层、侧缘标签一层，全都走同一套 PaneWindow（〔铁律四〕不出第二套窗口壳）')
+  // 原判据里有 '.expand('（v2 窗口轴的那枚还原方法）。〔批次76 裁定B〕宿主现在合法地调
+  // hostWorkspace.expand()——那是「从悬浮球回原形态」的唯一入口，不是那条旧轴。
+  // 所以这里把「不许出现 .expand(」改成「出现的每一处都只能是状态机的 expand」，判据不放松，只是换了写法。
+  const expandCalls = [...app.matchAll(/[\w$]+\.expand\(/gu)].map((match) => match[0])
+  assert.ok(expandCalls.length > 0, '宿主要有从球里放出来的那一句')
+  for (const call of expandCalls) {
+    assert.equal(call, 'hostWorkspace.expand(', `expand 只许通向工作区状态机，别处不许：${call}`)
+  }
+  // 〔批次76 裁定A〕窗头两枚形态钮撤了，宿主侧对应的 splitWindow 也随之删除（不留没人按的旁路）。
+  assert.equal(app.includes('splitWindow'), false, '窗头「分屏」钮撤了，宿主那句实现一起删；落位归 applySnapTarget 与菜单')
+  assert.equal((app.match(/<PaneWindow/gu) ?? []).length, 1, '页层与浮窗层同一条 v-for（〔裁定B〕收起态那一条已删——缘签不再渲染窗体）')
   // 〔裁定①〕缺省落点是页：全文件只有两处开窗。批次61 那句「唯一带 floating 的那处是显式悬浮钮」
   // 在批次62 长了两条：Alt＋点击页签、Alt＋点击竖条——它们同样是作者明说的意图（手势＝显式），
   // 变的是入口，没变的是「缺省不许浮出一扇窗」。所以这里把三处来源逐一点名，而不是放开计数。
@@ -773,10 +830,10 @@ test('批次61：workspace v3 页轴就位，v2 窗口 API 与旧位置四轴零
   assert.match(app, /function toggleBoardOverlay[\s\S]{0,600}form: 'floating'/u, '索引窗那枚显式悬浮钮仍是浮窗落点之一')
 
   const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
-  for (const needle of ['.nx-page-tabstrip', '.nx-page-tab', '.nx-pane-window.is-page', '.nx-pane-window.is-page.is-in-side', '.nx-pane-window-tab']) {
+  for (const needle of ['.nx-page-tabstrip', '.nx-page-tab', '.nx-pane-window.is-page', '.nx-pane-window.is-page.is-in-side', '.nx-collapse-orb', '.nx-collapse-orb-open', '.nx-pane-snap-preview']) {
     assert.ok(layout.includes(needle), `页底座缺样式落点：${needle}`)
   }
-  for (const gone of ['.nx-overlay-widget', '.nx-overlay-bubble', '.nx-split-side', '.nx-split-main', '.nx-form-bar', '.is-tiled']) {
+  for (const gone of ['.nx-overlay-widget', '.nx-overlay-bubble', '.nx-split-side', '.nx-split-main', '.nx-form-bar', '.is-tiled', '.nx-pane-window-tab']) {
     assert.equal(layout.includes(gone), false, `next-shell.css 还留着退役形态的规则：${gone}`)
   }
 
@@ -824,4 +881,81 @@ test('批次59：布局模板是宿主词汇；folder 有树，web／gallery 没
   assert.equal(index.includes('打开方式'), false, '索引窗不再上报宿主形态菜单')
   assert.equal(index.includes("'context-menu'"), false, '索引窗不再有形态菜单事件')
   assert.ok(index.includes('nx-context-menu'), '大纲／章节自己的右键菜单仍在（内容操作，不是窗口动作）')
+})
+
+test('〔批次76 任务4-4〕遍历点名的六处小命中区：度量声明都过 24 这条线', async () => {
+  // 判据是**度量级**的（jsdom 没有排版，量不出真实 getBoundingClientRect）：
+  // 逐条取规则体，① 正向钉住补上去的那一档尺寸，② 反向扫「声明了的 px 尺寸不许 < 24」。
+  // 真机逐屏复测（<24×24 计数）仍记在「未真机复核」的账上，不由这条测试冒充。
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  const scoped = async (file) => stripComments(await readFile(join(shellDir, file), 'utf-8'))
+  const rules = [
+    ['next-shell.css · 关闭这一页（实测 20×36）', layout, '.nx-page-tab-close {', /width:\s*24px/u],
+    ['next-shell.css · 快捷词入口（实测 45×22）', layout, '.nx-tools-toggle {', /min-height:\s*24px/u],
+    ['next-shell.css · 快捷词 chip（同族）', layout, '.nx-tools-chip {', /min-height:\s*24px/u],
+    ['next-shell.css · 可点双链（inline 锚点扩命中区）', layout, '.nx-wikilink {', /padding:\s*3px/u],
+    ['EntriesBoard.vue · 世界书表头「按 X 排序」（实测 20–21×36）', await scoped('EntriesBoard.vue'), '.nx-entries-table th .nx-entries-sort {', /min-height:\s*24px/u],
+    ['IndexWindow.vue · 新建资料（实测 22×22）', await scoped('IndexWindow.vue'), '.nx-index-icon-btn {', /width:\s*24px/u],
+    ['AssistantDialog.vue · 审阅模式徽标（实测 40×23）', await scoped('AssistantDialog.vue'), '.authoring-knowledge__mode-badge {', /min-height:\s*24px/u]
+  ]
+  const offenders = []
+  for (const [label, css, selector, pin] of rules) {
+    const body = ruleBody(css, selector)
+    if (!body) {
+      offenders.push(`${label}：找不到规则 ${selector}`)
+      continue
+    }
+    if (!pin.test(body)) offenders.push(`${label}：规则体里没有 ${pin}`)
+    for (const match of body.matchAll(/(?:^|;)\s*(?:width|height|min-height|min-width)\s*:\s*(\d+)px/gu)) {
+      if (Number(match[1]) < 24) offenders.push(`${label}：还留着 ${match[0].trim()}（<24px）`)
+    }
+  }
+  assert.deepEqual(offenders, [], `小命中区没补到 ≥24×24：\n${offenders.join('\n')}`)
+})
+
+/**
+ * 〔批次77 守卫⑥〕正文渲染单一来源。
+ *
+ * 工单那句话：**对话正文只走 mdRender，出现第二处 Markdown 拼装即红**。
+ * 这条钉三件事，全是源码级（jsdom 量不出排版，视觉对不对归实拍）：
+ *   1. 任何 `.vue` 里有 `v-html=`，它就必须 import `mdRender.mjs`——
+ *      「把字符串当 HTML 塞进 DOM」这个动作在 Next 外壳里只有那一把钥匙；
+ *   2. `marked`／`dompurify` 只许出现在 `mdRender.mjs` 里——第二个解析器＝第二套拼装，
+ *      也是打包门禁 f（渲染层依赖薄）最容易被人顺手绕开的那道口子；
+ *   3. 反向钉住对话正文确实走的是那把钥匙（`answerHtml` → `renderMarkdown`），
+ *      并且**用户消息**没有跟着走 md——作者打的 `**字**` 必须原样回显。
+ */
+test('〔批次77 守卫⑥〕正文渲染单一来源：v-html 只认 mdRender，第二处 Markdown 拼装即红', async () => {
+  const files = (await walk(shellDir)).filter((file) => /\.(?:vue|mjs)$/u.test(file))
+  assert.ok(files.length > 10, 'next/shell 扫描面空了等于没测')
+
+  const offenders = []
+  for (const file of files) {
+    const source = await readFile(file, 'utf-8')
+    const relative = file.slice(shellDir.length + 1).replace(/\\/gu, '/')
+    if (file.endsWith('.vue') && /v-html[=\s]/u.test(source) && !/from '\.{1,2}(?:\/[^']*)?mdRender\.mjs'/u.test(source)) {
+      offenders.push(`${relative}：有 v-html 却没 import mdRender.mjs`)
+    }
+    if (relative !== 'mdRender.mjs' && /\bfrom '(?:marked|dompurify)'/u.test(source)) {
+      offenders.push(`${relative}：直接引了 marked／dompurify（第二处 Markdown 拼装）`)
+    }
+    if (relative !== 'mdRender.mjs' && /\bmarked\.parse\s*\(/u.test(source)) {
+      offenders.push(`${relative}：自己调了 marked.parse`)
+    }
+  }
+  assert.deepEqual(offenders, [], `正文渲染不止一个来源：\n${offenders.join('\n')}`)
+
+  // 正向：助手正文那条路径确实存在（改名或退回纯文本插值，这里就红）。
+  const dialog = await readFile(join(shellDir, 'AssistantDialog.vue'), 'utf-8')
+  assert.match(dialog, /function answerHtml[\s\S]{0,120}renderMarkdown\(/u, '助手正文没走 renderMarkdown')
+  assert.match(
+    dialog,
+    /class="[^"]*authoring-knowledge__answer-text[^"]*authoring-knowledge__markdown[\s\S]{0,160}v-html="answerHtml\(message\.text\)"/u,
+    '助手正文容器不是 md 版（v-html＋markdown 类名都要在）'
+  )
+  // 反向：用户消息保持纯文本插值——它不该被当成 Markdown。
+  const questionBlock = dialog.match(/<div class="authoring-knowledge__question"[\s\S]*?<\/div>/u)?.[0] ?? ''
+  assert.ok(questionBlock.length > 0, '找不到用户消息那一块（结构变了要连这条一起改）')
+  assert.equal(/v-html/u.test(questionBlock), false, '用户消息走了 v-html：作者打的标记符号会被改写')
+  assert.match(questionBlock, /\{\{ message\.text \}\}/u, '用户消息不再是原样插值')
 })

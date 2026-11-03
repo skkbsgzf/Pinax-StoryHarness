@@ -59,6 +59,39 @@ export function serializeToolOutput(result) {
   return String(text ?? '')
 }
 
+/**
+ * 本轮 token 用量累加（批次77 任务2）。
+ *
+ * 上游那份是 `forwardComplete` 归一化后的 `{ inputTokens, outputTokens, totalTokens }`
+ * （server/services/kitModelGateway.js:225 同款形状），有的网关整块回报 null 或全 0。
+ * 口径：**只加真回报**。一次都没回报时 `usageOf` 回 null——上层据此显示「本轮未回报用量」，
+ * 不许用字数估算冒充 token（作者纪律：不自设数值当事实）。
+ */
+export function createUsageTally() {
+  return { input: 0, output: 0, total: 0, rounds: 0, reported: 0 }
+}
+
+export function absorbUsage(tally, usage) {
+  if (!tally) return tally
+  const input = Number(usage?.inputTokens ?? 0)
+  const output = Number(usage?.outputTokens ?? 0)
+  const total = Number(usage?.totalTokens ?? input + output)
+  if (![input, output, total].every((value) => Number.isFinite(value) && value >= 0)) return tally
+  tally.rounds += 1
+  if (input <= 0 && output <= 0 && total <= 0) return tally
+  tally.input += input
+  tally.output += output
+  tally.total += total
+  tally.reported += 1
+  return tally
+}
+
+/** 汇总结果：一条真回报都没有 → null（不是 0）。 */
+export function usageOf(tally) {
+  if (!tally || tally.reported <= 0) return null
+  return { input: tally.input, output: tally.output, total: tally.total, rounds: tally.rounds }
+}
+
 function clampOutput(text, limit) {
   const cap = Number.isSafeInteger(limit) && limit > 0 ? limit : 7200
   if (text.length <= cap) return text
@@ -136,9 +169,12 @@ export function createToolLoop({
      * @param {string} [input.writeMode] 写模式（policy 是工厂时按这一问现造）
      * @param {string} [input.runId]
      * @param {Function} [input.onEvent] 单次提问的事件口，优先于创建时的 onEvent
+     * @param {Function} [input.abort] 取消谓词（批次77 任务3）：返回 true 就在**轮次边界**收手。
+     *        粒度只能到轮——模型那一回合的 HTTP 请求已经在路上，运行时不假装能把它掐回来。
      */
-    async run({ question = '', envelope = null, tools = [], skill = null, writeMode = null, runId = null, onEvent: perRunEvent = null } = {}) {
+    async run({ question = '', envelope = null, tools = [], skill = null, writeMode = null, runId = null, onEvent: perRunEvent = null, abort = null } = {}) {
       const emit = safeEmitter(typeof perRunEvent === 'function' ? perRunEvent : onEvent)
+      const stoppedFor = typeof abort === 'function' ? () => { try { return abort() === true } catch { return false } } : () => false
       // policy 既可以是现成对象（单测），也可以是工厂（真实链：每一问的写模式不同，不能共用一份）。
       const activePolicy = typeof policy === 'function' ? policy({ writeMode }) : policy
       const chain = chainFor(activePolicy)
@@ -157,14 +193,23 @@ export function createToolLoop({
       const rounds = []
       const steps = []
       const callsLog = []
+      const usageTally = createUsageTally()
 
       for (let step = 1; step <= maxSteps; step += 1) {
+        // 轮次边界的取消闸（批次77 任务3）：作者按下停止后，正在跑的这一轮照常跑完，
+        // 下一轮不再发起。stoppedAt 是「已经跑完的轮数」，界面据此说「第 N 轮后不再续轮」。
+        if (stoppedFor()) {
+          const stoppedAt = step - 1
+          emit({ stage: 'stopped', step: stoppedAt, runId })
+          return { kind: 'stopped', stoppedAt, text: '', steps, calls: callsLog, dropped, usage: usageOf(usageTally) }
+        }
         emit({ stage: 'step', step, tools: [...declared], runId })
         const response = await turn({ messages: buildMessages(base, rounds, maxMessages), tools: toolDefs, options: {}, writeMode, runId })
+        absorbUsage(usageTally, response?.usage)
         const rawCalls = Array.isArray(response?.calls) ? response.calls : []
         const kind = response?.kind ?? (rawCalls.length ? 'tool_calls' : 'final_ready')
         if (kind !== 'tool_calls' || !rawCalls.length) {
-          return { kind: 'final', text: String(response?.text ?? ''), steps, calls: callsLog, dropped }
+          return { kind: 'final', text: String(response?.text ?? ''), steps, calls: callsLog, dropped, usage: usageOf(usageTally) }
         }
 
         const calls = []
@@ -181,7 +226,7 @@ export function createToolLoop({
           calls.push({ id, name, arguments: args })
         }
         if (!calls.length) {
-          return { kind: 'final', text: '', steps, calls: callsLog, dropped }
+          return { kind: 'final', text: '', steps, calls: callsLog, dropped, usage: usageOf(usageTally) }
         }
 
         const assistant = {
@@ -258,7 +303,7 @@ export function createToolLoop({
       }
 
       // 步数用尽：不编总结。上层如实告诉作者「这一步还没收敛」。
-      return { kind: 'step-budget', text: '', steps, calls: callsLog, dropped }
+      return { kind: 'step-budget', text: '', steps, calls: callsLog, dropped, usage: usageOf(usageTally) }
     }
   }
 }

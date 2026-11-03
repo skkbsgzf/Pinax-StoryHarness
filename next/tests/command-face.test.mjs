@@ -21,8 +21,14 @@ import {
   HOTKEYS_FILE,
   HOTKEYS_FILENAME,
   HOTKEYS_VERSION,
+  CHAT_HOTKEY_IDS,
+  HOTKEY_CHAT_MODE,
+  HOTKEY_CHAT_OPEN,
+  HOTKEY_CHAT_SEND,
+  HOTKEY_CHAT_STOP,
   HOTKEY_COLLAPSE_TOP,
   HOTKEY_PALETTE_OPEN,
+  HOTKEY_SKILL_MENU,
   STANDALONE_KEYS,
   acceleratorFromEvent,
   acceleratorLabel,
@@ -163,8 +169,20 @@ test('批次62 默认键位：面板 Ctrl+P、提案审阅 Ctrl+Shift+R（Q3 让
   assert.equal(bindings[HOTKEY_PALETTE_OPEN], 'CmdOrCtrl+P')
   assert.equal(bindings[HOTKEY_COLLAPSE_TOP], 'Esc')
   assert.equal(bindings['project.reviewProposals'], 'CmdOrCtrl+Shift+R')
-  assert.deepEqual(bindableIds().sort(), ['project.reviewProposals', HOTKEY_COLLAPSE_TOP, HOTKEY_PALETTE_OPEN].sort(),
-    '本批只收编点名的高频项；偷偷多收一条＝动了没被授权的键位')
+  // 〔批次77 任务3 判据反转，理由在此〕原来这条钉的是「只有三条」——那是批次62 的收编进度，
+  // 不是永久合同。工单任务3 第 5 条明写「快捷键白名单扩到 6 条并走既有 hotkeys.mjs 持久化」，
+  // 对话面五条键位必须有 id 才能落盘与改键，所以白名单按工单点名扩到 8 条（3 老 + 5 新）。
+  // 判据从「条数不许变」换成「只许是这批点名的这八条」：多一条仍然红，少一条也红。
+  assert.deepEqual(bindableIds().sort(), [
+    'project.reviewProposals',
+    HOTKEY_COLLAPSE_TOP,
+    HOTKEY_PALETTE_OPEN,
+    HOTKEY_CHAT_OPEN,
+    HOTKEY_CHAT_SEND,
+    HOTKEY_CHAT_STOP,
+    HOTKEY_CHAT_MODE,
+    HOTKEY_SKILL_MENU
+  ].sort(), '白名单＝批次62 三条 ∪ 批次77 对话面五条：没点名的命令仍然进不来')
 
   // Q3 裁定的另一半：Ctrl+Shift+P 让给面板，菜单里不许再挂着那把旧键。
   const accelerators = flattenMenuEntries(MENU_TEMPLATE).map((entry) => entry.accelerator ?? '')
@@ -174,6 +192,36 @@ test('批次62 默认键位：面板 Ctrl+P、提案审阅 Ctrl+Shift+R（Q3 让
   assert.equal(acceleratorLabel('CmdOrCtrl+Shift+R'), 'Ctrl+Shift+R')
   assert.equal(acceleratorLabel('CmdOrCtrl+Shift+R', { mac: true }), '⌘⇧R')
   assert.equal(acceleratorLabel('垃圾写法'), '')
+})
+
+test('〔批次77 任务3〕对话面五条键位：默认表自洽、不与原生菜单撞键、且都归总线（菜单里没有它们）', () => {
+  const bindings = defaultBindings()
+  assert.equal(bindings[HOTKEY_CHAT_OPEN], 'CmdOrCtrl+Shift+A')
+  assert.equal(bindings[HOTKEY_CHAT_SEND], 'CmdOrCtrl+Enter')
+  assert.equal(bindings[HOTKEY_CHAT_STOP], 'CmdOrCtrl+Shift+Enter')
+  assert.equal(bindings[HOTKEY_CHAT_MODE], 'CmdOrCtrl+Shift+M')
+  assert.equal(bindings[HOTKEY_SKILL_MENU], 'CmdOrCtrl+/')
+  assert.equal(findHotkeyConflicts(bindings).length, 0, '默认表自己不许冲突（发送与停止只差一个 Shift，等价类判定要认得它们是两下按键）')
+  assert.equal(findHotkeyConflicts({ [HOTKEY_CHAT_SEND]: 'CmdOrCtrl+Enter', [HOTKEY_CHAT_STOP]: 'Ctrl+Enter' }).length, 1,
+    'CmdOrCtrl+Enter 与 Ctrl+Enter 在非 mac 上是同一下按键：跨档撞车必须被抓出来')
+
+  // 新键位不许踩原生菜单已经占着的那把键（菜单 accelerator 不在可绑定表里，冲突判定看不见它们）。
+  const menuAccelerators = new Set(flattenMenuEntries(MENU_TEMPLATE).map((entry) => entry.accelerator ?? '').filter(Boolean))
+  for (const id of CHAT_HOTKEY_IDS) {
+    const canonical = normalizeAccelerator(bindings[id])
+    assert.ok(canonical, `${id} 的默认键位「${bindings[id]}」不是合法写法`)
+    assert.equal(menuAccelerators.has(canonical), false, `${id} 的 ${canonical} 与某条菜单项撞键`)
+    assert.equal(menuAccelerators.has(canonical.replace('CmdOrCtrl', 'Ctrl')), false, `${id} 在 Windows 上按出去的那一下与菜单撞键`)
+  }
+
+  // 五条都不在菜单模板里 → 不是 nativeAccelerated：总线是唯一生效点（对话框那个监听读的就是这张表）。
+  const native = new Set(nativeAcceleratedIds())
+  for (const id of CHAT_HOTKEY_IDS) assert.equal(native.has(id), false, `${id} 不该被原生菜单直办`)
+  assert.equal(matchHotkey({ key: 'a', ctrlKey: true, shiftKey: true }, bindings), HOTKEY_CHAT_OPEN, 'Ctrl+Shift+A 命中唤起对话')
+  assert.equal(matchHotkey({ key: 'Enter', ctrlKey: true }, bindings), HOTKEY_CHAT_SEND, '不带 Shift 的 Ctrl+Enter 是发送')
+  assert.equal(matchHotkey({ key: 'Enter', ctrlKey: true, shiftKey: true }, bindings), HOTKEY_CHAT_STOP, '带 Shift 才是停止：两下按键不许混成一条')
+  assert.equal(matchHotkey({ key: '/', ctrlKey: true }, bindings), HOTKEY_SKILL_MENU)
+  assert.equal(matchHotkey({ key: 'm', ctrlKey: true, shiftKey: true }, bindings), HOTKEY_CHAT_MODE, 'mac 那一侧 CmdOrCtrl 摊成 Cmd 也要按得响')
 })
 
 test('批次62 键位串规范化：作者手写的档收成同一套 Electron 词汇，认不懂的回 null 不猜', () => {

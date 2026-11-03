@@ -270,6 +270,33 @@ let historyWired = false
 /** 历史定时调度（D1）：单例；项目打开后绑定，关窗前兜底提交。 */
 const historyScheduler = createHistoryScheduler()
 
+/**
+ * 外壳侧的记账口（批次69 任务2：不许有「吞掉而不留名」的 promise）。
+ * 菜单回调／窗口打开处理器／before-quit 都是模块级的，拿不到 startNextShell 里才建出来的公共池，
+ * 所以装配期把池引用写死在这里（`shellServiceLogPool = serviceLogPool`）；
+ * 池还没建好时发生的账先进本地环，建好后同一份账并进池——一条都不丢。
+ */
+const SHELL_ACCOUNT_LIMIT = 50
+const SHELL_RUNTIME_DRAIN_MS = 3000
+const shellAccountRing = []
+let shellServiceLogPool = null
+/** 会话句柄：只有 before-quit 的退役链用它（别的层都各有自己的引用，不从这里绕）。 */
+let shellRuntime = null
+
+function noteShellAccounting(level, message, data = {}) {
+  const line = { at: new Date().toISOString(), level, message: String(message), data }
+  shellAccountRing.push(line)
+  while (shellAccountRing.length > SHELL_ACCOUNT_LIMIT) shellAccountRing.shift()
+  if (shellServiceLogPool?.append) {
+    try {
+      shellServiceLogPool.append({ source: { kind: 'service', id: 'shell', carrierId: null }, level, message: String(message), data })
+    } catch {
+      // 记账失败不改变这条账本身——本地环里已经留下了。
+    }
+  }
+  return line
+}
+
 function sendToRenderer(channel, payload) {
   if (window_ && !window_.isDestroyed()) window_.webContents.send(channel, payload)
 }
@@ -283,7 +310,15 @@ function buildMenu() {
         ...item,
         click: () => {
           sendToRenderer(IPC_EVENT.menuInvoked, { id: item.id })
-          dispatcher?.dispatch(IPC_CHANNELS.menuInvoke, { id: item.id }).catch(() => {})
+          // 菜单这一侧不 await：点了就要立刻回，不能让原生菜单等一次 IPC。
+          // 但不 await ≠ 不接住——拒绝一律进「服务与通知」池留名（批次69 任务2）。
+          dispatcher?.dispatch(IPC_CHANNELS.menuInvoke, { id: item.id })
+            .then((result) => {
+              if (result?.ok) return
+              noteShellAccounting('warn', `菜单指令 ${item.id} 的分发回执是失败：${result?.error?.message ?? '未知原因'}`, { id: item.id, code: result?.error?.code ?? null })
+            }, (error) => {
+              noteShellAccounting('error', `菜单指令 ${item.id} 的分发抛错：${String(error?.message ?? error)}`, { id: item.id })
+            })
         }
       }
     })
@@ -321,7 +356,10 @@ function createWindow(preloadPath, uiZoom, theme) {
     console.error('[pinax-next] 窗口已显示')
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url).catch(() => {})
+    // 拦下新窗口、改交系统浏览器。openExternal 失败（协议不允许／无默认程序）要留名，不能静默什么都不发生。
+    shell.openExternal(url).then(null, (error) => {
+      noteShellAccounting('warn', `外链交给系统浏览器失败：${String(error?.message ?? error)}`, { url })
+    })
     return { action: 'deny' }
   })
   return win
@@ -645,6 +683,18 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   })
   // 批次51：回卷失败也要进公共池留痕——注册表建在会话里，池在会话外，创建后交进去。
   session.registry?.setServiceLogPool?.(serviceLogPool)
+  // 批次69：把池与会话交给模块级记账口——菜单／外链／before-quit 这三处都在 startNextShell 外面，
+  // 没有这两句它们就只能把失败悄悄丢掉（那正是工单禁止的「吞错误不记账」）。
+  shellServiceLogPool = serviceLogPool
+  shellRuntime = { session }
+  for (const line of shellAccountRing.filter((item) => !item.pooled)) {
+    line.pooled = true
+    try {
+      serviceLogPool.append({ source: { kind: 'service', id: 'shell', carrierId: null }, level: line.level, message: line.message, data: line.data })
+    } catch {
+      // 池拒收（封顶淘汰）不影响本地环里的那条账。
+    }
+  }
   // 批次63 收编a：hotkeysLoad/Save 两通道落真盘。通道读的是 `session.loadHotkeys/saveHotkeys`
   // （与 session.loadWorkspace 同一形状），存储实例由这一层建——渲染层与内核都碰不到 fs。
   // 没有项目根时如实报缺（与工作区／配置的同一句口径），不回一张假默认表糊过去。
@@ -822,9 +872,52 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// 关窗兜底（D1）：先补一次历史快照再退出。
-// 最多等 10 秒——仓库/磁盘异常也不能把应用卡死在退出流程里；超时照样退出。
+// 关窗兜底（D1）：先补一次历史快照，再把运行时按 drain 规矩退役，最后退。
+// 历史那一段最多等 10 秒——仓库/磁盘异常也不能把应用卡死在退出流程里；超时照样退出。
 let quittingAfterHistory = false
+
+/**
+ * 关窗前的运行时退役（批次69）：会话的进程内 MCP 链路带在途请求关闭是那条偶发红的源头，
+ * 所以这里给它一条明确的收口顺序——先让在途工具调用落定（transportInProcess 的 drain，上限 2 秒），
+ * 超时才硬关；整段再套一层外壳侧的墙（比 drain 上限多 1.5 秒），退出流程永远不该被一次卡住的文件写钉死。
+ * 本函数不抛：任何一段的结果与失败都写成「服务与通知」池里的一条账。
+ */
+async function retireShellRuntime() {
+  const handle = shellRuntime
+  shellRuntime = null
+  if (!handle?.session) return null
+  const guardMs = SHELL_RUNTIME_DRAIN_MS + 1500
+  const outcome = await Promise.race([
+    handle.session.close().then((result) => ({ kind: 'closed', result }), (error) => ({ kind: 'thrown', error })),
+    new Promise((resolveDeadline) => {
+      const timer = setTimeout(() => resolveDeadline({ kind: 'shell-timeout' }), guardMs)
+      timer.unref?.()
+    })
+  ])
+  if (outcome.kind === 'closed' && outcome.result?.ok) {
+    // 报告形状（next/index.mjs 的 close 链）：{ stopped, errors[], drain: { pendingAtClose, waitedMs, forced, forcedLabels[], errors[] } }
+    const stop = outcome.result.value?.runtime ?? null
+    const drain = stop?.drain ?? null
+    const lines = [...(stop?.errors ?? []), ...(drain?.errors ?? [])]
+    const forced = drain?.forced ?? 0
+    if (forced || lines.length) {
+      noteShellAccounting('warn', `退出时的运行时退役有账要留：硬关 ${forced} 条在途请求（${(drain?.forcedLabels ?? []).join('、') || '未记名'}）、drain 等了 ${drain?.waitedMs ?? 0}ms${lines.length ? `；另有 ${lines.length} 条关闭失败：${lines.slice(0, 3).join('；')}` : ''}`, {
+        pendingAtClose: drain?.pendingAtClose ?? 0,
+        forced,
+        waitedMs: drain?.waitedMs ?? 0,
+        errors: lines
+      })
+    }
+    return stop
+  }
+  if (outcome.kind === 'shell-timeout') {
+    noteShellAccounting('error', `退出时的运行时退役超过 ${guardMs}ms 未落定，放弃等待直接退出（drain 上限 ${SHELL_RUNTIME_DRAIN_MS}ms 之外的兜底）`, { guardMs })
+    return null
+  }
+  noteShellAccounting('error', `退出时的运行时退役失败：${String(outcome.error?.message ?? outcome.result?.error?.message ?? outcome.result ?? '未知')}`, { kind: outcome.kind })
+  return null
+}
+
 app.on('before-quit', (event) => {
   if (quittingAfterHistory) return
   quittingAfterHistory = true
@@ -834,7 +927,9 @@ app.on('before-quit', (event) => {
     timer.unref?.()
   })
   Promise.race([historyScheduler.beforeQuit(), deadline])
-    .catch(() => {})
+    .catch((error) => noteShellAccounting('error', `关窗前的历史兜底失败：${String(error?.message ?? error)}`, { stage: 'history-before-quit' }))
+    .then(() => retireShellRuntime())
+    .catch((error) => noteShellAccounting('error', `关窗前的运行时退役抛错：${String(error?.message ?? error)}`, { stage: 'runtime-before-quit' }))
     .finally(() => app.quit())
 })
 

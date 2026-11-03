@@ -54,6 +54,7 @@ import { buildEntryTokenMap, linkifyEntryNames } from './wikiLinks.mjs'
  * 批次33（作者 2026-10-30 裁定）把第 2 条的「头部」再收一刀——文档头只放一个标题：
  *   「作为一个 doc 来说，就是标题栏放一个标题，其他东西就不用放了，最多在底部放一些提示。」
  *   1. 头部只剩一行 .doc-title（章节名／条目名／资料名／剧本名／规则名／提案文件名）；
+ *      〔批次76 裁定A 已改判本条：这一行整体上移成窗头「载体 · 文档」，内容层不再自绘，见文末〕
  *      「正文」「演示之书 · novel」那层身份与项目名都不在文档头里再念一遍——
  *      载体身份在竖条上，项目名在标题栏；
  *   2. 写作面聚焦不再套蓝框（.editor-area 的 outline 规则已拆，焦点指示就是光标）。
@@ -65,6 +66,15 @@ import { buildEntryTokenMap, linkifyEntryNames } from './wikiLinks.mjs'
  *   2. 底部 .doc-meta-hint 不再摆路径 · 第 N 版 · N 字 · 节点数这些开发者信息，
  *      只留作者用得上的：有没有没落盘的改动、是不是只载入了前段、条目自己的关键词与摘要；
  *   3. 改动会自己落盘（自动保存，见 useBoardData）：作者不该靠记忆去按 Ctrl+S。
+ *
+ * 批次76（作者 2026-11-03 看完真窗口遍历后的〔裁定A〕）**改判批次33 的第 1 条**：
+ *   「我们只需要确保打开的第一章，在显示的时候是"小说 第一章"就行，避免冗余层级。」
+ *   ——标题面从「文档头那一行」上移成「窗头那一行」：窗头统一 `${载体名} · ${文档名}`（AppNext.windowTitle），
+ *   本组件**不再自绘 `h2.doc-title`**，正文／条目正文从第一行开始。`.doc-head` 容器留着，
+ *   因为右侧的保存 chip／编辑／工具那些动作还得有个落脚的行。
+ *   〔大纲面例外〕`input.doc-title`（改节点名的输入框）保留——它是**控件**不是标题层级，撤了作者就没法改名；
+ *   读态那一行 `h2 outline-reading-title` 同样撤掉，节点名归窗头。
+ *   〔状态栏例外〕底部 StatusBar 的 doc 读数（名字＋字数）保留：那是读数行，不是第二层标题。
  */
 const props = defineProps({
   pane: { type: Object, default: null },
@@ -960,7 +970,6 @@ function actOnSaveChip() {
     <template v-if="viewKind === 'chapter-editor'">
       <div v-if="data.chapter" class="editor">
         <div class="doc-head">
-          <h2 class="doc-title">{{ data.chapter.title }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -1288,7 +1297,6 @@ function actOnSaveChip() {
     <template v-else-if="viewKind === 'notes-editor'">
       <div v-if="data.note" class="editor">
         <div class="doc-head">
-          <h2 class="doc-title">{{ data.note.title }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -1334,7 +1342,6 @@ function actOnSaveChip() {
             title="改名、备注、增删与排序都先记在草稿上，改完自动落盘（Ctrl+S 可立刻存）"
             @input="data.setOutlineNodeTitle(data.outlineNodeIndex, $event.target.value)"
           >
-          <h2 v-else class="doc-title" data-test="outline-reading-title">{{ data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? '' }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -1370,11 +1377,8 @@ function actOnSaveChip() {
          采纳＝按此刻的章节修订号走载体 save（写入为新一版），弃用＝删提案文件；两者都不静默合并。 -->
     <template v-else-if="viewKind === 'proposal-review'">
       <div v-if="data.proposal" class="editor proposal-review">
-        <!-- 头部同样归一（批次33）：一行标题「提案审阅 · 文件名」，meta 沉到正文之下。
-             两版对照的框保留（P18 第 5 条豁免：两份文档需要视觉分隔）。 -->
-        <div class="doc-head">
-          <h2 class="doc-title">提案审阅 · {{ data.proposal.name ?? data.proposal.target?.file ?? '提案' }}</h2>
-        </div>
+        <!-- 〔批次76 裁定A〕这一面的「提案审阅 · 文件名」整行撤了：窗头已经是「小说 · 提案名」，
+             再摆一行就是同一份文档名在同屏念第二遍。两版对照的框保留（P18 第 5 条豁免：两份文档需要视觉分隔）。 -->
         <p v-if="data.proposal.note" class="pane-hint proposal-note">提案说明：{{ data.proposal.note }}</p>
         <div class="proposal-stack">
           <section class="proposal-panel">
@@ -1418,7 +1422,6 @@ function actOnSaveChip() {
     <template v-else-if="viewKind === 'rule-editor'">
       <div v-if="data.rule" class="editor">
         <div class="doc-head">
-          <h2 class="doc-title">{{ data.rule.title }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -1543,7 +1546,6 @@ function actOnSaveChip() {
       </section>
       <div v-if="data.document" class="entry-body">
         <div class="doc-head">
-          <h2 class="doc-title">{{ data.document.title }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -1577,7 +1579,6 @@ function actOnSaveChip() {
     <template v-else-if="viewKind === 'script-editor'">
       <div v-if="data.script" class="entry-body">
         <div class="doc-head">
-          <h2 class="doc-title">{{ data.script.title }}</h2>
           <span class="nx-pane-actions">
             <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
               <span class="nx-save-chip-state">{{ saveChipText }}</span>
@@ -1612,7 +1613,6 @@ function actOnSaveChip() {
     <template v-else-if="viewKind === 'records-editor'">
       <div v-if="data.record && recordCarrier" class="entry-body">
         <div class="doc-head">
-          <h2 class="doc-title">{{ data.record.title || data.record.id }}</h2>
           <span class="nx-pane-actions">
             <!-- 漫画预览（批次49）：服务在跑才给链接；不在跑就禁用并说明原因。 -->
             <template v-if="recordCarrier?.key === 'comic'">

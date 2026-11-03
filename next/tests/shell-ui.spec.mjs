@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import AppNext from '../shell/AppNext.vue'
 import ActivityRail from '../shell/ActivityRail.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
+import AssistantDialog from '../shell/AssistantDialog.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
 import { hostWorkspace, resetWorkspace } from '../shell/workspace.mjs'
@@ -325,6 +326,357 @@ describe('运行时栏', () => {
     wrapper.unmount()
   })
 
+  /**
+   * 〔批次77 任务1〕助手正文是 Markdown，用户消息不是。
+   * 这条同时钉三件：① md 真的渲染成了元素（不是把 ** 显示出来）；
+   * ② 作者自己打的那几个字原样回显（复制回去不能变味）；
+   * ③ v-html 的安全边界由 mdRender 那把钥匙守着——脚本与事件属性不许进 DOM。
+   */
+  it('助手正文走 Markdown：粗体／列表／代码块出真元素，用户消息原样是文本，脚本被剥（批次77 任务1）', async () => {
+    const answer = ['总结三件事：', '', '**节奏**拖了', '', '- 第一章：开门', '- 第二章：关门', '', '代码：`pinax_chapter_read`'].join('\n')
+      + '\n\n<script>alert(1)</script>\n\n<img src="x" onerror="alert(2)">'
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: answer } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('帮我梳理 **三件事**')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    const body = wrapper.find('.authoring-knowledge__answer-text')
+    expect(body.classes()).toContain('authoring-knowledge__markdown')
+    expect(body.find('strong').text()).toBe('节奏')
+    expect(body.findAll('li')).toHaveLength(2)
+    expect(body.find('code').text()).toBe('pinax_chapter_read')
+    // 转义断言：源码里的 `**` 不该以字面形式出现在渲染后的正文里。
+    expect(body.text()).not.toContain('**')
+
+    const question = wrapper.find('.authoring-knowledge__question')
+    expect(question.text()).toContain('帮我梳理 **三件事**')
+    expect(question.find('strong').exists()).toBe(false)
+
+    // 清洗：marked 宽松到不剥 script／on*，穿透与否由 mdRender 的 sanitize 决定。
+    const container = body.element
+    expect(container.querySelector('script')).toBe(null)
+    expect(container.innerHTML).not.toMatch(/onerror/iu)
+    expect([...container.querySelectorAll('img')].every((img) => !img.hasAttribute('onerror'))).toBe(true)
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77 任务1 附带〕正文里的外链不能把外壳导航掉。
+   * 主进程只装了 setWindowOpenHandler（main.mjs:358，新窗口→系统浏览器），没有 will-navigate；
+   * 同标签点 <a> 默认行为就是整窗导航，一轮会话没了。所以这里必须：拦默认＋走 window.open。
+   */
+  it('正文里的外链：拦下默认行为并走 window.open，页内锚点不开窗（批次77 任务1）', async () => {
+    const open = vi.spyOn(globalThis.window, 'open').mockReturnValue(null)
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({
+        ok: true,
+        value: { source: 'in-process-runner', text: '详见[官方文档](https://example.com/guide)，或看[锚点](#top)' }
+      })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('链接怎么走')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    // 用真事件（cancelable）而不是 VTU 的 trigger：要判的就是 defaultPrevented。
+    const links = [...wrapper.find('.authoring-knowledge__markdown').element.querySelectorAll('a[href]')]
+    expect(links).toHaveLength(2)
+    const external = new globalThis.window.MouseEvent('click', { bubbles: true, cancelable: true })
+    links[0].dispatchEvent(external)
+    expect(external.defaultPrevented).toBe(true)
+    expect(open).toHaveBeenCalledWith('https://example.com/guide', '_blank', 'noopener,noreferrer')
+
+    open.mockClear()
+    const anchor = new globalThis.window.MouseEvent('click', { bubbles: true, cancelable: true })
+    links[1].dispatchEvent(anchor)
+    expect(anchor.defaultPrevented).toBe(true)
+    expect(open).not.toHaveBeenCalled()
+    open.mockRestore()
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77 任务2〕用量从主进程流到屏上这一条链，全程只认「回报的数」。
+   * 链路：toolTurn 把网关归一过的 usage 交出来 → toolLoop 累计（只累真回报的轮）→
+   * runnerAdvisor 挂到返回值 → agentRuntime 摊进 value → RuntimeDock 存进会话 → 界面读 message.usage。
+   * 这里钉的是最后两环：chip 显的是那一轮的原数，会话级那一格取的是最近一条真带 usage 的回答。
+   */
+  it('批次77 任务2：上游回报的用量走到屏上——回答带 chip，会话格取最近一轮，存的那条带 runId／usage／status', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({
+        ok: true,
+        value: {
+          source: 'in-process-runner',
+          text: '第二章的节奏拖了。',
+          askId: 'ask-42',
+          usage: { input: 1200, output: 380, total: 1580, rounds: 2 }
+        }
+      })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('现在几章？')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="usage-chip"]').text()).toBe('1200 in／380 out')
+    expect(wrapper.find('[data-test="usage-chip"]').attributes('title')).toBe('本轮模型回报的用量')
+    expect(wrapper.find('[data-test="session-usage"]').text()).toContain('最近一轮 1200 in／380 out（计 1580）')
+
+    // 状态那一格走的是 messageStatus 唯一读判口；老数据没有 status 字段也读得出「已完成」。
+    const status = wrapper.find('.authoring-knowledge__answer-status')
+    expect(status.text()).toBe('已完成')
+    expect(status.attributes('data-status')).toBe('completed')
+
+    // 落到会话里的那一条必须带上同一些事实（刷新后还能说得出这一轮是谁跑的、报了多少）。
+    const stored = wrapper.findComponent(AssistantDialog).props('messages').at(-1)
+    expect(stored.role).toBe('agent')
+    expect(stored.runId).toBe('ask-42')
+    expect(stored.usage).toEqual({ input: 1200, output: 380, total: 1580 })
+    expect(stored.status).toBe('completed')
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77 守卫⑦〕缺 usage 时不许显示 0。
+   * 这一条是负断言，也是本任务最容易作弊的地方：一个 `?? 0` 就能让 chip 看起来「有数」，
+   * 但那是在告诉作者这一轮花了 0 token。字数更不是 token，不许换算。
+   * 顺手把「出错」那一格钉了：失败的回答状态读作 error，不是 completed。
+   */
+  it('〔批次77 守卫⑦〕上游没回报用量就说「本轮未回报用量」，DOM 里不许出现 0 tokens；失败那条读作出错', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '第三章更好。' } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('再看一下')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    const chip = wrapper.find('[data-test="usage-chip"]')
+    expect(chip.text()).toBe('本轮未回报用量')
+    expect(chip.attributes('title')).toBe('上游这一轮没有回报用量')
+    // 负断言：屏上任何地方都不许出现「0 tokens」，也不许出现「0 in／0 out」这种假数。
+    expect(wrapper.text()).not.toContain('0 tokens')
+    expect(wrapper.text()).not.toContain('0 in')
+    // 会话级那一格没有数就不画——留一格 0 比不画更坏。
+    expect(wrapper.find('[data-test="session-usage"]').exists()).toBe(false)
+    expect(wrapper.findComponent(AssistantDialog).props('messages').at(-1).usage).toBe(null)
+    wrapper.unmount()
+
+    // 被内核拒绝的那一问：状态读作「出错」（老的 failed 布尔还在，靠 messageStatus 归一到闭集）。
+    const refusing = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: false, error: { code: 'PINAX_DEPENDENCY_UNMET', message: '未接模型运行器（runner）' } })
+    })
+    const second = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge: refusing } })
+    await second.find('.authoring-knowledge__input-row textarea').setValue('随便问')
+    await second.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    expect(second.find('.authoring-knowledge__answer-status').text()).toBe('出错')
+    expect(second.find('.authoring-knowledge__answer-status').attributes('data-status')).toBe('error')
+    // 出错那条不许长出「重新生成」：它没有可重跑的回答体，重试钮在错误行里（既有口径）。
+    expect(second.find('[data-test="answer-regenerate"]').exists()).toBe(false)
+    second.unmount()
+  })
+
+  /**
+   * 〔批次77 任务2〕复制：写进剪贴板的是**原文**（Markdown 源码），不是渲染后的 HTML；
+   * 成功后 aria-label 与 title 同步转「已复制」，失败（没有剪贴板）什么都不假装。
+   * 中文口径进用例：屏上的动作件靠这两个属性被读屏念出来，字改了就是界面改了。
+   */
+  it('批次77 任务2：复制问句与回答走原文，成功后标签转「已复制」，没有剪贴板时不变形', async () => {
+    const writeText = vi.fn(async () => {})
+    Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '**节奏**拖了' } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('帮我梳理 **三件事**')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    const answerCopy = wrapper.find('[data-test="answer-copy"]')
+    expect(answerCopy.attributes('aria-label')).toBe('复制这条回答')
+    expect(answerCopy.attributes('title')).toBe('复制这条回答')
+    await answerCopy.trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenLastCalledWith('**节奏**拖了')
+    expect(wrapper.find('[data-test="answer-copy"]').attributes('aria-label')).toBe('已复制')
+    expect(wrapper.find('[data-test="answer-copy"]').attributes('title')).toBe('已复制')
+
+    const questionCopy = wrapper.find('[data-test="question-copy"]')
+    expect(questionCopy.attributes('aria-label')).toBe('复制这句提问')
+    await questionCopy.trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenLastCalledWith('帮我梳理 **三件事**')
+    wrapper.unmount()
+
+    // 没有剪贴板（主进程未授权／环境不支持）：点下去不报错、标签不动、不弹「已复制」的谎。
+    delete globalThis.navigator.clipboard
+    const blind = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '再答一次' } })
+    })
+    const second = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge: blind } })
+    await second.find('.authoring-knowledge__input-row textarea').setValue('第二问')
+    await second.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    await second.find('[data-test="answer-copy"]').trigger('click')
+    await flushPromises()
+    expect(second.find('[data-test="answer-copy"]').attributes('aria-label')).toBe('复制这条回答')
+    second.unmount()
+  })
+
+  /**
+   * 〔批次77 任务2〕编辑重发：回填输入框＋截掉这一条之后的历史（截断走 store.dropFrom 唯一入口）。
+   * 负断言钉的是乐观失效保护：动作条是 hover 才显形的，点下去那一下会话可能已经变了，
+   * 原文／时间戳对不上就必须一个字节都不动——否则一次过期点击会把作者的历史截没。
+   */
+  it('批次77 任务2：编辑重发回填原文并截掉之后的历史，对不上原文的过期点击不动一个字节', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '答完就走' } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    const ask = async (text) => {
+      await wrapper.find('.authoring-knowledge__input-row textarea').setValue(text)
+      await wrapper.find('.authoring-knowledge__send').trigger('click')
+      await flushPromises()
+    }
+    await ask('第一问')
+    await ask('第二问')
+
+    const dialog = wrapper.findComponent(AssistantDialog)
+    const before = dialog.props('messages')
+    expect(before.map((message) => message.role)).toEqual(['user', 'agent', 'user', 'agent'])
+
+    const editButtons = wrapper.findAll('[data-test="question-edit"]')
+    expect(editButtons).toHaveLength(2)
+    expect(editButtons[0].attributes('title')).toBe('编辑重发（这条之后的历史会截断）')
+    expect(editButtons[0].attributes('aria-label')).toBe('编辑重发')
+
+    const firstQuestion = before[0]
+    await editButtons[0].trigger('click')
+    await flushPromises()
+    // 这一条之后的全没了（包括它自己——重发会重新长出这条问句）。
+    expect(dialog.props('messages')).toEqual([])
+    expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe(firstQuestion.text)
+
+    // 过期点击：id 还在会话里，但 text 与 at 已经不是当时那一份 → 一条都不许动。
+    await ask('第三问')
+    await ask('第四问')
+    const current = dialog.props('messages')
+    expect(current).toHaveLength(4)
+    dialog.vm.$emit('edit', { id: current[0].id, text: '被改过的', at: current[0].at })
+    await flushPromises()
+    expect(dialog.props('messages').map((message) => message.text)).toEqual(current.map((message) => message.text))
+    // 角色不对（拿回答的 id 来「编辑重发」）同样不动。
+    dialog.vm.$emit('edit', { id: current[1].id, text: current[1].text, at: current[1].at })
+    await flushPromises()
+    expect(dialog.props('messages')).toHaveLength(4)
+    // 查无此 id（会话已被别的问推进）——也不动，不抛。
+    dialog.vm.$emit('edit', { id: '不存在的 id', text: '第四问', at: current[3].at })
+    await flushPromises()
+    expect(dialog.props('messages')).toHaveLength(4)
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77 任务2〕重新生成：只对**最后一条**回答开（中间那条重跑＝把后面的历史丢掉，等任务6 的分支）。
+   * 禁用的那一枚必须把理由写在 title 里——禁用而不解释，作者只能猜。
+   * 问题原文优先用本轮记住的那一问（omit／skill 一起带走）；这里钉的是「丢掉旧答案＋用同一问再跑」。
+   */
+  it('批次77 任务2：重新生成只对最后一条回答开，点它丢掉那条并用同一个问题再跑一轮', async () => {
+    let round = 0
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => {
+        round += 1
+        return { ok: true, value: { source: 'in-process-runner', text: `第 ${round} 次的答案` } }
+      }
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    const ask = async (text) => {
+      await wrapper.find('.authoring-knowledge__input-row textarea').setValue(text)
+      await wrapper.find('.authoring-knowledge__send').trigger('click')
+      await flushPromises()
+    }
+    await ask('第一问')
+    await ask('第二问')
+
+    const dialog = wrapper.findComponent(AssistantDialog)
+    const regen = wrapper.findAll('[data-test="answer-regenerate"]')
+    expect(regen).toHaveLength(2)
+    // 前一条：禁用＋把理由摊在 title 上。
+    expect(regen[0].attributes('disabled')).toBeDefined()
+    expect(regen[0].attributes('title')).toContain('只有最后一条回答能重新生成')
+    // 最后一条：可用，中文口径。
+    expect(regen[1].attributes('disabled')).toBeUndefined()
+    expect(regen[1].attributes('aria-label')).toBe('重新生成')
+    expect(regen[1].attributes('title')).toBe('用同一个问题再生成一次')
+
+    await regen[1].trigger('click')
+    await flushPromises()
+    const calls = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeAsk)
+    expect(calls).toHaveLength(3)
+    // 重跑用的是会话里那句原文（第二问），载荷形状与首发一致。
+    expect(calls[2][1]).toEqual(expect.objectContaining({ question: '第二问', writeMode: 'review' }))
+    const after = dialog.props('messages')
+    expect(after).toHaveLength(4)
+    expect(after.map((message) => message.role)).toEqual(['user', 'agent', 'user', 'agent'])
+    expect(after.at(-1).text).toBe('第 3 次的答案')
+    expect(after.at(-1).usage).toBe(null)
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77 任务2 附带〕Enter 发送必须让位给输入法组字。
+   * 老前端 8 处同一口径是 `isComposing || keyCode === 229`（AuthoringBlockComposer.vue:202、
+   * AuthoringManuscriptImport.vue:451、AuthoringRehearsalPanel.vue:93 等）：后者是老 Chromium
+   * 在组字期把 isComposing 留 false、只把 keyCode 打成 229 的那条兜底。
+   * 这里两种都要判住，同时钉「普通 Enter 照样发得出去」——不然这条守卫只是在把发送键打死。
+   */
+  it('批次77 任务2：Enter 发送尊重 isComposing，并对老 Chromium 的 keyCode 229 兜底，普通 Enter 照发', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '收到' } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    const textarea = wrapper.find('.authoring-knowledge__input-row textarea')
+    await textarea.setValue('正在组字的句子')
+    const target = textarea.element
+
+    const sendCalls = () => bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeAsk).length
+    const press = (init = {}) => {
+      const event = new globalThis.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...init })
+      if (typeof init.keyCode === 'number') Object.defineProperty(event, 'keyCode', { value: init.keyCode })
+      target.dispatchEvent(event)
+      return event
+    }
+
+    press({ isComposing: true })
+    await flushPromises()
+    expect(sendCalls()).toBe(0)
+
+    // isComposing 是 false、keyCode 仍是 229 的那一档（老内核）：一样不许发。
+    const legacy = press({ keyCode: 229 })
+    expect(legacy.isComposing).toBe(false)
+    await flushPromises()
+    expect(sendCalls()).toBe(0)
+
+    // Shift+Enter 是换行，不是发送。
+    press({ shiftKey: true })
+    await flushPromises()
+    expect(sendCalls()).toBe(0)
+
+    // 组字结束后的普通 Enter：发得出去（这一档要是也判住，输入框就废了）。
+    press()
+    await flushPromises()
+    expect(sendCalls()).toBe(1)
+    expect(bridge.request).toHaveBeenCalledWith(
+      IPC_CHANNELS.runtimeAsk,
+      expect.objectContaining({ question: '正在组字的句子' })
+    )
+    wrapper.unmount()
+  })
+
   it('没有桥时输入框禁用并说明原因', async () => {
     const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView() } })
     expect(wrapper.find('.authoring-knowledge__input-row textarea').attributes('disabled')).toBeDefined()
@@ -449,6 +801,185 @@ describe('运行时栏', () => {
     expect(trail.text()).toContain('WRITE_BLOCKED')
     expect(trail.text()).toContain('生成提案')
     expect(trail.text()).toContain('20261030-120000-chapter_save-ab12')
+    wrapper.unmount()
+  })
+
+  it('〔批次77 任务4〕过程折叠层升级成运行时间线：五类块、四态文案、图标按名字归类、写入类不显图标', async () => {
+    const wrapper = mount(AssistantDialog, {
+      props: {
+        messages: [
+          { id: 'q1', role: 'user', text: '这章节奏怎么样？', at: '10:00' },
+          {
+            id: 'a1',
+            role: 'agent',
+            text: '中段拖了。',
+            at: '10:01',
+            trail: [
+              { stage: 'envelope', taskType: 'authoring.review.chapter', profile: 'writing-chapter', blocks: 6, chars: 1800, missingKinds: [], at: 1000 },
+              { stage: 'model-round', round: 1, at: 1200 },
+              { stage: 'tool-start', callId: 'c1', name: 'pinax_chapter_read', at: 1300 },
+              { stage: 'tool-end', callId: 'c1', name: 'pinax_chapter_read', ok: true, ms: 12, at: 1312 },
+              { stage: 'tool-start', callId: 'c2', name: 'pinax_chapter_search', at: 1320 },
+              { stage: 'tool-end', callId: 'c2', name: 'pinax_chapter_search', ok: true, ms: 8, at: 1328 },
+              { stage: 'tool-start', callId: 'c3', name: 'pinax_chapter_save', at: 1340 },
+              { stage: 'tool-denied', callId: 'c3', name: 'pinax_chapter_save', code: 'WRITE_BLOCKED', at: 1350 },
+              { stage: 'subagent', name: '研究员', callId: 's1', task: '查伏笔', ok: false, at: 1360 },
+              { stage: 'answer', chars: 24, structured: false, roundsUsed: 2, at: 1900 }
+            ]
+          }
+        ]
+      }
+    })
+    const timeline = wrapper.find('[data-test="conversation-timeline"]')
+    expect(timeline.exists()).toBe(true)
+    // 顶部那一条：时间差与工具自报两条都在（口径写在 conversationTimeline 那份注释里）。
+    const summary = timeline.find('[data-test="timeline-summary"]').text()
+    expect(summary).toContain('已处理 0.9 秒')
+    expect(summary).toContain('工具累计 20ms')
+    const rows = timeline.findAll('.nx-timeline__block')
+    expect(rows.map((row) => row.attributes('data-kind'))).toEqual(['thinking', 'tool-group', 'tool', 'subagent', 'response'])
+    expect(rows.map((row) => row.attributes('data-state'))).toEqual(['completed', 'completed', 'error', 'completed', 'completed'])
+    // 块头那五句中文全来自判定层（组件里不许再写一套状态词，改词只改 conversationTimeline 一处）。
+    expect(timeline.findAll('.nx-timeline__title').map((node) => node.text())).toEqual([
+      '已梳理上下文',
+      '已读取 2 项项目内容',
+      '写入被拒 · WRITE_BLOCKED',
+      '已交给子代理 研究员',
+      '已给出回答'
+    ])
+    // 只读并组：连续两把读压成一行，明细折在组里，原文一条不丢。
+    expect(rows[1].find('.nx-timeline__count').text()).toBe('2 项')
+    expect(rows[1].findAll('.nx-timeline__group-item').length).toBe(2)
+    // 图标按工具名字归类：读的那两把有图标，写入那一块一枚都不画（工单第 1 条）。
+    expect(rows[1].find('.nx-timeline__group-item svg').exists()).toBe(true)
+    expect(rows[2].find('svg').exists()).toBe(false)
+    // 数字仍是事件里那几个，不是界面现编。
+    expect(timeline.text()).toContain('pinax_chapter_read · 12ms')
+    expect(timeline.text()).toContain('6 块 · 1800 字 · writing-chapter')
+    wrapper.unmount()
+  })
+
+  it('〔批次77 任务4〕时间线缺省收起；展开态活在内存（切会话再回来还在），落盘快照里一个字段都没有（守卫⑨）', async () => {
+    const handlers = new Map()
+    const savePayloads = []
+    let settle = null
+    const response = new Promise((resolve) => { settle = resolve })
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        if (channel === IPC_CHANNELS.sessionsLoad) return { ok: true, value: { sessions: [], warnings: [], badLines: 0 } }
+        if (channel === IPC_CHANNELS.sessionsSave) {
+          // 拷一份：状态机后面还会继续改，断言要看的是那一刻交出去的那份快照。
+          savePayloads.push(JSON.parse(JSON.stringify(payload.snapshot)))
+          return { ok: true, value: { saved: payload.snapshot.sessions.length } }
+        }
+        if (channel === IPC_CHANNELS.runtimeAsk) return response
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      }),
+      onEvent: (channel, handler) => {
+        handlers.set(channel, handler)
+        return () => handlers.delete(channel)
+      },
+      channels: IPC_CHANNELS
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge, projectRoot: 'D:/trail-fold' } })
+    await flushPromises()
+
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('这章行不行？')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    const askId = bridge.request.mock.calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1].askId
+    const emit = handlers.get(IPC_PUSH.runtimeAskEvent)
+    emit({ askId, event: { stage: 'tool-start', callId: 'c1', name: 'pinax_chapter_read' } })
+    emit({ askId, event: { stage: 'tool-end', callId: 'c1', name: 'pinax_chapter_read', ok: true, ms: 9 } })
+    emit({ askId, event: { stage: 'tool-start', callId: 'c2', name: 'pinax_outline_read' } })
+    emit({ askId, event: { stage: 'tool-end', callId: 'c2', name: 'pinax_outline_read', ok: true, ms: 4 } })
+    settle({ ok: true, value: { source: 'in-process-advisor', text: '节奏还行，中段可收紧。', askId } })
+    await flushPromises()
+
+    // 缺省收起：屏上只留问—答主线。
+    expect(wrapper.find('details.authoring-knowledge__trail').attributes('open')).toBeUndefined()
+    // 动作条那个钮与原生 summary 走同一个 details.open：点它展开，aria-label 跟着翻。
+    const toggle = wrapper.find('[data-test="answer-trail-toggle"]')
+    await toggle.trigger('click')
+    expect(wrapper.find('details.authoring-knowledge__trail').attributes('open')).toBeDefined()
+    expect(toggle.attributes('aria-label')).toBe('收起过程')
+
+    // 换会话再换回来：展开态还在——那份 Map 的生命周期就是这块面板，它不落盘。
+    // 口径抄上面那条真点过的路径：新建不收弹层，所以要「开→新建→关」，再开一次才看得见列表。
+    await wrapper.find('.authoring-knowledge__session-btn').trigger('click')
+    await wrapper.find('.authoring-knowledge__session-new').trigger('click')
+    await wrapper.find('.authoring-knowledge__session-btn').trigger('click')
+    await flushPromises()
+    await wrapper.find('.authoring-knowledge__session-btn').trigger('click')
+    const firstRow = wrapper.findAll('.authoring-knowledge__session-item').find((row) => row.text().includes('这章行不行？'))
+    expect(firstRow, '会话列表里要能找到那一句问题当标题的行').toBeDefined()
+    await firstRow.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('details.authoring-knowledge__trail').attributes('open')).toBeDefined()
+
+    // 守卫⑨：落盘的那一份里没有任何展开态字段（展开态不进 store，也就不进 JSONL）。
+    expect(savePayloads.length).toBeGreaterThan(0)
+    const json = JSON.stringify(savePayloads.at(-1))
+    expect(json).not.toContain('expanded')
+    expect(json).not.toContain('trailOpen')
+    expect(json).not.toContain('"open"')
+    wrapper.unmount()
+  })
+
+  it('〔批次77 任务4〕在途那一问的时间线是平铺的（不套折叠层），落地后才收进那条回答', async () => {
+    const handlers = new Map()
+    let settle = null
+    const response = new Promise((resolve) => { settle = resolve })
+    const bridge = {
+      request: vi.fn(async (channel) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: emptyFrameworkView() }
+        if (channel === IPC_CHANNELS.runtimeAsk) return response
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      }),
+      onEvent: (channel, handler) => {
+        handlers.set(channel, handler)
+        return () => handlers.delete(channel)
+      },
+      channels: IPC_CHANNELS
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('开场怎么改？')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+    const askId = bridge.request.mock.calls.find(([channel]) => channel === IPC_CHANNELS.runtimeAsk)[1].askId
+    const emit = handlers.get(IPC_PUSH.runtimeAskEvent)
+
+    emit({ askId, event: { stage: 'envelope', taskType: 'authoring.review.chapter', profile: 'writing-chapter', blocks: 6, chars: 1800, missingKinds: [] } })
+    emit({ askId, event: { stage: 'tool-start', callId: 'c1', name: 'pinax_chapter_read' } })
+    await flushPromises()
+
+    // 作者正看着它跑：过程平铺在状态行下面，不套「点开才看得见」那一层。
+    const live = wrapper.find('[data-test="live-timeline"]')
+    expect(live.exists()).toBe(true)
+    expect(live.find('details.authoring-knowledge__trail').exists()).toBe(false)
+    expect(live.text()).toContain('正在处理')
+    expect(live.text()).toContain('正在调用 pinax_chapter_read')
+    expect(live.text()).toContain('6 块 · 1800 字 · writing-chapter')
+    // 顶部那句固定语／阶段语仍在（时间线不取代它）。
+    expect(wrapper.find('.authoring-knowledge__thinking').exists()).toBe(true)
+
+    emit({ askId, event: { stage: 'tool-end', callId: 'c1', name: 'pinax_chapter_read', ok: true, ms: 9 } })
+    await flushPromises()
+    expect(wrapper.find('[data-test="live-timeline"]').text()).toContain('已调用 pinax_chapter_read')
+
+    settle({ ok: true, value: { source: 'in-process-advisor', text: '把停摆的表提前。', askId } })
+    await flushPromises()
+    // 回答落地：平铺那一条撤掉，同一叠事件定格进这条回答的折叠层（缺省收起）。
+    expect(wrapper.find('[data-test="live-timeline"]').exists()).toBe(false)
+    const trail = wrapper.find('details.authoring-knowledge__trail')
+    expect(trail.exists()).toBe(true)
+    expect(trail.attributes('open')).toBeUndefined()
+    // 块头那句是「已调用 pinax_chapter_read」；9ms 不在块头里，在它下面那行原始事件的 detail span。
+    // jsdom 的 text() 把相邻 span 直接粘起来（不带分隔空格），所以后半句按拼接后的字面断言——
+    // 这不是文案口径，是断言层的事实；写成「已调用 pinax_chapter_read · 9ms」会假失败。
+    expect(trail.text()).toContain('已调用 pinax_chapter_read')
+    expect(trail.text()).toContain('pinax_chapter_read · 9ms')
     wrapper.unmount()
   })
 
@@ -692,6 +1223,10 @@ describe('Obsidian 三栏', () => {
     expect(gate.exists()).toBe(true)
     expect(wrapper.text()).toContain('这个项目要创作什么？')
     expect(wrapper.find('.workbench-modal-close').exists()).toBe(false)
+    // 〔批次76 任务4-1〕这一节原来在按钮里附带渲染 `carrier.primary.projectKind`（内部词表值），
+    // 实测作者看到的是「剧本（夹具） screenplay」。判据反过来钉：面上只有中文标题，内核 token 不外露。
+    expect(gate.find('.wizard-item').text()).toBe('剧本（夹具）')
+    expect(gate.text()).not.toContain('screenplay')
 
     await gate.find('.wizard-item').trigger('click')
     await flushPromises()
@@ -1427,9 +1962,49 @@ describe('载体管理面板（工单A1）', () => {
 
     await rows[1].find('.carriers-toggle').trigger('click')
     await flushPromises()
-    // expectedRevision 用 view.project.revision（夹具里是 1）。
+    // 修订号取自当前项目账（〔批次76 任务4-1〕口径）：@3 读 carriers.revision、@1／@2 读顶层 revision，
+    // 夹具这份是 @2 的 revision 1 → 仍是 1（原来写死 0 的错在这一档被 revision 恰好为 0 的夹具掩盖过）。
     expect(setEnabled).toHaveBeenCalledTimes(1)
     expect(setEnabled).toHaveBeenCalledWith({ pluginId: 'fixture.script', enabled: false, expectedRevision: 1 })
+    wrapper.unmount()
+  })
+
+  it('〔批次76 任务4-1〕@3 项目的载体写入带的是 carriers.revision，不是硬编码 0', async () => {
+    // 遍历没直接抓到这条，是任务4-1 追 chip 时顺着同一个 revision 读出来的真 bug：
+    // projectManifest.mjs:46-58 把 @3 归一成 carriers:{primary,enabled,revision}（顶层 revision 不再带账），
+    // 而 projectSession 的 nextCarriers（:108-115）拿 expectedRevision 与 carriers.revision 一比就 STALE 拒。
+    // 外壳原先一律传 0 → @3 项目里「停用载体／换主载体」必被拒，作者点了像没反应。
+    const handlers = new Map()
+    const setPrimary = vi.fn(async () => ({ ok: true, value: {} }))
+    const setEnabled = vi.fn(async () => ({ ok: true, value: {} }))
+    handlers.set(IPC_CHANNELS.carrierSetPrimary, setPrimary)
+    handlers.set(IPC_CHANNELS.carrierSetEnabled, setEnabled)
+    const base = carrierView()
+    const view = {
+      ...base,
+      // 第二块载体设成「已启用」，这一行才给停用的按钮（夹具缺省是没启用的）。
+      carriers: base.carriers.map((carrier, index) => (index === 1 ? { ...carrier, isEnabled: true } : carrier)),
+      project: {
+        root: 'x', name: '大梦', kind: 'novel', spec: 'pinax-project@3',
+        carriers: { primary: 'fixture.novel', enabled: ['fixture.novel', 'fixture.script'], revision: 6 }
+      }
+    }
+    const bridge = carriersBridge({ handlers, view })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
+    await flushPromises()
+
+    let rows = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
+    await rows[1].find('.carriers-set-primary').trigger('click')
+    await flushPromises()
+    expect(setPrimary).toHaveBeenCalledWith({ pluginId: 'fixture.script', expectedRevision: 6 })
+
+    // 停用走同一条闸：refresh 后重新取行，修订号仍是账上那份 6（夹具的 view 不换版）。
+    rows = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
+    await rows[1].find('.carriers-toggle').trigger('click')
+    await flushPromises()
+    expect(setEnabled).toHaveBeenCalledWith({ pluginId: 'fixture.script', enabled: false, expectedRevision: 6 })
     wrapper.unmount()
   })
 
@@ -1715,8 +2290,10 @@ describe('提案审阅（工单B1 · 协议 v1.1-B：列表在二级页，审阅
     expect(bridge.calls.read).toHaveLength(1)
     const pane = wrapper.find('[data-pane-id="novel.editor"]')
     expect(pane.exists()).toBe(true)
-    // 批次33：文档头只有一行标题「提案审阅 · 文件名」，meta 沉到底部 hint。
-    expect(pane.text()).toContain(`提案审阅 · ${PROPOSAL.name}`)
+    // 〔批次76 裁定A〕原判据「审阅面头部一行『提案审阅 · 文件名』」改判：这一行撤了，提案名归窗头
+    // 那一行「小说 · 提案名」（.json 尾巴不上屏，批次43 同口径）。
+    expect(pane.text()).not.toContain('提案审阅 ·')
+    expect(wrapper.text()).toContain(`小说（夹具） · ${PROPOSAL.name.replace(/\.json$/u, '')}`)
     expect(pane.find('.doc-meta-hint').text()).toContain('正文/雨夜.md')
     expect(pane.text()).toContain('提案说明：把雨提前一段')
     expect(pane.find('.editor-text, .entry-text').text()).toBe('雨夜。')
@@ -1784,7 +2361,7 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     await flushPromises()
     expect(withProject.find('.nx-titlebar').exists()).toBe(true)
     expect(withProject.find('.nx-titlebar-brand').text()).toBe('Pinax · Next')
-    expect(withProject.find('[data-test="titlebar-project-chip"]').text()).toBe('大梦 · novel · 第 1 版')
+    expect(withProject.find('[data-test="titlebar-project-chip"]').text()).toBe('大梦 · 小说（夹具） · 第 1 版')
     // 右侧给原生窗控留位（主进程 titleBarOverlay 盖在这块上）。
     expect(withProject.find('.nx-titlebar-window-controls').exists()).toBe(true)
     withProject.unmount()
@@ -1793,6 +2370,28 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     await flushPromises()
     expect(withoutProject.find('[data-test="titlebar-project-chip"]').text()).toBe('未打开项目')
     withoutProject.unmount()
+
+    // 〔批次76 任务4-1 改判〕上面那句原判据是「大梦 · novel · 第 1 版」：中间那格端的是内核词表里的
+    // 内部 id（project.kind），作者实测念成英文生词。判据换成人话＝主载体的中文标题（清单的 title）。
+    // 顺带把修订号那一格也钉住：@3 的账记在 carriers.revision，顶层 revision 是 @1／@2 老档那一格。
+    const atV3 = {
+      ...carrierView(),
+      project: { root: 'x', name: '大梦', kind: 'novel', spec: 'pinax-project@3', carriers: { primary: 'fixture.novel', enabled: ['fixture.novel'], revision: 6 } }
+    }
+    const v3 = mount(AppNext, { props: { bridge: stubBridge(atV3) } })
+    await flushPromises()
+    expect(v3.find('[data-test="titlebar-project-chip"]').text()).toBe('大梦 · 小说（夹具） · 第 6 版')
+    v3.unmount()
+
+    // 项目声明的主载体不在清单里（插件没装／外部插件被摘）：宁可说「未定主载体」，也不回落内部 token。
+    const dangling = {
+      ...carrierView(),
+      project: { root: 'x', name: '大梦', kind: 'novel', spec: 'pinax-project@3', carriers: { primary: 'fixture.gone', enabled: [], revision: 2 } }
+    }
+    const orphan = mount(AppNext, { props: { bridge: stubBridge(dangling) } })
+    await flushPromises()
+    expect(orphan.find('[data-test="titlebar-project-chip"]').text()).toBe('大梦 · 未定主载体 · 第 2 版')
+    orphan.unmount()
   })
 
   it('页内菜单行：顶层与 MENU_TEMPLATE 一致，菜单项走 menuInvoke；打开项目＝选目录→projectOpen→refresh；Esc/点外部收起', async () => {
@@ -2101,7 +2700,7 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     wrapper.unmount()
   })
 
-  it('目录搜索（工单B）：标题与已知描述浅匹配，输入后只剩匹配项；无命中显示「无匹配设置」', async () => {
+  it('目录搜索（工单B＋批次76 任务4-2）：标题与字段标签都算命中，右栏与目录同进同退', async () => {
     const handlers = new Map()
     const bridge = modalBridge({ handlers })
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -2117,7 +2716,20 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await flushPromises()
     expect(wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())).toEqual(['备份与恢复'])
     expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toEqual(['应用'])
-    // 搜索只过滤目录，不把右栏当前节换掉。
+
+    // 〔任务4-2 改判〕原判据是「搜索只过滤目录，不把右栏当前节换掉」（shell-ui.spec 旧 line 2122-2123）——
+    // 那句正是作者点出来的自相矛盾：目录说「这里没有」，右栏还挂着「偏好与模型」。
+    // 现在的判据是两栏同进同退：当前节被查询滤掉，右栏同步收成一句人话＋一条退路。
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(false)
+    const blank = wrapper.find('[data-test="settings-search-blank"]')
+    expect(blank.exists()).toBe(true)
+    expect(blank.text()).toContain('没有与「备份」匹配的设置项')
+    expect(blank.text()).toContain('左侧目录里是剩下的那些')
+    await blank.find('[data-test="settings-search-clear"]').trigger('click')
+    await flushPromises()
+    // 「清除搜索」就是把词擦掉：目录与右栏一起回来，当前节没被换走。
+    expect(search.element.value).toBe('')
+    expect(wrapper.find('[data-test="settings-search-blank"]').exists()).toBe(false)
     expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
 
     // 说明字段的浅匹配（keywords 来自各节的标题/描述）：搜「历史仓」也命中备份与恢复。
@@ -2125,16 +2737,34 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await flushPromises()
     expect(wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())).toEqual(['备份与恢复'])
 
+    // 〔任务4-2 的另一半〕字段标签进词表：作者搜「字号」是要改写作偏好，
+    // 原来目录空了、右栏却自说自话；现在「正文字号／行高／段落间距」这些控件名直接命中，
+    // 点这一格右栏就是那一节的真内容（组件仍由 AppNext 的映射表注入，不在弹窗里写死节名）。
+    await search.setValue('字号')
+    await flushPromises()
+    const fontTabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
+    expect(fontTabs).toEqual(['写作偏好'])
+    expect(wrapper.find('[data-test="settings-search-blank"]').exists()).toBe(true)
+    await wrapper.find('.settings-navigation .settings-tab').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-search-blank"]').exists()).toBe(false)
+
     await search.setValue('不存在的设置项')
     await flushPromises()
     expect(wrapper.findAll('.settings-navigation .settings-tab')).toHaveLength(0)
     expect(wrapper.find('[data-test="settings-empty"]').text()).toBe('无匹配设置')
+    // 全空时那句空态不再提「左侧目录里是剩下的那些」（没有剩下的可指）。
+    const allBlank = wrapper.find('[data-test="settings-search-blank"]').text()
+    expect(allBlank).toContain('没有与「不存在的设置项」匹配的设置项')
+    expect(allBlank).not.toContain('左侧目录')
 
-    // 清空：目录恢复（静态八节在前，载体占位节在后）。
+    // 清空：目录恢复（静态八节在前，载体占位节在后），右栏跟着回来。
     await search.setValue('')
     await flushPromises()
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
     expect(tabs.slice(0, 8)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
+    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
@@ -2328,6 +2958,24 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     node.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y }))
   }
 
+  /**
+   * 指针序列驱动一次拖拽（批次76 裁定A 的验法）：标题栏按下 → 移到目标点 → 停住（先看预览）→ 松手。
+   * jsdom 里 offsetParent 恒为 null，PaneWindow 的 parentRect() 回落 `innerWidth/innerHeight`
+   * （缺省 1024×768），于是吸附的「窗口层」就是这块虚拟画布：左右缘各 12%＝x≤122／x≥901，
+   * 顶缘 14%＝y≤107，右下角球命中圈＝x≥928 且 y≥672。
+   */
+  async function dragTo(head, to) {
+    head.element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 400, clientY: 300, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: to.x, clientY: to.y, bubbles: true }))
+    await flushPromises()
+  }
+
+  async function release(to) {
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: to.x, clientY: to.y, bubbles: true }))
+    await flushPromises()
+  }
+
   const formOf = (instance) => hostWorkspace.get(instance)?.form
   const groupOf = (instance) => hostWorkspace.get(instance)?.group
 
@@ -2380,9 +3028,12 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(hostWorkspace.get('outline.widget#1').geometry).toBeTruthy()
     const tabs = () => wrapper.findAll('.nx-page-tab')
     expect(tabs().map((tab) => tab.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1', 'outline.widget#1'])
-    // 浮窗也上签：否则「看得见」只覆盖了一半；签上的后缀标出它此刻是浮着的。
+    // 浮窗也上签：否则「看得见」只覆盖了一半。〔批次76 裁定A〕后缀从「浮窗」两个字换成一枚 12px 图标点，
+    // 屏幕上不再念文字状态（原判据在此改判，理由：文字角标与窗头/页签的标题抢层级；形态读数改走属性与 aria）。
     expect(tabs()[2].attributes('data-page-form')).toBe('floating')
-    expect(tabs()[2].find('.nx-page-tab-flag').text()).toBe('浮窗')
+    expect(tabs()[2].find('.nx-page-tab-flag').attributes('data-page-form-flag')).toBe('floating')
+    expect(tabs()[2].find('.nx-page-tab-flag').text()).toBe('')
+    expect(tabs()[2].find('.nx-page-tab-flag svg').exists(), '浮窗态要有一枚图标点').toBe(true)
 
     // 换回小说板：大纲那两条原地不动（页还是页、浮还是浮），只是主组的当前页换成小说。
     await railByName(wrapper, '小说（夹具）').trigger('click')
@@ -2415,7 +3066,7 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     await flushPromises()
     const menu = wrapper.find('[data-test="pane-form-menu"]')
     expect(menu.exists()).toBe(true)
-    // 大纲编辑声明了 dock／split／overlay／fullscreen：菜单出三项，fullscreen 被词表闸掉（v3 没有独立落点）。
+    // 批次66 收敛后大纲编辑只声明三值；菜单项恒＝声明 ∩ 词表落点，旧词即使被喂进来也出不来（见 pane-forms 的负向断言）。
     expect(menu.findAll('.nx-form-menu-item').map((item) => item.attributes('data-test')))
       .toEqual(['form-menu-dock', 'form-menu-side', 'form-menu-float', 'form-menu-tab', 'form-menu-close'])
     expect(menu.text()).not.toContain('全屏')
@@ -2447,32 +3098,84 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     wrapper.unmount()
   })
 
-  it('分屏＝把这一页搬进对面页组（不是第四种形态）：两组各占一半，再点搬回来', async () => {
+  it('拖到右缘吸附＝搬进对面页组，拖到左缘＝回主组（批次76 裁定A：形态钮改手势；〔铁律一〕side 仍是页组不是形态）', async () => {
     const workspace = { version: 3, entries: {} }
     const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
     await flushPromises()
     await openOutlineBoard(wrapper)
 
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.editor"] [data-window-action="split"]').trigger('click')
-    await flushPromises()
+    const win = () => wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
+    // 拖动中先亮预览（〔工单守卫④〕无预览不落位——预览是落位的前置条件，不是装饰）。
+    await dragTo(win().find('.nx-pane-window-head'), { x: 950, y: 400 })
+    expect(win().attributes('data-window-snap')).toBe('right')
+    const preview = wrapper.find('.nx-pane-snap-preview')
+    expect(preview.exists(), '右缘命中圈亮时要有半屏预览').toBe(true)
+    expect(preview.attributes('data-snap-target')).toBe('right')
+    await release({ x: 950, y: 400 })
     // 形态没变，变的是页组：v3 的「分屏」就是 main／side 两组各摆自己那张页。
     expect(hostWorkspace.get('outline.editor#1')).toMatchObject({ form: 'page', group: 'side' })
     expect(hostWorkspace.get('outline.editor#1').geometry).toBe(null)
-    const win = wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
-    expect(win.attributes('data-window-state')).toBe('page')
-    expect(win.attributes('data-window-group')).toBe('side')
-    expect(win.classes()).toContain('is-in-side')
+    expect(win().attributes('data-window-state')).toBe('page')
+    expect(win().attributes('data-window-group')).toBe('side')
+    expect(win().classes()).toContain('is-in-side')
     expect(wrapper.findAll('.nx-pane-window.is-page')).toHaveLength(2)
     expect(hostWorkspace.snapshot().active).toEqual({ main: 'novel.editor#1', side: 'outline.editor#1' })
     expect(workspace.entries['outline.editor#1'].group).toBe('side')
+    // 松手后预览撤掉：吸附提示不留残影。
+    expect(wrapper.find('.nx-pane-snap-preview').exists()).toBe(false)
 
-    // 再点＝解除：搬回对面那一组，side 组空了，屏幕上只剩一张页。
-    await win.find('[data-window-action="split"]').trigger('click')
-    await flushPromises()
+    // 拖回左缘＝解除：搬回对面那一组，side 组空了，屏幕上只剩一张页。
+    await dragTo(win().find('.nx-pane-window-head'), { x: 40, y: 400 })
+    expect(win().attributes('data-window-snap')).toBe('left')
+    await release({ x: 40, y: 400 })
     expect(groupOf('outline.editor#1')).toBe('main')
     expect(hostWorkspace.snapshot().active).toEqual({ main: 'outline.editor#1', side: null })
     expect(wrapper.findAll('.nx-pane-window.is-in-side')).toHaveLength(0)
     expect(wrapper.findAll('.nx-pane-window.is-page')).toHaveLength(1)
+
+    // 〔作者批次61 裁定③〕键盘／无障碍的兜底还在：右键菜单那一项落的是同一个地方。
+    rightClick(win().find('.nx-pane-window-head'))
+    await flushPromises()
+    await wrapper.find('[data-test="form-menu-side"]').trigger('click')
+    await flushPromises()
+    expect(groupOf('outline.editor#1')).toBe('side')
+    wrapper.unmount()
+  })
+
+  it('阈值外松手＝只改矩形不改形态（〔工单守卫④〕无预览不落位）', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge() } })
+    await flushPromises()
+    await openOutlineBoard(wrapper)
+    await openWidget(wrapper)
+    const widget = () => wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
+    // 浮窗从 (400,300) 拖到 (500,350)：两点都不在命中圈里（x 落在 122～901、y 落在 107～672 之间）。
+    await dragTo(widget().find('.nx-pane-window-head'), { x: 500, y: 350 })
+    expect(widget().attributes('data-window-snap')).toBe('')
+    expect(wrapper.find('.nx-pane-snap-preview').exists()).toBe(false)
+    await release({ x: 500, y: 350 })
+    expect(formOf('outline.widget#1')).toBe('floating')
+    expect(groupOf('outline.widget#1')).toBe('main')
+    // 只改了矩形：jsdom 里窗体 rect 全 0，所以位移＝指针位移（100／50）。
+    expect(hostWorkspace.get('outline.widget#1').geometry).toMatchObject({ x: 100, y: 50 })
+
+    // 顶缘那一圈＝浮窗的子态「最大化」（〔裁定A〕四条落点里唯一不是换页组的一条）：
+    // 拖到 y=60（≤ 层高的 14%＝107）→ 预览亮满层 → 松手落 maximized，形态仍是浮窗、页组不动。
+    await dragTo(widget().find('.nx-pane-window-head'), { x: 500, y: 60 })
+    expect(widget().attributes('data-window-snap')).toBe('top')
+    expect(wrapper.find('.nx-pane-snap-preview').attributes('data-snap-target')).toBe('top')
+    await release({ x: 500, y: 60 })
+    expect(formOf('outline.widget#1')).toBe('floating')
+    expect(groupOf('outline.widget#1')).toBe('main')
+    expect(hostWorkspace.get('outline.widget#1').maximized).toBe(true)
+    // 页态拖到同一个位置不该有任何反应（v3 没有「页再最大化」那一档）——判据在 paneSnap 的纯函数里，
+    // 这里补一条界面层的对照：把上面那扇收回页态，再拖顶缘，预览与 maximized 都不该动。
+    await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]').trigger('click')
+    await flushPromises()
+    await dragTo(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#1"]').find('.nx-pane-window-head'), { x: 500, y: 60 })
+    expect(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#1"]').attributes('data-window-snap')).toBe('')
+    await release({ x: 500, y: 60 })
+    expect(hostWorkspace.get('outline.editor#1').maximized).toBe(false)
+    expect(formOf('outline.editor#1')).toBe('page')
     wrapper.unmount()
   })
 
@@ -2520,31 +3223,49 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
 
     // 页态与标签态一律没有矩形（旧断言「收起不啃 geometry」随 v3 作废：位置归宿主排版）。
     expect(hostWorkspace.list().filter((entry) => entry.form !== 'floating').every((entry) => entry.geometry === null)).toBe(true)
-    await widget().find('[data-window-action="collapse"]').trigger('click')
+    // 拖到右下角那颗球＝收起（〔裁定A〕形态钮换成动线；工单验收点名的「拖进球命中圈→进悬浮球列表」）。
+    // 记下的矩形此刻仍是 (40,30) 那一份——收进球里不等于丢掉位置，restore 格带着它。
+    const rectWhenCollapsed = { ...hostWorkspace.get('outline.widget#1').geometry }
+    await dragTo(widget().find('.nx-pane-window-head'), { x: 960, y: 700 })
+    expect(widget().attributes('data-window-snap')).toBe('orb')
+    await release({ x: 960, y: 700 })
     await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('tab')
     expect(hostWorkspace.get('outline.widget#1').geometry).toBe(null)
+    expect(workspace.entries['outline.widget#1'].restore).toMatchObject({ form: 'floating', geometry: rectWhenCollapsed })
     wrapper.unmount()
 
-    // 重新挂载＝从同一份存档读回浮窗与坐标（不是二次打开；存档里那条收起态也读得回来）。
+    // 重新挂载＝从同一份存档读回「收进球里的那一条」（不是二次打开；存档里那条收起态也读得回来）。
     const second = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
     await flushPromises()
     expect(formOf('outline.widget#1')).toBe('tab')
-    expect(second.find('.nx-pane-window-tab[data-window-pane="outline.widget"]').exists()).toBe(true)
+    expect(second.findAll('.nx-pane-window-tab')).toHaveLength(0)
+    expect(second.find('[data-test="collapse-orb"]').attributes('data-orb-count')).toBe('1')
+    // 〔批次76 裁定B〕页签上点它＝按 restore 放回**收起前**那一档：原来是浮窗就还是浮窗，矩形原样。
+    // 原判据「点签 → form 落 page」是那时候只会硬写页态的产物，随本批改判并留这条理由。
     await second.find('.nx-page-tab[data-page-instance="outline.widget#1"]').trigger('click')
     await flushPromises()
-    expect(formOf('outline.widget#1')).toBe('page')
+    expect(formOf('outline.widget#1')).toBe('floating')
+    expect(hostWorkspace.get('outline.widget#1').geometry).toEqual(rectWhenCollapsed)
     second.unmount()
   })
 
-  it('统一 chrome：三枚钮＋没有第二套窗口壳；竖条右键不弹形态菜单', async () => {
+  it('统一 chrome：窗头只剩一枚 ×（批次76 裁定A）＋没有第二套窗口壳；竖条右键不弹形态菜单', async () => {
     const wrapper = mount(AppNext, { props: { bridge: pageBridge() } })
     await flushPromises()
     await openOutlineBoard(wrapper)
     await openWidget(wrapper)
 
     const widget = wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]')
-    expect(widget.findAll('[data-window-action]').map((node) => node.attributes('data-window-action'))).toEqual(['collapse', 'split', 'close'])
+    // 原判据是 ['collapse','split','close'] 三枚常驻钮。〔裁定A〕「相关的页面形态转换按钮，用拖拽的形式去做」
+    // ＋〔裁定B〕收起的呈现归悬浮球 → 收起／分屏两枚钮从窗头撤掉，换形态只剩「拖拽吸附」与「右键菜单」两条活路；
+    // × 是唯一保留的常驻动作（它删记录，不是形态）。这条改判据是有理由的，不是静默放宽。
+    expect(widget.findAll('[data-window-action]').map((node) => node.attributes('data-window-action'))).toEqual(['close'])
+    expect(widget.find('[data-window-action="collapse"]').exists()).toBe(false)
+    expect(widget.find('[data-window-action="split"]').exists()).toBe(false)
     expect(widget.attributes('aria-label')).toBe('大纲窗口')
+    // 球常驻在右下角：收起态没有第二处呈现（缘签整列退役，见下一条用例）。
+    expect(wrapper.find('[data-test="collapse-orb"]').exists()).toBe(true)
     for (const gone of ['[data-action]', '.nx-overlay-widget', '.nx-overlay-head', '.nx-form-bar', '.nx-split', '.nx-overlay-tab', '.nx-overlay-bubble']) {
       expect(wrapper.find(gone).exists(), `${gone} 不该再存在`).toBe(false)
     }
@@ -2567,43 +3288,124 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     plain.unmount()
   })
 
-  it('侧缘标签：收起＝退场留缘签，点缘签回页态；× 删记录（页签栏同时少一条）', async () => {
+  it('收起态收进右下角悬浮球：徽标计数、点开列出、点一条回「收起前那一档」（〔裁定B〕· 守卫①②）', async () => {
     const workspace = { version: 3, entries: {} }
     const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
     await flushPromises()
     await openOutlineBoard(wrapper)
     await openWidget(wrapper)
+    expect(formOf('outline.widget#1')).toBe('floating')
+    const rectBefore = { ...hostWorkspace.get('outline.widget#1').geometry }
 
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="collapse"]').trigger('click')
+    // 收起的入口只剩「右键菜单／Esc／拖进球」三条——窗头那颗「—」钮随〔裁定A〕撤了，这里走菜单。
+    rightClick(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] .nx-pane-window-head'))
+    await flushPromises()
+    expect(wrapper.find('[data-test="form-menu-tab"]').text()).toContain('收进悬浮球')
+    await wrapper.find('[data-test="form-menu-tab"]').trigger('click')
     await flushPromises()
     expect(formOf('outline.widget#1')).toBe('tab')
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').exists()).toBe(false)
-    const tab = wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]')
-    expect(tab.exists()).toBe(true)
-    expect(tab.attributes('data-window-state')).toBe('tab')
-    expect(tab.attributes('aria-label')).toBe('展开大纲窗口')
-    // 缘签按叠序依次下移，多扇收起不叠成一枚。
-    expect(tab.attributes('style')).toContain('top: 120px')
+    // 「上次记忆的位置」真的落在页记录里：进 tab 时把收起前的形态＋矩形＋页组记进 restore 格。
+    expect(workspace.entries['outline.widget#1'].restore).toMatchObject({ form: 'floating', group: 'main' })
+    // 守卫①：缘签零渲染——右缘那一竖列文字标签整条退役，收起的窗也不画窗体。
+    expect(wrapper.findAll('.nx-pane-window-tab')).toHaveLength(0)
+    expect(wrapper.find('.nx-pane-window[data-window-instance="outline.widget#1"]').exists()).toBe(false)
+    // 球本体常驻（它同时是拖拽的落点），徽标＝收起数；浮层此刻没开。
+    const orb = wrapper.find('[data-test="collapse-orb"]')
+    expect(orb.exists()).toBe(true)
+    expect(orb.attributes('data-orb-count')).toBe('1')
+    expect(wrapper.find('[data-test="orb-badge"]').text()).toBe('1')
+    expect(wrapper.find('[data-test="orb-panel"]').exists()).toBe(false)
 
-    await tab.trigger('click')
+    await orb.find('[data-test="orb-button"]').trigger('click')
     await flushPromises()
-    expect(formOf('outline.widget#1')).toBe('page')
-    expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').classes()).toContain('is-page')
+    const rows = wrapper.findAll('[data-test="orb-item"]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('大纲')
+    // 守卫②：点一条＝回收起前那一档（浮窗回浮窗、矩形原样带回来），不是硬写页态；顺手把浮层收掉。
+    await rows[0].trigger('click')
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('floating')
+    expect(hostWorkspace.get('outline.widget#1').geometry).toEqual(rectBefore)
+    expect(wrapper.find('[data-test="orb-panel"]').exists()).toBe(false)
+    expect(hostWorkspace.get('outline.widget#1').restore).toBe(null)
 
-    // × ＝删记录：窗口层与页签栏一起少一条，别的页不受牵连。
-    await wrapper.find('.nx-page-tab[data-page-instance="outline.widget#1"] [data-page-action="close"]').trigger('click')
+    // 浮层开着时 Esc 先归这一层：面板收掉，窗口一条都不动（宿主的收窗总线被打断）。
+    await orb.find('[data-test="orb-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="orb-panel"]').exists()).toBe(true)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="orb-panel"]').exists()).toBe(false)
+    expect(formOf('outline.widget#1')).toBe('floating')
+
+    // 再收一次（这次走 Esc 那条收起的路），然后从球里关：删记录、徽标随之减到 0（球本体不藏，它还是拖拽落点）。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('tab')
+    await orb.find('[data-test="orb-button"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="orb-close"]').trigger('click')
     await flushPromises()
     expect(hostWorkspace.get('outline.widget#1')).toBe(null)
     expect(workspace.entries['outline.widget#1']).toBeUndefined()
+    expect(orb.attributes('data-orb-count')).toBe('0')
+    expect(wrapper.find('[data-test="orb-badge"]').exists()).toBe(false)
+
+    // 页签栏那条 × 仍是删记录（原判据在这里成立，与球共用同一个 close）。
     expect(wrapper.findAll('.nx-page-tab').map((node) => node.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1'])
-    // 中心区只画「所在组的当前页」：关掉的这页曾是 main 的当前页，指针随之回指组内第一张（novel）。
-    // 大纲那条记录仍在册（页态、main 组），只是不占屏——所以这里断言记录与签，不断言 DOM 存在。
+    // 中心区只画「所在组的当前页」：main 的当前页是最后切出来的那一页（大纲编辑），
+    // 正文那条仍在册、签上有名，但同组的第二页不占屏——〔铁律一〕不给同一组画两次窗。
+    // 刚关掉的那条是浮窗：它不占页组，退场时当前页指针根本不用重指（原判据「指针回指 novel」是猜的，实测不成立）。
     expect(hostWorkspace.get('outline.editor#1')).toMatchObject({ form: 'page', group: 'main' })
-    expect(wrapper.findAll('.nx-pane-window.is-page').map((node) => node.attributes('data-window-instance'))).toEqual(['novel.editor#1'])
+    expect(hostWorkspace.snapshot().active.main).toBe('outline.editor#1')
+    expect(wrapper.findAll('.nx-pane-window.is-page').map((node) => node.attributes('data-window-instance'))).toEqual(['outline.editor#1'])
     wrapper.unmount()
   })
 
-  it('Esc＝把最上面那一页收成侧缘标签；统一二级页开着时 Esc 先归弹窗', async () => {
+  it('5 扇同时收起＝徽标 5、列表 5 条、每条都点得动（缘签时代的堆叠问题从源头消失）', async () => {
+    // 遍历实测：右缘竖排标签用 `top: 120 + i*36` 硬排，5 扇收起＝6 对重叠、后面那扇点不到。
+    // 现在收起态只剩球里的一列，每条一行、整行命中区 ≥44——这里验的是「都在、都可点」，不是像素。
+    // 清单只用夹具里 center／overlay 槽的那几块 pane：左树（novel.shelf／outline.tree）不是可开窗的
+    // 内容，descriptorFor 认不出它，硬塞进夹具只会测到「记录在册但不呈现」的另一条口径。
+    // 三块 pane 凑不够 5 扇，就按 v3 的多实例口径开同一块的第二页——正好也是作者会走的那条路。
+    const entries = {}
+    const instances = ['novel.editor#1', 'novel.editor#2', 'outline.editor#1', 'outline.editor#2', 'outline.widget#1']
+    instances.forEach((instance, index) => {
+      const group = index % 2 === 0 ? 'main' : 'side'
+      entries[instance] = {
+        pane: instance.split('#')[0],
+        instance,
+        form: 'tab',
+        group,
+        order: index + 1,
+        z: index + 1,
+        resource: null,
+        viewState: null,
+        restore: { form: 'page', group, geometry: null, maximized: false }
+      }
+    })
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace: { version: 3, entries } }) } })
+    await flushPromises()
+
+    const orb = wrapper.find('[data-test="collapse-orb"]')
+    expect(orb.attributes('data-orb-count')).toBe('5')
+    expect(wrapper.find('[data-test="orb-badge"]').text()).toBe('5')
+    await orb.find('[data-test="orb-button"]').trigger('click')
+    await flushPromises()
+    const rows = wrapper.findAll('[data-test="orb-item"]')
+    expect(rows).toHaveLength(5)
+    expect(rows.map((row) => row.attributes('data-orb-instance'))).toEqual(instances)
+    // 每条点得动：点第一条就把它放出来，球里少一条。
+    await rows[0].trigger('click')
+    await flushPromises()
+    expect(formOf('novel.editor#1')).toBe('page')
+    expect(wrapper.find('[data-test="orb-badge"]').text()).toBe('4')
+    // 缘签零渲染（守卫①）在这一档也一样：屏上没有第二套收起态呈现。
+    expect(wrapper.findAll('.nx-pane-window-tab')).toHaveLength(0)
+    wrapper.unmount()
+  })
+
+  it('Esc＝把最上面那一页收进悬浮球；统一二级页开着时 Esc 先归弹窗', async () => {
     const handlers = new Map()
     const wrapper = mount(AppNext, { props: { bridge: pageBridge({ handlers }) } })
     await flushPromises()
@@ -2613,9 +3415,11 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
 
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
-    // 叠序最高的是刚开的浮窗 → 它成标签；页态那条不动。
+    // 叠序最高的是刚开的浮窗 → 它收进球里；页态那条不动。
     expect(formOf('outline.widget#1')).toBe('tab')
-    expect(wrapper.find('.nx-pane-window-tab[data-window-pane="outline.widget"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="collapse-orb"]').attributes('data-orb-count')).toBe('1')
+    // 守卫①：球是收起态的唯一呈现，右缘那一竖列文字标签不再回来。
+    expect(wrapper.findAll('.nx-pane-window-tab')).toHaveLength(0)
     expect(formOf('outline.editor#1')).toBe('page')
 
     // 再按一次：非标签记录里最靠后的那张页（大纲编辑）也让位。
@@ -2651,10 +3455,12 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(pages[0].instance).toBe('outline.editor#1')
     expect(pages[0].resource).toBe('outline:node:1')
     expect(workspace.entries['outline.editor#1'].resource).toBe('outline:node:1')
-    // 窗头与页签的标题跟着文档走：载体名 ＋ 文档标识末段。
-    expect(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]').text()).toContain('大纲编辑 · 1')
-    // 那一页的文档面确实换了（读态标题＝第二个节点）。
-    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('第一折：停摆的表')
+    // 窗头与页签的标题跟着文档走。〔批次76 裁定A〕原判据「大纲编辑 · 1」改判：
+    // 那一行不再念 resource 的数字尾巴（内部 id 不上屏），也不念 pane 名——读作「载体名 · 文档名」，
+    // 文档名从这一页自己的数据面回读（大纲节点＝节点标题）。
+    expect(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]').text()).toContain('大纲 · 第一折：停摆的表')
+    // 那一页的文档面确实换了（读态标题那一行已由批次76 撤到窗头，内容层不再自绘）。
+    expect(wrapper.find('[data-test="outline-reading-title"]').exists()).toBe(false)
 
     // 同一份文档重复点＝回到这一页，既不新建也不改 resource。
     await wrapper.findAll('.nx-overlay-tree .workspace-nav-item')[1].trigger('click')
@@ -2679,22 +3485,48 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(pages.map((page) => page.instance)).toEqual(['outline.editor#1', 'outline.editor#2', 'outline.editor#3'])
     expect(pages.map((page) => page.resource)).toEqual([null, 'outline:node:0', 'outline:node:1'])
     // 页签栏三条都上签，标题按各自那份文档区分。
-    expect(wrapper.findAll('.nx-page-tab').map((node) => node.text()).filter((text) => text.includes('大纲编辑')))
-      .toEqual(['大纲编辑', '大纲编辑 · 0', '大纲编辑 · 1'])
+    // 〔批次76 裁定A〕原判据「大纲编辑／大纲编辑 · 0／大纲编辑 · 1」改判：窗头与页签统一读「载体名 · 文档名」，
+    // 大纲节点的数字序号是内部 id，不再当标题端给作者（原判据保留在此行的替换里，不静默删）。
+    const tabText = (instance) => wrapper.find(`.nx-page-tab[data-page-instance="${instance}"]`).text()
+    expect(tabText('outline.editor#1')).toContain('大纲 · 大纲编辑')
+    expect(tabText('outline.editor#2')).toContain('大纲 · 开场：雨夜进城')
+    expect(tabText('outline.editor#3')).toContain('大纲 · 第一折：停摆的表')
 
     // 一页一份文档面（D-2）：揭示 #2 看到的是第一个节点，揭示 #3 看到的是第二个——两份草稿互不覆盖。
+    // 判据从「内容层那一行读态标题」换成「这一页自己的窗头」：批次76 之后标题面只有窗头，指向不变。
     await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#2"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
+    expect(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#2"] .nx-pane-window-title').text())
+      .toBe('大纲 · 开场：雨夜进城')
     await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#3"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-test="outline-reading-title"]').text()).toBe('第一折：停摆的表')
+    expect(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#3"] .nx-pane-window-title').text())
+      .toBe('大纲 · 第一折：停摆的表')
 
     // 关掉其中一页：另一页的记录与文档都不动。
     await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#3"] [data-page-action="close"]').trigger('click')
     await flushPromises()
     expect(hostWorkspace.get('outline.editor#3')).toBe(null)
     expect(hostWorkspace.get('outline.editor#2').resource).toBe('outline:node:0')
+    wrapper.unmount()
+  })
+
+  it('批次76 裁定A：标题面只剩窗头一行「载体 · 文档」，内容层零自绘、也不漏内部 id', async () => {
+    globalThis.localStorage?.clear()
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge() } })
+    await flushPromises()
+
+    // ① 窗头那一行读作「载体中文名 · 文档名」（作者原话的口径是「小说 第一章」）。
+    const head = wrapper.find('.nx-pane-window[data-window-instance="novel.editor#1"] .nx-pane-window-title')
+    expect(head.exists(), '页态窗必须有窗头标题行——批次76 之后它是唯一的标题面').toBe(true)
+    expect(head.text()).toBe('小说（夹具） · 雨夜')
+
+    // ② 内容层不再自绘任何一行标题：h2.doc-title 在整个壳里必须是 0（守卫⑤的运行时那半，源码侧在 visual-contract）。
+    expect(wrapper.findAll('h2.doc-title').length, '内容层还自绘标题行，同一份文档名会同屏出现两遍').toBe(0)
+
+    // ③ 内部 id 不上屏：resource 里的数字尾巴（record:material:7 → 7）不许当标题；
+    //    标题只能来自这一页数据面回读到的真名字，回读不到就只显示载体名。
+    expect(head.text()).not.toMatch(/\b(novel|chapter|record|editor)\b/u)
     wrapper.unmount()
   })
 
@@ -2723,16 +3555,33 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(snap.warnings).toContain('WORKSPACE_MIGRATED_V2')
     expect(snap.warnings).toContain('WORKSPACE_RESOURCE_UNKNOWN')
 
-    // 界面按迁移结果渲染：缘签一条、浮窗一条、屏上两张页（main＋side 各画自己的当前页＝对半）。
-    expect(wrapper.find('.nx-pane-window-tab[data-window-pane="outline.editor"]').exists()).toBe(true)
+    // 界面按迁移结果渲染：球里一条（〔裁定B〕收起态不再有右缘缘签）、浮窗一条、
+    // 屏上两张页（main＋side 各画自己的当前页＝对半）。
+    expect(wrapper.findAll('.nx-pane-window-tab')).toHaveLength(0)
+    expect(wrapper.find('[data-test="collapse-orb"]').attributes('data-orb-count')).toBe('1')
     expect(wrapper.find('.nx-pane-window[data-window-pane="outline.widget"]').attributes('data-window-state')).toBe('floating')
     const half = wrapper.findAll('.nx-pane-window.is-page')
     expect(half.map((node) => node.attributes('data-window-instance'))).toEqual(['novel.editor#1', 'novel.editor#2'])
     expect(half[1].attributes('data-window-group')).toBe('side')
     expect(half[1].classes()).toContain('is-in-side')
-    // 下一次变更才整份重写：落盘形状升到 v3（四格齐全）。
-    await wrapper.find('.nx-pane-window[data-window-pane="outline.widget"] [data-window-action="collapse"]').trigger('click')
+    // 下一次变更才整份重写：落盘形状升到 v3（四格齐全）。这里用 Esc 收最上面那扇浮窗（窗头钮已撤）。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('tab')
+    expect(wrapper.find('[data-test="collapse-orb"]').attributes('data-orb-count')).toBe('2')
+    // 球里两条各验一路：v2 迁来的那条没有 restore 那一格 → 回**页态**（旧档如实如此，不猜形态）；
+    // 本轮刚收进去的那条带着记忆 → 回浮窗并带回 (40,60,320,300)。
+    await wrapper.find('[data-test="orb-button"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="orb-item"][data-orb-instance="outline.editor#1"]').trigger('click')
+    await flushPromises()
+    expect(formOf('outline.editor#1')).toBe('page')
+    await wrapper.find('[data-test="orb-button"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="orb-item"][data-orb-instance="outline.widget#1"]').trigger('click')
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('floating')
+    expect(hostWorkspace.get('outline.widget#1').geometry).toMatchObject({ x: 40, y: 60, w: 320, h: 300 })
     expect(workspace.version).toBe(3)
     expect(Object.keys(workspace.active).sort()).toEqual(['main', 'side'])
     expect(workspace.entries['novel.editor#2'].group).toBe('side')
@@ -3220,9 +4069,10 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
       await flushPromises()
       const paneNow = () => wrapper.find('[data-pane-id="outline.editor"]')
       expect(paneNow().exists()).toBe(true)
-      expect(paneNow().find('.doc-title').exists()).toBe(true)
-      // 批次43：大纲面默认是阅读态——头部那一行标题是节点名，正文是渲染出来的备注。
-      expect(paneNow().find('[data-test="outline-reading-title"]').text()).toBe('开场：雨夜进城')
+      // 〔批次76 裁定A〕原判据「内容层头部那一行标题＝节点名」改判：那一行撤了，节点名上移到窗头。
+      expect(paneNow().find('.doc-title').exists()).toBe(false)
+      expect(wrapper.find('.nx-pane-window-title').text()).toBe('大纲 · 开场：雨夜进城')
+      // 批次43：大纲面默认是阅读态——正文是渲染出来的备注（标题那一行已由批次76 撤走）。
       expect(paneNow().find('[data-test="outline-rendered"]').exists()).toBe(true)
       expect(paneNow().find('.editor-foot').exists()).toBe(false)
       for (const gone of ['.outline-move', '.outline-remove', '.outline-add', '.pane-hint']) {
@@ -3437,7 +4287,9 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await flushPromises()
     const read = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_read').at(-1)
     expect(read.args).toEqual({ path: '世界书/编年/编年·雨夜.md' })
-    expect(wrapper.find('[data-pane-id="worldbook.entries"] .doc-title').text()).toBe('编年·雨夜')
+    // 〔批次76 裁定A〕原判据「详情面头部 .doc-title＝条目名」改判：条目名上移到窗头，详情面从正文第一行开始。
+    expect(wrapper.find('[data-pane-id="worldbook.entries"] .doc-title').exists()).toBe(false)
+    expect(wrapper.find('.nx-pane-window-title').text()).toBe('世界书 · 编年·雨夜')
     wrapper.unmount()
   })
 
@@ -3720,6 +4572,8 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     expect(graph.find('svg').exists()).toBe(true)
     expect(graph.findAll('.nx-entry-graph-node')).toHaveLength(withRelations.length, '每个条目一个节点，没有幽灵节点')
     expect(graph.findAll('.nx-entry-graph-edge')).toHaveLength(2, '跨类边落图（无向去重）')
+    // 〔批次76 任务4-6〕有边的图不贴那句「还没有登记关系」（同一条文案不许在两种事实下都出现）。
+    expect(wrapper.find('[data-test="entries-graph-no-relations"]').exists()).toBe(false)
 
     // 图例：三个类别各一枚色样；未落图的边如实计数。
     const legend = wrapper.find('[data-test="entries-graph-legend"]')
@@ -3762,6 +4616,9 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     expect(graph.findAll('.nx-entry-graph-node')).toHaveLength(CATEGORIZED.length)
     expect(graph.findAll('.nx-entry-graph-edge')).toHaveLength(0)
     expect(wrapper.find('[data-test="entries-graph-unmatched"]').exists()).toBe(false, '没有未落图的边就不摆这行计数')
+    // 〔批次76 任务4-6〕0 边不再静默画一圈散点：图上角落要出一句人话。
+    // 判据本身不动（边仍只认 relations[].to）——《大梦》13 条全是 relations: []，作者原来看不到任何解释。
+    expect(wrapper.find('[data-test="entries-graph-no-relations"]').text()).toBe('这些条目之间还没有登记关系。')
     // 关系富集读失败的条目在索引窗的 warning 里可见（图谱少边时作者看得到原因）。
     expect(wrapper.find('.nx-index-warn').exists()).toBe(false)
     wrapper.unmount()
