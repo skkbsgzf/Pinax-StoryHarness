@@ -51,7 +51,8 @@ async function reload() {
     feedback.value = { kind: 'error', text: result?.error?.message ?? '技能清单读不出来。' }
     return
   }
-  feedback.value = null
+  // 只擦掉上一句错误；刚按下启停后那句回执不能被随后的重扫抹掉——否则作者以为没生效。
+  if (feedback.value?.kind === 'error') feedback.value = null
   snapshot.value = result.value ?? null
 }
 
@@ -67,7 +68,7 @@ async function toggle(row) {
   feedback.value = {
     kind: 'ok',
     text: row.enabled
-      ? `已停用「${row.name}」：它从提示词的可用技能清单里退出去了，重新打开即时生效。`
+      ? `已停用「${row.name}」：下一问的可用技能清单里不再有它（启停写进了项目内 .pinax/skills.json）。`
       : `已启用「${row.name}」：下一问的清单里就有它。`
   }
   await reload()
@@ -172,13 +173,23 @@ onMounted(reload)
               :disabled="!!busyName"
               @click="showBody(row)"
             >{{ openedBody?.name === row.name ? '收起正文' : '查看正文' }}</button>
+            <!-- 停用是「收手」，启用是「这一问开始会用上它」：两枚按钮一份 data-test，控件词汇各取静态一档。 -->
             <button
+              v-if="row.enabled"
               type="button"
-              :class="row.enabled ? 'control-secondary' : 'control-primary'"
+              class="control-secondary"
               :data-test="`skills-toggle-${row.name}`"
               :disabled="!!busyName"
               @click="toggle(row)"
-            >{{ row.enabled ? '停用' : '启用' }}</button>
+            >停用</button>
+            <button
+              v-else
+              type="button"
+              class="control-primary"
+              :data-test="`skills-toggle-${row.name}`"
+              :disabled="!!busyName"
+              @click="toggle(row)"
+            >启用</button>
           </span>
           <pre v-if="openedBody?.name === row.name" class="skills-body" data-test="skills-body-view">{{ openedBody.body }}</pre>
         </div>

@@ -147,7 +147,7 @@ test('五份记录清单：各自一块目录、四把自有工具，外壳对�
     const expectedPanes = key === 'material'
       ? ['material.board', 'material.editor', 'material.panel']
       : key === 'comic'
-        ? ['comic.board', 'comic.editor', 'comic.canvas']
+        ? ['comic.board', 'comic.editor', 'comic.canvas', 'comic.comfyui']
         : [`${key}.board`, `${key}.editor`]
     assert.deepEqual(panes, expectedPanes, `${key}：左树＋中栏两块 pane（素材另有一块自带面板，漫画另有画布）`)
     if (key === 'comic') {

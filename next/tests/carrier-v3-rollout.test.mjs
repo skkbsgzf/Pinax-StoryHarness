@@ -115,9 +115,9 @@ test('十一块载体全部升到 @4：spec／manifestVersion／四张牌齐，p
   assert.deepEqual(customPanes, ['pinax.carrier.material/material.panel'],
     '十二块里只有素材那一栏带自带面板（v3 的样板），别的一栏不许悄悄多出面板')
 
-  // 批次58：画布（toonflow :3010）是十二块里唯一一块应用面——宿主只给内嵌浏览器，不手搓组件。
-  assert.deepEqual(appPanes, ['pinax.carrier.comic/comic.canvas'],
-    '十二块里只有漫画那一栏带应用面（独立体①的接入面），别的一栏不许悄悄多出应用面')
+  // 批次58：画布（toonflow :3010）是第一块应用面；批次65b 起追加 ComfyUI 前端（:8188）为第二块——作者 2026-11-03 裁定「两个端口都接进软件」。
+  assert.deepEqual(appPanes, ['pinax.carrier.comic/comic.canvas', 'pinax.carrier.comic/comic.comfyui'],
+    '十二块里只有漫画载体带应用面（toonflow 画布＋ComfyUI 前端各一块，作者 2026-11-03 裁定双端口都接），别的一栏不许悄悄多出应用面')
 })
 
 test('世界书两块 pane 的形态由 @4 认领语义正面表达：例外表删除后等价断言仍在', () => {

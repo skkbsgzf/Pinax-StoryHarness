@@ -40,8 +40,8 @@ import { IPC_CHANNELS, createIpcDispatcher } from '../shell/ipcContract.mjs'
 
 const BODY = '## 步骤\n\n1. 先读。\n'
 
-function markdown({ domain, kind, name = 'demo', tools = ['pinax_chapter_read'], output = 'checklist' } = {}) {
-  const lines = ['---', `name: ${name}`, 'description: 一句话说清这个技能干什么。', `tools: [${tools.join(', ')}]`, `output: ${output}`]
+function markdown({ domain, kind, name = 'demo', description = '一句话说清这个技能干什么。', tools = ['pinax_chapter_read'], output = 'checklist' } = {}) {
+  const lines = ['---', `name: ${name}`, `description: ${description}`, `tools: [${tools.join(', ')}]`, `output: ${output}`]
   if (domain !== undefined) lines.push(`domain: ${domain}`)
   if (kind !== undefined) lines.push(`kind: ${kind}`)
   lines.push('---', '', BODY)
@@ -280,7 +280,7 @@ test('〔批次77 任务5·判据4／守卫⑪〕整包拒装时设置面逐条�
   assert.equal('body' in listed.value.rows[0], false, '清单里不带正文')
 
   const codes = listed.value.rejected.map((item) => item.code).sort()
-  assert.deepEqual(codes, ['SKILL_FILE_MISSING', 'SKILL_TOOLS_NOT_ON_SURFACE'])
+  assert.deepEqual(codes, ['SKILL_FRONTMATTER_MISSING', 'SKILL_TOOLS_NOT_ON_SURFACE'])
   const surface = listed.value.rejected.find((item) => item.code === 'SKILL_TOOLS_NOT_ON_SURFACE')
   assert.equal(surface.dir, 'needs-mcp')
   assert.match(surface.message, /comfy_submit/u, '缺哪把工具要点名')
@@ -345,7 +345,7 @@ test('〔批次77 任务5·判据4〕装不上的那条连「看正文」也要�
 
   const unknown = await service.body('no-such')
   assert.equal(unknown.ok, false)
-  assert.equal(unknown.error.code, 'PINAX_SKILL_NOT_FOUND')
+  assert.equal(unknown.error.code, 'SKILL_NOT_FOUND', '既没装载也没拒装记录的名字：装载层那句原样交回来')
 })
 
 /* ───────────── 导入：拷进 .pinax/skills/ 后逐条校验 ───────────── */
@@ -361,9 +361,12 @@ test('〔批次77 任务5〕导入认「一个包」，落点在项目内 .pinax
   assert.deepEqual(result.value.rejected, [])
   assert.equal(result.value.source, projectSkillsDir(root))
 
-  const loaded = await loadSkills({ dir: source, availableTools: ['pinax_chapter_read'], projectRoot: root })
+  // 随包层给一个不存在的目录：这一条只证「项目里那层货架能单独把包供上来」，不与同名仲裁混在一起。
+  const loaded = await loadSkills({ dir: join(root, '没有随包层'), availableTools: ['pinax_chapter_read'], projectRoot: root })
   assert.deepEqual(loaded.skills.map((item) => item.name), ['imported-one'], '项目层那份是随包之外的第二层货架')
   assert.equal(loaded.skills[0].origin, 'project')
+  assert.equal(loaded.skills[0].domain, 'screenwriting')
+  assert.deepEqual(loaded.rejected, [])
 })
 
 test('〔批次77 任务5〕导入不合格逐条列原因，不假装成功', async () => {
