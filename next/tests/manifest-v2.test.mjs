@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   CARRIER_SPEC_V1,
   CARRIER_SPEC_V2,
+  CARRIER_SUBSCRIPTIONS,
+  PANE_FORM_WORDS,
   validateCarrierManifest
 } from '../kernel/carrierManifest.mjs'
 import { createRegistry } from '../kernel/pluginRegistry.mjs'
@@ -28,7 +30,7 @@ const V2_MINIMAL = {
   contributes: {
     panes: [
       { slot: 'left-dock', id: 'demo.tree', title: '树', view: 'pinax.view.tree' },
-      { slot: 'center', id: 'demo.editor', title: '编辑', view: 'pinax.view.editor', forms: ['dock', 'overlay', 'fullscreen'] }
+      { slot: 'center', id: 'demo.editor', title: '编辑', view: 'pinax.view.editor', forms: ['dock', 'overlay', 'split'] }
     ],
     settings: [
       { id: 'demo.section', title: '外观' },
@@ -70,7 +72,7 @@ test('v2 合规清单：五类声明都过，pane.view／forms、命令、枚举
   const manifest = result.value
   assert.deepEqual(manifest.panes.map((pane) => pane.id), ['demo.tree', 'demo.editor'])
   assert.equal(manifest.panes[0].view, 'pinax.view.tree')
-  assert.deepEqual(manifest.panes[1].forms, ['dock', 'overlay', 'fullscreen'])
+  assert.deepEqual(manifest.panes[1].forms, ['dock', 'overlay', 'split'])
   assert.deepEqual(manifest.commands, [{ id: 'demo.say', title: '打个招呼', run: 'sayHello' }])
   assert.deepEqual(manifest.renderers, ['pinax.view.custom'])
   assert.deepEqual(manifest.subscriptions, ['project.changed'])
@@ -144,15 +146,37 @@ test('contributes.renderers：只开 pinax.view.custom；宿主视图名即拒',
   assert.equal(validateCarrierManifest(bogus).error.code, 'PINAX_INVALID_MANIFEST')
 })
 
-test('subscriptions：只认 project.changed', () => {
+test('subscriptions：词表三档（批次66 任务四 F7 扩的 file.changed／layout.changed），词外照拒', () => {
+  // 词表本身是记账对象：扩了词必须在这份测试里点名，别只在实现文件里悄悄多一个字符串。
+  assert.deepEqual([...CARRIER_SUBSCRIPTIONS], ['project.changed', 'file.changed', 'layout.changed'])
+  for (const word of CARRIER_SUBSCRIPTIONS) {
+    const result = validateCarrierManifest(withMutation(V2_MINIMAL, (m) => { m.subscriptions = [word] }))
+    assert.equal(result.ok, true, `${word}：${JSON.stringify(result.error ?? {})}`)
+    assert.deepEqual(result.value.subscriptions, [word])
+  }
+  const allThree = validateCarrierManifest(withMutation(V2_MINIMAL, (m) => { m.subscriptions = [...CARRIER_SUBSCRIPTIONS] }))
+  assert.equal(allThree.ok, true, JSON.stringify(allThree.error ?? {}))
+
   const bad = withMutation(V2_MINIMAL, (m) => { m.subscriptions = ['project.deleted'] })
   assert.equal(validateCarrierManifest(bad).error.code, 'PINAX_UNKNOWN_SUBSCRIPTION')
+  // selection.changed 本批登记不做（没有干净发射点），词表里没有它 = 清单声明了也拒装，不许半成品口径。
+  const deferred = withMutation(V2_MINIMAL, (m) => { m.subscriptions = ['selection.changed'] })
+  assert.equal(validateCarrierManifest(deferred).error.code, 'PINAX_UNKNOWN_SUBSCRIPTION')
 })
 
 test('pane.view／forms：view 须是 pinax.view.*，forms 只认宿主位置词表', () => {
+  // 批次66 裁定 Q2：位置词表三档，整窗旧词从此是词表外值——清单还写它就拒装，不是"读得到但不生效"。
+  assert.deepEqual([...PANE_FORM_WORDS], ['dock', 'split', 'overlay'])
   const badView = withMutation(V2_MINIMAL, (m) => { m.contributes.panes[0].view = 'tree' })
   assert.equal(validateCarrierManifest(badView).error.code, 'PINAX_INVALID_MANIFEST')
 
+  for (const retired of ['fullscreen', 'immersive']) {
+    const stale = withMutation(V2_MINIMAL, (m) => { m.contributes.panes[1].forms = ['dock', retired] })
+    const result = validateCarrierManifest(stale)
+    assert.equal(result.ok, false, `${retired} 已从词表删除，不该还能装上`)
+    assert.equal(result.error.code, 'PINAX_INVALID_MANIFEST')
+    assert.match(result.error.message, /未知位置/u)
+  }
   const badForm = withMutation(V2_MINIMAL, (m) => { m.contributes.panes[1].forms = ['dock', 'popout'] })
   assert.equal(validateCarrierManifest(badForm).error.code, 'PINAX_INVALID_MANIFEST')
 

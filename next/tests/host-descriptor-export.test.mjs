@@ -26,7 +26,8 @@ test('生成器取值全部来自词表常量：views／forms／slots／reserved
   assert.deepEqual(descriptor.views, [...VIEW_TYPES])
   assert.equal(descriptor.views.length, 9)
   assert.deepEqual(descriptor.forms, [...PANE_FORMS])
-  assert.equal(descriptor.forms.length, 5)
+  // 批次66 裁定 Q2：形态词表收敛成三档（整窗旧词无落点，删除）——这里钉住「三档且只有三档」。
+  assert.equal(descriptor.forms.length, 3)
   assert.deepEqual(descriptor.slots, [...OPEN_SLOTS])
   assert.deepEqual(descriptor.reservedSlots, Object.keys(RESERVED_SLOTS))
   assert.deepEqual(descriptor.carrierSpecs, [...SUPPORTED_CARRIER_SPECS])
@@ -48,7 +49,7 @@ test('反向断言：任一字段被人为改错，diffHostDescriptor 必须报�
   const mutations = [
     ['views', base.views.slice(0, -1)],
     ['views-order', [...base.views].reverse()],
-    ['forms', base.forms.filter((form) => form !== 'immersive')],
+    ['forms', base.forms.filter((form) => form !== 'overlay')],
     ['slots', [...base.slots, 'right']],
     ['reservedSlots', base.reservedSlots.slice(1)],
     ['carrierSpecs', base.carrierSpecs.slice(0, -1)],

@@ -727,7 +727,8 @@ test('批次61：workspace v3 页轴就位，v2 窗口 API 与旧位置四轴零
 
   const forms = await readFile(join(shellDir, 'paneForms.mjs'), 'utf-8')
   for (const needle of [
-    "PANE_FORMS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])",
+    // 批次66（裁定 Q2）：词表收敛成三档，与 FORM_ACTIONS 一一同构——旧词不许回来。
+    "PANE_FORMS = Object.freeze(['dock', 'split', 'overlay'])",
     'FORM_ACTIONS',
     'PAGE_ACTIONS',
     'MENU_TARGET_FORM',

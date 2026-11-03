@@ -49,10 +49,10 @@ export const DOSSIER_CARRIER = Object.freeze({
     panes: [
       // 槽语义（批次53）：整栏一份的双段树（single＋project），兜底认领 资料/** 与 约束/**。
       // kind 取 document-detail：这棵树的主要面孔是文档；约束文件由编辑面按 selection 切规则面孔。
-      { slot: 'left-dock', id: 'dossier.board', title: '设定与资料', icon: 'library', view: 'pinax.view.tree', kind: 'document-detail', multiplicity: 'single', scope: 'project', claims: ['资料/**', '约束/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'left-dock', id: 'dossier.board', title: '设定与资料', icon: 'library', view: 'pinax.view.tree', kind: 'document-detail', multiplicity: 'single', scope: 'project', claims: ['资料/**', '约束/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：编辑位绑一份文档或一条约束（single＋entry），两类都认。
       // canOpen 用 in：资料与约束在同一块编辑面里按 selection 换面孔，裁决不因半边不匹配而落空。
-      { slot: 'center', id: 'dossier.editor', title: '资料与约束', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', multiplicity: 'single', scope: 'entry', claims: ['资料/**/*.md', '资料/**/*.txt', '约束/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['document', 'rule'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      { slot: 'center', id: 'dossier.editor', title: '资料与约束', icon: 'document', view: 'pinax.view.reader', kind: 'document-detail', multiplicity: 'single', scope: 'entry', claims: ['资料/**/*.md', '资料/**/*.txt', '约束/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['document', 'rule'] }, takes: 'extension', forms: ['dock', 'split', 'overlay'] }
     ],
     // 批次62 任务一：命令面（既有动作的另一个入口）：
     //   dossier.open-board       board:pinax.carrier.dossier ← 竖条点「设定与资料」这一格（AppNext.selectBoard）

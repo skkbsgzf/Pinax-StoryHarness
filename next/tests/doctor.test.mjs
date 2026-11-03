@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readdir, readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { DOCTOR_STATES, diagnoseAll, diagnoseCarrier, loadHostDescriptor } from '../doctor.mjs'
+import { PANE_FORMS } from '../shell/paneForms.mjs'
+import { PANE_FORM_WORDS } from '../kernel/carrierManifest.mjs'
 import { NOVEL_CARRIER } from '../carriers/novel/manifest.mjs'
 import { OUTLINE_CARRIER } from '../carriers/outline/manifest.mjs'
 import { NOTES_CARRIER } from '../carriers/notes/manifest.mjs'
@@ -19,6 +24,12 @@ import { clone } from '../testing/fixtures.mjs'
  * 描述符是「这台外壳今天是什么」的事实；doctor 只是把它和载体清单对表。
  */
 
+/**
+ * 批次66 前置裁定 Q2 删掉的两个整窗旧词。它们不在任何词表里了（词表就是「不许有它们」这件事），
+ * 所以这份守卫自己点名——「全仓零声明」这条断言的判据只能写在测试里，不能写在被测模块里。
+ */
+const RETIRED_FORMS = Object.freeze(['fullscreen', 'immersive'])
+
 const DESCRIPTOR = {
   descriptorVersion: 1,
   host: 'pinax-next-shell',
@@ -28,7 +39,7 @@ const DESCRIPTOR = {
   trustMode: 'same-process',
   slots: ['left-dock', 'center', 'overlay'],
   reservedSlots: ['right', 'top-menu'],
-  forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'],
+  forms: ['dock', 'split', 'overlay'],
   // 批次58：画布用 pinax.view.app（真实描述符里也有这一项）；批次54 的来源层用例要能诊断漫画。
   views: ['pinax.view.tree', 'pinax.view.list', 'pinax.view.editor', 'pinax.view.reader', 'pinax.view.diff', 'pinax.view.graph', 'pinax.view.app', 'pinax.view.custom'],
   uiLayers: ['shell-chrome', 'pane-content', 'floating-overlay'],
@@ -45,8 +56,8 @@ test('描述符：真实文件可读，字段齐全；不支持真多窗口如�
   assert.equal(descriptor.host, 'pinax-next-shell')
   assert.equal(descriptor.supportsPopout, false, '今天的浮窗是应用内 absolute 卡片，不假装多窗口')
   assert.deepEqual(descriptor.slots, ['left-dock', 'center', 'overlay'])
-  // 批次45：描述符 forms 加 immersive；批次60 合并后六个文档面载体声明它，五个记录型载体不声明。
-  assert.deepEqual(descriptor.forms, ['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
+  // 批次66（前置裁定 Q2）：形态词表收敛成三档，描述符由词表生成，所以这里就是那三档。
+  assert.deepEqual(descriptor.forms, ['dock', 'split', 'overlay'])
   assert.ok(descriptor.views.includes('pinax.view.custom'))
   // 批次52：六态——adopted-external 是「合法清单，但服务由外部进程自管」的事实，不是故障。
   assert.deepEqual(DOCTOR_STATES, ['ok', 'adopted-external', 'needs-host-upgrade', 'missing-capability', 'permission-denied', 'incompatible-form'])
@@ -70,31 +81,45 @@ test('六个内置载体全部对得上真描述符：没有一个需要升级�
   }
 })
 
-test('沉浸形态（批次45／批次60）：六个文档面载体声明 immersive，五个记录型载体不声明', () => {
-  const documentFaces = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER]
-  for (const carrier of documentFaces) {
-    const panes = carrier.contributes.panes.filter((pane) => Array.isArray(pane.forms))
-    assert.ok(panes.length > 0, `${carrier.id} 应有带 forms 声明的 pane`)
-    for (const pane of panes) {
-      assert.ok(pane.forms.includes('immersive'), `${carrier.id}/${pane.id} 的 forms 应含 immersive`)
-    }
-  }
-  const recordFaces = [MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER]
-  for (const carrier of recordFaces) {
-    const panes = carrier.contributes.panes.filter((pane) => Array.isArray(pane.forms))
-    for (const pane of panes) {
-      // 批次58：漫画的画布是 app 档（内嵌浏览器承载外部端口），不是记录编辑/文档面——
-      // 它按作者工单声明 immersive（整窗占满中栏看画布），不参与「记录型载体不许沉浸」这条。
-      if (pane.kind === 'external-app') {
-        assert.equal(pane.id, 'comic.canvas', `${carrier.id}/${pane.id}：记录型载体里只允许画布这一块应用面声明沉浸`)
-        continue
+test('形态词表三档（批次66 裁定 Q2）：十一个载体的 forms 声明里没有整窗旧词，且全部落在词表内', async () => {
+  const carriers = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER,
+    MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER]
+  const vocab = new Set(PANE_FORMS)
+  let declared = 0
+  for (const carrier of carriers) {
+    for (const pane of carrier.contributes.panes) {
+      if (!Array.isArray(pane.forms)) continue
+      declared += 1
+      for (const form of pane.forms) {
+        assert.equal(vocab.has(form), true, `${carrier.id}/${pane.id} 声明了词表外形态：${form}`)
+        assert.equal(RETIRED_FORMS.includes(form), false, `${carrier.id}/${pane.id} 又声明了整窗旧词：${form}`)
       }
-      assert.equal(pane.forms.includes('immersive'), false, `${carrier.id}/${pane.id} 是记录型载体，不该声明沉浸`)
     }
   }
-  // 十一个载体在真描述符下仍然全部 ok（批次60 设定与资料合并后 12→11）。
+  // 批次61 起这份声明就是右键菜单项的唯一来源：一个都没有＝菜单永远空，收敛收成删光了。
+  assert.ok(declared >= 20, `带 forms 声明的 pane 只有 ${declared} 块，不像话`)
+
+  // 声明面源码扫描：每份清单里 `forms: [...]` 那一串不许出现旧词（注释里讲历史不算违规）。
+  const carriersDir = fileURLToPath(new URL('../carriers', import.meta.url))
+  const dirs = (await readdir(carriersDir, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+  assert.equal(dirs.length, 11, '载体数变了：这份守卫要跟着点名')
+  for (const dir of dirs) {
+    const source = await readFile(join(carriersDir, dir, 'manifest.mjs'), 'utf-8')
+    const declarations = [...source.matchAll(/forms\s*:\s*\[([^\]]*)\]/gu)]
+    assert.ok(declarations.length > 0, `carriers/${dir}/manifest.mjs 一条 forms 声明都没扫到：守卫写法失效了`)
+    for (const match of declarations) {
+      for (const word of RETIRED_FORMS) {
+        assert.equal(match[1].includes(word), false, `carriers/${dir}/manifest.mjs 的 forms 声明残留旧词：[${match[1].trim()}]`)
+      }
+    }
+  }
+  // 两份词表（渲染层 / 内核校验层）也必须是三档——清单和宿主对不上就是体检红。
+  assert.deepEqual(PANE_FORM_WORDS, [...PANE_FORMS])
   const loaded = loadHostDescriptor()
-  const all = diagnoseAll([...documentFaces, ...recordFaces], { descriptor: loaded.value })
+  assert.deepEqual(loaded.value.forms, [...PANE_FORMS])
+
+  // 十一个载体在真描述符下仍然全部 ok（批次60 设定与资料合并后 12→11）。
+  const all = diagnoseAll(carriers, { descriptor: loaded.value })
   assert.equal(all.length, 11)
   for (const report of all) assert.equal(report.state, 'ok', `${report.manifestId}: ${report.message}`)
 })

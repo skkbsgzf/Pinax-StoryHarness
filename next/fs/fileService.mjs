@@ -6,6 +6,7 @@ import { canPerform } from '../kernel/scopeGrant.mjs'
 import { recoverInterruptedWrites, TMP_PREFIX, writeFileAtomic } from './atomicWrite.mjs'
 import { assertNoSymlinkEscape, joinContained } from './projectPath.mjs'
 import { snapshotBeforeDestructive } from '../history/gitHistory.mjs'
+import { emitProjectEvent } from '../runtime/eventBus.mjs'
 
 /**
  * 唯一写盘出口（WP2）。所有插件的文件操作都必须过这三道闸：
@@ -734,8 +735,23 @@ export function createFileService({ root, registry, fsImpl, onWrite, snapshot = 
   /**
    * 写入后的旁路通知（D1：历史标脏的单一接入点，不让各载体自己标）。
    * 历史是旁路：钩子失败绝不能让已经落盘的写作失败，异常在这里吞掉。
+   *
+   * 批次66 任务四：这里同时是 `file.changed` 的真实发射点——四道写口（write／delete／
+   * rename 的两段／writeProposal）都汇到这一个函数，所以细粒度的「哪份文件刚落盘」在这里发一次就够，
+   * 不在每个写口各写一行（那会把「唯一接入点」这条纪律拆散）。
+   * 顺序固定：先上总线（细），再交写入钩子（批次37 那条按目录映射的粗类别＋历史标脏）——
+   * 同一次落盘于是有两条事件，粒度各管各的刷新，不是重复投递。
+   * 语义不变：闸、修订号、快照、返回值一个字都没动，事件纯粹是旁路。
    */
   async function notifyWrite(info) {
+    const relativePath = typeof info?.relativePath === 'string' ? info.relativePath : null
+    if (relativePath) {
+      try {
+        emitProjectEvent(projectRoot, { kind: 'file-changed', path: relativePath })
+      } catch {
+        // 总线是进程内的旁路：它坏了也不该让已经落盘的写作失败（与下面钩子同一口径）。
+      }
+    }
     if (!writeHook) return
     try {
       await writeHook({ root: projectRoot, ...info })

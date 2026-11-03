@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir, rename as renameFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { emitProjectEvent } from './runtime/eventBus.mjs'
 
 /**
  * 工作区状态的磁盘层（M2.5-C 任务一）：项目级 `.pinax/workspace.json`。
@@ -50,6 +51,8 @@ function validateSnapshot(snapshot) {
     if (Object.keys(active).length === 2) value.active = active
   }
   if (snapshot.focus === 'main' || snapshot.focus === 'side') value.focus = snapshot.focus
+  // 批次66 任务二：最近打开列表同属加法字段，整串透传（逐条净化只有一处：渲染层的 normalizeLastOpenFiles）。
+  if (Array.isArray(snapshot.lastOpenFiles)) value.lastOpenFiles = snapshot.lastOpenFiles
   return { ok: true, value }
 }
 
@@ -75,6 +78,7 @@ function parseStored(raw) {
     entries,
     active: parsed.active && typeof parsed.active === 'object' && !Array.isArray(parsed.active) ? parsed.active : null,
     focus: parsed.focus === 'main' || parsed.focus === 'side' ? parsed.focus : null,
+    lastOpenFiles: Array.isArray(parsed.lastOpenFiles) ? parsed.lastOpenFiles : null,
     warnings,
     exists: true
   }
@@ -111,6 +115,9 @@ export function createFileWorkspaceStore({ root } = {}) {
       await writeFile(tmpFile, text, 'utf-8')
       await renameFile(tmpFile, file)
       lastWritten = text
+      // 〔批次66 任务四〕layout.changed 的真实发射点：只有「真的落了一次盘」才发——
+      // 内容没变被跳过的那次不算布局变了（不发假事件），失败的那次更不会。
+      emitLayoutChanged()
       return { ok: true, value: { file, skipped: false, bytes: Buffer.byteLength(text), entries: Object.keys(validated.value.entries).length } }
     })
     queue = task.then(() => undefined, () => undefined)
@@ -118,6 +125,15 @@ export function createFileWorkspaceStore({ root } = {}) {
       ok: false,
       error: { code: 'WORKSPACE_WRITE_FAILED', message: `工作区写盘失败：${String(error?.message ?? error)}` }
     }))
+  }
+
+  /** 事件是旁路：总线出问题绝不反过来让已经落盘的工作区写失败（与 fileService.notifyWrite 同一口径）。 */
+  function emitLayoutChanged() {
+    try {
+      emitProjectEvent(root, { kind: 'layout-changed', path: `${WORKSPACE_DIR}/${WORKSPACE_FILENAME}` })
+    } catch {
+      // 忽略：没有订阅者时 emit 本来就是空操作。
+    }
   }
 
   return { root: String(root), file, read, write }

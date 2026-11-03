@@ -741,10 +741,13 @@ describe('Obsidian 三栏', () => {
     const wrapper = mount(AppNext, { props: { bridge: { request } } })
     await flushPromises()
 
-    // 卷标题按目录名出，是静态 <p>（不可点、不出现在 .nx-tree-item 里）。
+    // 卷标题按目录名出，是折叠钮（批次66 任务三：它不再是静态 <p>，但也仍然不打开文档，
+    // 所以章行照旧只出在 .nx-tree-item 里）。名字与条数分两个 span，取名字那一段。
     const volumes = wrapper.findAll('[data-test="chapter-volume"]')
-    expect(volumes.map((node) => node.text())).toEqual(['第一卷', '第二卷'])
-    expect(volumes[0].element.tagName).toBe('P')
+    expect(volumes.map((node) => node.find('.nx-volume-name').text())).toEqual(['第一卷', '第二卷'])
+    expect(volumes.map((node) => node.find('.nx-volume-count').text())).toEqual(['2', '1'])
+    expect(volumes[0].element.tagName).toBe('BUTTON')
+    expect(volumes[0].attributes('aria-expanded')).toBe('true')
     const rows = wrapper.findAll('.nx-index-window .nx-tree-item')
     expect(rows).toHaveLength(4)
     // 批次33（索引窗 IDE 化）：行＝名字，数字前缀已拆（顺序由文件名与排序自明）。
@@ -767,6 +770,26 @@ describe('Obsidian 三栏', () => {
     // 批次43：文档面不再摆路径 · 版本这些开发者信息（作者 2026-10-31）——路径在索引窗那一行的 title 上。
     expect(wrapper.find('[data-pane-id="novel.editor"]').text()).not.toContain('正文/第二卷/第003章-雪夜.md')
     expect(rows[2].attributes('title')).toContain('正文/第二卷/第003章-雪夜.md')
+
+    // 批次66 任务三：卷头那一钮收的是本卷那几行；折叠态按页记进 workspace 条目（重启恢复的就是这一份）。
+    // 每点一次都重新查一遍：树的整段会随视图状态重渲染，上头的旧句柄指向的是已经换下的节点。
+    // 收放认的是 v-show 落在 ul 上的那条内联声明——jsdom 的 getComputedStyle 对「挂上 display:none 再摘掉」
+    // 有缓存（摘掉后仍报 none），isVisible 在这种「收起→再展开」的路径上不可信，真浏览器没这问题。
+    const volumeTrees = () => wrapper.findAll('.nx-index-body ul.nx-tree')
+    const volumeButtons = () => wrapper.findAll('[data-test="chapter-volume"]')
+    const hidden = (ul) => String(ul.attributes('style') ?? '').includes('display: none')
+    expect(volumeTrees().map(hidden)).toEqual([false, false, false])
+    await volumeButtons()[0].trigger('click')
+    await flushPromises()
+    expect(volumeButtons()[0].attributes('aria-expanded')).toBe('false')
+    expect(volumeTrees().map(hidden)).toEqual([true, false, false])
+    expect(hostWorkspace.get('novel.editor#1')?.viewState).toEqual({ collapsed: ['第一卷'] })
+    // 再点一次＝展开回去，状态随之落回 null（全展开没有值得落盘的东西，不写空壳）。
+    await volumeButtons()[0].trigger('click')
+    await flushPromises()
+    expect(volumeButtons()[0].attributes('aria-expanded')).toBe('true')
+    expect(volumeTrees().map(hidden)).toEqual([false, false, false])
+    expect(hostWorkspace.get('novel.editor#1')?.viewState).toBe(null)
     wrapper.unmount()
 
     // 平铺数据（没有卷子目录）：不画卷标题，行文与拆分前一样。
@@ -794,6 +817,68 @@ describe('Obsidian 三栏', () => {
       '雨夜'
     ])
     flatWrapper.unmount()
+  })
+
+  it('最近打开（批次66 任务二）：整份列表只预填不自动开，点一条才落回那一页，关掉页仍留在列表', async () => {
+    const chapters = [
+      { index: 0, title: '第001章-雨夜', file: '正文/第001章-雨夜.md', name: '第001章-雨夜.md', revision: 1 },
+      { index: 1, title: '第002章-雪夜', file: '正文/第002章-雪夜.md', name: '第002章-雪夜.md', revision: 1 }
+    ]
+    // 上次关掉壳时留在 .pinax/workspace.json 里的那份账：两条最近打开，一页都没开着。
+    const archive = {
+      version: 3,
+      entries: {},
+      lastOpenFiles: [
+        { pane: 'novel.editor', resource: 'chapter:正文/第002章-雪夜.md' },
+        { pane: 'novel.editor', resource: 'chapter:正文/第001章-雨夜.md' }
+      ]
+    }
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.workspaceLoad) return { ok: true, value: archive }
+      if (channel === IPC_CHANNELS.runtimeToolCall) {
+        if (payload.tool === 'pinax_chapter_list') {
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, total: chapters.length, truncated: false, chapters } } }
+        }
+        if (payload.tool === 'pinax_chapter_read') {
+          const hit = chapters.find((chapter) => chapter.file === payload.args.file) ?? chapters[0]
+          return { ok: true, value: { tool: payload.tool, owner: 'fixture.novel', payload: { ok: true, chapter: { index: hit.index, title: hit.title, file: hit.file }, text: `${hit.title}正文。`, totalChars: 7, truncated: false, revision: 1 } } }
+        }
+      }
+      return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '未预期的通道' } }
+    })
+    const wrapper = mount(AppNext, { props: { bridge: { request } } })
+    await flushPromises()
+
+    const recentRows = () => wrapper.findAll('[data-test="recent-file"]')
+    // 预填：列表一上来就摆在那里（带标题，不是路径尾巴），但没有为这两条开出两页——
+    // 页只有一张，是启动补的那一张缺省页。
+    expect(recentRows().map((row) => row.text())).toEqual(['章 · 第002章-雪夜', '章 · 第001章-雨夜'])
+    expect(hostWorkspace.list()).toHaveLength(1)
+    expect(hostWorkspace.list()[0].pane).toBe('novel.editor')
+
+    // 区头那一钮是 disclosure：收起＝列表不占栏高，列表项仍在 DOM 里（v-show，不是删掉）。
+    const recentList = () => wrapper.find('.nx-recent-list')
+    await wrapper.find('[data-test="recent-toggle"]').trigger('click')
+    await flushPromises()
+    expect(recentList().element.style.display).toBe('none')
+    expect(recentRows()).toHaveLength(2)
+    await wrapper.find('[data-test="recent-toggle"]').trigger('click')
+    await flushPromises()
+    expect(recentList().element.style.display).toBe('')
+
+    // 点第 2 条＝经宿主的唯一开窗通路开那一份文档：同一块 pane 换装（不另起一页），列表把它置顶且不重复。
+    await recentRows()[1].trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.list()).toHaveLength(1)
+    expect(hostWorkspace.get('novel.editor#1')?.resource).toBe('chapter:正文/第001章-雨夜.md')
+    expect(recentRows().map((row) => row.text())).toEqual(['章 · 第001章-雨夜', '章 · 第002章-雪夜'])
+
+    // 关掉那一页：列表不动——「打开过」是一段历史，不是「现在开着什么」的镜像。
+    hostWorkspace.close('novel.editor#1')
+    await flushPromises()
+    expect(recentRows().map((row) => row.text())).toEqual(['章 · 第001章-雨夜', '章 · 第002章-雪夜'])
+    wrapper.unmount()
   })
 })
 
@@ -2128,6 +2213,8 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     { id: 'n1', title: '开场：雨夜进城', summary: '雪夜，柯秒进了城。' },
     { id: 'n2', title: '第一折：停摆的表' }
   ]
+  // 夹具里**故意**留着批次66 已从词表删除的两个旧词：真实世界里存在「清单没改就送到外壳」的旧档，
+  // 渲染层 sanitizePaneForms 必须把它们滤干净——菜单因此永远只有 dock／side／float 三项（下面有用例钉住）。
   const NOVEL_PANES = [
     { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', multiplicity: 'single', scope: 'project', forms: ['dock'] },
     { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', multiplicity: 'single', scope: 'entry', split: 'main', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }

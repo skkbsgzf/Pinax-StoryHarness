@@ -279,7 +279,8 @@ test('doctor：描述符没登记 v3 就是 needs-host-upgrade，登记了才放
     trustMode: 'same-process',
     slots: ['left-dock', 'center', 'overlay'],
     reservedSlots: ['right', 'top-menu'],
-    forms: ['dock', 'split', 'overlay', 'fullscreen'],
+    // 批次66 裁定 Q2：宿主能落地的位置只剩三档（这份夹具只用来验 carrierSpecs 那一步，形态词表跟着现实走）。
+    forms: ['dock', 'split', 'overlay'],
     views: ['pinax.view.tree', 'pinax.view.list', 'pinax.view.editor', 'pinax.view.reader', 'pinax.view.diff', 'pinax.view.graph', 'pinax.view.custom'],
     platforms: ['electron']
   }

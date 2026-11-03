@@ -37,8 +37,8 @@ import { WORLDBOOK_CARRIER_ID } from '../carriers/worldbook/manifest.mjs'
 import { FIXTURE_NOVEL } from './fixtures.mjs'
 import { probePort } from './harness.mjs'
 import { IPC_CHANNELS, createIpcDispatcher } from '../shell/ipcContract.mjs'
-import { PANE_FORMS } from '../shell/paneForms.mjs'
-import { PAGE_FORMS } from '../shell/workspace.mjs'
+import { PANE_FORMS, FORM_ACTIONS } from '../shell/paneForms.mjs'
+import { PAGE_FORMS, LAST_OPEN_FILES_LIMIT, pushRecentFile } from '../shell/workspace.mjs'
 import { GESTURE_ACTIONS, GESTURE_FORMS } from '../shell/openTarget.mjs'
 
 /**
@@ -754,6 +754,67 @@ try {
     })
     console.log(`〔批次65a 记账〕doctor 外部态读数：declarative=${extDoctorReport.filter((item) => item.state === 'external-declarative').length} rejected=${extDoctorReport.filter((item) => item.state === 'external-rejected').length}；卸载回收站路径=${extUninstalled.ok ? extUninstalled.value.trashPath.replace(extRoot, '.pinax/plugins') : '-'}`)
   }
+
+  // ── 批次66：形态词表收敛（前置裁定 Q2）＋lastOpenFiles／逐视图状态＋订阅词表扩展 ──────
+  // 硬判据住在 next/tests/（pane-forms 的同构断言、doctor 的全仓零声明、workspace 的滚动封顶、
+  // event-bus 的两个发射点投递用例）。本节按工单「记账指标（不进闸）」把三张对照表留在跑批输出里。
+  const RETIRED_FORM_WORDS = ['fullscreen', 'immersive']
+  const carrierFormTable = BUILT_IN_CARRIER_PLUGINS.map((plugin) => {
+    const declared = new Set()
+    for (const pane of plugin.manifest.contributes?.panes ?? []) for (const form of pane.forms ?? []) declared.add(form)
+    return { id: plugin.manifest.id, forms: [...declared].sort(), retired: [...declared].filter((word) => RETIRED_FORM_WORDS.includes(word)) }
+  })
+  const formsConverged = PANE_FORMS.length === 3
+    && carrierFormTable.every((row) => row.forms.length > 0 && row.retired.length === 0 && row.forms.every((word) => PANE_FORMS.includes(word)))
+    // 落点同构：每个词都真有落点（FORM_ACTIONS 的键集＝词表），不存在「声明了却没落点」。
+    && PANE_FORMS.every((word) => Boolean(FORM_ACTIONS[word]?.action))
+    && Object.keys(FORM_ACTIONS).length === PANE_FORMS.length
+  record('批次66 任务1：词表三档↔落点同构，随包清单声明的 forms ⊆ 词表且零退役值',
+    formsConverged,
+    `词表=${PANE_FORMS.join('/')} 落点=${PANE_FORMS.map((word) => FORM_ACTIONS[word]?.action ?? '-').join('/')} 清单=${carrierFormTable.length} 份 退役命中=${carrierFormTable.reduce((sum, row) => sum + row.retired.length, 0)}`)
+  console.log('〔批次66 记账①〕词表 → 落点 → v3 形态轴对照：'
+    + PANE_FORMS.map((word) => `${word}→${FORM_ACTIONS[word]?.action ?? '无落点'}(${FORM_ACTIONS[word]?.label ?? '-'})`).join(' ')
+    + ` ；页形态轴=${PAGE_FORMS.join('/')}（本批一字未动）`)
+  console.log('〔批次66 记账②〕随包清单 forms 清理对照（退役值 fullscreen／immersive 应为零）：'
+    + carrierFormTable.map((row) => `${row.id}=[${row.forms.join(',')}]`).join(' '))
+
+  // lastOpenFiles 首版内容样例：纯函数现造一份 25 次打开（其中 3 次是重开已有那份）的账，
+  // 摊出滚动封顶、去重与最近优先。真实内容要等真窗口实拍（工单验收判据后半句由调度方接管），
+  // 这里只证形状与封顶。
+  let recentLedger = []
+  const recentPushes = []
+  let repeatKeptLength = true
+  for (let index = 0; index < LAST_OPEN_FILES_LIMIT + 5; index += 1) {
+    // 每 8 次里的第 8 次「重开第 1 次那份」：序号回卷，file 与 pane 一起回卷，才是真重复。
+    const ordinal = index % 8 === 7 ? index - 7 : index
+    const file = `正文/第${String(ordinal + 1).padStart(3, '0')}章-样例.md`
+    const pushed = ordinal % 3 === 0
+      ? { pane: 'worldbook.board', resource: `entry:${file}` }
+      : { pane: 'novel.editor', resource: `chapter:${file}` }
+    const before = recentLedger.length
+    if (index % 8 === 7) {
+      // 重开不增条数，且那份得挪到最前。
+      const wasIn = recentLedger.some((item) => item.pane === pushed.pane && item.resource === pushed.resource)
+      recentLedger = pushRecentFile(recentLedger, pushed)
+      repeatKeptLength = repeatKeptLength
+        && (!wasIn || recentLedger.length === before)
+        && recentLedger[0].pane === pushed.pane
+        && recentLedger[0].resource === pushed.resource
+    } else {
+      recentLedger = pushRecentFile(recentLedger, pushed)
+    }
+    recentPushes.push(pushed)
+  }
+  const lastPush = recentPushes[recentPushes.length - 1]
+  record('批次66 任务2：lastOpenFiles 滚动封顶（25 次打开含 3 次重开→封顶 20 条、去重、最近优先）',
+    recentLedger.length === LAST_OPEN_FILES_LIMIT
+      && recentPushes.length === LAST_OPEN_FILES_LIMIT + 5
+      && recentLedger[0].pane === lastPush.pane
+      && recentLedger[0].resource === lastPush.resource
+      && repeatKeptLength
+      && new Set(recentLedger.map((item) => `${item.pane} ${item.resource}`)).size === recentLedger.length,
+    `条数=${recentLedger.length}/${LAST_OPEN_FILES_LIMIT}（推送 ${recentPushes.length} 次）首条=${recentLedger[0]?.resource ?? '-'}`)
+  console.log(`〔批次66 记账③〕lastOpenFiles 首版内容样例（前 3 条）：${JSON.stringify(recentLedger.slice(0, 3))}`)
 
   const failed = results.filter((item) => !item.passed).length
   console.log(`\nM1 空框架＋M2 真载体验收：${results.length - failed}/${results.length} 通过`)

@@ -36,9 +36,9 @@ export const EXPERIENCE_CARRIER = Object.freeze({
   contributes: Object.freeze({
     panes: [
       // 槽语义（批次53）：体验会话板是整栏一份的记录树（single＋project），兜底认领 体验/**。
-      { slot: 'left-dock', id: 'experience.board', title: '体验会话', icon: 'adventure', view: 'pinax.view.list', kind: 'records-editor', multiplicity: 'single', scope: 'project', claims: ['体验/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'left-dock', id: 'experience.board', title: '体验会话', icon: 'adventure', view: 'pinax.view.list', kind: 'records-editor', multiplicity: 'single', scope: 'project', claims: ['体验/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：编辑位绑一条会话记录（single＋entry），认领 体验/**/*.json 并以 extension 档接管。
-      { slot: 'center', id: 'experience.editor', title: '体验', icon: 'adventure', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['体验/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'experience-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'center', id: 'experience.editor', title: '体验', icon: 'adventure', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['体验/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'experience-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay'] }
     ],
     // 批次62 任务一：命令面（既有动作的另一个入口）。
     // 本板块 centerPanes 只有一块（experience.editor），「开这一页」与「点竖条这一格」是同一条路，只留一条 open-board。

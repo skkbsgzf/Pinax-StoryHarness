@@ -44,9 +44,9 @@ export const SCRIPT_CARRIER = Object.freeze({
     panes: [
       // 竖条图标用 film（老前端图标表里的片子那一枚）；中栏是剧本正文。
       // 槽语义（批次53）：剧本板是整栏一份的篇目清单（single＋project），兜底认领 剧本/**。
-      { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film', view: 'pinax.view.list', kind: 'script-editor', multiplicity: 'single', scope: 'project', claims: ['剧本/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'left-dock', id: 'script.board', title: '剧本板', icon: 'film', view: 'pinax.view.list', kind: 'script-editor', multiplicity: 'single', scope: 'project', claims: ['剧本/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：编辑位绑一场剧本（single＋entry），认领 剧本/**/*.md 并以 extension 档接管。
-      { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor', kind: 'script-editor', multiplicity: 'single', scope: 'entry', claims: ['剧本/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'script' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      { slot: 'center', id: 'script.editor', title: '剧本', icon: 'document', view: 'pinax.view.editor', kind: 'script-editor', multiplicity: 'single', scope: 'entry', claims: ['剧本/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'script' }, takes: 'extension', forms: ['dock', 'split', 'overlay'] }
     ],
     // 批次62 任务一：命令面（既有动作的另一个入口）：
     //   script.open-board   board:pinax.carrier.script ← 竖条点「剧本」这一格（AppNext.selectBoard）

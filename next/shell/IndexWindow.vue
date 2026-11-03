@@ -39,9 +39,41 @@ const props = defineProps({
   /** useBoardData 的返回值：索引窗与核心区看的是同一份数据。 */
   data: { type: Object, required: true },
   archive: { type: Array, default: () => [] },
-  width: { type: Number, default: 256 }
+  width: { type: Number, default: 256 },
+  /**
+   * 〔批次66 任务二〕最近打开：宿主从 workspace v3 的 lastOpenFiles 端来的滚动清单
+   * `[{ pane, resource, label }]`。这一栏只负责列出来，「点了开哪一页」交回宿主的唯一通路。
+   */
+  recent: { type: Array, default: () => [] },
+  /**
+   * 〔批次66 任务三〕这一页自己的视图状态（folder 树的卷折叠态）：`{ collapsed: [卷名] }`。
+   * 真相住在 workspace 的页条目里，索引窗只是它的一个读者——换一栏、重启都从同一份读回。
+   */
+  treeState: { type: Object, default: null }
 })
-const emit = defineEmits(['collapse', 'history', 'overlay'])
+const emit = defineEmits(['collapse', 'history', 'overlay', 'open-recent', 'tree-state'])
+
+/**
+ * 〔批次66 任务二〕「最近打开」默认摊开（窄栏里最多占 30vh，超出自己滚），
+ * 头部那枚箭头可以整区收起。收起态是这一栏自己的临时偏好，不进 workspace：
+ * 本批按工单范围只登记「树的折叠」，把这块也落盘属于扩权（§7 已记账）。
+ */
+const recentOpen = ref(true)
+
+/**
+ * 〔批次66 任务三〕卷折叠态：读 props.treeState.collapsed，写回整份数组（替换语义）。
+ * 只报「此刻哪些卷是收着的」这一件事，不在索引窗里另存一份 Set——
+ * 两栏并存时各页有自己的 viewState，共享一份本地状态就会互相踩。
+ */
+const collapsedVolumes = computed(() => new Set(Array.isArray(props.treeState?.collapsed) ? props.treeState.collapsed : []))
+const isVolumeCollapsed = (name) => Boolean(name) && collapsedVolumes.value.has(name)
+function toggleVolume(name) {
+  if (!name) return
+  const next = new Set(collapsedVolumes.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  emit('tree-state', { collapsed: [...next] })
+}
 
 /**
  * 批次59：窗口形态菜单随四轴一起退役——窗口动作只在 PaneWindow 的统一 chrome 里。
@@ -533,6 +565,37 @@ watch(() => props.board?.id, () => {
     </header>
 
     <div class="nx-index-body">
+      <!-- 最近打开（批次66 任务二）：整份清单来自 workspace v3 的 lastOpenFiles（滚动 20 条、去重最近优先），
+           跨载体共用这一栏顶部。恢复语义＝预填不自动开：列表只是候选，点一条才经宿主的唯一通路开那一页；
+           页关掉后那条记录仍留在列表里（作者「打开过」这件事不该跟着页一起消失）。 -->
+      <section v-if="recent.length" class="nx-recent" data-test="recent-files" aria-label="最近打开">
+        <button
+          type="button"
+          class="nx-row nx-recent-head"
+          data-test="recent-toggle"
+          :aria-expanded="recentOpen.toString()"
+          :aria-label="'最近打开（' + recent.length + '）'"
+          @click="recentOpen = !recentOpen"
+        >
+          <WorkbenchIcon name="chevron-down" :size="12" class="nx-recent-chevron" :class="{ 'is-collapsed': !recentOpen }" />
+          <span class="nx-recent-title">最近打开</span>
+          <span class="nx-recent-count">{{ recent.length }}</span>
+        </button>
+        <ul v-show="recentOpen" class="nx-recent-list">
+          <li v-for="item in recent" :key="`${item.pane} ${item.resource}`">
+            <button
+              type="button"
+              class="nx-row nx-recent-item"
+              data-test="recent-file"
+              :title="item.resource"
+              @click="emit('open-recent', item)"
+            >
+              <span class="nx-recent-label">{{ item.label }}</span>
+            </button>
+          </li>
+        </ul>
+      </section>
+
       <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
 
       <!-- 小说（协议 v1.1-A：这一栏只有正文一棵树；提案审阅已迁统一二级页，工单B1） -->
@@ -672,10 +735,25 @@ watch(() => props.board?.id, () => {
           </div>
           <p v-else-if="findSearched" class="nx-find-hint" data-test="find-empty">没有命中。</p>
         </section>
-        <!-- 卷→章（工单B）：有子目录时先出卷标题（不可点），卷下是章行；平铺时只有一个无名组。 -->
+        <!-- 卷→章（工单B）：有子目录时先出卷标题，卷下是章行；平铺时只有一个无名组。
+             批次66 任务三：卷标题从「不可点的分区标题」升成一枚折叠钮——作者收起哪几卷，
+             是「这一页自己的视图状态」，按页记进 workspace 条目（viewState.collapsed），重启照原样恢复。
+             平铺那一组没有卷名，不出折叠钮（无内容可收，出了就是个空转的箭头）。 -->
         <template v-for="(group, groupIndex) in chapterGroups" :key="group.name || `flat-${groupIndex}`">
-          <p v-if="group.name" class="workspace-nav-section nx-volume" data-test="chapter-volume">{{ group.name }}</p>
-          <ul class="nx-tree">
+          <button
+            v-if="group.name"
+            type="button"
+            class="nx-row workspace-nav-section nx-volume nx-volume-toggle"
+            data-test="chapter-volume"
+            :aria-expanded="(!isVolumeCollapsed(group.name)).toString()"
+            :aria-label="`「${group.name}」${isVolumeCollapsed(group.name) ? '展开' : '收起'}`"
+            @click="toggleVolume(group.name)"
+          >
+            <WorkbenchIcon name="chevron-down" :size="12" class="nx-volume-chevron" :class="{ 'is-collapsed': isVolumeCollapsed(group.name) }" />
+            <span class="nx-volume-name">{{ group.name }}</span>
+            <span class="nx-volume-count">{{ group.chapters.length }}</span>
+          </button>
+          <ul v-show="!isVolumeCollapsed(group.name)" class="nx-tree">
             <li v-for="(item, itemIndex) in group.chapters" :key="item.file" class="nx-tree-line">
               <input
                 v-if="renameTarget?.file === item.file"
@@ -1569,5 +1647,113 @@ watch(() => props.board?.id, () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 卷折叠钮（批次66 任务三）：区标题那套字级排版原样留着（.workspace-nav-section），
+   这里只把它做成可点、可聚焦、带箭头的 disclosure；配色一个新都不加，hover 用导航行那份 --nav-hover。 */
+.nx-volume-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px;
+  text-align: left;
+  cursor: pointer;
+}
+.nx-volume-toggle:hover { background: var(--nav-hover); }
+.nx-volume-chevron {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.nx-volume-chevron.is-collapsed { transform: rotate(-90deg); }
+.nx-volume-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-volume-count {
+  flex: none;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* 最近打开（批次66 任务二）：区头一枚 disclosure ＋下面一列短行。
+   窄栏里最多占 30vh（超出自己滚），不跟正文树抢整栏高度；行文本单行省略。 */
+.nx-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 8px;
+  margin: 0 0 6px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.nx-recent-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 24px;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--nx-radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.nx-recent-head:hover { background: var(--nav-hover); color: var(--archive-ink); }
+.nx-recent-chevron {
+  flex: none;
+  transition: transform 120ms ease;
+}
+.nx-recent-chevron.is-collapsed { transform: rotate(-90deg); }
+.nx-recent-title { flex: 1 1 auto; }
+.nx-recent-count {
+  flex: none;
+  font-weight: 400;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.nx-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 30vh;
+  overflow: auto;
+  scrollbar-width: thin;
+}
+.nx-recent-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 0;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--nx-radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  text-align: left;
+  cursor: pointer;
+}
+.nx-recent-item:hover { background: var(--nav-hover); color: var(--archive-ink); }
+.nx-recent-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nx-volume-chevron,
+  .nx-recent-chevron {
+    transition: none;
+  }
 }
 </style>

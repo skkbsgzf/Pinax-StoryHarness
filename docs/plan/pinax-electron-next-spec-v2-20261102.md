@@ -230,19 +230,24 @@
 
 ### 4.2 形态（清单词表 vs v3 状态轴）——「同一块板能摆成几种样子」
 
-**协议词表五值**（`carrierManifest.mjs:134` `PANE_FORM_WORDS`；`paneForms.mjs:16` `PANE_FORMS`；对外 `host-descriptor.json:9`）：`dock / split / overlay / fullscreen / immersive`。
-**v3 状态轴三值**（`workspace.mjs:38` `PAGE_FORMS`）：`page / floating / tab`。
+**协议词表三值**（`carrierManifest.mjs` `PANE_FORM_WORDS`；`paneForms.mjs:16` `PANE_FORMS`；对外 `host-descriptor.json` 的 `forms`）：`dock / split / overlay`。
+**v3 状态轴三值**（`workspace.mjs` `PAGE_FORMS`）：`page / floating / tab`——批次66 一字未动。
 
-| 协议词 | 菜单文案（`PANE_FORM_LABELS`，`paneForms.mjs:37-43`） | v3 落点（`FORM_ACTIONS` `:19-23` → `MENU_TARGET_FORM` `:34`） | 落点现状 |
+| 协议词 | 菜单文案（`PANE_FORM_LABELS`） | 菜单动作 → v3 形态（`FORM_ACTIONS` → `MENU_TARGET_FORM`） | 落点 |
 |---|---|---|---|
-| `dock` | 停靠栏 | `action:'dock'` → `form:'page'`，留当前页组 | 有 |
-| `split` | 分屏 | `action:'side'` → `form:'page'` ＋ `group:'side'` | 有（分屏是**页组**不是形态） |
-| `overlay` | 浮窗 | `action:'float'` → `form:'floating'` | 有（唯一持几何的形态） |
-| `fullscreen` | 全屏 | **无落点** | 不进右键菜单（避免骗人入口）；v2 期曾被收成浮窗子态 `maximized` |
-| `immersive` | 沉浸 | **无落点** | 同上；批次45 的「沉浸态」实为 `placement:'immersive'`（另一条轴，不是 forms） |
+| `dock` | 停靠栏 | `action:'dock'` → `form:'page'` | 有：留当前页组，占为页 |
+| `split` | 分屏 | `action:'side'` → `form:'page'` ＋ `group:'side'` | 有：分屏是**页组**不是形态 |
+| `overlay` | 浮窗 | `action:'float'` → `form:'floating'` | 有：唯一持几何的形态 |
 
-**现状量化（2026-11-02 工作树实测）**：11 份清单共 25 处 `slot:` 声明，其中 23 处含 `fullscreen`、13 处含 `immersive`（口径 `grep -rho "slot: '" next/carriers/*/manifest.mjs | wc -l`；逐词 grep 同框架计划 §9）。右键菜单只列「声明 ∩ 可落点」，所以这 23/13 处声明今天点不出来——**F6**。
-**裁定**：Q2＝删词（`fullscreen`/`immersive` 从协议词表、25 处声明与对外描述符三处同删），落批次66，见 `docs/plan/pinax-ruling-ledger-20261102.md`。删前本表的留名即为过渡期口径；J4 判据（`forms ⊆ 可实现集合`）在删词落地后才能转「达成」。
+**同构纪律（批次66 新守卫）**：`Object.keys(FORM_ACTIONS)` 与 `PANE_FORMS` 逐项相等，且每个词都带着 `action` 与 `label`——「声明了形态却没有落点」这条口子从此不存在，右键菜单也不可能再列出点不动的那一档。断言落 `next/testing/acceptance.mjs`〔批次66 任务1〕，对照表随同一条 record 打印（记账①）。
+
+**退役登记**：`fullscreen` / `immersive` 自批次66 起从协议词表、11 份随包清单的 `forms` 数组与对外描述符三处同删（裁定 Q2，台账 `pinax-ruling-ledger-20261102.md`）。删前实测：25 处 `slot:` 声明里 23 处含 `fullscreen`、13 处含 `immersive`（§9 那条口径），这些声明今天一律点不出来，删掉的是**骗人入口**，不是任何在用的能力——
+- 「整窗占满」在 v3 没有独立落点：页态天然铺满所在页组；浮窗的双击标题栏走 `maximized` 子态（`toggleMaximized`），那是浮窗的属性，不是第四种形态。
+- 「沉浸」是 `placement:'immersive'`（批次45 那条轴），与 `forms` 从来不是同一张表。
+- 两个旧词**不进任何兼容读**：`normalizeForm`／清单校验遇到它们一律按「不在词表」处置，不做同义映射（不猜近义）。
+
+J4（`forms ⊆ 可实现集合`）随删词转「达成」：验收里除了「声明 ⊆ 词表」，还加了一条防空转的「每份清单至少声明一种形态」——11 份随包清单今天全部声明 `dock/overlay/split` 三值（记账②逐份打印）。
+
 
 ### 4.3 视图（`view`）＋内容面（`kind`）——「用什么方式渲染 / 渲的是哪一类面」
 
@@ -252,7 +257,7 @@
 | 第三方唯一口（1） | `pinax.view.custom` | `:33`、`carrierManifest.mjs:140` |
 | 内容面词表（13） | `chapter-editor / outline-editor / notes-editor / entry-detail / script-editor / rule-editor / document-detail / records-editor / proposal-review / entries-workspace / entries-categories / external-app / custom-panel`（＋词表顺序见 `:84-102`） | `PANE_KIND_WORDS` `:84-102` |
 
-`board`（看板面）与 `app`（应用面）由批次44 加入，宿主视图从 6 变 8——**`carrierManifest.mjs:149,465,476` 三处注释仍写「宿主六种视图」，属陈旧注释，登记在台账待批次66 修**（本合同表以常量为准，注释不权威）。
+`board`（看板面）与 `app`（应用面）由批次44 加入，宿主视图从 6 变 8——`carrierManifest.mjs` 三处「宿主六种视图」的陈旧文案（两处注释＋一处给作者看的报错）随批次66 一并改为不带数字的「宿主自带的视图」（台账 NOTE-1 关闭；`RESERVED_VIEW_TYPE` 的判定逻辑一字未动，合同表仍以 `HOST_VIEW_TYPES` 常量为准）。`next/shell/viewRegistry.mjs` 不在本批允许文件内，其内部注释的口径以本表为准。
 配对纪律（@3+）：`pinax.view.custom` ⟺ `kind:'custom-panel'`；`pinax.view.app` ⟺ `kind:'external-app'`（⟹ 必须给 `app.url`，只本机回环）。写一半即拒。
 
 **附·手势（批次62 接通，词汇 `openTarget.mjs:41-42`）**：`gesture:{form:'floating'}` ＝ **Alt＋点竖条格／点页签**——以另一形态执行同一个动作，落点判定（reveal／replace-page／open-page／raise-tab）一条都不改，只在答案上多带一个 `form`；`gesture:{action:'close', instance}` ＝ **中键点页签**——关的就是被点那一页（实例不在页列表里就 `block:GESTURE_NO_TARGET`，不猜第二页）。手势既不开新动作也不新增形态值：形态轴仍是 §4.2 那三值，认不出的组合一律 `block` ＋明确 reason。
@@ -362,3 +367,72 @@
   `details.where = "top"`。§0 的三张拒装名单是真闸，不是文档承诺。
 
 复现：`node D:/Pinax-main/_tools/spec-v2-selfcheck.mjs`。
+
+---
+
+## 附录 A：项目事件——订阅词（声明面）与 kind（投递面）〔批次66 任务四〕
+
+总线本体 `next/runtime/eventBus.mjs`：进程内 `Map<root, Map<handler, {owner, topics}>>`，**不持久化、不跨进程**（跨进程那一步走 IPC `projectEvent` 推送，见 A.5）。要治的是批次37 留下的那半截：清单已经能声明 `subscriptions`，但宿主没有发布者，改了盘没人知道。
+
+### A.1 两张表，各管一面
+
+| 面 | 词汇 | 本体 | 用途 |
+|---|---|---|---|
+| 声明面（订阅词，3） | `project.changed / file.changed / layout.changed` | `carrierManifest.mjs` 的 `CARRIER_SUBSCRIPTIONS` | 载体清单 `subscriptions` 能写的闭集；@4 校验器据此拒装 |
+| 投递面（kind，7） | `entries-/outline-/manuscript-/sessions-/proposals-changed` ＋ `file-changed` ＋ `layout-changed` | `eventBus.mjs` 的 `PROJECT_EVENT_KINDS` | 总线里真正流动的变化类别 |
+
+两面的唯一映射是 `PROJECT_EVENT_TOPICS`（kind → 订阅词）；反查用 `projectEventKindsForTopic(topic)`，**别处不许再抄一份映射**（包括测试）。前五类都归 `project.changed`（批次37 口径逐字不变），两类新 kind 各归自己的新词。认不出来的 kind（第三方自造的类别）`topic` 为 `null`：只投递给不挑词的订阅者，不猜一个近义的词。
+
+新两类的分工（这是它们存在的理由，不是前五类的重复）：
+
+- `file-changed`＝**哪份文件**变了（带 `path`，任何一次受控落盘都发：写／删／改名／提案）。前五类回答的是**哪块数据**变了（按目录归类，界面整块刷新）。同一次落盘会先后收到两条——先细后粗，见 A.3。
+- `layout-changed`＝`.pinax/workspace.json` 落盘了。窗口布局不是任何载体的 dataDir，前五类里没有一类能代表它。
+
+`selection.changed` **登记不做**（工单任务4 原文）：壳层至今没有一个干净的「选择」发射点（页内选中态归各页数据面，见 §4.2 那条「selection 只从页数据面推」的纪律），硬造一个发射点＝造第二个真相来源。
+
+### A.2 负载形状：四个键恒定
+
+`emitProjectEvent(root, { kind, at?, path? })` 摊给订阅者的是一份新拷贝：
+
+```
+{ kind: string,        // 投递面类别（PROJECT_EVENT_KINDS；自定义类别原样透传）
+  topic: string|null,  // 声明面订阅词（PROJECT_EVENT_TOPICS 反查；认不出 → null）
+  at: string,          // ISO 时刻；调用方没给就取此刻
+  path: string|null }  // 变化落在哪份相对路径；前五类历史上不带，仍按 null 摊平
+```
+
+四键**恒定在场**（取不到就是 `null`），订阅方不必再判「这个键这次有没有」。`at` 缺省与 `path` 归一都在 `emitProjectEvent` 一处做完，发射点只负责报事实。
+
+### A.3 发射点（六处，全部经 `emitProjectEvent`）
+
+| 发射点 | kind | 备注 |
+|---|---|---|
+| `fs/fileService.mjs:750` `notifyWrite` | `file-changed` ＋ `path:relativePath` | 批次66 新增。闸（归属／作用域／`expectedRevision`）与返回值**一字未改**；事件是旁路，抛错不拦写盘。**被拒的那次不发假事件**（STALE／越权都在发事件之前 return） |
+| `shell/main.mjs:534` 写入钩子 | 由 `projectEventKindForPath(relativePath)` 按目录首段映射出的粗五类之一 | 目录映射表 `DIRECTORY_KINDS`（正文／大纲／世界书／构思／约束／剧本／资料）＋ `.pinax/proposals`／`.pinax/sessions` 两类元数据；认不出返回 `null`，不发「某处变了」这种没有信息量的事件 |
+| `shell/main.mjs:748` | `proposals-changed` | 提案采纳／弃用那条口 |
+| `sessionStore.mjs:479` | `sessions-changed` | 会话落盘 |
+| `runtime/outlineImportService.mjs:172` | `outline-changed` | 大纲转换落盘 |
+| `workspaceStore.mjs:133` | `layout-changed` ＋ `path:.pinax/workspace.json` | 批次66 新增。**只有真正 rename 成功那一次发**：内容没变被跳过的那次、以及被拒的那次，都不发假事件 |
+
+**细／粗两条的先后**是同一次落盘的真实顺序：`fileService.notifyWrite` 先把 `file-changed`（细）推上总线，再走 `main.mjs` 那道写入钩子发按目录归类的粗事件。两个粒度各管各的刷新，不是重复投递事故。
+
+### A.4 投递语义（都进测试，不是文档承诺）
+
+1. **同 root 广播，跨 root 完全隔离**：root 先归一（`resolve`）再作键，尾分隔符／相对写法落同一个键。
+2. **挑词**：`subscribeProjectEvents(root, handler, { subscriptions: [...] })` 只收这些词覆盖的 kind；被过滤掉的订阅者**不计入送达数**（返回值＝真正送达的订阅者数）。
+3. **不挑词＝全收**：不传 `subscriptions`、传非数组、传**空数组**三种写法一律全收（批次37／39 那两条宿主订阅都没给，行为逐字不变）。「谁没声明订阅词」的排除归调用方（`mcpSurface` 的 `subscribedCarriers` 名单），总线不另造一道闸。
+4. **拼错的词什么都收不到**：`['file.change']` 在 `PROJECT_EVENT_TOPICS` 里查不到任何 kind → 不投递。不猜近义，也不静默降级成全收。
+5. **一个订阅者抛错不拦别人**：事件是旁路，不该拖住提问与写盘。
+6. **没有订阅者时 emit 是空操作**（返回 0，不是错误）；空 root／空 kind 同样返回 0。
+7. **退订幂等**：`subscribe` 返回的函数重复调不炸；该 root 订阅者清零后整键删除，不占位。
+8. **归属可查**：`projectEventSubscriberCount(root)` 与 `projectEventSubscriberCount(root, owner)`（批次51 的硬断言口径）；`subscribeProjectEventsEffect(registry, pluginId, root, handler)` 把订阅登记成注册表效应，卸载／换项目时逆序回卷。
+
+### A.5 消费侧的两条链路
+
+- **载体 `onProjectEvent`**（`runtime/agentRuntime.mjs:168`，不带 `subscriptions`＝全收）：总线里的**整份四键负载**原样送到声明了订阅的载体，`meta` 带 `{ pluginId }`。扩词表**不改投递名单**——名单由清单 `subscriptions` 是否非空决定（今天 11 份随包清单只声明 `project.changed`，见 §2.4 与本批批次记录）。
+- **渲染层**（`shell/main.mjs:487` → IPC `projectEvent` → `AppNext.onProjectEvent`）：这一跳今天只带 `{ kind, at }`（`topic`／`path` 在主进程那一行被削掉，改它要动 `next/shell/main.mjs`，不在本批允许文件内）。渲染层按 kind 精确过滤刷新：`refreshTargetsFor('file-changed'|'layout-changed')` 返回空 → 外壳提前 return，新事件不会误刷树。
+
+### A.6 测试口径
+
+`next/tests/event-bus.test.mjs` 为本批新增五条：词表↔kind 同构（含 `selection.changed → []`、覆盖数＝kind 总数）、挑词过滤（全收／空数组／拼错词）、`file.changed` 端到端（受控写盘→先细后粗、负载四键形状、提案路径、被拒不发事件）、`layout.changed` 端到端（写→1 条、内容没变被跳过→不发、改 form→第 2 条、坏快照→不发）、新事件沿批次39 那条链送达载体 `onProjectEvent`（名单不因扩词表而变）。批次37／39 的既有投递用例一字未改，仍全绿。
+

@@ -10,11 +10,14 @@
  *   order      组内序号          页签栏的排列依据
  *   form       page|floating|tab 占页／浮窗／收成侧缘标签
  *   resource   string|null      这页装的是哪份文档（D）；null＝按 pane 缺省文档打开
+ *   viewState  object|null      批次66 任务三：这一页自己的视图状态（folder 模板＝树收了哪几个卷）
  *   geometry   {x,y,w,h}|null   仅 floating 持有；页态为 null
  *   z          叠序（越大越靠前）  仅 floating 参与渲染
  *   maximized  boolean           仅 floating 的子态（双击标题栏占满中栏）
  *
- * 工作区级别多出 `active: { main, side }`（每组当前页）与 `focus`（新页进哪一组）。
+ * 工作区级别多出 `active: { main, side }`（每组当前页）与 `focus`（新页进哪一组），
+ * 批次66 任务二再加一份 `lastOpenFiles`（最近打开的文档，滚动封顶、去重置顶）：
+ * 它是**预填不是恢复**——重启后不自动开任何一页，只把这份列表摆给作者点。
  * `maximized`／`tiledWith`／`tileSide`／`minimized` 全部退役：页态天然铺满所在页组，
  * 分屏由「side 组是否存在」表达——原来那对 tiledWith 互指只能装两个窗，是页组的退化形态。
  *
@@ -40,6 +43,12 @@ export const DEFAULT_FORM = 'page'
 
 /** resource 只是页与文档之间的标识，不解析语义；给长度上限防脏数据把存档撑爆。 */
 const RESOURCE_MAX_LEN = 240
+
+/** 「最近打开」的滚动封顶（批次66 任务二）：去重置顶，多出来的从尾巴上挤掉。 */
+export const LAST_OPEN_FILES_LIMIT = 20
+
+/** 每页 viewState 里最多记几个收起的树节点（批次66 任务三）：折叠态是有限集合，不留历史。 */
+const VIEW_STATE_MAX_COLLAPSED = 200
 
 export const GEOMETRY_MIN_W = 240
 export const GEOMETRY_MAX_W = 2400
@@ -94,6 +103,67 @@ export function normalizeResource(value) {
   return trimmed.length > RESOURCE_MAX_LEN ? trimmed.slice(0, RESOURCE_MAX_LEN) : trimmed
 }
 
+/**
+ * 「最近打开」的一条记录：pane＋resource 两个都在才算数——
+ * 列表要能点回去（routeOpen 需要知道开哪块 pane），只记路径的那份清单点了没反应。
+ */
+function normalizeRecentFile(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const pane = typeof value.pane === 'string' ? value.pane.trim() : ''
+  if (!isPaneId(pane)) return null
+  const resource = normalizeResource(value.resource)
+  if (!resource) return null
+  return { pane, resource }
+}
+
+/**
+ * 最近打开列表的净化（读盘／整份替换都走它）：坏条目逐条丢（不整份作废），
+ * 按 pane＋resource 去重保首个（首＝最新），封顶 LAST_OPEN_FILES_LIMIT。
+ */
+export function normalizeLastOpenFiles(value) {
+  if (!Array.isArray(value)) return []
+  const seen = new Set()
+  const files = []
+  for (const item of value) {
+    const entry = normalizeRecentFile(item)
+    if (!entry) continue
+    const key = `${entry.pane} ${entry.resource}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    files.push(entry)
+    if (files.length >= LAST_OPEN_FILES_LIMIT) break
+  }
+  return files
+}
+
+/**
+ * 记一笔「刚打开过这份文档」（批次66 任务二）：同一条重复打开＝置顶，不追加第二份；
+ * 关闭文档不调这里——列表是「打开过什么」的历史，不是「现在开着什么」的镜像。
+ */
+export function pushRecentFile(files, { pane, resource } = {}) {
+  const entry = normalizeRecentFile({ pane, resource })
+  if (!entry) return normalizeLastOpenFiles(files)
+  const key = `${entry.pane} ${entry.resource}`
+  const rest = normalizeLastOpenFiles(files).filter((item) => `${item.pane} ${item.resource}` !== key)
+  return [entry, ...rest].slice(0, LAST_OPEN_FILES_LIMIT)
+}
+
+/**
+ * 每页自己的视图状态（批次66 任务三）。本批只有 folder 模板那棵树用得上：
+ *   collapsed  收起的树节点名（卷名）列表——空集＝全展开，所以不记「展开」只记「收起」。
+ * 「选中哪份文档」不在这里：那一格工作区早就有了（`entry.resource`，批次61〔D〕），
+ * 再存一份就是两个真相来源，改一边就漂移——本仓的老纪律（selection 只从页数据面推，不另记）。
+ * 其它视图（滚动位置等）本批登记不做，字段形状留着不扩——没有消费方的键不落盘。
+ */
+export function normalizeViewState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const collapsed = Array.isArray(value.collapsed)
+    ? [...new Set(value.collapsed.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean))].slice(0, VIEW_STATE_MAX_COLLAPSED)
+    : []
+  if (!collapsed.length) return null
+  return { collapsed }
+}
+
 function clampInt(value, min, max, fallback) {
   const number = Number(value)
   if (!Number.isFinite(number)) return fallback
@@ -121,7 +191,8 @@ export function defaultEntry(paneId, index = 1, { group = DEFAULT_GROUP, form = 
     form: isPageForm(form) ? form : DEFAULT_FORM,
     geometry: isPageForm(form) && form !== 'page' ? { ...DEFAULT_FLOATING_GEOMETRY } : null,
     z: 0,
-    maximized: false
+    maximized: false,
+    viewState: null
   }
 }
 
@@ -146,7 +217,8 @@ export function normalizeEntry(value, fallbackInstance = '') {
     form,
     geometry: geometry ?? (form === 'floating' ? { ...DEFAULT_FLOATING_GEOMETRY } : null),
     z: Number.isSafeInteger(value.z) && value.z >= 0 ? value.z : 0,
-    maximized: form === 'floating' && value.maximized === true
+    maximized: form === 'floating' && value.maximized === true,
+    viewState: normalizeViewState(value.viewState)
   }
 }
 
@@ -216,13 +288,15 @@ export function migrateV2Entry(value, fallbackInstance = '') {
     geometry: form === 'floating' ? (geometry ?? { ...DEFAULT_FLOATING_GEOMETRY }) : null,
     z,
     // v2 的 maximized 在浮窗档没有对应物（它已经被上面判成页态），不带走。
-    maximized: false
+    maximized: false,
+    // v2 没有「每页视图状态」这一格（批次66 才加的），迁移过来就是没记过。
+    viewState: null
   }
 }
 
 /** 空工作区（新项目、坏档回落、没有存档都走它）。 */
 export function emptyWorkspace() {
-  return { version: WORKSPACE_VERSION, entries: {}, active: { main: null, side: null }, focus: DEFAULT_GROUP, warnings: [] }
+  return { version: WORKSPACE_VERSION, entries: {}, active: { main: null, side: null }, focus: DEFAULT_GROUP, lastOpenFiles: [], warnings: [] }
 }
 
 /**
@@ -298,6 +372,7 @@ export function normalizeWorkspace(value) {
     entries,
     active: repairActive(entries, value.active && typeof value.active === 'object' ? value.active : null),
     focus,
+    lastOpenFiles: normalizeLastOpenFiles(value.lastOpenFiles),
     warnings
   }
 }
@@ -313,7 +388,8 @@ function compareEntries(a, b) {
 function cloneEntry(entry) {
   return {
     ...entry,
-    geometry: entry.geometry ? { ...entry.geometry } : null
+    geometry: entry.geometry ? { ...entry.geometry } : null,
+    viewState: entry.viewState ? { collapsed: [...entry.viewState.collapsed] } : null
   }
 }
 
@@ -328,6 +404,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
   let entries = { ...loaded.entries }
   let active = { ...loaded.active }
   let focus = loaded.focus
+  let lastOpenFiles = [...loaded.lastOpenFiles]
   let warnings = [...loaded.warnings]
   let degraded = false
   let persistTo = typeof save === 'function' ? save : null
@@ -339,15 +416,22 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
       entries: Object.fromEntries(Object.entries(entries).map(([key, entry]) => [key, cloneEntry(entry)])),
       active: { ...active },
       focus,
+      lastOpenFiles: lastOpenFiles.map((item) => ({ ...item })),
       warnings: [...warnings],
       persistent: Boolean(persistTo) && !degraded
     }
   }
 
-  /** 存档形状：界面上读 snapshot（带 persistent／warnings），落盘认 { version, entries, active, focus }。 */
+  /** 存档形状：界面上读 snapshot（带 persistent／warnings），落盘认 { version, entries, active, focus, lastOpenFiles }。 */
   function serialize() {
     const copy = snapshot()
-    return { version: WORKSPACE_VERSION, entries: copy.entries, active: copy.active, focus: copy.focus }
+    return {
+      version: WORKSPACE_VERSION,
+      entries: copy.entries,
+      active: copy.active,
+      focus: copy.focus,
+      lastOpenFiles: copy.lastOpenFiles
+    }
   }
 
   function persist() {
@@ -482,6 +566,16 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
   }
 
   /**
+   * 记一笔「这一页此刻落在哪份文档」（批次66 任务二）。只有带着 resource 的页才有得记：
+   * null＝这块 pane 的缺省那份，不是一份可点回去的文档。判据跟着**真实发生的变更**走
+   * （开出一页、把一页带回前台、换装文档），空点击不记——否则「最近打开」会被连点同一张页刷成噪音。
+   */
+  function noteRecent(entry) {
+    if (!entry?.resource) return
+    lastOpenFiles = pushRecentFile(lastOpenFiles, entry)
+  }
+
+  /**
    * 打开一页：记录即开页。已存在则只把它带回前台（页态→置为该组当前页；浮窗→提叠序），
    * 不动几何、不改 resource（换文档走 setResource，这条纪律让「重复点同一张页」零副作用）。
    */
@@ -499,6 +593,8 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
         : null
       entry.z = nextZ()
       entries[parsed.id] = entry
+      // 批次66 任务二：这一页带着文档开出来，就记一笔「最近打开」。
+      noteRecent(entry)
       if (targetForm === 'page') {
         active[targetGroup] = entry.instance
         focus = targetGroup
@@ -514,12 +610,14 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
       }
       active[entry.group] = entry.instance
       focus = entry.group
+      noteRecent(entry)
       commit()
       return { ok: true, changed: true, created: false, instance: entry.instance, form: entry.form, group: entry.group, resource: entry.resource }
     }
     const top = Object.values(entries).reduce((max, item) => Math.max(max, item.z), 0)
     if (entry.z !== top) {
       entry.z = top + 1
+      noteRecent(entry)
       commit()
     }
     return { ok: true, changed: entry.z !== top, created: false, instance: entry.instance, form: entry.form, group: entry.group, resource: entry.resource }
@@ -637,8 +735,27 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     const next = normalizeResource(resource)
     if (entry.resource === next) return { ok: true, changed: false, instance: entry.instance, resource: next }
     entry.resource = next
+    noteRecent(entry)
     commit()
     return { ok: true, changed: true, instance: entry.instance, resource: next }
+  }
+
+  /**
+   * 〔批次66 任务三〕这一页自己的视图状态：folder 模板＝树的折叠集＋选中项。
+   * 整份替换（不是合并）——状态的唯一作者就是那块视图本身，合并只会让两边各留半截真相。
+   * 收成 null 的条件：净化后什么也没记（全展开＋没选中＝没有值得落盘的东西）。
+   */
+  function setViewState(instance, viewState) {
+    const parsed = parseInstanceId(instance)
+    if (!parsed) return { ok: false, error: { code: 'INVALID_INSTANCE', message: '改视图状态需要 <paneId>#<n> 形式的实例 id' } }
+    const entry = entries[parsed.id]
+    if (!entry) return { ok: false, error: { code: 'UNKNOWN_INSTANCE', message: '这一页没有打开' } }
+    const next = normalizeViewState(viewState)
+    const same = (entry.viewState?.collapsed ?? []).join('\u0000') === (next?.collapsed ?? []).join('\u0000')
+    if (same) return { ok: true, changed: false, instance: entry.instance, viewState: entry.viewState }
+    entry.viewState = next
+    commit()
+    return { ok: true, changed: true, instance: entry.instance, viewState: next }
   }
 
   /** 拖动／缩放结束写入矩形：只有浮窗有矩形可写，顺手取消它的最大化（作者拖了就是想要自由窗）。 */
@@ -762,6 +879,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     entries = { ...normalized.entries }
     active = { ...normalized.active }
     focus = normalized.focus
+    lastOpenFiles = [...normalized.lastOpenFiles]
     warnings = [...normalized.warnings]
     degraded = false
     emit()
@@ -778,9 +896,15 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     entries = {}
     active = { main: null, side: null }
     focus = DEFAULT_GROUP
+    lastOpenFiles = []
     warnings = []
     degraded = false
     emit()
+  }
+
+  /** 最近打开（批次66 任务二）的读数口径：副本，调用方改了不影响状态机。 */
+  function recentFiles() {
+    return lastOpenFiles.map((item) => ({ ...item }))
   }
 
   return {
@@ -791,6 +915,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     floatingList,
     tabList,
     instancesOf,
+    recentFiles,
     open,
     openInstance,
     close,
@@ -798,6 +923,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
     moveToGroup,
     setActive,
     setResource,
+    setViewState,
     setGeometry,
     setMaximized,
     toggleMaximized,

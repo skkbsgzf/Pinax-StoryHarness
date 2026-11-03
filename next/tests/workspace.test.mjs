@@ -23,8 +23,12 @@ import {
   normalizeEntry,
   normalizeGeometry,
   normalizeResource,
+  normalizeViewState,
+  normalizeLastOpenFiles,
   normalizeWorkspace,
+  LAST_OPEN_FILES_LIMIT,
   parseInstanceId,
+  pushRecentFile,
   repairActive
 } from '../shell/workspace.mjs'
 import { migrateLegacyWorkspace, readLegacyWorkspace } from '../shell/workspaceMigration.mjs'
@@ -98,7 +102,8 @@ test('开页＝记录存在，且缺省落主组当前页：页态天然没有�
     form: 'page',
     geometry: null,
     z: 1,
-    maximized: false
+    maximized: false,
+    viewState: null
   })
   assert.equal(store.snapshot().active.main, 'outline.tree#1', '新开的一页就是该组当前页')
   assert.equal(store.snapshot().focus, 'main')
@@ -509,11 +514,13 @@ test('持久化：attachPersistence 收到整份快照（含 active／focus）�
   assert.equal(store.snapshot().persistent, false, 'degraded 要如实报给界面')
 })
 
-test('落盘只认 { version, entries, active, focus }；snapshot 的 persistent／warnings 不写进档', () => {
+test('落盘只认 { version, entries, active, focus, lastOpenFiles }；snapshot 的 persistent／warnings 不写进档', () => {
   const store = createWorkspaceStore()
   store.open('novel.editor#1', { resource: '章节/第一章.md' })
   const saved = store.serialize()
-  assert.deepEqual(Object.keys(saved).sort(), ['active', 'entries', 'focus', 'version'])
+  // 批次66 任务二：lastOpenFiles 是工作区级的那一份列表，跟着落盘（重启后「最近打开」还在）。
+  assert.deepEqual(Object.keys(saved).sort(), ['active', 'entries', 'focus', 'lastOpenFiles', 'version'])
+  assert.deepEqual(saved.lastOpenFiles, [{ pane: 'novel.editor', resource: '章节/第一章.md' }])
   assert.equal(saved.entries['novel.editor#1'].resource, '章节/第一章.md')
   assert.equal('persistent' in saved, false)
   assert.equal('warnings' in saved, false)
@@ -690,4 +697,178 @@ test('磁盘层：active／focus 形状不对时不写进档，不让脏指针�
 
 test('磁盘层：没有项目根时报错，不造孤儿文件', () => {
   assert.throws(() => createFileWorkspaceStore({ root: '' }), /需要项目根/u)
+})
+
+// ── 批次66 任务二：lastOpenFiles（滚动封顶、去重置顶、关闭不删、预填不自动开）──────
+
+test('最近打开：带着文档开一页记一条，换文档（single 硬闸的 replace-page）再记一条', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1', { resource: '正文/第一章.md' })
+  assert.deepEqual(store.recentFiles(), [{ pane: 'novel.editor', resource: '正文/第一章.md' }])
+
+  store.setResource('novel.editor#1', '正文/第二章.md')
+  assert.deepEqual(store.recentFiles(), [
+    { pane: 'novel.editor', resource: '正文/第二章.md' },
+    { pane: 'novel.editor', resource: '正文/第一章.md' }
+  ], '最近优先＝新的排在最前')
+
+  // 没带 resource 的开页（竖条点载体＝该 pane 缺省那份）没得记，不编一条空路径出来。
+  store.open('outline.tree#1')
+  assert.equal(store.recentFiles().length, 2, 'resource 为 null 不记')
+  store.setResource('novel.editor#1', null)
+  assert.equal(store.recentFiles().length, 2, '回落到缺省文档也不算"打开过某份文档"')
+})
+
+test('最近打开：同一条重复打开＝置顶，不追加第二份（去重按 pane＋resource 这一对）', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1', { resource: '正文/a.md' })
+  store.open('notes.editor#1', { resource: '构思/b.md' })
+  store.open('novel.editor#2', { resource: '正文/a.md' })
+  assert.deepEqual(store.recentFiles(), [
+    { pane: 'novel.editor', resource: '正文/a.md' },
+    { pane: 'notes.editor', resource: '构思/b.md' }
+  ], '同一 pane 的第二个实例装同一份文档＝同一条，不去那儿记第二份')
+
+  store.setResource('novel.editor#2', '正文/c.md')
+  store.open('novel.editor#1', { resource: '正文/a.md' })
+  store.setResource('novel.editor#1', '正文/a.md')
+  assert.deepEqual(store.recentFiles().map((item) => item.resource), ['正文/a.md', '正文/c.md', '构思/b.md'])
+  assert.equal(store.recentFiles().length, 3)
+})
+
+test('最近打开：滚动封顶 20 条（守卫用例）——第 21 条把最旧那条挤出去', () => {
+  const store = createWorkspaceStore()
+  // single 那块 pane 换文档走 replace-page（setResource），这才是"连着开很多份文档"的真实路径。
+  store.open('novel.editor#1', { resource: '正文/第1章.md' })
+  for (let index = 2; index <= LAST_OPEN_FILES_LIMIT + 3; index += 1) {
+    store.setResource('novel.editor#1', `正文/第${index}章.md`)
+  }
+  const files = store.recentFiles()
+  assert.equal(files.length, LAST_OPEN_FILES_LIMIT)
+  assert.equal(files[0].resource, `正文/第${LAST_OPEN_FILES_LIMIT + 3}章.md`)
+  assert.equal(files.some((item) => item.resource === '正文/第1章.md'), false, '最旧的该被挤出去')
+
+  // 封顶后把列表里已有的一条再打开一次：长度不涨，位置回到最前。
+  const before = store.recentFiles().map((item) => item.resource)
+  store.setResource('novel.editor#1', before[before.length - 1])
+  const after = store.recentFiles().map((item) => item.resource)
+  assert.equal(after.length, LAST_OPEN_FILES_LIMIT)
+  assert.equal(after[0], before[before.length - 1])
+})
+
+test('最近打开：空点击不记（连着点同一张当前页不该把列表刷成噪音）', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1', { resource: '正文/第一章.md' })
+  const before = JSON.stringify(store.recentFiles())
+  store.open('novel.editor#1')
+  store.open('novel.editor#1', { resource: '正文/第一章.md' })
+  store.setResource('novel.editor#1', '正文/第一章.md')
+  assert.equal(JSON.stringify(store.recentFiles()), before)
+  assert.equal(store.serialize().lastOpenFiles.length, 1)
+})
+
+test('最近打开：关掉的文档留在列表里（它是"打开过什么"，不是"现在开着什么"）', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.editor#1', { resource: '正文/第一章.md' })
+  store.open('novel.editor#2', { resource: '正文/第二章.md' })
+  store.close('novel.editor#1')
+  assert.deepEqual(store.list().map((page) => page.resource), ['正文/第二章.md'])
+  assert.deepEqual(store.recentFiles().map((item) => item.resource), ['正文/第二章.md', '正文/第一章.md'])
+})
+
+test('最近打开：读盘净化——坏条目逐条丢、非数组回空、超额截断', () => {
+  assert.deepEqual(normalizeLastOpenFiles(null), [])
+  assert.deepEqual(normalizeLastOpenFiles('正文/a.md'), [])
+  assert.deepEqual(normalizeLastOpenFiles([null, 42, {}, { pane: 'novel.editor' }, { resource: '正文/a.md' }]), [])
+  assert.deepEqual(normalizeLastOpenFiles([{ pane: 'Bad Pane', resource: 'a.md' }]), [], 'pane 名不合法就不算一条')
+  const many = Array.from({ length: LAST_OPEN_FILES_LIMIT + 5 }, (_, index) => ({ pane: 'novel.editor', resource: `正文/${index}.md` }))
+  assert.equal(normalizeLastOpenFiles(many).length, LAST_OPEN_FILES_LIMIT)
+  const dup = [
+    { pane: 'novel.editor', resource: 'a.md' },
+    { pane: 'notes.editor', resource: 'a.md' },
+    { pane: 'novel.editor', resource: 'a.md' }
+  ]
+  assert.deepEqual(normalizeLastOpenFiles(dup), [
+    { pane: 'novel.editor', resource: 'a.md' },
+    { pane: 'notes.editor', resource: 'a.md' }
+  ], '同 pane 同文档重复出现＝保首个（首＝最新）')
+  assert.deepEqual(pushRecentFile([], { pane: 'novel.editor', resource: '  ' }), [], '空 resource 记不出条目')
+})
+
+test('最近打开：落盘再读回不变形；老档没这一格就回空表（预填不自动开任何一页）', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'pinax-workspace-recent-'))
+  const disk = createFileWorkspaceStore({ root })
+  const store = createWorkspaceStore({ initial: { version: 3, entries: {} } })
+  store.open('novel.editor#1', { resource: '正文/第一章.md' })
+  store.open('notes.editor#1', { resource: '构思/卡片.md' })
+  const written = await disk.write(store.serialize())
+  assert.equal(written.ok, true)
+  const onDisk = JSON.parse(await readFile(written.value.file, 'utf-8'))
+  assert.deepEqual(onDisk.lastOpenFiles, [
+    { pane: 'notes.editor', resource: '构思/卡片.md' },
+    { pane: 'novel.editor', resource: '正文/第一章.md' }
+  ], '磁盘层整串透传，不在这洗第二遍')
+
+  const readBack = await disk.read()
+  // 页本身照旧恢复（批次61 的语义不变）：最近打开不额外开任何一页。
+  const revived = createWorkspaceStore({ initial: readBack.value })
+  assert.deepEqual(revived.recentFiles(), onDisk.lastOpenFiles)
+  assert.deepEqual(revived.list().map((page) => page.instance), ['novel.editor#1', 'notes.editor#1'])
+  const prefilled = createWorkspaceStore({ initial: { ...readBack.value, entries: {}, active: { main: null, side: null } } })
+  assert.deepEqual(prefilled.recentFiles(), onDisk.lastOpenFiles, '列表读回来了')
+  assert.deepEqual(prefilled.list(), [], '但恢复语义＝预填：不自动开任何一页')
+
+  // 这一格出现之前的老档：磁盘层回 null，渲染层收成空表，不报错也不记账。
+  await writeFile(workspacePath(root), JSON.stringify({ version: 3, entries: {}, active: { main: null, side: null }, focus: 'main' }), 'utf-8')
+  const legacy = await disk.read()
+  assert.equal(legacy.value.lastOpenFiles, null)
+  assert.deepEqual(createWorkspaceStore({ initial: legacy.value }).recentFiles(), [])
+})
+
+// ── 批次66 任务三：逐视图状态（folder 模板的树折叠态＋选中项，按页记）────────────
+
+test('逐视图状态：每页自己一份，树的折叠集落盘读回；同值不重复写', () => {
+  const store = createWorkspaceStore()
+  store.open('novel.shelf#1', { resource: null })
+  store.open('novel.shelf#2', { resource: null })
+  assert.equal(store.get('novel.shelf#1').viewState, null, '没动过视图就没有状态，不凭空造一份')
+
+  const first = store.setViewState('novel.shelf#1', { collapsed: ['第二卷'] })
+  assert.equal(first.ok, true)
+  assert.equal(first.changed, true)
+  assert.deepEqual(store.get('novel.shelf#1').viewState, { collapsed: ['第二卷'] })
+  assert.equal(store.get('novel.shelf#2').viewState, null, '状态归这一页自己，别的页不受影响')
+
+  // 快照给出去的是副本：界面改了副本不该串改状态机（和几何同一纪律）。
+  const copy = store.get('novel.shelf#1')
+  copy.viewState.collapsed.push('第三卷')
+  assert.deepEqual(store.get('novel.shelf#1').viewState.collapsed, ['第二卷'])
+
+  const saved = store.serialize()
+  assert.deepEqual(saved.entries['novel.shelf#1'].viewState, { collapsed: ['第二卷'] })
+  const revived = createWorkspaceStore({ initial: saved })
+  assert.deepEqual(revived.get('novel.shelf#1').viewState, { collapsed: ['第二卷'] })
+
+  const again = revived.setViewState('novel.shelf#1', { collapsed: ['第二卷'] })
+  assert.equal(again.changed, false, '同值不该写盘')
+
+  // 「选中哪份文档」不在 viewState 里：那一格就是 entry.resource（批次61〔D〕），不另存第二份真相。
+  assert.deepEqual(Object.keys(revived.get('novel.shelf#1')), ['instance', 'pane', 'resource', 'group', 'order', 'form', 'geometry', 'z', 'maximized', 'viewState'])
+})
+
+test('逐视图状态净化：全展开＝收成 null（没有值得落盘的东西）；重复卷名去掉；坏形状不脏状态机', () => {
+  assert.deepEqual(normalizeViewState({ collapsed: [] }), null)
+  assert.deepEqual(normalizeViewState({}), null)
+  assert.deepEqual(normalizeViewState(null), null)
+  assert.deepEqual(normalizeViewState('collapsed'), null)
+  assert.deepEqual(normalizeViewState({ collapsed: ['甲', ' 甲 ', '', null, '乙'] }), { collapsed: ['甲', '乙'] })
+  // 旧形状里多出来的键（比如曾经想过要记 selected）一概不收——不留第二份真相的入口。
+  assert.deepEqual(normalizeViewState({ collapsed: ['甲'], selected: '正文/a.md' }), { collapsed: ['甲'] })
+
+  const store = createWorkspaceStore()
+  store.open('novel.shelf#1')
+  assert.equal(store.setViewState('novel.shelf#1', { collapsed: ['第一卷'] }).changed, true)
+  assert.equal(store.setViewState('novel.shelf#1', {}).changed, true, '收干净了也是一次变更（回 null）')
+  assert.equal(store.get('novel.shelf#1').viewState, null)
+  assert.equal(store.setViewState('ghost.pane#1', {}).ok, false, '没开的页不记')
 })

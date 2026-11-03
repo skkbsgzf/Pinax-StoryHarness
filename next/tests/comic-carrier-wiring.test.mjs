@@ -175,7 +175,8 @@ test('清单守卫（批次58）：comfy allow 恰为只读两把，画布是 ap
   assert.equal(canvas.view, 'pinax.view.app')
   assert.equal(canvas.kind, 'external-app')
   assert.equal(canvas.app?.url, 'http://127.0.0.1:3010')
-  assert.deepEqual(canvas.forms, ['dock', 'split', 'fullscreen', 'immersive'])
+  // 批次66 裁定 Q2：画布的形态声明跟着词表收敛成两档——页态天然占满中栏，那件事不需要一个词。
+  assert.deepEqual(canvas.forms, ['dock', 'split'])
 
   // 全仓工具面零命中：内置载体的 tools 与 mcp.allow 里都不许再出现 comfy_submit。
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) {

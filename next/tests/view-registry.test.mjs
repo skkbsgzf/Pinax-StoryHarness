@@ -59,7 +59,7 @@ test('注册/解析：第三方注册 custom 可解析；同名重复注册拒�
   assert.equal(again.error.code, 'DUPLICATE_VIEW')
 })
 
-test('保留类型：第三方不许顶替宿主六种视图；宿主自己可以注册', () => {
+test('保留类型：第三方不许顶替宿主自带视图（HOST_VIEW_TYPES 全集，台账 NOTE-1）；宿主自己可以注册', () => {
   const registry = createViewRegistry()
   for (const type of HOST_VIEW_TYPES) {
     const denied = registry.registerView(type, () => ({ kind: 'hijack' }), { owner: 'plugin.evil' })

@@ -146,7 +146,9 @@ describe('载体面板接真会话', () => {
     await settingBoard.trigger('click')
     await waitFor(() => wrapper.find('[data-pane-id="dossier.editor"]').exists() && wrapper.find('.nx-index-window').text().includes('文风'), { note: '设定与资料栏没从磁盘读出约束' })
     expect(wrapper.findAll('.nx-index-window .nx-tree-item')).toHaveLength(1)
-    expect(wrapper.find('.nx-index-window').text()).not.toContain('人物·柯秒')
+    // 「本域之外的条目不在这一栏」＝树里那一列不含它。批次66 任务二后索引窗顶部多了一栏「最近打开」，
+    // 那里出现刚才点过的那条世界书条目是应该的（它记的是「打开过什么」，跨载体共用这一栏），所以限定到树。
+    expect(wrapper.findAll('.nx-index-window .nx-tree-item').map((row) => row.text()).join('\n')).not.toContain('人物·柯秒')
     // 同一限定：世界书窗仍并存于窗层，这里只断言设定与资料面里没有条目阅读态。
     expect(wrapper.find('[data-pane-id="dossier.editor"] .entry-text').exists()).toBe(false)
 

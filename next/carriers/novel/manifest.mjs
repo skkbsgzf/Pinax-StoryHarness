@@ -48,10 +48,10 @@ export const NOVEL_CARRIER = Object.freeze({
       // view（工单 C2）：pane 自己声明视图类型，宿主不再按 id 前缀猜。
       // 槽语义（批次53）：书稿是整本书的章节索引，整份项目只有一份（single＋project）；
       // 它是正文/** 的兜底面——精确到某一章 .md 的打开由 novel.editor 接管（fallback，优先级低）。
-      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', kind: 'chapter-editor', multiplicity: 'single', scope: 'project', claims: ['正文/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'left-dock', id: 'novel.shelf', title: '书稿', icon: 'outline', view: 'pinax.view.editor', kind: 'chapter-editor', multiplicity: 'single', scope: 'project', claims: ['正文/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：正文编辑位绑「一条正文资源」（scope:entry，一章一编辑位）；
       // 它认领 正文/**/*.md 并以 extension 档接管——同一章同时命中书稿时，编辑面赢。
-      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', multiplicity: 'single', scope: 'entry', claims: ['正文/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['chapter', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      { slot: 'center', id: 'novel.editor', title: '正文', icon: 'writing', view: 'pinax.view.editor', kind: 'chapter-editor', multiplicity: 'single', scope: 'entry', claims: ['正文/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['chapter', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay'] }
     ],
     // 批次62 任务一：命令面。**这六条全是既有动作的另一个入口，没有一条是新行为**——
     // 逐条对照（评审按这张表核）：

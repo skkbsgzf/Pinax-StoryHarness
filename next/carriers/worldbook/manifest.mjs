@@ -41,10 +41,10 @@ export const WORLDBOOK_CARRIER = Object.freeze({
       // 两块 pane 的形态因此不再是「文档面」：窄栏是树、核心区是看板——形态三分类见 formTaxonomy.mjs。
       // 槽语义（批次53）：窄栏类别树是整栏一份的导航面（single＋project），兜底认领 世界书/**。
       // 批次44 的「按 pane id 改 kind」例外表由此转正：两块 pane 的分工改由 claims／takes 正面表达。
-      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', kind: 'entries-categories', multiplicity: 'single', scope: 'project', claims: ['世界书/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'left-dock', id: 'worldbook.board', title: '世界书板', icon: 'worldbook', view: 'pinax.view.tree', kind: 'entries-categories', multiplicity: 'single', scope: 'project', claims: ['世界书/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：看板区按**条目路径**各开各的（keyed＋entry，keyField='path'）；
       // 它认领 世界书/**/*.md 并以 extension 档接管：同一份条目同时命中类别树时，看板区赢。
-      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', multiplicity: 'keyed', scope: 'entry', keyField: 'path', claims: ['世界书/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['entry', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      { slot: 'center', id: 'worldbook.entries', title: '条目', icon: 'list', view: 'pinax.view.board', kind: 'entries-workspace', multiplicity: 'keyed', scope: 'entry', keyField: 'path', claims: ['世界书/**/*.md'], priority: 70, canOpen: { field: 'kind', in: ['entry', 'proposal'] }, takes: 'extension', forms: ['dock', 'split', 'overlay'] }
     ],
     // 批次62 任务一：命令面（既有动作的另一个入口）：
     //   worldbook.open-board    board:pinax.carrier.worldbook ← 竖条点「世界书」这一格（AppNext.selectBoard）

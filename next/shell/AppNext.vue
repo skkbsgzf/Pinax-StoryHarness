@@ -1136,7 +1136,9 @@ async function openResourceInPage(page, paneId, resource) {
   // 条目／资料／约束这一类要先有清单；dossier 的约束与文档同 pane，按前缀选那一棵树。
   if (target.kind === 'entry') await page.loadEntries?.()
   if (target.kind === 'note') await page.loadNotes?.()
-  if (target.kind === 'chapter') await page.loadChapters?.()
+  // 章这一棵点名「不要顺手开别的」：下面就是按 resource 开那一份，先自动开一条会让作者看见闪一下的错文档。
+  // 找不到那一条（改名／删除）就如实留着——这一页空着，比替作者挑一章好。
+  if (target.kind === 'chapter') await page.loadChapters?.({ keep: false })
   if (target.kind === 'script') await page.loadScripts?.()
   if (target.kind === 'document' || target.kind === 'rule') {
     await page.loadDocuments?.()
@@ -1336,8 +1338,8 @@ const currentInstance = computed(() => focusedInstance() ?? '')
 /**
  * 索引窗／画廊跟着走的那一页：当前板的那块中栏 pane 里序号最靠前的页。
  * 没开页就回落基座那一份数据（索引窗自己会取数，行为与批次60 一致）。
- * IndexWindow 本批不在允许改动的文件里，所以「点一行开哪份文档」仍由它直接调它拿到的
- * 那份数据——把「这一页」递给它就是归一的那一步：跳转落在页上，不再写没人看的基座 selection。
+ * 批次66 起索引窗开始吃宿主注口（最近打开／树折叠态），但「点一行开哪份文档」仍由它直接调
+ * 它拿到的那份数据——把「这一页」递给它就是归一的那一步：跳转落在页上，不再写没人看的基座 selection。
  */
 function indexPageInstance() {
   const pane = chosenCenterPaneFor(activeBoard.value)
@@ -1351,6 +1353,74 @@ function indexPageInstance() {
   return candidates.length ? candidates[0].instance : null
 }
 const indexData = computed(() => pageDataOf(indexPageInstance()))
+
+/* —— 最近打开（批次66 任务二）——————————————————————————————
+ * 真相只有一处：workspace v3 的 lastOpenFiles（打开文档时由状态机滚动记入，20 条封顶、去重最近优先）。
+ * 这里把它翻译成「能点的一行」，点击仍旧走 routeOpen 那条唯一通路——恢复语义＝预填不自动开：
+ * 启动后列表摆在那里，谁都不占中心区；页已经关掉的条目也留在列表里（「打开过」不跟着页一起消失）。
+ */
+const RECENT_KIND_PLURALS = Object.freeze({ chapter: 'chapters', note: 'notes', entry: 'entries', document: 'documents', rule: 'rules', script: 'scripts' })
+const RECENT_KIND_WORDS = Object.freeze({ chapter: '章', note: '构思', entry: '条目', document: '文档', rule: '约束', script: '剧本', record: '记录', 'outline-node': '大纲' })
+
+/** 标题从各页已经取回的清单里现找（不另存一份名字）：找不到就退到路径末段，如实而不是编一个。 */
+function recentTitleOf(target) {
+  const pages = [data, ...pageDataMap.values()]
+  if (target.kind === 'record') {
+    for (const page of pages) {
+      const list = page?.recordSets?.[target.carrier]?.records
+      const hit = (Array.isArray(list) ? list : []).find((record) => String(record?.id) === String(target.id))
+      if (hit?.title || hit?.name) return hit.title ?? hit.name
+    }
+    return null
+  }
+  const key = RECENT_KIND_PLURALS[target.kind]
+  if (!key) return null
+  const field = target.kind === 'entry' ? 'path' : 'file'
+  for (const page of pages) {
+    const list = page?.[key]
+    const hit = (Array.isArray(list) ? list : []).find((item) => item?.[field] === target.path)
+    if (hit?.title) return hit.title
+  }
+  return null
+}
+
+function recentLabel(resource) {
+  const target = resourceTarget(resource)
+  if (!target) return String(resource ?? '')
+  const word = RECENT_KIND_WORDS[target.kind] ?? ''
+  const title = recentTitleOf(target)
+  if (title) return word ? `${word} · ${title}` : title
+  if (target.kind === 'outline-node') return `大纲节点 ${target.index}`
+  const tail = String(target.path ?? resource ?? '').split('/').filter(Boolean).pop() ?? String(resource ?? '')
+  return tail.replace(/\.(?:md|txt)$/u, '')
+}
+
+const recentFiles = computed(() => (workspaceSnapshot.value.lastOpenFiles ?? []).map((item) => ({
+  pane: item.pane,
+  resource: item.resource,
+  label: recentLabel(item.resource)
+})))
+
+/** 点一条＝按 resource 走那条唯一通路开页（已开着就回到那一页，没开就新开；记不记新开由 resolveOpenTarget 判）。 */
+function openRecentFile(item) {
+  const pane = String(item?.pane ?? '')
+  if (!pane) return
+  void routeOpen({ pane, resource: item.resource ?? null })
+}
+
+/**
+ * 〔批次66 任务三〕folder 树的卷折叠态：按页读／写 workspace 条目上的 viewState（每页自己的状态）。
+ * 读的是 workspaceSnapshot 那一行（不是 hostWorkspace.get），与页签高亮同一口径——登记表不是响应式的。
+ */
+const indexTreeState = computed(() => {
+  const instance = indexPageInstance()
+  return instance ? (workspaceSnapshot.value.entries[instance]?.viewState ?? null) : null
+})
+function onIndexTreeState(state) {
+  const instance = indexPageInstance()
+  if (!instance) return
+  hostWorkspace.setViewState(instance, state)
+}
 
 /** 页签／窗头右键共用的形态菜单状态：同一时刻只有一份，锚点＝右键处的视口坐标。 */
 const formMenu = ref(null)
@@ -1464,7 +1534,8 @@ function closeWindow(instance) {
 
 /**
  * 形态菜单的唯一落点（页签右键与窗头右键是同一个入口的两份）。
- * 项从这块 pane 清单声明的 `forms` 里出， fullscreen／immersive 不进菜单（工单 §7 待裁 ④）。
+ * 项从这块 pane 清单声明的 `forms` 里出；批次66 Q2 裁定后词表只有 dock／split／overlay 三值，
+ * 每一项都有真实落点（FORM_ACTIONS），不再有「看着能点、其实没差别」的骗人入口。
  */
 function applyFormAction(instance, action) {
   const entry = hostWorkspace.get(instance)
@@ -1563,14 +1634,16 @@ const activeLayoutTemplate = computed(() => layoutTemplateForBoard(activeBoard.v
 const showIndexWindow = computed(() => indexOpen.value && templateHasTree(activeLayoutTemplate.value))
 
 /** 换形态后把对应载体的内容取回来（浮窗／分屏／全屏都可能打开一块不在当前板的树）。 */
-async function preparePaneData(page, paneId) {
+async function preparePaneData(page, paneId, { autoOpen = true } = {}) {
   const id = String(paneId ?? '')
   if (!id || !page) return
-  if (id.startsWith('novel.')) await page.loadChapters()
+  // 〔批次66 任务三〕这一页存档里带着自己的文档时，别让目录替作者挑一条：
+  // folder 树那条「没有就开最后一章」、世界书那条「没有就开第一条」都会把存档那份顶掉，重启后选中就漂移了。
+  if (id.startsWith('novel.')) await page.loadChapters(autoOpen ? {} : { keep: false })
   else if (id.startsWith('outline.')) await page.loadOutline()
   else if (id.startsWith('notes.')) await page.loadNotes()
   else if (id.startsWith('worldbook.')) {
-    await page.loadEntries()
+    await page.loadEntries(autoOpen ? {} : { syncCurrent: false })
     // 批次60：蓝色双链指向整个知识库（条目＋资料＋约束）——另两棵树没取过就顺手补一次。
     await page.ensureKnowledgeCatalog?.()
   }
@@ -1631,7 +1704,8 @@ async function ensurePaneData(instance, paneId) {
   pendingPaneLoads.set(instance, page)
   overlayLoading.value = { ...overlayLoading.value, [instance]: true }
   try {
-    await preparePaneData(page, id)
+    // 这一页在存档里已经认了自己的文档＝取树时不触发「替你开最后一章」。
+    await preparePaneData(page, id, { autoOpen: !hostWorkspace.get(instance)?.resource })
   } finally {
     if (pendingPaneLoads.get(instance) === page) pendingPaneLoads.delete(instance)
     const next = { ...overlayLoading.value }
@@ -1669,11 +1743,33 @@ function syncWorkspaceForView() {
   if (!paneDataRestored) {
     // 本次打开的第一次有效清单：先把上次留下的窗内容取回来，再保证至少有一页占着中心区。
     paneDataRestored = true
-    for (const entry of hostWorkspace.list()) void ensurePaneData(entry.instance, entry.pane)
+    for (const entry of hostWorkspace.list()) {
+      void restorePageDocument(entry.instance, entry.pane, entry.resource ?? null)
+    }
     restoreActiveBoardFromWorkspace()
     // 图库模板不补页：它的内容（画廊）本身就在核心区，开一扇记录窗反而是多余的遮挡。
     if (!hostWorkspace.list().length && layoutTemplateForBoard(activeBoard.value) !== 'gallery') showBoardWindow(activeBoard.value)
   }
+}
+
+/**
+ * 〔批次66 任务三〕重启恢复「这一页装的是哪份文档」：先取清单，再把存档那一份放回页上。
+ * 少了后半段，页会停在目录顺手挑的那一条，而 selection→resource 那条看门狗会照着页上的选中标
+ * 反过来改写存档——作者上次看的稿子就此丢失，「最近打开」也会被这一条假记录污染。
+ * 找回失败（那一份改了名／删了）就如实让页空着：不替作者挑，也不动存档里那条 resource，
+ * 等他自己点一行，看门狗照实更新。
+ */
+async function restorePageDocument(instance, paneId, recorded) {
+  await ensurePaneData(instance, paneId)
+  if (!recorded) return
+  const page = pageDataOf(instance)
+  if (selectionResource(page) === recorded) {
+    pageResource.set(instance, recorded)
+    return
+  }
+  const opened = await openResourceInPage(page, paneId, recorded)
+  if (!opened) return
+  pageResource.set(instance, recorded)
 }
 
 /** 从工作区把「上次看的那一栏」找回来：叠序最高的窗口属于哪个载体，竖条就落哪一格。 */
@@ -1717,7 +1813,9 @@ async function hydrateWorkspace(bridge, root) {
       version: loaded.version ?? 1,
       entries: loaded.entries,
       active: loaded.active ?? null,
-      focus: loaded.focus ?? null
+      focus: loaded.focus ?? null,
+      // 批次66 任务二：最近打开跟着整份读回来。它是预填数据——这里只列表，不开页。
+      lastOpenFiles: Array.isArray(loaded.lastOpenFiles) ? loaded.lastOpenFiles : []
     })
   } else {
     hostWorkspace.load(null)
@@ -2207,9 +2305,13 @@ onBeforeUnmount(() => {
           :board="activeBoard"
           :data="indexData"
           :width="indexWidth"
+          :recent="recentFiles"
+          :tree-state="indexTreeState"
           @collapse="indexOpen = false"
           @history="openHistoryFor"
           @overlay="toggleBoardOverlay"
+          @open-recent="openRecentFile"
+          @tree-state="onIndexTreeState"
         />
         <div class="resizer" role="separator" aria-orientation="vertical" @pointerdown="startDrag('index', $event)" />
       </template>

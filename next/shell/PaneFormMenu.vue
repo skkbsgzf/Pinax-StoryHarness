@@ -9,9 +9,9 @@ import { PAGE_ACTIONS, formMenuItems } from './paneForms.mjs'
  * 无拖拽句柄、无缩放角、点外或 Esc 即收、坐标按视口钳住；样式复用索引窗那套
  * `.nx-context-*`（next-shell.css:1111 起），不另起一套弹层。
  *
- * 项的来源只有一处：这块 pane 清单声明的 `forms` ∩ 本批能落地的形态
- * （`dock`／`split`／`overlay`）。`fullscreen`／`immersive` 在 v3 状态轴里没有独立落点，
- * 不进菜单——进了就是看着能点、其实没差别的骗人入口（工单 §7 待裁 ④）。
+ * 项的来源只有一处：这块 pane 清单声明的 `forms` ∩ 词表能落地的形态
+ * （`dock`／`split`／`overlay`）。批次66 前置裁定 Q2 把两个无落点的旧词从词表删除
+ * （登记未采用照 chain 先例），三值与 FORM_ACTIONS 一一同构，菜单里不存在「点了没差别」的项。
  * 「收成侧缘标签／关闭这一页」属于页操作，不在 forms 词表里，所以恒在。
  */
 const props = defineProps({

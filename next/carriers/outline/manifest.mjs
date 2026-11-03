@@ -36,10 +36,10 @@ export const OUTLINE_CARRIER = Object.freeze({
   contributes: Object.freeze({
     panes: [
       // 槽语义（批次53）：大纲树是全项目一份的导航面（single＋project），兜底认领 大纲/**。
-      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', kind: 'outline-editor', multiplicity: 'single', scope: 'project', claims: ['大纲/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'left-dock', id: 'outline.tree', title: '大纲树', icon: 'outline', view: 'pinax.view.tree', kind: 'outline-editor', multiplicity: 'single', scope: 'project', claims: ['大纲/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：编辑位绑的是整份 outline.json（不是单个节点），所以 scope 是 project 而不是 entry；
       // 认领同目录、以 extension 档接管大纲资源，canOpen 只放行 kind=outline（其它文件仍留给兜底面）。
-      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', kind: 'outline-editor', multiplicity: 'single', scope: 'project', claims: ['大纲/**'], priority: 70, canOpen: { field: 'kind', equals: 'outline' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'center', id: 'outline.editor', title: '大纲编辑', icon: 'list', view: 'pinax.view.editor', kind: 'outline-editor', multiplicity: 'single', scope: 'project', claims: ['大纲/**'], priority: 70, canOpen: { field: 'kind', equals: 'outline' }, takes: 'extension', forms: ['dock', 'split', 'overlay'] },
       // 协议 v1.1-C：悬浮小工具窗（作者点名「大纲变成微型悬浮窗，悬浮在小说正文的某个位置」）。
       // 载体只声明意图与宽度；定位、拖动、收起/展开、位置记忆全归宿主 next/shell/FloatingWidget.vue。
       // 槽语义（批次53）：悬浮窗是同一份大纲的第二种看法，允许开多份（list），生命周期跟会话（session）；

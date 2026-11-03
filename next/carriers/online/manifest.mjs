@@ -36,9 +36,9 @@ export const ONLINE_CARRIER = Object.freeze({
   contributes: Object.freeze({
     panes: [
       // 槽语义（批次53）：联机房间板是整栏一份的记录树（single＋project），兜底认领 联机/**。
-      { slot: 'left-dock', id: 'online.board', title: '联机房间', icon: 'collaboration', view: 'pinax.view.list', kind: 'records-editor', multiplicity: 'single', scope: 'project', claims: ['联机/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen'] },
+      { slot: 'left-dock', id: 'online.board', title: '联机房间', icon: 'collaboration', view: 'pinax.view.list', kind: 'records-editor', multiplicity: 'single', scope: 'project', claims: ['联机/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：编辑位绑一条房间记录（single＋entry），认领 联机/**/*.json 并以 extension 档接管。
-      { slot: 'center', id: 'online.editor', title: '联机', icon: 'collaboration', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['联机/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'online-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen'] }
+      { slot: 'center', id: 'online.editor', title: '联机', icon: 'collaboration', view: 'pinax.view.editor', kind: 'records-editor', multiplicity: 'single', scope: 'entry', claims: ['联机/**/*.json'], priority: 70, canOpen: { field: 'kind', equals: 'online-record' }, takes: 'extension', forms: ['dock', 'split', 'overlay'] }
     ],
     // 批次62 任务一：命令面（既有动作的另一个入口）。
     // 本板块 centerPanes 只有一块（online.editor），「开这一页」与「点竖条这一格」是同一条路，只留一条 open-board。

@@ -8,14 +8,15 @@
  *   dock     → 占为页（留在当前页组）
  *   split    → 移到对面页组（对半）
  *   overlay  → 浮出为窗
- * `fullscreen`／`immersive` 在 v3 没有独立落点（页态天然铺满；浮窗的双击另有子态），
- * 本批**不进菜单**——进了就是看着能点、其实没差别的骗人入口（工单 §7 待裁 ④）。
+ * 批次66（前置裁定 Q2）：两个在 v3 没有独立落点的旧词（整窗占满类形态）从词表删除——
+ * 页态天然铺满，浮窗的双击另有子态；登记未采用照 chain 先例（见 carrierManifest.paneSemantics）。
+ * 词表三值与 FORM_ACTIONS 一一同构，「声明了形态却没有落点」这条口子从此不存在。
  */
 
-/** 协议词表（清单与宿主描述符都用这五个值；界面只用其中能落地的三个）。 */
-export const PANE_FORMS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
+/** 协议词表（清单与宿主描述符都用这三个值；批次66 起与状态机落点一一同构）。 */
+export const PANE_FORMS = Object.freeze(['dock', 'split', 'overlay'])
 
-/** 本批右键菜单能真正落地的形态（其余值在词表里，但 v3 状态轴装不下）。 */
+/** 词表三值的落点表（批次66 起与 PANE_FORMS 一一同构：有词必有动作，不存在「声明了却没落点」）。 */
 export const FORM_ACTIONS = Object.freeze({
   dock: { action: 'dock', label: '占为页' },
   split: { action: 'side', label: '移到侧页组（对半）' },
@@ -33,13 +34,11 @@ export const DEFAULT_PANE_FORM = 'dock'
  */
 export const MENU_TARGET_FORM = Object.freeze({ dock: 'page', side: 'page', float: 'floating', tab: 'tab' })
 
-/** 词表文案（菜单与宿主描述符共用；`fullscreen`／`immersive` 只在这里留名，不进菜单）。 */
+/** 词表文案（菜单与宿主描述符共用；批次66 起与 PANE_FORMS 三值一一对应）。 */
 export const PANE_FORM_LABELS = Object.freeze({
   dock: '停靠栏',
   split: '分屏',
-  overlay: '浮窗',
-  fullscreen: '全屏',
-  immersive: '沉浸'
+  overlay: '浮窗'
 })
 
 /** 右键菜单里「页操作」那一组：不属于 forms 词表（v3 自有形态与关闭），故恒在。 */

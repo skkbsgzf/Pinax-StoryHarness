@@ -35,9 +35,9 @@ export const NOTES_CARRIER = Object.freeze({
   contributes: Object.freeze({
     panes: [
       // 槽语义（批次53）：清单是整栏一份的导航面（single＋project），兜底认领 构思/**。
-      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list', kind: 'notes-editor', multiplicity: 'single', scope: 'project', claims: ['构思/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] },
+      { slot: 'left-dock', id: 'notes.list', title: '构思清单', icon: 'idea', view: 'pinax.view.list', kind: 'notes-editor', multiplicity: 'single', scope: 'project', claims: ['构思/**'], priority: 30, takes: 'fallback', forms: ['dock', 'split', 'overlay'] },
       // 槽语义（批次53）：编辑位绑一篇构思（single＋entry），认领 构思/**/*.md 并以 extension 档接管。
-      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', kind: 'notes-editor', multiplicity: 'single', scope: 'entry', claims: ['构思/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'note' }, takes: 'extension', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'] }
+      { slot: 'center', id: 'notes.editor', title: '构思编辑', icon: 'writing', view: 'pinax.view.editor', kind: 'notes-editor', multiplicity: 'single', scope: 'entry', claims: ['构思/**/*.md'], priority: 70, canOpen: { field: 'kind', equals: 'note' }, takes: 'extension', forms: ['dock', 'split', 'overlay'] }
     ],
     // 批次62 任务一：命令面（既有动作的另一个入口）：
     //   notes.open-board   board:pinax.carrier.notes ← 竖条点「构思」这一格（AppNext.selectBoard）

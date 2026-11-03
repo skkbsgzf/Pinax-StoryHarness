@@ -22,7 +22,7 @@ import {
  *   requires      ［不变］缺口即拒，且必须给 fix
  *   permissions   ［v1 的 scopes］结构化成 [{ type:'file', dir, mode }]
  *   contributes   { panes, commands, settings, renderers }
- *   subscriptions 今天只认 project.changed
+ *   subscriptions project.changed／file.changed／layout.changed（批次66 扩展词表）
  * 归一化结果同时保留 v1 字段（capabilities／scopes／settings／panes），
  * 这样依赖闭包、目录唯一主人、载体设置页都不用为改名再改一遍。
  *
@@ -127,11 +127,18 @@ const SERVICE_HEALTH_PATH_MAX = 200
 const MCP_ALLOW_MAX = 256
 const MCP_URL_MAX = 2000
 
-/** 宿主认得的事件订阅（A 批收尾时发 project.changed）。 */
-export const CARRIER_SUBSCRIPTIONS = Object.freeze(['project.changed'])
+/**
+ * 宿主认得的事件订阅词表（声明面）。词 ↔ 进程内 kind 的路由表在 next/runtime/eventBus.mjs
+ * 的 PROJECT_EVENT_TOPICS（投递面），两边同集合由 next/tests/event-bus.test.mjs 硬核对。
+ *   project.changed  批次37：项目数据变了（entries/outline/manuscript/sessions/proposals 五类内部 kind）
+ *   file.changed     批次66（F7）：fileService 写钩子的落盘事实，负载带 path（相对项目根的 posix 路径）
+ *   layout.changed   批次66（F7）：workspaceStore 工作区落盘的事实，负载 path 固定 .pinax/workspace.json
+ * `selection.changed` 登记不做——壳层尚无干净的选择发射点，不硬造（工单任务4）。
+ */
+export const CARRIER_SUBSCRIPTIONS = Object.freeze(['project.changed', 'file.changed', 'layout.changed'])
 
-/** 宿主打开位置词表（与 next/shell/paneForms.mjs 的 PANE_FORMS 逐项相等，doctor 会核）。 */
-export const PANE_FORM_WORDS = Object.freeze(['dock', 'split', 'overlay', 'fullscreen', 'immersive'])
+/** 宿主打开位置词表（与 next/shell/paneForms.mjs 的 PANE_FORMS 逐项相等，doctor 会核；批次66 Q2 收敛为三值）。 */
+export const PANE_FORM_WORDS = Object.freeze(['dock', 'split', 'overlay'])
 
 /** 设置控件的声明类型（v1 的 { id, title } 读成 section＝只出目录项、不带控件）。 */
 export const SETTING_TYPES = Object.freeze(['section', 'string', 'number', 'boolean', 'enum'])
@@ -146,7 +153,7 @@ const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_.]{1,63}$/u
 /** 载体设置节 id：载体命名空间内的小写名（与工具名的命名家族一致，不带大写与空格）。 */
 const SETTING_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u
 const SETTING_TITLE_MAX = 40
-/** pane.view 的命名家族：pinax.view.<name>（宿主六种与 pinax.view.custom 同族）。 */
+/** pane.view 的命名家族：pinax.view.<name>（宿主八种与 pinax.view.custom 同族；口径 `viewRegistry.mjs` 的 HOST_VIEW_TYPES，台账 NOTE-1）。 */
 const VIEW_TYPE_PATTERN = /^pinax\.view\.[a-z][a-z0-9.-]{0,63}$/u
 
 /** 插件可用的槽位（C5）。right 是保留字——右栏归一级公民运行时，任何插件声明即拒。
@@ -462,7 +469,7 @@ function validateCommands(value, pluginId) {
   return ok(out)
 }
 
-/** renderers：v2 只开 pinax.view.custom 一个类型名（宿主六种视图不许被顶替）。 */
+/** renderers：v2 只开 pinax.view.custom 一个类型名（宿主自带的那批视图不许被顶替）。 */
 function validateRenderers(value, pluginId) {
   if (value === undefined || value === null) return ok([])
   if (!Array.isArray(value)) return fail('INVALID_MANIFEST', `${pluginId} 的 contributes.renderers 必须是数组`)
@@ -473,7 +480,7 @@ function validateRenderers(value, pluginId) {
       return fail('INVALID_MANIFEST', `${pluginId} 的 renderer 类型不合法：${String(type)}`, { pluginId })
     }
     if (!CARRIER_VIEW_TYPES.includes(type)) {
-      return fail('RESERVED_VIEW_TYPE', `${pluginId} 不能声明视图 ${type}：宿主六种视图归宿主，第三方只能用 ${CARRIER_VIEW_TYPES.join('/')}`, { pluginId, type })
+      return fail('RESERVED_VIEW_TYPE', `${pluginId} 不能声明视图 ${type}：宿主自带的视图归宿主，第三方只能用 ${CARRIER_VIEW_TYPES.join('/')}`, { pluginId, type })
     }
     if (typeof raw === 'object' && raw !== null) {
       for (const key of Object.keys(raw)) {
@@ -485,7 +492,7 @@ function validateRenderers(value, pluginId) {
   return ok(out)
 }
 
-/** subscriptions：今天只认 project.changed；未订阅的载体收不到事件。 */
+/** subscriptions：只认 CARRIER_SUBSCRIPTIONS 词表；未订阅的载体收不到对应事件。 */
 function validateSubscriptions(value, pluginId) {
   if (value === undefined || value === null) return ok([])
   if (!Array.isArray(value)) return fail('INVALID_MANIFEST', `${pluginId} 的 subscriptions 必须是数组`)
