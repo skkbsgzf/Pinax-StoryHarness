@@ -2,6 +2,7 @@
 import { computed, nextTick, ref } from 'vue'
 import WorkbenchModal from './WorkbenchModal.vue'
 import CarrierSettingsGeneric from './settings/CarrierSettingsGeneric.vue'
+import SkillsSection from './settings/SkillsSection.vue'
 
 /**
  * SettingsModal（工单C0 · U13 作者裁定）：统一的二级页面。
@@ -99,7 +100,26 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
     })
 }))
 
-const allSections = computed(() => [...props.sections, ...carrierSections.value])
+/**
+ * 外壳自己的内置节（批次77 任务5 · 技能库）。
+ *
+ * 注册点为什么在弹窗这一层：AppNext 那份 <code>settingsSections</code> 是「应用／项目／文档」三组的宿主，
+ * 工单没把它划进允许文件；本节又不该只能从菜单命令进设置。目录表本来就是 <code>[props.sections, 载体声明节]</code>
+ * 两段拼出来的，中间插一段内置节是这一层已有的形状（载体节的 group 也是在这里现算的，不在 AppNext 写死）。
+ * 分组给「技能」而不是塞进「项目」：组序按首次出现算，插进 项目 会把既有目录的节序整体推后一格——
+ * 那条节序是 shell-ui 用例钉着的规格，不是可以顺手挪的排版。
+ */
+const builtInSections = computed(() => [{
+  id: 'skills',
+  title: '技能库',
+  group: '技能',
+  // 浅匹配词表（批次76 任务4-2 口径：字段标签进词表）。技能域的名字都在这一列，作者搜「编剧」也该找到这格。
+  keywords: ['技能', '技能库', 'skill', '启停', '停用', '导入技能', '方法说明书', '适用任务域', '正文写作', '编剧', '世界书整理', '审阅验收', '未分域', '风格'],
+  component: SkillsSection,
+  props: { bridge: props.bridge }
+}])
+
+const allSections = computed(() => [...props.sections, ...builtInSections.value, ...carrierSections.value])
 
 /** 当前节：目录里没有的 id 回落第一节，右栏不出现空窗。 */
 const current = computed(() => allSections.value.find((section) => section.id === props.activeSection) ?? allSections.value[0] ?? null)

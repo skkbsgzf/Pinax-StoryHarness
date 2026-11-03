@@ -3,6 +3,7 @@ name: outline-restructure
 description: 重构大纲结构：合并、拆分、重排节点，保留节点 id 与既有摘要。
 tools: [pinax_outline_read, pinax_outline_save]
 output: proposal
+domain: prose
 ---
 
 ## 何时用

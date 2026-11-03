@@ -3,6 +3,7 @@ name: scene-expand
 description: 把一句梗概扩写成一场戏：只落成提案，不动正文原稿。
 tools: [pinax_chapter_read, pinax_chapter_save]
 output: proposal
+domain: prose
 ---
 
 ## 何时用

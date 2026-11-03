@@ -3,6 +3,7 @@ name: chapter-rewrite
 description: 按作者给的方向重写一整章，结果只落成提案，作者采纳才进正文。
 tools: [pinax_chapter_read, pinax_chapter_save]
 output: proposal
+domain: prose
 ---
 
 ## 何时用

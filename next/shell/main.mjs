@@ -25,6 +25,7 @@ import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/kn
 import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
 import { buildSettingsSchema, createFileCarrierOverridesStore, readCarrierOverridesSync } from '../carrierOverridesStore.mjs'
+import { createSkillsService } from '../skills/loadSkills.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE } from './menus.mjs'
@@ -787,6 +788,12 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     writingComplete,
     settingsStoreFor,
     carrierOverridesFor,
+    // 技能库设置面（批次77 任务5）：四条 skills:* 通道都转给这一份服务。
+    // 根与工具面都是**现取**（getter）：换项目不用重建服务，运行时还没装配时它也答得出「装不上是因为工具面还没起来」。
+    skillsService: createSkillsService({
+      getRoot: () => session?.projectRoot ?? null,
+      getAvailableTools: () => session?.runtime?.listTools?.() ?? []
+    }),
     // 运行过程事件（批次29）：runtimeAsk 期间把运行器的真实阶段推给渲染层。
     // 走既有推送机制（sendToRenderer → webContents.send），通道名在 ipcContract 里；窗口不在时静默丢弃。
     emitRuntimeEvent: (payload) => {

@@ -3,6 +3,7 @@ name: worldbook-refactor
 description: 重构世界书：拆分过长的条目、合并重复设定、补齐条目之间的关系。
 tools: [pinax_worldbook_list, pinax_worldbook_read, pinax_worldbook_save]
 output: proposal
+domain: worldbook
 ---
 
 ## 何时用

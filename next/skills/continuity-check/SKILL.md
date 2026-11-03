@@ -3,6 +3,7 @@ name: continuity-check
 description: 连续性核对：把正文与大纲、世界书对一遍，只出问题清单，不改任何文件。
 tools: [pinax_project_context, pinax_chapter_read, pinax_worldbook_list]
 output: checklist
+domain: acceptance
 ---
 
 ## 何时用

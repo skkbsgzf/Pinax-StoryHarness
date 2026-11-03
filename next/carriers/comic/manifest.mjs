@@ -58,7 +58,9 @@ export const COMIC_CARRIER = Object.freeze({
       // 槽语义（批次53）：画布是**项目级唯一**的一块外部应用面（single＋project）——它不认领项目内文件
       // （内容住在 toonflow 自己的数据里），与 comic.editor 同属 center 槽、按 pane id 各自成实例：
       // 外壳的中栏切换条据此在两块中间切换（批次58 实拍的「双中栏无入口」由这里收口）。
-      { slot: 'center', id: 'comic.canvas', title: 'Toonflow 画布', icon: 'comics', view: 'pinax.view.app', kind: 'external-app', multiplicity: 'single', scope: 'project', app: { url: 'http://127.0.0.1:3010' }, forms: ['dock', 'split'] }
+      { slot: 'center', id: 'comic.canvas', title: 'Toonflow 画布', icon: 'comics', view: 'pinax.view.app', kind: 'external-app', multiplicity: 'single', scope: 'project', app: { url: 'http://127.0.0.1:3010' }, forms: ['dock', 'split'] },
+      // 画布是独立体②：ComfyUI（:8188）自己的 web 前端——同一条 app 档口径，宿主只给浏览器承载，不代启不代杀。
+      { slot: 'center', id: 'comic.comfyui', title: 'ComfyUI', icon: 'comics', view: 'pinax.view.app', kind: 'external-app', multiplicity: 'single', scope: 'project', app: { url: 'http://127.0.0.1:8188' }, forms: ['dock', 'split'] }
     ],
     // 批次62 任务一：命令面（既有动作的另一个入口）。
     // 这块板有**两块** center pane（comic.editor／comic.canvas），所以 open-editor 与 open-board 不是同一条路：

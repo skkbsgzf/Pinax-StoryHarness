@@ -108,7 +108,16 @@ export const IPC_CHANNELS = Object.freeze({
   // 批次62 任务4：快捷键表（.pinax/hotkeys.json）。整份读、整份写；
   // 冲突在这道闸就拒并往服务与通知池记一条 warn，坏档回默认（净化在 next/shell/hotkeys.mjs）。
   hotkeysLoad: 'pinax:agent:hotkeys:load',
-  hotkeysSave: 'pinax:agent:hotkeys:save'
+  hotkeysSave: 'pinax:agent:hotkeys:save',
+  // 批次77 任务5：技能库设置面。四条都只认当前项目根——启停真值存项目内 `.pinax/skills.json`，
+  // 导入的包落在 `.pinax/skills/`，都不写全局偏好（换项目不该带走上一本书的启停）。
+  // list 现扫两层目录并带上每一条拒装原因（守卫⑪：原因必须看得见）；toggle 写一条启停；
+  // body 只在点开「查看正文」时取那一份全文（清单里从不带正文，渐进披露那道闸不破）；
+  // import 把选中的目录拷进 `.pinax/skills/` 后逐条校验，不合格列原因，不假装成功。
+  skillsList: 'pinax:agent:skills:list',
+  skillsToggle: 'pinax:agent:skills:toggle',
+  skillsBody: 'pinax:agent:skills:body',
+  skillsImport: 'pinax:agent:skills:import'
 })
 
 /**
@@ -324,8 +333,12 @@ export function shellView(session) {
  *                       不注入时 settings:* 两条通道如实报缺。
  *   carrierOverridesFor —— (root) => carrierOverridesStore（next/carrierOverridesStore）：
  *                       批次54 的工程覆盖只读口（应用面 url／来源层展示）。不注入时如实报缺。
+ * deps 扩展（批次77 任务5 技能库）：
+ *   skillsService —— next/skills/loadSkills.mjs 的 createSkillsService：{ list, toggle, body, importFrom }。
+ *                       四条 skills:* 通道都只转发给它（判定与落盘口径全在装载层那一份，这里不留第二套）。
+ *                       不注入时如实报缺——不注入的是**接线**，不是功能：渲染层拿不到 fs，也不该拿。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null }) {
   // 批次62 任务2：这条通道认的 id 集不再是「MENU_TEMPLATE 的拍平结果」这一份死集合，
   // 而是 MENU_TEMPLATE ∪ registry.commands()，每次现算（载体可被启用／停用）。
   // 见下方 acceptedMenuIds —— 全文件只有那一处口径。
@@ -391,6 +404,11 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
     } catch {
       // 记账失败不改变这条通道自己的裁决结果。
     }
+  }
+
+  /** 技能四条通道的缺线说法：不注入的是接线，不是功能——渲染层拿不到 fs，也不该拿。 */
+  function skillsUnwired() {
+    return fail('INVALID_INPUT', '技能服务未接入（主进程未创建 skillsService）：这条通道现在只报缺，不读写任何文件')
   }
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
@@ -598,6 +616,22 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         const store = carrierOverridesFor(session.projectRoot)
         return store ? store.read() : fail('INVALID_INPUT', '工程覆盖存储不可用：拿不到当前项目的覆盖文件')
       }
+      // 批次77 任务5：技能库设置面。四条都只把载荷交给技能服务——启停真值、两层目录、拒装原因
+      // 的口径全在 next/skills/loadSkills.mjs 那一份，通道这层不留第二套判定。
+      // 为什么不在本文件里直接引装载层：ipcContract 在渲染层的依赖图上（AppNext 等只取通道名），
+      // 而装载层静态用 node:fs —— 把 fs 拖进 renderer bundle 是这条链一直守着的那个口（服务由主进程注入）。
+      case IPC_CHANNELS.skillsList:
+        return skillsService ? skillsService.list() : skillsUnwired()
+      case IPC_CHANNELS.skillsToggle: {
+        if (!skillsService) return skillsUnwired()
+        // 启停只认布尔：缺了这一笔就替作者猜一次开关，猜错的方向是「他以为关掉了」。
+        if (typeof input.enabled !== 'boolean') return fail('INVALID_INPUT', '技能启停要给出 enabled：true＝启用，false＝停用')
+        return skillsService.toggle(input.name, input.enabled)
+      }
+      case IPC_CHANNELS.skillsBody:
+        return skillsService ? skillsService.body(input.name) : skillsUnwired()
+      case IPC_CHANNELS.skillsImport:
+        return skillsService ? skillsService.importFrom(input.sourceDir) : skillsUnwired()
       case IPC_CHANNELS.runtimeToolCall:
         return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
       case IPC_CHANNELS.runtimePropose:

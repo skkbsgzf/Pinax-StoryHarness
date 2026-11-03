@@ -3,7 +3,7 @@ import { collectCarrierTools, createAggregatedMcpServer } from './surfaceAggrega
 import { connectMcpServers, resolveMcpSpec } from './mcpClient.mjs'
 import { collectPluginDirs } from './pluginDirs.mjs'
 import { KERNEL_WRITE_TOOL_NAMES, guardKernelToolCall } from './kernelWriteGuard.mjs'
-import { loadSkills } from '../skills/loadSkills.mjs'
+import { loadSkills, skillDomainLabel, SKILL_ORIGINS } from '../skills/loadSkills.mjs'
 import { createSkillTools, SKILL_READ_TOOL } from './skillTools.mjs'
 import { createServiceLogTools, SERVICE_LOG_LIST_TOOL } from './serviceLogTools.mjs'
 
@@ -63,7 +63,9 @@ export async function createRuntimeSurface({ registry, view, fileService, adviso
   // 批次49：pinax_service_log_list 与 pinax_skill_read 同属运行时原生工具，恒定上报——
   // 没有服务时它如实回空数组，工具面形状不随项目有没有服务而漂。
   const availableTools = [...kernelToolNames(), ...map.keys(), SKILL_READ_TOOL, SERVICE_LOG_LIST_TOOL]
-  const loaded = await loadSkills({ ...(skillsDir ? { dir: skillsDir } : {}), availableTools })
+  // 批次77 任务5：装载层现在认得「项目」这件事——`.pinax/skills.json` 的启停真值与 `.pinax/skills/`
+  // 那层导入的包都按当前项目根读。root 就是上面那一行已经算好的项目根（没有项目时两处都跳过）。
+  const loaded = await loadSkills({ ...(skillsDir ? { dir: skillsDir } : {}), availableTools, projectRoot: root })
   const nativeMap = createSkillTools({ skills: loaded.skills })
   for (const [name, entry] of createServiceLogTools({ pool: serviceLogPool })) nativeMap.set(name, entry)
   const guard = (tool, args) => guardKernelToolCall({ tool, args, root, registry })
@@ -107,11 +109,28 @@ export async function createRuntimeSurface({ registry, view, fileService, adviso
     skills: {
       names: loaded.skills.map((skill) => skill.name),
       rejected: loaded.rejected,
+      // 批次77 任务5：清单纯数据形状照 loadSkills 的产物摊开，域与「风格」标记进面——
+      // `/` 菜单要按 kind 把风格单列一组、设置面要按 domain 分组，两边都不许自己再 parse 一遍 frontmatter。
       catalog: loaded.skills.map((skill) => ({
         name: skill.name,
         description: skill.description,
         tools: [...skill.tools],
-        output: skill.output
+        output: skill.output,
+        domain: skill.domain ?? '',
+        domainLabel: skillDomainLabel(skill.domain),
+        kind: skill.kind ?? '',
+        origin: skill.origin ?? SKILL_ORIGINS.builtIn
+      })),
+      // 关掉的那几条今天也摊出来：装载清单里没它（渐进披露与 pinax_skill_read 都拿不到），
+      // 但界面上「停用了」与「根本没有这个技能」必须是两句话。
+      disabled: loaded.disabledSkills.map((skill) => ({
+        name: skill.name,
+        description: skill.description,
+        output: skill.output,
+        domain: skill.domain ?? '',
+        domainLabel: skillDomainLabel(skill.domain),
+        kind: skill.kind ?? '',
+        origin: skill.origin ?? SKILL_ORIGINS.builtIn
       }))
     }
   }

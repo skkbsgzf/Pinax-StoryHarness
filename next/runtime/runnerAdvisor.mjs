@@ -5,7 +5,7 @@ import { createModelRoundGuard } from '../../shared/modelLoopGuard.js'
 import { buildOpenClawUserMessage } from '../../server/services/openclawService.js'
 import { fail, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { buildRuntimeEnvelope } from './contextProfiles.mjs'
-import { skillCatalogLines } from '../skills/loadSkills.mjs'
+import { skillCatalogLines, enabledSkillList, readSkillPreferencesSync } from '../skills/loadSkills.mjs'
 import { normalizeWriteMode } from './writePolicy.mjs'
 
 /**
@@ -32,6 +32,17 @@ const DEFAULT_TIMEOUT_MS = 60_000
  * 事件回调是旁路：回调抛错只记 warning，绝不打断提问本身（见 createEventEmitter）。
  * 事件全部在这一层发，老线（server/services/advisorAgentRunner.js）一个字节都不动。
  */
+/**
+ * 启停读值（批次77 任务5）：项目根从 contextSources 现取（view.root → fileService.root 两级回落，
+ * 与 mcpSurface 算 root 的口径一字不差），读的是 `<项目根>/.pinax/skills.json`。
+ * 没有项目根＝没有启停这一说（运行时独立在空壳里跑），回空名单＝全部照装，不猜一份默认关闭表。
+ */
+function disabledSkillNamesOf(sources) {
+  const root = sources?.view?.root ?? sources?.fileService?.root ?? null
+  if (!root) return []
+  return readSkillPreferencesSync(root).disabled
+}
+
 export function createAdvisorRunner({
   runAgent = runAdvisorAgent,
   buildEnvelope = buildRuntimeEnvelope,
@@ -84,7 +95,12 @@ export function createAdvisorRunner({
         // 循环自己发 step / tool-* 事件，roundGuard 不参与——它计的是单次 runAgent 的回合。
         const tools = typeof runtime?.listTools === 'function' ? runtime.listTools() : []
         // 渐进披露：系统提示只给「名字 + 一句话」，正文要模型自己调 pinax_skill_read。
-        const catalog = typeof runtime?.skills === 'function' ? (runtime.skills().catalog ?? []) : []
+        // 批次77 任务5：启停真值在**项目里**（.pinax/skills.json），而 surface 那份 catalog 是运行时
+        // 装配那一刻的快照——作者刚关掉的那一条要等下一次重建才从快照里消失。提示词这一头不能等：
+        // 每一问现读一次启停表，关掉的当场从清单里剔掉（工单判据「关掉技能后系统提示清单里不再有它」）。
+        // 判定只有一句 enabledSkillList，与装载层共用同一个谓词，不长第二套规则。
+        const surfaceCatalog = typeof runtime?.skills === 'function' ? (runtime.skills().catalog ?? []) : []
+        const catalog = enabledSkillList(surfaceCatalog, disabledSkillNamesOf(sources))
         loopResult = await withTimeout(toolLoop.run({
           question,
           envelope: payload.envelope,
