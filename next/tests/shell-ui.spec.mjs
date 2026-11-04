@@ -581,7 +581,174 @@ describe('运行时栏', () => {
   })
 
   /**
-   * 〔批次77 任务2〕重新生成：只对**最后一条**回答开（中间那条重跑＝把后面的历史丢掉，等任务6 的分支）。
+   * 〔批次77-R2 任务6〕分一支＋‹ i/n › 切换器。
+   * 工单的分工在这儿落成可断言的三件事：
+   *   1) 分支＝截断前先存一支：点完这一问之后的历史**从当前视野消失但没被删**（拷成了另一支），
+   *      输入框同时回填原文——所以「分一支」是「编辑重发」的带退路版本，两者共用 dropFrom 这一个入口。
+   *   2) 切换只换「此刻看哪一支」：切过去再切回来，两支的消息逐字段不变（拿整份 JSON 对拍）。
+   *   3) 计数与指针都来自可见路径，不是组件自己猜的。
+   */
+  it('批次77-R2 任务6：分一支把尾段存成另一支并回填原文，‹ › 只挪当前支指针、两支内容一字不动', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '答完就走' } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    const ask = async (text) => {
+      await wrapper.find('.authoring-knowledge__input-row textarea').setValue(text)
+      await wrapper.find('.authoring-knowledge__send').trigger('click')
+      await flushPromises()
+    }
+    await ask('第一问')
+    await ask('第二问')
+
+    const dialog = wrapper.findComponent(AssistantDialog)
+    // 对拍口径：一支的「内容」＝除 id／branch／branchNav 之外的每个字段。
+    // 前三个是分叉机制自己的记账（拷贝必然换新 id、明写父链接），后一个是界面派生格、从不落盘。
+    const contentOf = (list) => JSON.parse(JSON.stringify(list)).map((message) => {
+      delete message.id
+      delete message.branch
+      delete message.branchNav
+      return message
+    })
+    const beforeFork = contentOf(dialog.props('messages'))
+    const trunk = dialog.props('messages').map((message) => ({ role: message.role, text: message.text }))
+    expect(trunk).toEqual([
+      { role: 'user', text: '第一问' },
+      { role: 'agent', text: '答完就走' },
+      { role: 'user', text: '第二问' },
+      { role: 'agent', text: '答完就走' }
+    ])
+
+    const branchButtons = wrapper.findAll('[data-test="question-branch"]')
+    expect(branchButtons).toHaveLength(2)
+    expect(branchButtons[0].attributes('aria-label')).toBe('分一支')
+    expect(branchButtons[0].attributes('title')).toContain('把这条之后的历史存成另一支')
+    // 还没分叉：这一层只有一支，切换器不许凭空长出来。
+    expect(wrapper.find('[data-test="branch-nav"]').exists()).toBe(false)
+
+    await branchButtons[0].trigger('click')
+    await flushPromises()
+    // 当前支被截到这条之前（这条本身也没了——重发会重新长出它），输入框拿到原文。
+    expect(dialog.props('messages')).toEqual([])
+    expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe('第一问')
+
+    await ask('第一问 换个写法')
+    const afterAsk = dialog.props('messages')
+    expect(afterAsk.map((message) => message.text)).toEqual(['第一问 换个写法', '答完就走'])
+    // 这一层现在有两支，正看着的是重新长出来的第 1 支。
+    const nav = wrapper.find('[data-test="branch-nav"]')
+    expect(nav.exists()).toBe(true)
+    expect(nav.attributes('title')).toBe('这一层共 2 支，正在看第 1 支')
+    expect(wrapper.find('[data-test="branch-count"]').text()).toBe('1/2')
+
+    // ‹ › 是循环的：两支之间来回切，内容一个字节都不改（工单第 3 条的硬判据）。
+    await wrapper.find('[data-test="branch-next"]').trigger('click')
+    await flushPromises()
+    const other = dialog.props('messages')
+    expect(other.map((message) => ({ role: message.role, text: message.text }))).toEqual(trunk)
+    expect(wrapper.find('[data-test="branch-count"]').text()).toBe('2/2')
+    expect(wrapper.find('[data-test="branch-nav"]').attributes('title')).toBe('这一层共 2 支，正在看第 2 支')
+
+    // 逐字段对拍：切过去看到的这一支，和分叉前那一份完全一致（时间戳／trail／usage 都原样）。
+    expect(contentOf(other)).toEqual(beforeFork)
+
+    await wrapper.find('[data-test="branch-prev"]').trigger('click')
+    await flushPromises()
+    expect(dialog.props('messages').map((message) => message.text)).toEqual(['第一问 换个写法', '答完就走'])
+    expect(wrapper.find('[data-test="branch-count"]').text()).toBe('1/2')
+    // 切回来也一个字节没写：两支都在，谁也没被覆盖。
+    await wrapper.find('[data-test="branch-next"]').trigger('click')
+    await flushPromises()
+    expect(dialog.props('messages').map((message) => message.text)).toEqual(['第一问', '答完就走', '第二问', '答完就走'])
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77-R2 任务6〕分一支与编辑重发同一条乐观失效保护：
+   * 原文／时间戳对不上，或那条根本不是问句，就一个字节都不动——
+   * 分叉要拷尾段、要截当前支，一次过期点击的破坏力比编辑重发更大。
+   */
+  it('批次77-R2 任务6：分一支的过期点击与错角色点击不动任何一支，也不回填输入框', async () => {
+    const bridge = stubBridge(emptyFrameworkView(), {
+      [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '照答' } })
+    })
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge } })
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue('唯一一问')
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+
+    const dialog = wrapper.findComponent(AssistantDialog)
+    const before = dialog.props('messages')
+    expect(before).toHaveLength(2)
+
+    dialog.vm.$emit('branch', { id: before[0].id, text: '被改过的', at: before[0].at })
+    await flushPromises()
+    expect(dialog.props('messages').map((message) => message.text)).toEqual(['唯一一问', '照答'])
+    dialog.vm.$emit('branch', { id: before[1].id, text: before[1].text, at: before[1].at })
+    await flushPromises()
+    expect(dialog.props('messages')).toHaveLength(2)
+    expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe('')
+    // 没分叉就没有可切的层：切支请求返回 null，界面不演「切了」。
+    dialog.vm.$emit('switch-branch', { id: before[0].id, step: 1 })
+    await flushPromises()
+    expect(dialog.props('messages')).toHaveLength(2)
+    expect(wrapper.find('[data-test="branch-nav"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77-R2 任务6〕分叉与切支在**落盘载荷**上的样子（工单验收：两叉都在盘上且互不覆盖；切换只改当前支指针）。
+   * 这里量的是外壳交给主进程的那份快照——真正「既有行逐字节不变」由 next/tests/session-store.test.mjs 的守卫⑩钉；
+   * 两条合起来才说完整：快照里两支同存，写盘时只追加不重写。
+   */
+  it('批次77-R2 任务6：分叉后两支同时在快照里，切支只改 branchChoice，消息一个字节不动', async () => {
+    const saves = []
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        if (channel === IPC_CHANNELS.sessionsLoad) return { ok: true, value: { sessions: [], warnings: [], badLines: 0 } }
+        if (channel === IPC_CHANNELS.sessionsSave) {
+          saves.push(JSON.parse(JSON.stringify(payload.snapshot)))
+          return { ok: true, value: { saved: payload.snapshot.sessions.length } }
+        }
+        if (channel === IPC_CHANNELS.runtimeAsk) return { ok: true, value: { source: 'in-process-runner', text: '那一答' } }
+        return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: `未预期的通道：${channel}` } }
+      })
+    }
+    const wrapper = mount(RuntimeDock, { props: { runtime: runtimeView(), bridge, projectRoot: 'D:/branch' } })
+    await flushPromises()
+    const ask = async (text) => {
+      await wrapper.find('.authoring-knowledge__input-row textarea').setValue(text)
+      await wrapper.find('.authoring-knowledge__send').trigger('click')
+      await flushPromises()
+    }
+    await ask('原问')
+
+    await wrapper.find('[data-test="question-branch"]').trigger('click')
+    await flushPromises()
+    await ask('改后的问')
+
+    const forked = saves.at(-1).sessions[0]
+    // 两支同存：退路那一条（原问／那一答）和重新长出来的这一条，谁也没把谁挤掉。
+    expect(forked.messages.map((message) => message.text)).toEqual(['原问', '那一答', '改后的问', '那一答'])
+    const head = forked.messages.find((message) => message.text === '原问')
+    expect(head.branch).toEqual({ parentId: '', index: 2, count: 2 })
+    expect(forked.messages.find((message) => message.text === '改后的问').branch).toEqual({ parentId: '', index: 1, count: 2 })
+    // 没拨指针就还是在看第 1 支（分支不自动切支，这是工单第 4 条的「留退路」而不是「换门面」）。
+    expect(forked.branchChoice).toEqual({})
+
+    const messagesBefore = JSON.stringify(forked.messages)
+    await wrapper.find('[data-test="branch-next"]').trigger('click')
+    await flushPromises()
+    const switched = saves.at(-1).sessions[0]
+    expect(switched.branchChoice).toEqual({ '': 2 })
+    expect(JSON.stringify(switched.messages)).toBe(messagesBefore)
+    expect(switched.messages.map((message) => message.text)).toEqual(forked.messages.map((message) => message.text))
+    wrapper.unmount()
+  })
+
+  /**
+   * 〔批次77 任务2〕重新生成：只对**最后一条**回答开（中间那条重跑＝把后面的历史丢掉；
+   * 〔批次77-R2 任务6〕分支长出来之后这条口子也不开——想保历史走「分一支」，再生成是就地替换）。
    * 禁用的那一枚必须把理由写在 title 里——禁用而不解释，作者只能猜。
    * 问题原文优先用本轮记住的那一问（omit／skill 一起带走）；这里钉的是「丢掉旧答案＋用同一问再跑」。
    */

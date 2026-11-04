@@ -87,7 +87,7 @@ const props = defineProps({
   /** 统一二级页开着时为 true：Esc 先归它（照 FloatingWidget 的 suspendEsc 先例）。 */
   suspendEsc: { type: Boolean, default: false }
 })
-const emit = defineEmits(['send', 'retry', 'stop', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate'])
+const emit = defineEmits(['send', 'retry', 'stop', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate', 'branch', 'switch-branch'])
 
 const draft = ref('')
 const threadRef = ref(null)
@@ -518,7 +518,31 @@ function editQuestion(message) {
   emit('edit', { id: message.id, text: message.text, at: message.at })
 }
 
-/** 重新生成：只对最后一条回答开（把中间的某一条换掉＝把后面的历史弄丢，本批不做）。 */
+/* —— 〔批次77-R2 任务6〕消息树：分支钮与 ‹i/n› 切换器 ————————————————
+ * 这一层仍只管「摆」与「把手上的键／点击交出去」：存一支、截断、拨指针全在 agentSessions，
+ * 与任务4 的时间线、任务3 的 typeahead 同一口径。
+ */
+
+/** 这一行右边要不要长切换器：同一层只有一支时不画（画一枚点了没反应的钮＝本批要消灭的死钮）。 */
+function branchCount(message) {
+  return Number(message?.branchNav?.count) || 0
+}
+
+function branchIndex(message) {
+  return Number(message?.branchNav?.index) || 1
+}
+
+/** 分一支：与编辑重发同样只交「哪一条、原文、时刻」三要素，宿主拿去做乐观校验后再动历史。 */
+function branchQuestion(message) {
+  emit('branch', { id: message.id, text: message.text, at: message.at })
+}
+
+/** ‹ › 只说一件事：此刻想看这一层的哪一支（step＝往后挪几位）。内容不归这里管。 */
+function cycleBranch(message, step) {
+  emit('switch-branch', { id: message.id, step })
+}
+
+/** 重新生成：只对最后一条回答开（把中间的某一条换掉＝把后面的历史弄丢，要先分一支留退路）。 */
 function regenerate(message) {
   emit('regenerate', { id: message.id })
 }
@@ -695,6 +719,18 @@ onBeforeUnmount(() => {
                 title="编辑重发（这条之后的历史会截断）"
                 @click="editQuestion(message)"
               ><WorkbenchIcon name="pencil" :size="13" /></button>
+              <!-- 〔批次77-R2 任务6〕分一支＝先把这条之后的历史存成另一支，再在这儿改问法。
+                   与「编辑重发」的分工要说清：直接编辑＝旧的那条之后的历史没了；分支＝旧的那条变成退路，
+                   两支都在，切换器随时回得去。图标取现成的那张节点树（图标表在老 web 轨的文件里，本批不许动它）。 -->
+              <button
+                type="button"
+                class="authoring-knowledge__row-btn"
+                data-test="question-branch"
+                :disabled="disabled || busy"
+                aria-label="分一支"
+                title="分一支（把这条之后的历史存成另一支，再改这一问）"
+                @click="branchQuestion(message)"
+              ><WorkbenchIcon name="network" :size="13" /></button>
             </div>
             <div class="authoring-knowledge__question">
               <p>
@@ -706,6 +742,36 @@ onBeforeUnmount(() => {
                 class="authoring-knowledge__question-note"
               >{{ note }}</p>
             </div>
+            <!-- ‹ 2/3 ›：这一层的候选支计数＋当前指针。切换只换「此刻看哪一支」，
+                 两支的内容一个字节都不动（所以它只 emit，不在这儿动 messages）。
+                 摆在气泡右侧、且**不**跟着动作区那层 opacity 走：「我正在看第几支」是常驻事实，
+                 hover 才显形的一闪而过等于没告诉人；只有真分了叉的那几行才会多出这一格。 -->
+            <span
+              v-if="branchCount(message) > 1"
+              class="authoring-knowledge__branch-nav"
+              data-test="branch-nav"
+              :title="`这一层共 ${branchCount(message)} 支，正在看第 ${branchIndex(message)} 支`"
+            >
+              <button
+                type="button"
+                class="authoring-knowledge__branch-step"
+                data-test="branch-prev"
+                :disabled="disabled || busy"
+                aria-label="看上一支"
+                title="看上一支"
+                @click="cycleBranch(message, -1)"
+              >‹</button>
+              <span class="authoring-knowledge__branch-count" data-test="branch-count">{{ branchIndex(message) }}/{{ branchCount(message) }}</span>
+              <button
+                type="button"
+                class="authoring-knowledge__branch-step"
+                data-test="branch-next"
+                :disabled="disabled || busy"
+                aria-label="看下一支"
+                title="看下一支"
+                @click="cycleBranch(message, 1)"
+              >›</button>
+            </span>
           </div>
           <article v-else class="authoring-knowledge__answer">
             <div class="authoring-knowledge__answer-meta">
@@ -741,7 +807,8 @@ onBeforeUnmount(() => {
               </div>
             </template>
             <!-- 批次77 任务2：回答这行的动作条（复制／展开过程／重新生成／token chip）。
-                 「分支」不在这里——它要等任务6 的消息树一起长出来，先摆一枚点不动的钮正是本批要消灭的东西。 -->
+                 〔批次77-R2 任务6〕分支不在这里：分叉点是问句那一层（同一问才有「另一支」可言），
+                 所以「分一支」与 ‹i/n› 切换器长在上面的 question-row 动作区，回答这行只留再生成。 -->
             <div class="authoring-knowledge__row-actions authoring-knowledge__row-actions--answer" data-test="answer-actions">
               <button
                 type="button"
@@ -766,7 +833,7 @@ onBeforeUnmount(() => {
                 class="authoring-knowledge__row-btn"
                 data-test="answer-regenerate"
                 :disabled="disabled || busy || messageIndex !== messages.length - 1"
-                :title="messageIndex !== messages.length - 1 ? '只有最后一条回答能重新生成（换中间那条会把后面的历史弄丢，分支还没做）' : '用同一个问题再生成一次'"
+                :title="messageIndex !== messages.length - 1 ? '只有最后一条回答能重新生成（换中间那条会把后面的历史弄丢；想留退路就在那句问句上分一支）' : '用同一个问题再生成一次'"
                 aria-label="重新生成"
                 @click="regenerate(message)"
               ><WorkbenchIcon name="refresh" :size="13" /></button>
@@ -1065,6 +1132,15 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .authoring-knowledge__row-btn:hover:not(:disabled) { color: var(--text-primary); background: var(--nav-hover); }
 .authoring-knowledge__row-btn:focus-visible { outline: 2px solid var(--workbench-selected); outline-offset: 1px; color: var(--text-primary); }
 .authoring-knowledge__row-btn:disabled { cursor: not-allowed; opacity: 0.45; }
+/* 〔批次77-R2 任务6〕分支切换器：‹› 两个字符本体很小，命中区靠固定 24×24 撑开
+   （批次76 那条度量闸按 min-width/min-height: 24px 量，不靠 padding 猜——padding 会随字号漂）。
+   整条不跟随 .row-actions 的 opacity：分叉后「看的是第几支」要一直在眼前。 */
+.authoring-knowledge__branch-nav { display: inline-flex; align-items: center; gap: 1px; flex: none; color: var(--text-muted); }
+.authoring-knowledge__branch-step { display: inline-flex; align-items: center; justify-content: center; width: 24px; min-width: 24px; height: 24px; min-height: 24px; padding: 0; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-md); line-height: 1; cursor: pointer; }
+.authoring-knowledge__branch-step:hover:not(:disabled) { color: var(--text-primary); background: var(--nav-hover); }
+.authoring-knowledge__branch-step:focus-visible { outline: 2px solid var(--workbench-selected); outline-offset: 1px; color: var(--text-primary); }
+.authoring-knowledge__branch-step:disabled { cursor: not-allowed; opacity: 0.45; }
+.authoring-knowledge__branch-count { min-width: 24px; min-height: 24px; display: inline-flex; align-items: center; justify-content: center; font-variant-numeric: tabular-nums; font-size: var(--nx-fs-2xs); }
 .authoring-knowledge__row-time { margin-inline-end: 4px; color: var(--text-muted); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; }
 /* token chip：也是 hover 才现的一格。没有回报时是那六个字，不是 0（守卫⑦）。 */
 .authoring-knowledge__usage { margin-inline-start: 6px; color: var(--text-muted); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; white-space: nowrap; }

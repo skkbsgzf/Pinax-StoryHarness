@@ -13,9 +13,12 @@ import {
   describeRuntimeProgress,
   describeTrailEvent,
   messageStatus,
+  normalizeBranchChoice,
+  sanitizeMessageBranch,
   sanitizeSessionMessage,
   sanitizeTrail,
-  sanitizeTrailEvent
+  sanitizeTrailEvent,
+  visibleMessagePath
 } from '../shell/agentSessions.mjs'
 
 /**
@@ -210,12 +213,16 @@ test('持久化往返：多会话与 activeId 落盘，消息形状是 JSON 安�
   // 「这一条是哪一轮跑的、这轮报了多少 token、现在是什么状态」要能跨刷新说得出，
   // 才有消息行上的状态字与用量 chip。这三格由 sanitizeSessionMessage 统一裁（usage 只能缺省成 null，
   // status 只能落进 MESSAGE_STATUSES 闭集），仍是 JSON 安全的固定字段——不是把未知字段放进来。
+  // 〔批次77-R2 任务6 断言漂移，理由如实记〕再多一格 `branch`：消息级分叉的链接格（工单第 1 条），
+  // 只认 {parentId,index,count} 三个确定字段，读不出就是 null（＝原始支）。仍是固定字段、
+  // 仍由 sanitizeSessionMessage 一处裁——不是把未知字段放进来。
   assert.deepEqual(Object.keys(firstMessage).sort(),
-    ['actions', 'at', 'command', 'failed', 'findings', 'id', 'notes', 'role', 'runId', 'status', 'text', 'trail', 'usage'],
+    ['actions', 'at', 'branch', 'command', 'failed', 'findings', 'id', 'notes', 'role', 'runId', 'status', 'text', 'trail', 'usage'],
     '消息只落 schema 里那几个字段（未知字段不进存储）')
   assert.equal(firstMessage.runId, '', '没带 runId 就是空串，不编一个')
   assert.equal(firstMessage.usage, null, '上游没回报用量时是 null，不是 0')
   assert.equal(firstMessage.status, 'completed', '缺 status 的老写法归一成 completed')
+  assert.equal(firstMessage.branch, null, '没分过叉的会话读回来就是原始支，不编一个链接格')
   assert.equal(firstMessage.command, '/资料')
   assert.equal(firstMessage.notes.length, 1)
   assert.deepEqual(Object.keys(saved.sessions[0].messages[1].findings[0]).sort(), ['message', 'severity'])
@@ -306,9 +313,11 @@ test('消息清洗：角色必须是 user/agent，非字符串字段不进存储
   assert.equal(sanitizeSessionMessage(null), null)
   assert.equal(sanitizeSessionMessage({ role: 'system', text: 'x' }), null)
   // 整份形状钉住（批次77 任务2 加了 runId／usage／status 三格：usage 没回报就是 null，
-  // status 缺省按 failed 归位。改名、漏格、把 null 变成 0 都会在这里红，不会静默漂移。）
+  // status 缺省按 failed 归位。〔批次77-R2 任务6〕再加一格 branch：分叉链接，没带就是 null。
+  // 改名、漏格、把 null 变成 0 都会在这里红，不会静默漂移——沿批次76「整份钉住」那条纪律。）
   assert.deepEqual(sanitizeSessionMessage({ role: 'agent', text: 42, findings: 'nope', actions: [1, 'ok'] }), {
     id: '',
+    branch: null,
     role: 'agent',
     text: '',
     findings: [],
@@ -452,4 +461,142 @@ test('运行过程轨迹（批次29）：事件按白名单清洗、封顶 32 �
   assert.equal(describeTrailEvent({ stage: 'subagent-start' }), null)
   assert.equal(describeRuntimeProgress({ stage: 'subagent', name: '研究员' }), '正在交给子代理 研究员')
   assert.equal(describeRuntimeProgress({ stage: 'workflow-step', step: 2 }), '工作流第 2 步')
+})
+
+/**
+ * 〔批次77-R2 任务6〕消息树（分支）。工单四条验收在这里钉前三条：
+ *   1) 分叉不改写既有那一条支（`branch` 只长在新拷贝上，原始支在盘上就是不带标签的一串）；
+ *   2) ‹ › 切换只改「此刻看哪一支」，两支的内容一字不差；
+ *   3) 分支与编辑重发共用 `dropFrom` 这一个历史入口，截断只截看得见的那一段，别支不陪葬。
+ * 第四条（追加式落盘、守卫⑩既有行逐字节不变）在盘那侧，见 session-store.test.mjs。
+ */
+test('批次77-R2 任务6：branch 格只认三个确定字段，读不出就按原始支走', () => {
+  assert.deepEqual(sanitizeMessageBranch({ parentId: 'm-1', index: 2, count: 3, junk: 'drop' }), { parentId: 'm-1', index: 2, count: 3 })
+  assert.equal(sanitizeMessageBranch(null), null)
+  assert.equal(sanitizeMessageBranch('m-1'), null, '一个字符串不是一格链接')
+  assert.equal(sanitizeMessageBranch([]), null, '数组也不是一格链接')
+  assert.equal(sanitizeMessageBranch({ parentId: 'm-1', index: 0, count: 2 }), null, '支序号从 1 起')
+  assert.equal(sanitizeMessageBranch({ parentId: 'm-1', index: 3, count: 2 }), null, '序号不许超过支数')
+  assert.deepEqual(sanitizeMessageBranch({ index: 2, count: 2 }), { parentId: '', index: 2, count: 2 }, '没带 parentId＝挂在会话开头那一层，不是把整格丢掉')
+  assert.deepEqual(
+    sanitizeSessionMessage({ role: 'user', text: 'q', branch: { parentId: 'm-1', index: 2, count: 2, extra: 1 } }).branch,
+    { parentId: 'm-1', index: 2, count: 2 },
+    '多余字段不进这一格')
+})
+
+test('批次77-R2 任务6：指针表只认正整数序号，坏值不进存储也不参与判读', () => {
+  assert.deepEqual(normalizeBranchChoice(null), {})
+  assert.deepEqual(normalizeBranchChoice([1, 2]), {}, '数组不是一张表')
+  assert.deepEqual(normalizeBranchChoice({ a: 2, b: 0, c: 1.5, d: '3' }), { a: 2, d: 3 }, '0／小数不算支序号，字符串数字归一成整数')
+  assert.deepEqual(normalizeBranchChoice({ ['x' + 'y'.repeat(90)]: 2 }), {}, '键是消息 id，长过 80 的不认')
+})
+
+test('批次77-R2 任务6：分一支是把可见支那一段存成新支，既有那几条一字不动，‹ › 只动当前支指针', () => {
+  const saver = recorder()
+  const store = createSessionStore('D:/branch', { save: saver.save, now: stepClock() })
+  store.append({ role: 'user', text: '第一问' })
+  store.append({ role: 'agent', text: '第一答' })
+  store.append({ role: 'user', text: '第二问' })
+  store.append({ role: 'agent', text: '第二答' })
+  const visible = store.active().messages
+  const anchor = visible[2]
+  const anchorParent = visible[1].id
+
+  const fork = store.branchFrom(anchor.id)
+  assert.equal(fork.copied, 2, '这一问和它的答案一起存成另一支')
+  assert.equal(fork.index, 2, '原始支天生占 1 号位，新支排到 2')
+  assert.deepEqual(store.active().messages.map((message) => message.text),
+    ['第一问', '第一答', '第二问', '第二答'], '分叉不切支：屏上仍是作者正在看的那一条串')
+
+  const stored = saver.latest().sessions[0].messages
+  assert.equal(stored.length, 6, '分叉只是多出两条拷贝，一条既有的都没动')
+  assert.deepEqual(stored.slice(0, 4).map((message) => [message.text, message.branch]),
+    [['第一问', null], ['第一答', null], ['第二问', null], ['第二答', null]],
+    '原始支在盘上就是不带标签的那一串（既有行才能逐字节不变）')
+  assert.deepEqual(stored[4].branch, { parentId: anchorParent, index: 2, count: 2 }, '拷贝的头一条认分叉点')
+  assert.deepEqual(stored[5].branch, { parentId: stored[4].id, index: 1, count: 1 },
+    '落盘是追加式的，数组位置不能当父子依据：段内也明写；这一层只有它一个孩子，count 就写 1（候选数只说本层）')
+  assert.notEqual(stored[4].id, anchor.id, '拷贝是新的 id，不与原来那条抢身份')
+
+  // 分支的后半＝截断（与编辑重发同一个 dropFrom），接着再问一次，两支并存在同一个分叉点下。
+  assert.equal(store.dropFrom(anchor.id), 2)
+  store.append({ role: 'user', text: '第二问（改过的）' })
+  store.append({ role: 'agent', text: '新的答案' })
+  assert.deepEqual(store.active().messages.map((message) => message.text),
+    ['第一问', '第一答', '第二问（改过的）', '新的答案'])
+  const switchable = store.active().messages.at(-2)
+  assert.deepEqual(switchable.branchNav, { index: 1, count: 2 }, '新长的问句占回 1 号位，屏上才有 ‹1/2› 可点')
+  assert.deepEqual(saver.latest().sessions[0].branchChoice, {}, '分叉＋截断＋再问＝一次开关都没拨，指针表就该是空的')
+
+  assert.equal(store.cycleBranch(switchable.id, 1).index, 2)
+  assert.deepEqual(store.active().messages.map((message) => message.text),
+    ['第一问', '第一答', '第二问', '第二答'], '切到退路那一支：这一支的内容一字不差')
+  assert.equal(store.cycleBranch(store.active().messages.at(-2).id, -1).index, 1)
+  assert.deepEqual(store.active().messages.map((message) => message.text),
+    ['第一问', '第一答', '第二问（改过的）', '新的答案'], '切回来：另一支同样一字不差')
+
+  // 指针是会话真值：拨过开关就随会话落盘，读回来还在作者挑的那一支上。
+  assert.equal(store.cycleBranch(store.active().messages.at(-2).id, 1).index, 2)
+  assert.equal(saver.latest().sessions[0].branchChoice[anchorParent], 2, '拨到第 2 支：这一步落盘')
+  const reopened = createSessionStore('D:/branch', { initial: saver.latest(), save: recorder().save, now: stepClock() })
+  assert.deepEqual(reopened.active().messages.map((message) => message.text),
+    ['第一问', '第一答', '第二问', '第二答'], '重开外壳不许把挑好的那一支抹回默认')
+})
+
+test('批次77-R2 任务6：截断与追写只碰看得见的那一段，别的一支不陪葬', () => {
+  const store = createSessionStore('D:/isolate', { save: recorder().save, now: stepClock() })
+  store.append({ role: 'user', text: '甲' })
+  store.append({ role: 'agent', text: '乙' })
+  const fork = store.branchFrom(store.active().messages[0].id)
+  assert.equal(fork.parentId, '', '从第一句分叉＝挂在会话开头那一层')
+  assert.equal(store.dropFrom(store.active().messages[0].id), 2, '截掉的是可见支那两条')
+
+  // 截完屏上是空的（原始支被截了、指针没记 → 不擅自把拷贝那一支当成「正在看的那一支」画出来），
+  // 再问一次就占回 1 号位：两支并存，切换器才有得切。
+  store.append({ role: 'user', text: '丙' })
+  store.append({ role: 'agent', text: '丁' })
+  const current = store.active().messages
+  assert.deepEqual(current.map((message) => message.text), ['丙', '丁'])
+  assert.deepEqual(current[0].branchNav, { index: 1, count: 2 })
+
+  // 此刻数组末尾是「丁」，而另一支的拷贝在数组中间：追写与 updateLast 必须落在看得见的那条上。
+  store.updateLast({ notes: ['这一条落在丁上'] })
+  assert.deepEqual(store.active().messages.at(-1).notes, ['这一条落在丁上'])
+  assert.equal(store.active().messages.at(-1).text, '丁')
+  const before = store.active()
+  assert.equal(store.cycleBranch(current[0].id, 1).index, 2)
+  assert.deepEqual(store.active().messages.map((message) => message.text), ['甲', '乙'], '切过去就是那一支，一条不缺')
+  // 切回来仍要点那一支的**头**（切换器就长在这一行上）：支与支的开关是分叉点那一层的事，不是叶子的事。
+  assert.equal(store.cycleBranch(store.active().messages[0].id, -1).index, 1, '切回来')
+  assert.equal(store.cycleBranch(store.active().messages[1].id, -1), null, '那一层只有一支：不演一次「切了」')
+  assert.deepEqual(before.messages.map((message) => message.text), ['丙', '丁'], '刚才那次切换没动这一支的内容')
+  assert.equal(store.dropLast(), true, 'dropLast 去掉的也是看得见的那条')
+  assert.deepEqual(store.active().messages.map((message) => message.text), ['丙'])
+})
+
+test('批次77-R2 任务6：没分过叉的会话，可见支就是整串消息，派生格不进存储', () => {
+  const saver = recorder()
+  const store = createSessionStore('D:/plain', { save: saver.save, now: stepClock() })
+  store.append({ role: 'user', text: '问' })
+  store.append({ role: 'agent', text: '答' })
+  assert.deepEqual(store.active().messages.map((message) => message.branch), [null, null])
+  assert.deepEqual(store.active().messages.map((message) => message.branchNav), [{ index: 1, count: 1 }, { index: 1, count: 1 }])
+  assert.equal(saver.latest().sessions[0].messages.every((message) => !('branchNav' in message)), true,
+    'branchNav 是显示面派生格，不进存储（钉住形状的那两条用例才不会莫名多一格）')
+  // 只有一支时切换器无处可切：返回 null，不演一次「切了」。
+  assert.equal(store.cycleBranch(store.active().messages[1].id, 1), null)
+  assert.equal(store.branchFrom('查无此 id'), null)
+})
+
+test('批次77-R2 任务6：指针落空不擅自换支，那一条支被截了路径就到头为止', () => {
+  const messages = [
+    { id: 'a', role: 'user', text: '原始问' },
+    { id: 'b', role: 'user', text: '拷贝问', branch: { parentId: '', index: 2, count: 2 } }
+  ]
+  // 指针指着一支不存在的序号，但原始支还在 → 看原始支（不跳到拷贝那支上去）。
+  assert.deepEqual(visibleMessagePath({ messages, branchChoice: { '': 9 } }).map((entry) => entry.message.text), ['原始问'])
+  // 原始支本身也没了（截断之后）：路径为空，界面上就是一句都不画，别支不能冒充「正在看的那一支」。
+  assert.deepEqual(visibleMessagePath({ messages: messages.slice(1), branchChoice: {} }).map((entry) => entry.message.text), [])
+  // 挑了第 2 支就看得见那一支。
+  assert.deepEqual(visibleMessagePath({ messages, branchChoice: { '': 2 } }).map((entry) => entry.message.text), ['拷贝问'])
 })

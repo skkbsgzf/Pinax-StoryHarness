@@ -317,6 +317,159 @@ test('整份快照回写：新增/改名/删消息落盘；快照里消失的会
   }
 })
 
+/**
+ * 〔批次77-R2 任务6〕追加式落盘 ＋ 守卫⑩「分支非破坏」（本批主验收）。
+ *
+ * 口径：渲染层每次仍交整份内存快照，主进程这份存储**先问一句「新状态是不是磁盘那份的严格增长」**——
+ *   · 是（追写、分叉存出去的那一整段拷贝、拨支的指针）→ 只往文件尾补新行，既有行逐字节不变；
+ *   · 不是（编辑重发的截断、上限截旧、文件里有坏行）→ 落回原来的 tmp＋rename 原子重写。
+ * 增长判据比的是**折回来的内容**（id ＋ 净化后的字段），不比原始字节：消息行的 ts 由每次写覆盖，
+ * 逐字节比会把这种正常变化误判成「改写」。
+ */
+const branchMessages = () => ([
+  { id: 'm-q1', role: 'user', text: '第一问', at: '09:00' },
+  { id: 'm-a1', role: 'agent', text: '第一答', at: '09:01' },
+  { id: 'm-q2', role: 'user', text: '第二问', at: '09:02' },
+  { id: 'm-a2', role: 'agent', text: '第二答', at: '09:03' }
+])
+
+const branchSession = (messages, extra = {}) => ({
+  id: 's-branch',
+  title: '分叉的会话',
+  createdAt: clock(),
+  updatedAt: clock(),
+  renamed: true,
+  messages,
+  ...extra
+})
+
+async function linesOf(root, id) {
+  const text = await readFile(sessionFilePath(root, id), 'utf-8')
+  return text.trim().split('\n')
+}
+
+test('〔批次77-R2 任务6·守卫⑩〕分叉那次写入只往文件尾补行：既有行逐字节不变、首行还是那一条', async () => {
+  const { workspace, root, store } = await freshStore('branch-append')
+  try {
+    const base = branchMessages()
+    const seeded = await store.saveSnapshot({ sessions: [branchSession(base)], activeId: 's-branch' })
+    assert.equal(seeded.ok, true, JSON.stringify(seeded.error ?? {}))
+    const before = await linesOf(root, 's-branch')
+    assert.equal(before.length, 5, 'session ＋ 四条消息')
+
+    // 分叉＝把「第二问／第二答」原样拷贝成新支（头一条认分叉点，段内第二条认拷贝里前一条的新 id）。
+    // 这是严格增长：一条既有的都没动。
+    const copies = [
+      { id: 'm-q2-copy', role: 'user', text: '第二问', at: '09:02', branch: { parentId: 'm-a1', index: 2, count: 2 } },
+      { id: 'm-a2-copy', role: 'agent', text: '第二答', at: '09:03', branch: { parentId: 'm-q2-copy', index: 1, count: 1 } }
+    ]
+    const forked = await store.saveSnapshot({ sessions: [branchSession([...base, ...copies])], activeId: 's-branch' })
+    assert.equal(forked.ok, true, JSON.stringify(forked.error ?? {}))
+    const after = await linesOf(root, 's-branch')
+
+    assert.equal(after.length, before.length + 2, '行数只增不减：多出的就是那两条拷贝')
+    assert.deepEqual(after.slice(0, before.length), before, '既有行逐字节不变（守卫⑩的主断言）')
+    assert.equal(after[0], before[0], '首行还是那一条元数据：没被重打')
+
+    // 两叉都在盘上、互不覆盖：读回来原始支与拷贝支一条不缺。
+    const read = await store.read('s-branch')
+    assert.deepEqual(read.value.messages.map((message) => message.text),
+      ['第一问', '第一答', '第二问', '第二答', '第二问', '第二答'])
+    assert.equal(read.value.messages.filter((message) => message.branch === null).length, 4, '原始支就是不带标签的那一串')
+    assert.deepEqual(read.value.messages[4].branch, { parentId: 'm-a1', index: 2, count: 2 })
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
+test('〔批次77-R2 任务6〕切支＝只多一行元数据：两支的内容一个字都没被重打', async () => {
+  const { workspace, root, store } = await freshStore('branch-switch')
+  try {
+    const base = branchMessages()
+    const copies = [
+      { id: 'm-q2-copy', role: 'user', text: '第二问', at: '09:02', branch: { parentId: 'm-a1', index: 2, count: 2 } },
+      { id: 'm-a2-copy', role: 'agent', text: '第二答', at: '09:03', branch: { parentId: 'm-q2-copy', index: 1, count: 1 } }
+    ]
+    const forked = [...base, ...copies]
+    await store.saveSnapshot({ sessions: [branchSession(forked)], activeId: 's-branch' })
+    const before = await linesOf(root, 's-branch')
+
+    const switched = await store.saveSnapshot({
+      sessions: [branchSession(forked, { branchChoice: { 'm-a1': 2 } })],
+      activeId: 's-branch'
+    })
+    assert.equal(switched.ok, true, JSON.stringify(switched.error ?? {}))
+    const after = await linesOf(root, 's-branch')
+    assert.equal(after.length, before.length + 1, '指针换了＝只追加一条元数据行')
+    assert.deepEqual(after.slice(0, before.length), before, '两支的内容一行都没被重打')
+    const read = await store.read('s-branch')
+    assert.deepEqual(read.value.branchChoice, { 'm-a1': 2 }, '指针随会话落盘：重开外壳还在这一支上')
+
+    // 同一份状态再存一次：一个字节都不加（老口径「一致就不重写」原样保住）。
+    const again = await store.saveSnapshot({
+      sessions: [branchSession(forked, { branchChoice: { 'm-a1': 2 } })],
+      activeId: 's-branch'
+    })
+    assert.equal(again.ok, true)
+    assert.equal((await linesOf(root, 's-branch')).length, after.length, '没变化就不写')
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
+test('〔批次77-R2 任务6〕截断不是增长：落回原子重写，盘上只留内存里那一份', async () => {
+  const { workspace, root, store } = await freshStore('branch-truncate')
+  try {
+    const base = branchMessages()
+    await store.saveSnapshot({ sessions: [branchSession(base)], activeId: 's-branch' })
+    const copies = [
+      { id: 'm-q2-copy', role: 'user', text: '第二问', at: '09:02', branch: { parentId: 'm-a1', index: 2, count: 2 } },
+      { id: 'm-a2-copy', role: 'agent', text: '第二答', at: '09:03', branch: { parentId: 'm-q2-copy', index: 1, count: 1 } }
+    ]
+    await store.saveSnapshot({ sessions: [branchSession([...base, ...copies])], activeId: 's-branch' })
+    const before = await linesOf(root, 's-branch')
+    assert.equal(before.length, 7)
+
+    // 编辑重发那一步：把可见支上从第二问起的那两条截掉（分支先把它们存成了另一支，所以它们还在）。
+    const kept = [base[0], base[1], copies[0], copies[1]]
+    await store.saveSnapshot({ sessions: [branchSession(kept)], activeId: 's-branch' })
+    const read = await store.read('s-branch')
+    assert.deepEqual(read.value.messages.map((message) => message.id), ['m-q1', 'm-a1', 'm-q2-copy', 'm-a2-copy'])
+    assert.equal((await linesOf(root, 's-branch')).length, 5, '少了几行就真少几行：追加式表达不了「删」，这条走原子重写')
+
+    // 截完之后接着问：新那一条占回 1 号位（明写父链接），又回到严格增长。
+    const appended = [...kept, { id: 'm-q3', role: 'user', text: '第二问（改过的）', at: '09:04', branch: { parentId: 'm-a1', index: 1, count: 1 } }]
+    const grown = await store.saveSnapshot({ sessions: [branchSession(appended)], activeId: 's-branch' })
+    assert.equal(grown.ok, true)
+    const after = await linesOf(root, 's-branch')
+    assert.equal(after.length, 6, '追写只补一行')
+    const folded = await store.read('s-branch')
+    assert.deepEqual(folded.value.messages.map((message) => message.text),
+      ['第一问', '第一答', '第二问', '第二答', '第二问（改过的）'], '两支并存：退路那条还在')
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
+test('〔批次77-R2 任务6〕快照没交某个数组＝不是「清空」：分叉写入不许顺手抹了主进程记的提案', async () => {
+  const { workspace, store } = await freshStore('branch-keep-proposals')
+  try {
+    const base = branchMessages()
+    await store.saveSnapshot({ sessions: [branchSession(base)], activeId: 's-branch' })
+    await store.recordProposal('s-branch', { id: 'p-1', kind: 'chapter-rewrite', at: '09:05' })
+
+    // 渲染层的会话对象从不携带 proposals（提案归主进程记）：交上来的快照里没这一格。
+    const copies = [{ id: 'm-q2-copy', role: 'user', text: '第二问', at: '09:02', branch: { parentId: 'm-a1', index: 2, count: 2 } }]
+    const saved = await store.saveSnapshot({ sessions: [branchSession([...base, ...copies])], activeId: 's-branch' })
+    assert.equal(saved.ok, true, JSON.stringify(saved.error ?? {}))
+    const read = await store.read('s-branch')
+    assert.deepEqual(read.value.proposals.map((item) => item.id), ['p-1'], '没交＝保住，不是清空')
+    assert.equal(read.value.messages.length, 5)
+  } finally {
+    await workspace.cleanup()
+  }
+})
+
 test('IPC 三条会话通道：读写与迁移都只认当前项目；没有项目时如实报缺', async () => {
   const { workspace, store } = await freshStore('session-ipc')
   try {

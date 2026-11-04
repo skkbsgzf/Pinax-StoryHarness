@@ -13,6 +13,14 @@
  *
  * 纯数据模块，不 import Vue、不 import fs：node:test 能直接测状态机、上限截断与降级路径；
  * 渲染层用 subscribe() 把快照接进 ref（与 paneForms.mjs 同一套「宿主一份真相」）。
+ *
+ * 〔批次77-R2 任务6〕消息树（分支）。一份会话从「一条串」变成「一棵浅树」：
+ *   · 数组仍是**写入顺序**（也是落盘顺序），父子关系由每条自带的 `branch.parentId` 或
+ *     「数组里前一条」这两种依据说出来——判读只在 `messageParentKey`／`siblingsAt`／`visibleMessagePath` 三处；
+ *   · 界面上看到的是**当前可见支**（`visibleOf`），别处的支不画、也不许被 append/updateLast 顺手写进去；
+ *   · 「此刻看哪一支」是会话级指针 `branchChoice`，切支只动它（`cycleBranch`），两支的内容一个字节都不变；
+ *   · 分叉＝把可见支的一段**拷贝**成新支（`branchFrom`），既有那条原样留着——这样落盘才能走追加式，
+ *     「分叉写入后既有行逐字节不变」（守卫⑩）才有得钉。没分过叉的会话，可见支＝整串消息，行为一字不变。
  */
 
 /**
@@ -417,6 +425,108 @@ export function messageStatus(message) {
   return message?.failed === true ? 'error' : 'completed'
 }
 
+/**
+ * 〔批次77-R2 任务6〕消息级分叉的链接格（工单里写的 `branch:{parentId, index, count}`）。
+ *
+ * 带这一格的消息说的是一件事：「我是 `<parentId>` 那条下面的第 `index` 支」（`parentId` 为空串＝挂在会话开头）。
+ * 为什么非得有这一格：分叉**不许**把会话文件整份重写（守卫⑩「分叉写入后既有行逐字节不变」），
+ * 于是既有那一条支的字节都得原样留着——**它没法回头给自己补一个标签**。
+ * 规矩就此定死：
+ *   · 原始支在盘上就是**不带标签**的那一串（老会话读回来形状一字不变，既有行一行都不用重打）；
+ *     没带标签的消息一律按「接着数组里前一条往下长」认父，第 0 条挂在会话开头。
+ *   · 新分出去的那一支是整段**拷贝**：头一条带 `{parentId: 分叉点那条的父, index: ≥2}`；
+ *     段内后续每条带 `{parentId: 拷贝里前一条的新 id, index: 1}`——落盘是追加式的，
+ *     数组位置不能再当父子依据（截断＋追写之后，数组末尾未必是当前看的那一条），所以段内也明写。
+ *   · `index`／`count` 都是**写那一刻**的序号与支数：后来又分一叉不会追新老格里的 count，
+ *     屏上 ‹i/n› 的 n 用当场数出来的兄弟数（`visibleMessagePath` 算），这一格只留事实不留显示。
+ * 形状外的一律读成 null（＝不认得这一格＝按原始支走），不猜。
+ */
+export function sanitizeMessageBranch(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const index = Number(raw.index)
+  const count = Number(raw.count)
+  if (!Number.isSafeInteger(index) || index < 1) return null
+  if (!Number.isSafeInteger(count) || count < index) return null
+  const parentId = typeof raw.parentId === 'string' ? cleanText(raw.parentId, 80) : ''
+  return { parentId, index, count }
+}
+
+/**
+ * 〔批次77-R2 任务6〕当前看的是哪一支：会话级的指针表 `{ <父键>: 支序号 }`。
+ * 工单只把 `branch` 落在消息行白名单上，但「此刻看哪一支」是**会话级事实**——
+ * 它不属于任何一条消息，也不许改写任何一支的内容，所以挂在会话元数据行上（批次记录里已补登记）。
+ * 没有这一格＝看原始支（index 1），所以空表就是老行为，零回归。
+ */
+export function normalizeBranchChoice(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const choice = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof key !== 'string' || key.length > 80) continue
+    const index = Number(value)
+    if (Number.isSafeInteger(index) && index >= 1) choice[key] = index
+  }
+  return choice
+}
+
+/** 挂在会话开头的那一层的键：第一句话（或第一个分支头）都认它。 */
+export const BRANCH_ROOT_KEY = ''
+
+/** 一条消息的父键：带标签就照标签认；没标签＝数组里前一条（第 0 条挂会话开头）。 */
+export function messageParentKey(messages, index) {
+  const message = messages?.[index]
+  if (!message) return null
+  if (message.branch) return message.branch.parentId
+  return index > 0 ? String(messages[index - 1]?.id ?? '') : BRANCH_ROOT_KEY
+}
+
+/**
+ * 某个分叉点上的候选支：键＝支序号，值＝那条支的**头**在数组里的下标。
+ * 原始支（无标签的那条后继）先占 1 号位，带标签的按自己的 index 占位并覆盖同号——
+ * 显式标签比位置推断更有资格说话。
+ */
+export function siblingsAt(messages, parentKey) {
+  const options = new Map()
+  const list = Array.isArray(messages) ? messages : []
+  list.forEach((message, index) => {
+    if (messageParentKey(list, index) !== parentKey) return
+    const rank = message.branch ? message.branch.index : 1
+    if (message.branch || !options.has(rank)) options.set(rank, index)
+  })
+  return options
+}
+
+/**
+ * 当前可见的那一条路径（＝屏上的一问一答，从会话开头走到没有后继为止）。
+ * 每一步都在分叉点上按 `branchChoice` 挑一支；指针指的那一支不在了（被截断／被上限截旧）就回落原始支，
+ * 原始支也不在了就**到此为止**——不许把别的一支当成「作者正在看的那一条」画出来，
+ * 那是界面在替作者改他看的支（工单第 3 条：切换只换此刻看哪一支，别的一概不动）。
+ * `seen` 是环保护：parentId 被人手改坏成指向自己或后代时，宁可在此收住，也不许把这条 while 转成死循环。
+ */
+export function visibleMessagePath(session) {
+  const messages = Array.isArray(session?.messages) ? session.messages : []
+  const choice = session?.branchChoice ?? {}
+  const path = []
+  const seen = new Set()
+  let parentKey = BRANCH_ROOT_KEY
+  for (;;) {
+    const options = siblingsAt(messages, parentKey)
+    if (!options.size) break
+    const wanted = Number(choice[parentKey])
+    let rank = Number.isSafeInteger(wanted) && wanted >= 1 ? wanted : 1
+    if (!options.has(rank)) {
+      if (options.has(1)) rank = 1
+      else break
+    }
+    const index = options.get(rank)
+    const message = messages[index]
+    if (!message || seen.has(message.id)) break
+    seen.add(message.id)
+    path.push({ message, index, parentKey, rank, count: options.size })
+    parentKey = message.id
+  }
+  return path
+}
+
 export function sanitizeSessionMessage(raw) {
   if (!raw || typeof raw !== 'object') return null
   const role = raw.role === 'user' || raw.role === 'agent' ? raw.role : null
@@ -432,6 +542,8 @@ export function sanitizeSessionMessage(raw) {
     : []
   return {
     id: cleanText(raw.id, 80),
+    // 〔批次77-R2 任务6〕分叉链接格：没有就是 null（＝原始支），有就只认那三个确定字段。
+    branch: sanitizeMessageBranch(raw.branch),
     role,
     text: cleanText(raw.text, 200_000),
     findings,
@@ -451,6 +563,7 @@ export function sanitizeSessionMessage(raw) {
 function copyMessage(message) {
   return {
     ...message,
+    branch: message.branch ? { ...message.branch } : null,
     findings: message.findings.map((item) => ({ ...item })),
     actions: [...message.actions],
     notes: [...message.notes],
@@ -480,9 +593,13 @@ function summaryOf(session) {
  *   create(title?)          → 新会话摘要（并切过去）
  *   rename(id, title)       → boolean（之后不再自动改标题）
  *   remove(id)              → boolean（删空会自动补一个空会话）
- *   append(message, id?)    → 落进 id 那条会话（缺省＝当前会话）；上限截断、标题自动生成
- *   updateLast(patch, id?)  → 改那条会话的最后一条（回答晚到、引用标注都走它）
- *   dropLast(id?)           → 重试时去掉那条失败的回答
+ *   append(message, id?)    → 落进 id 那条会话（缺省＝当前会话）；上限截断、标题自动生成；
+ *                             接着**当前可见支**的尾巴长（〔批次77-R2 任务6〕）
+ *   updateLast(patch, id?)  → 改那条会话可见支的最后一条（回答晚到、引用标注都走它）
+ *   dropLast(id?)           → 重试时去掉那条失败的回答（去掉的是看得见的那条）
+ *   dropFrom(id, id?)       → 从那条起把可见支往后截掉；唯一的破坏性历史入口（编辑重发与分支共用）
+ *   branchFrom(id, id?)     → 〔任务6〕把可见支从那条起的整段存成另一支（一条既有消息都不动）
+ *   cycleBranch(id, step, id?) → 〔任务6〕‹ › 切支：只改当前支指针，不改任何一支的内容
  *   setBusy(busy) / isBusy()→ 忙态只活在这一个实例里，不持久化
  *   snapshot() / subscribe()→ 渲染层的唯一真相源（结构与 paneForms 的快照同一用法）
  */
@@ -528,9 +645,23 @@ export function createSessionStore(projectRoot, options = {}) {
       autoTitled: raw.autoTitled === true || (!renamed && title !== DEFAULT_SESSION_TITLE),
       // 写模式是会话真值：未知值一律回落 review（与运行时同一条口径）。
       writeMode: WRITE_MODES.includes(raw.writeMode) ? raw.writeMode : 'review',
+      // 〔批次77-R2 任务6〕当前看的是哪一支（会话级指针，不落进任何一条消息）。
+      branchChoice: normalizeBranchChoice(raw.branchChoice),
       events,
       messages
     }
+  }
+
+  /**
+   * 屏上那一条路径：当前可见支上的每条消息，外加「这一层共几支、此刻第几支」。
+   * `branchNav` 只在**显示面**长出来（内部 messages 与落盘 payload 都没有它），
+   * 所以形状钉用例钉的那份 schema 不会因为一个显示用的派生格而漂。
+   */
+  function visibleOf(session) {
+    return visibleMessagePath(session).map((entry) => ({
+      ...copyMessage(entry.message),
+      branchNav: { index: entry.rank, count: entry.count }
+    }))
   }
 
   /** 算「超限丢哪个」和「删完切到哪」都看这一份：最近更新的排前面。 */
@@ -564,7 +695,9 @@ export function createSessionStore(projectRoot, options = {}) {
       updatedAt: session.updatedAt,
       writeMode: session.writeMode,
       events: session.events.map((event) => ({ ...event })),
-      messages: session.messages.map(copyMessage)
+      // 〔批次77-R2 任务6〕界面拿的是**当前可见支**，不是数组全量：分叉出去的那一支不在这条路径上，
+      // 就不该跟在这一支后面一起画出来。没有分叉的会话，这条路径＝原来的整串消息，一字不差。
+      messages: visibleOf(session)
     }
   }
 
@@ -650,6 +783,7 @@ export function createSessionStore(projectRoot, options = {}) {
       renamed: Boolean(manual),
       autoTitled: false,
       writeMode: 'review',
+      branchChoice: {},
       events: [],
       messages: []
     }
@@ -695,6 +829,12 @@ export function createSessionStore(projectRoot, options = {}) {
   /**
    * 追加一条消息。sessionId 可省（＝当前会话）；传了 id 就落进那一条——
    * 提问后作者切到别的会话时，晚到的回答不该写进新会话里（那是两个话题）。
+   *
+   * 〔批次77-R2 任务6〕落点从「数组末尾」改成「**当前可见支的末尾**」：
+   * 作者切到分出去的那一支接着问，新这条得跟在那一支后面，不能因为数组末尾正好是别处的拷贝
+   * 就长错地方。父链接什么时候明写、什么时候不写，只有一条判据——
+   * **可见支的尾巴是不是数组的最后一条**：是（老会话、没分过叉）就不写，落盘形状与批次77 之前一字不变；
+   * 不是才写 `{parentId, index, count}`，因为这时候靠数组位置猜会猜歪。
    */
   function append(message, sessionId = null) {
     const session = targetSession(sessionId)
@@ -703,9 +843,25 @@ export function createSessionStore(projectRoot, options = {}) {
     if (!clean) return null
     if (!clean.id) clean.id = nextId('m')
     if (!clean.at) clean.at = formatClock(stamp())
+    const path = visibleMessagePath(session)
+    const tail = path.at(-1)
+    if (session.messages.length && (!tail || session.messages.at(-1)?.id !== tail.message.id)) {
+      const parentKey = tail ? tail.message.id : BRANCH_ROOT_KEY
+      const options = siblingsAt(session.messages, parentKey)
+      // 1 号位空着就回 1 号（截断之后接着问＝这一层的原始支重新长出来，不新开支、也不留空洞）；
+      // 1 号位有人了才往后排一位，并把指针拨过去，否则刚写的这条看不见。
+      const rank = options.has(1) ? Math.max(...options.keys()) + 1 : 1
+      // count 记的是「这一层到这儿一共几支」：正常就是 rank，只有早先的兄弟被上限挤掉时才取现数。
+      clean.branch = { parentId: parentKey, index: rank, count: Math.max(rank, options.size + 1) }
+      // 序号不是 1（＝不是这一层的原始支）就得把指针拨过来，否则刚写的这条看不见。
+      if (rank !== 1) branchChoiceOf(session)[parentKey] = rank
+    }
     session.messages.push(clean)
     if (session.messages.length > MAX_SESSION_MESSAGES) {
+      // 上限截的是**最早写入**的那些：拷贝支与原始支一起排在一起，谁老谁先出。
+      // 被截掉的那几条要是正挂着指针，一并抹掉（留着也读不到，别把元数据行越拖越长）。
       session.messages.splice(0, session.messages.length - MAX_SESSION_MESSAGES)
+      pruneBranchChoice(session)
     }
     session.updatedAt = stamp()
     if (!session.renamed && !session.autoTitled && clean.role === 'user' && clean.text.trim()) {
@@ -717,9 +873,96 @@ export function createSessionStore(projectRoot, options = {}) {
     return copyMessage(clean)
   }
 
+  /** 指针表只留还认得出的那些分叉点（父消息已经不在了的引用是脏数据，不是事实）。 */
+  function pruneBranchChoice(session) {
+    const choice = branchChoiceOf(session)
+    for (const key of Object.keys(choice)) {
+      if (key === BRANCH_ROOT_KEY) continue
+      if (!session.messages.some((message) => message.id === key)) delete choice[key]
+    }
+  }
+
+  /** 会话级的分叉指针表（拿到的是内部对象，只给本 store 自己写）。 */
+  function branchChoiceOf(session) {
+    if (!session.branchChoice || typeof session.branchChoice !== 'object') session.branchChoice = {}
+    return session.branchChoice
+  }
+
+  /**
+   * 分一支（〔批次77-R2 任务6〕工单第 4 条的「在截断前先存一支」）。
+   *
+   * 做法＝把**当前可见支从这一条往后的整段**原样拷贝一份，挂到同一个分叉点上的新序号（≥2）：
+   *   · 一条既有消息都不动、不重打、不改标签——所以落盘能走追加式（守卫⑩「既有行逐字节不变」）；
+   *   · 拷完也不拨指针——作者要的是「老的还在，我在这一支接着改」，看的新支就是原来那条；
+   *     想回头看退路，用 ‹i/n› 自己切（切换只改当前支指针，这是工单第 3 条）。
+   * 段内每条拷贝都明写 parentId（认拷贝里前一条的新 id）：数组位置在追加式落盘之后不再能当父子依据。
+   * 明写的 `count` 只说**本层**有几支可切：支头是第 index 支（这一层共 index 支，因为序号从不留洞），
+   * 段内那些是拷贝自己长的独生子（count=1）。读侧一律按 siblingsAt 现算，不拿这个字段当依据。
+   * 找不到那条消息（不在当前可见支上／已被截掉）就返回 null，一个字节都不动。
+   */
+  function branchFrom(messageId, sessionId = null) {
+    const session = targetSession(sessionId)
+    if (!session?.messages.length) return null
+    const path = visibleMessagePath(session)
+    const start = path.findIndex((entry) => entry.message.id === messageId)
+    if (start < 0) return null
+    const anchorKey = path[start].parentKey
+    const index = Math.max(1, ...siblingsAt(session.messages, anchorKey).keys()) + 1
+    const copies = []
+    let parentKey = anchorKey
+    for (const entry of path.slice(start)) {
+      const id = nextId('m')
+      copies.push({
+        ...copyMessage(entry.message),
+        id,
+        branch: { parentId: parentKey, index: copies.length ? 1 : index, count: copies.length ? 1 : index }
+      })
+      parentKey = id
+    }
+    session.messages.push(...copies)
+    if (session.messages.length > MAX_SESSION_MESSAGES) {
+      session.messages.splice(0, session.messages.length - MAX_SESSION_MESSAGES)
+      pruneBranchChoice(session)
+    }
+    session.updatedAt = stamp()
+    persist()
+    notify()
+    return { headId: copies[0].id, parentId: anchorKey, index, count: index, copied: copies.length }
+  }
+
+  /**
+   * ‹ › 切支（工单第 3 条）：**只**改当前支指针。
+   * 任何一支的内容都不因此被读写——这就是「切换只换此刻看哪一支」的实现口径，
+   * 也是它必须落在 store（而不是对话框）的原因：指针要随会话落盘，刷新后回来还在这一支上。
+   * 这一层不足两支、或者那条消息不在当前可见支上，一律返回 null 不动（不演一次「切了」）。
+   */
+  function cycleBranch(messageId, step, sessionId = null) {
+    const session = targetSession(sessionId)
+    if (!session?.messages.length) return null
+    const entry = visibleMessagePath(session).find((item) => item.message.id === messageId)
+    if (!entry || entry.count < 2) return null
+    const ranks = [...siblingsAt(session.messages, entry.parentKey).keys()].sort((a, b) => a - b)
+    const at = ranks.indexOf(entry.rank)
+    if (at < 0) return null
+    const move = Number(step)
+    if (!Number.isSafeInteger(move) || move === 0) return null
+    const next = ranks[((at + move) % ranks.length + ranks.length) % ranks.length]
+    const changed = next !== entry.rank
+    if (changed) {
+      branchChoiceOf(session)[entry.parentKey] = next
+      session.updatedAt = stamp()
+      persist()
+      notify()
+    }
+    return { index: next, count: ranks.length, changed }
+  }
+
   function updateLast(patch, sessionId = null) {
     const session = targetSession(sessionId)
-    const last = session?.messages.at(-1)
+    // 「最后一条」指的是**当前可见支**的最后一条：作者切进分出去的那一支时，晚到的引用标注
+    // 得落在他看着的那条上，不能落进数组末尾那条别的支的拷贝里。
+    const spot = visibleMessagePath(session).at(-1)
+    const last = spot?.message
     if (!last || !patch || typeof patch !== 'object') return null
     const merged = { ...last }
     for (const [key, value] of Object.entries(patch)) {
@@ -729,7 +972,7 @@ export function createSessionStore(projectRoot, options = {}) {
     }
     const clean = sanitizeSessionMessage(merged)
     if (!clean) return null
-    session.messages[session.messages.length - 1] = clean
+    session.messages[spot.index] = clean
     session.updatedAt = stamp()
     persist()
     notify()
@@ -738,29 +981,37 @@ export function createSessionStore(projectRoot, options = {}) {
 
   function dropLast(sessionId = null) {
     const session = targetSession(sessionId)
-    if (!session?.messages.length) return false
-    session.messages.pop()
+    const spot = visibleMessagePath(session).at(-1)
+    if (!spot) return false
+    session.messages.splice(spot.index, 1)
+    pruneBranchChoice(session)
     persist()
     notify()
     return true
   }
 
   /**
-   * 从某一条开始（含它）截断到末尾——批次77 任务2「编辑重发」那一步的历史动作。
+   * 从某一条开始（含它）把**当前可见支**往后截掉——批次77 任务2「编辑重发」那一步的历史动作，
+   * 〔批次77-R2 任务6〕也是分支动作的前半（`branchFrom` 先把这一串存成另一支，这里再截）。
    * 返回截掉的条数；找不到那个 id 就回 0，调用方据此决定要不要动（不静默改历史）。
-   * 这是本 store 唯一的破坏性动作，界面上只有「编辑重发」走它——重新生成用的是 dropLast。
+   *
+   * 只截看得见的那一段：分出去的那一支不在这条路径上，一根手指都不碰——
+   * 「编辑重发把退路删了」就是把分支存的意义删干净了。
+   * 这是本 store 唯一的破坏性动作（守卫：不许长出第二套历史重写入口）。
    */
   function dropFrom(messageId, sessionId = null) {
     const session = targetSession(sessionId)
     if (!session?.messages.length) return 0
-    const index = session.messages.findIndex((message) => message.id === messageId)
-    if (index < 0) return 0
-    const removed = session.messages.length - index
-    session.messages.splice(index)
+    const path = visibleMessagePath(session)
+    const start = path.findIndex((entry) => entry.message.id === messageId)
+    if (start < 0) return 0
+    const doomed = path.slice(start).map((entry) => entry.index).sort((a, b) => b - a)
+    for (const index of doomed) session.messages.splice(index, 1)
+    pruneBranchChoice(session)
     session.updatedAt = stamp()
     persist()
     notify()
-    return removed
+    return doomed.length
   }
 
   function setBusy(value) {
@@ -836,6 +1087,8 @@ export function createSessionStore(projectRoot, options = {}) {
     updateLast,
     dropLast,
     dropFrom,
+    branchFrom,
+    cycleBranch,
     setWriteMode,
     recordEvent,
     setBusy,

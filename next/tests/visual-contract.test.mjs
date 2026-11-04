@@ -883,7 +883,7 @@ test('批次59：布局模板是宿主词汇；folder 有树，web／gallery 没
   assert.ok(index.includes('nx-context-menu'), '大纲／章节自己的右键菜单仍在（内容操作，不是窗口动作）')
 })
 
-test('〔批次76 任务4-4〕遍历点名的六处小命中区：度量声明都过 24 这条线', async () => {
+test('〔批次76 任务4-4〕遍历点名的各处小命中区：度量声明都过 24 这条线', async () => {
   // 判据是**度量级**的（jsdom 没有排版，量不出真实 getBoundingClientRect）：
   // 逐条取规则体，① 正向钉住补上去的那一档尺寸，② 反向扫「声明了的 px 尺寸不许 < 24」。
   // 真机逐屏复测（<24×24 计数）仍记在「未真机复核」的账上，不由这条测试冒充。
@@ -896,7 +896,10 @@ test('〔批次76 任务4-4〕遍历点名的六处小命中区：度量声明�
     ['next-shell.css · 可点双链（inline 锚点扩命中区）', layout, '.nx-wikilink {', /padding:\s*3px/u],
     ['EntriesBoard.vue · 世界书表头「按 X 排序」（实测 20–21×36）', await scoped('EntriesBoard.vue'), '.nx-entries-table th .nx-entries-sort {', /min-height:\s*24px/u],
     ['IndexWindow.vue · 新建资料（实测 22×22）', await scoped('IndexWindow.vue'), '.nx-index-icon-btn {', /width:\s*24px/u],
-    ['AssistantDialog.vue · 审阅模式徽标（实测 40×23）', await scoped('AssistantDialog.vue'), '.authoring-knowledge__mode-badge {', /min-height:\s*24px/u]
+    ['AssistantDialog.vue · 审阅模式徽标（实测 40×23）', await scoped('AssistantDialog.vue'), '.authoring-knowledge__mode-badge {', /min-height:\s*24px/u],
+    // 〔批次77-R2 任务6〕‹ › 是两个字符的可点件，字号小、本体窄，命中区必须靠尺寸声明撑到 24×24。
+    ['AssistantDialog.vue · 分支切换器 ‹ ›', await scoped('AssistantDialog.vue'), '.authoring-knowledge__branch-step {', /min-width:\s*24px/u],
+    ['AssistantDialog.vue · 分支切换器计数格', await scoped('AssistantDialog.vue'), '.authoring-knowledge__branch-count {', /min-height:\s*24px/u]
   ]
   const offenders = []
   for (const [label, css, selector, pin] of rules) {

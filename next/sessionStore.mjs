@@ -9,6 +9,7 @@ import {
   MAX_SESSION_MESSAGES,
   MAX_SESSIONS,
   WRITE_MODES,
+  normalizeBranchChoice,
   sanitizeSessionEvent,
   sanitizeSessionMessage
 } from './shell/agentSessions.mjs'
@@ -22,8 +23,12 @@ import {
  *   3) 删除留墓碑（tombstone），正文不进 git（`.pinax/` 的既有口径）。
  *
  * 行类型（type）：
- *   session   会话元数据（标题／时间／写模式／parent）。后写的覆盖先写的，消息不因元数据覆盖而丢。
+ *   session   会话元数据（标题／时间／写模式／parent／branchChoice）。后写的覆盖先写的，消息不因元数据覆盖而丢。
  *   message   一条消息（形状与 agentSessions.sanitizeSessionMessage 同源，不另造 schema）。
+ *             〔批次77-R2 任务6〕消息可以带 `branch:{parentId,index,count}`＝分叉链接格；
+ *             **没带的就是原始支**（认「数组里前一条」为父）。这不是省字：分叉走追加式写入，
+ *             既有那一条支的每一行都得原样留着，没法回头给自己补标签，所以「原始」这一支天生无标签。
+ *             老会话（这格还没长出来时写的）读回来形状一字不变，按原始支读。
  *   event     会话级事实（目前只有模式切换），形状同 sanitizeSessionEvent。
  *   proposal  提案的登记（只记 id/kind/at，正文仍在 .pinax/proposals/）。
  *   tombstone 删除标记：列表不再显示；子会话不跟着死——父删了，子会话 re-parent 成根会话。
@@ -76,7 +81,11 @@ function normalizeMeta(raw, fallbackId) {
     // 名字不是缺省名又没被手动改过 → 只可能是自动标题（与 agentSessions.normalizeSession 同一条推导）。
     autoTitled: raw?.autoTitled === true || (!renamed && title !== DEFAULT_SESSION_TITLE),
     writeMode: WRITE_MODES.includes(raw?.writeMode) ? raw.writeMode : 'review',
-    parent: isSessionId(raw?.parent) ? raw.parent : null
+    parent: isSessionId(raw?.parent) ? raw.parent : null,
+    // 〔批次77-R2 任务6〕当前看的是哪一支：会话级指针，随元数据行走「后写的覆盖先写的」那条老语义。
+    // 工单只把 branch 落在消息行上，这一格是它的落点补充（批次记录 §7 已补登记）：
+    // 「切换只换此刻看哪一支」要能跨刷新说得出，而它不属于任何一条消息，也不改任何一支的内容。
+    branchChoice: normalizeBranchChoice(raw?.branchChoice)
   }
 }
 
@@ -93,6 +102,7 @@ export function sessionLine(meta, ts) {
     autoTitled: meta.autoTitled === true,
     writeMode: WRITE_MODES.includes(meta.writeMode) ? meta.writeMode : 'review',
     parent: isSessionId(meta.parent) ? meta.parent : null,
+    branchChoice: normalizeBranchChoice(meta.branchChoice),
     ts: cleanTs(ts, 0)
   }
 }
@@ -409,43 +419,94 @@ export function createFileSessionStore({ root, fs: fsImpl = null, now = Date.now
   }
 
   /**
-   * 渲染层状态机的整份回写（M2.5-B 的落盘路径）。
+   * 渲染层状态机的整份回写（M2.5-B 的落盘路径）＋〔批次77-R2 任务6〕**追加式优先**。
    *
-   * 与 appendMessage 的逐条追加并存：显式调用 appendMessage 的消费方仍在用追加；
-   * 渲染层的 agentSessions 是内存真源，每次变化交整份快照，这里按会话逐份原子重写
-   * （tmp + rename，崩在写一半时旧文件完好）。快照里没有、磁盘上又没删过的会话＝作者删了：
-   * 写墓碑（不删文件），子会话按同一条规则 re-parent。
+   * 两条写路，判据只有一条：**新状态是不是磁盘那份的严格增长**。
+   *   · 是（追加消息、分叉存出去的那一整段拷贝）→ 只往文件尾补新行，既有行一个字节都不重打。
+   *     守卫⑩「分叉写入后既有行逐字节不变」钉的就是这条路——行数只增不减，首行还是那一条。
+   *   · 不是（编辑重发的截断、上限截旧、坏行文件）→ 落回原来的 tmp＋rename 原子重写。
+   *     截断本来就是破坏性动作，追加式表达不了「少了哪几行」，也不该假装修完还在。
+   * 增长判据按**折回来的内容**比（id ＋ 净化后的字段），不比原始字节：消息行的 `ts` 由这份写覆盖，
+   * 一次元数据变更就会把整串的 ts 刷新，逐字节比会把这些正常变化误判成「改写」。
    *
-   * 内容与磁盘一致时不重写（ts 取会话自己的 updatedAt，不取此刻时钟），避免一次提问把 30 份文件全刷一遍。
+   * 快照里没有、磁盘上又没删过的会话＝作者删了：写墓碑（不删文件），子会话按同一条规则 re-parent。
+   * 快照里**没交**某个数组（渲染层不携带 proposals：提案归主进程记）＝不是「清空」，按磁盘那份保住。
+   * 内容与磁盘一致时不写（ts 取会话自己的 updatedAt，不取此刻时钟），避免一次提问把 30 份文件全刷一遍。
    */
   let snapshotQueue = Promise.resolve()
+
+  const normalizeProposalLine = (proposal) => {
+    const id = cleanText(proposal?.id, 120)
+    if (!id) return null
+    return { id, kind: cleanText(proposal?.kind, 40), at: cleanText(proposal?.at, 40) }
+  }
+
+  /** 磁盘那份是不是新那份的前缀（逐条同形、且新那份不更短）。 */
+  function isGrow(disk, next) {
+    if (!Array.isArray(disk) || disk.length > next.length) return false
+    return disk.every((item, index) => JSON.stringify(item) === JSON.stringify(next[index]))
+  }
+
+  function sameMetaLine(diskSession, meta, ts) {
+    // 比元数据行看不看得到变化：`ts` 这一格每次写都会动，它不是内容。
+    const strip = (line) => {
+      const copy = { ...line }
+      delete copy.ts
+      return JSON.stringify(copy)
+    }
+    return strip(sessionLine(diskSession, ts)) === strip(sessionLine(meta, ts))
+  }
 
   async function rewriteSession(raw, fallbackTs) {
     const normalized = normalizeMeta(raw, '')
     if (!normalized) return null
     const ts = cleanTs(normalized.updatedAt, fallbackTs)
-    const lines = [JSON.stringify(sessionLine(normalized, ts))]
-    for (const message of Array.isArray(raw.messages) ? raw.messages.slice(-MAX_SESSION_MESSAGES) : []) {
-      const clean = sanitizeSessionMessage(message)
-      if (clean) lines.push(JSON.stringify({ type: 'message', ...clean, ts }))
-    }
-    for (const event of Array.isArray(raw.events) ? raw.events.slice(-MAX_SESSION_EVENTS) : []) {
-      const clean = sanitizeSessionEvent(event)
-      if (clean) lines.push(JSON.stringify({ type: 'event', ...clean, ts }))
-    }
-    for (const proposal of Array.isArray(raw.proposals) ? raw.proposals.slice(-MAX_SESSION_PROPOSALS) : []) {
-      if (!proposal?.id) continue
-      lines.push(JSON.stringify({ type: 'proposal', id: cleanText(proposal.id, 120), kind: cleanText(proposal.kind, 40), at: cleanText(proposal.at, 40), ts }))
-    }
-    const text = `${lines.join('\n')}\n`
     const path = sessionFilePath(projectRoot, normalized.id)
+    if (!path) return null
     await io.mkdir(dir, { recursive: true })
+    let current = ''
     try {
-      const current = await io.readFile(path, 'utf-8')
-      if (current === text) return normalized.id
+      current = await io.readFile(path, 'utf-8')
     } catch {
-      // 文件不在（新会话）：继续写。
+      // 文件不在（新会话）：下面按「磁盘那份是空的」走。
     }
+    const folded = current
+      ? foldSessionLines(current.split('\n'), { file: `${normalized.id}${SESSION_FILE_SUFFIX}`, fallbackId: normalized.id })
+      : null
+    const disk = folded?.badLines === 0 ? folded.session : null
+    const pick = (key, limit, cleanOne, diskKey) => {
+      const source = Array.isArray(raw?.[key]) ? raw[key].slice(-limit) : (disk?.[diskKey] ?? [])
+      return source.map(cleanOne).filter(Boolean)
+    }
+    const messages = pick('messages', MAX_SESSION_MESSAGES, sanitizeSessionMessage, 'messages')
+    const events = pick('events', MAX_SESSION_EVENTS, sanitizeSessionEvent, 'events')
+    const proposals = pick('proposals', MAX_SESSION_PROPOSALS, normalizeProposalLine, 'proposals')
+    const diskMessages = disk?.messages ?? []
+    const diskEvents = disk?.events ?? []
+    const diskProposals = disk?.proposals ?? []
+    const grew = Boolean(disk)
+      && isGrow(diskMessages, messages)
+      && isGrow(diskEvents, events)
+      && isGrow(diskProposals, proposals)
+
+    if (grew) {
+      const lines = []
+      if (!sameMetaLine(disk, normalized, ts)) lines.push(sessionLine(normalized, ts))
+      for (const message of messages.slice(diskMessages.length)) lines.push({ type: 'message', ...message, ts })
+      for (const event of events.slice(diskEvents.length)) lines.push({ type: 'event', ...event, ts })
+      for (const proposal of proposals.slice(diskProposals.length)) lines.push({ type: 'proposal', ...proposal, ts })
+      // 一行新的都没有＝这份状态磁盘上已经有了：一个字节都不加（老口径「一致就不重写」原样保住）。
+      if (!lines.length) return normalized.id
+      await io.appendFile(path, `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`, 'utf-8')
+      return normalized.id
+    }
+
+    const rewriteLines = [JSON.stringify(sessionLine(normalized, ts))]
+    for (const message of messages) rewriteLines.push(JSON.stringify({ type: 'message', ...message, ts }))
+    for (const event of events) rewriteLines.push(JSON.stringify({ type: 'event', ...event, ts }))
+    for (const proposal of proposals) rewriteLines.push(JSON.stringify({ type: 'proposal', ...proposal, ts }))
+    const text = `${rewriteLines.join('\n')}\n`
+    if (current === text) return normalized.id
     const tmp = `${path}.tmp`
     await io.writeFile(tmp, text, 'utf-8')
     await io.rename(tmp, path)

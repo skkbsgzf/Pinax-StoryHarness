@@ -36,6 +36,9 @@ import { legacyLocalStorage, migrateLegacySessions } from './sessionMigration.mj
  *   6) 〔批次77 任务3〕技能与停止：发送那一刻从正文抽出 `/技能名` token（只认真装载的那份清单，
  *      抽完把字面量从正文里去掉），并把「按 askId 取消」的请求发给主进程——停没停由运行回执说，
  *      这一层不自己把消息改成「已停」。
+ *   7) 〔批次77-R2 任务6〕消息树：一条问句之后的历史可以分成好几支。「分一支」＝先把当前支的尾段
+ *      存成拷贝、再截断这一支（退路落在盘上，不是只在内存里）；‹ i/n › 只挪会话级的当前支指针，
+ *      两支的消息一个字都不动。截断只有 store.dropFrom 这一个入口，与「编辑重发」共用。
  * 工具面之类的开发者向事实折在对话框底部的折叠层里——老版就是这么处理的。
  */
 const props = defineProps({
@@ -429,10 +432,39 @@ function editQuestion(payload) {
 }
 
 /**
+ * 分一支（批次77-R2 任务6）：工单那句「分支＝在截断前先存一支，给用户留退路」的两步走。
+ *
+ * 顺序不能反：branchFrom 拷的是**当前可见支**从这条往后的整段，dropFrom 之后就没了。
+ * 两次动作都只走 store 的那一个历史入口（dropFrom 截、branchFrom 拷），界面上「编辑重发」和
+ * 「分一支」因此共用同一套乐观失效保护——三要素（原文/时间戳/角色）对不上就一个字节都不动。
+ * 分完不自动切到新支：作者改的是**这一问**，看得见的应该是重新长出来的那一支，
+ * 退路留在 ‹ 2/3 › 里随时回得去（切支只动指针，见 cycleBranch）。
+ */
+function branchQuestion(payload) {
+  if (busy.value || !canAsk.value) return
+  const id = String(payload?.id ?? '')
+  const target = messages.value.find((message) => message.id === id)
+  if (!target) return
+  if (target.role !== 'user') return
+  if (target.text !== payload?.text || target.at !== payload?.at) return
+  const sessionId = snapshot.value.activeId
+  if (!store.branchFrom(id, sessionId)) return
+  if (!store.dropFrom(id, sessionId)) return
+  dialogRef.value?.setDraft?.(String(payload.text ?? ''))
+}
+
+/** ‹ › 切支：只动那一条会话元数据里的当前支指针，两支的消息一个字都不改（口径见 store.cycleBranch）。 */
+function switchBranch(payload) {
+  store.cycleBranch(String(payload?.id ?? ''), Number(payload?.step) || 0, snapshot.value.activeId)
+}
+
+/**
  * 重新生成（批次77 任务2）：最后一条回答用同一个问题再跑一轮。
  *
- * 只对最后一条开（界面上那枚钮也是这么禁的）：换掉中间某一条＝把后面的历史丢掉，
- * 那要等任务6 的消息树——分支先留一条退路，才有资格谈「重跑这一条」。
+ * 只对最后一条开（界面上那枚钮也是这么禁的）：换掉中间某一条＝把后面的历史丢掉。
+ * 〔批次77-R2 任务6〕消息树已经长出来了，但「重跑中间这一条」仍不开这个口子——
+ * 想要退路就在那句问句上按「分一支」，那才是把后面历史保住的正路；这里的再生成是**就地替换**，
+ * 走 dropLast 一条路径，不碰任何一支的内容与指针。
  * 问题原文优先用本轮记住的那一问（omit／skill 都在里面）；重开窗口后内存清了，
  * 就退回用会话里那条问句原文再问一次——slash 剪裁与引用摘要不再重放，这一条如实记账。
  */
@@ -494,6 +526,8 @@ function removeSession(id) {
       @retry="retry"
       @stop="stopAsk"
       @edit="editQuestion"
+      @branch="branchQuestion"
+      @switch-branch="switchBranch"
       @regenerate="regenerateAnswer"
       @update:mode="changeMode"
       @new-session="newSession"
