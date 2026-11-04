@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { IPC_CHANNELS } from './ipcContract.mjs'
 
 /**
@@ -14,12 +14,22 @@ import { IPC_CHANNELS } from './ipcContract.mjs'
  * 边界（批次44 同批定）：只接**本机回环**的 http/https（127.0.0.1／localhost／::1）——
  * 内嵌浏览器能把本机文件面整个敞给页面，所以不接外网地址；这条约束在清单校验里
  * （next/kernel/carrierManifest.mjs 的 validateAppPane）就拒掉了，不是只靠这里的自觉。
+ *
+ * 〔批次76-R2 任务4〕这一面本批被压平：地址行（nx-external-app-head）撤除，应用面＝iframe 独占。
+ * 撤的不是信息，是那一行 chrome——地址仍要看得见，只是落点换到「已经在那儿」的两处：
+ *   ① 页签的 title tooltip（宿主经 `address` 事件拿去）；
+ *   ② 底栏状态栏「载体」那一项里多出的一段（同一份数据）。
+ * 抄地址的动作改成页签右键菜单项，不再常驻一行死按钮（作者裁定③）。
+ * 根节点上留 data-app-url / data-app-url-source 两个读数，供遍历与测试取证（不是渲染出来的行）。
  */
 const props = defineProps({
   /** pane：应用面的地址从 pane.app.url 来（清单里声明，宿主不替插件猜）。 */
   pane: { type: Object, default: null },
   data: { type: Object, default: null }
 })
+
+/** 地址上抛：宿主（CarrierPaneHost → AppNext）拿去填页签 tooltip 与状态栏。 */
+const emit = defineEmits(['address'])
 
 const manifestUrl = computed(() => String(props.pane?.app?.url ?? '').trim())
 
@@ -59,6 +69,14 @@ onMounted(async () => {
 const url = computed(() => overrideUrl.value || manifestUrl.value)
 const urlSource = computed(() => (overrideUrl.value ? 'override' : 'manifest'))
 
+/**
+ * 地址上抛（〔批次76-R2 任务4〕）：immediate 是因为覆盖那份是 onMounted 之后才补上的，
+ * 少了这一句宿主只会拿到清单那一版；地址为空也照实上报（宿主据此把这一段收起来）。
+ */
+watch([url, urlSource], ([address, source]) => {
+  emit('address', { url: address, source, paneId: String(props.pane?.id ?? '') })
+}, { immediate: true })
+
 /** iframe 自己加载失败时不给作者一个空白框：说清是哪个地址、为什么没有画面。 */
 const failed = ref(false)
 function onFrameError() {
@@ -67,15 +85,15 @@ function onFrameError() {
 </script>
 
 <template>
-  <section class="nx-external-app" data-test="external-app">
-    <div class="nx-external-app-head">
-      <!-- 〔批次76 裁定A〕应用名不在这里自绘第二行标题：窗头那一行「载体 · 面板名」归一了。
-           这一行剩下来的是真正只有这里才有的读数——地址与它的来源层。 -->
-      <!-- 地址摆出来：内嵌浏览器跑的是谁的端口，作者要能一眼看见（也能自己复制出去单开）。 -->
-      <span class="nx-external-app-url" :title="url">{{ url }}</span>
-      <!-- 来源层：这个地址是清单写死的还是工程覆盖改过的，作者要能一眼分清。 -->
-      <span v-if="urlSource === 'override'" class="nx-external-app-source" data-test="external-app-source">工程覆盖</span>
-    </div>
+  <!-- 〔批次76-R2 任务4〕地址行撤了：这一面从 iframe 上面一行「网址」压平成 iframe 独占。
+       data-app-url / data-app-url-source 是**属性上的读数**（不占版面），遍历取证与测试从这里认
+       「这块内嵌浏览器跑的到底是谁的端口、那个地址是清单写的还是工程覆盖改的」。 -->
+  <section
+    class="nx-external-app"
+    data-test="external-app"
+    :data-app-url="url || ''"
+    :data-app-url-source="url ? urlSource : ''"
+  >
     <iframe
       v-if="url"
       class="nx-external-app-frame"
@@ -92,38 +110,15 @@ function onFrameError() {
 </template>
 
 <style scoped>
-/* 应用面：地址一行，头下就是那块内嵌浏览器（占满剩余高度）。
+/* 应用面＝iframe 独占（〔批次76-R2 任务1＋4〕）。
+   高度链（〔守卫⑫〕）：根节点 flex 列 + flex:1 1 auto + min-height:0，不许写 height:auto／height:100%；
+   iframe 同一族（flex:1 1 auto + min-height:0），于是窗 body 给多少就用多少，半屏下能铺满半栏。
    颜色走 token；字号走 --nx-fs-* 刻度；其余 px 都是布局尺寸。 */
 .nx-external-app {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  height: 100%;
   min-height: 0;
-}
-
-.nx-external-app-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  flex: none;
-  margin: 0 0 6px;
-}
-
-.nx-external-app-url {
-  font-size: var(--nx-fs-2xs);
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nx-external-app-source {
-  flex: none;
-  padding: 0 6px;
-  border-radius: var(--radius-control);
-  font-size: var(--nx-fs-2xs);
-  color: var(--text-muted);
-  border: 1px solid var(--border-subtle, transparent);
 }
 
 .nx-external-app-frame {

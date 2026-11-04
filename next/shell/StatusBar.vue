@@ -5,7 +5,8 @@ import { computed } from 'vue'
  * 底栏常驻状态栏（批次63 任务1，框架计划 §6 桩1⑤）。
  *
  * 一句话：回答「我现在处于什么状态」——四要素从左到右固定：
- *   ① 服务灯 ② 当前载体／页组 ③「1＋N 的 N」＝在册窗数 ④ 焦点文档字数。
+ *   ① 服务灯 ② 当前载体／页组（〔批次76-R2 任务4〕末尾可挂一段网址：应用面顶部那行常驻 URL 撤了，
+ *      读数搬进这条已有的栏，不新开第五项） ③「1＋N 的 N」＝在册窗数 ④ 焦点文档字数。
  *
  * 三条边界写死在这里：
  * · **只读**：组件不认识桥、载体与文件系统，四个数全由宿主（AppNext）现取后传进来——
@@ -28,7 +29,15 @@ const props = defineProps({
   windows: { type: Number, default: 0 },
   /** 焦点文档：标题与字数（字数为 null＝这一页没装可计字的文档，如实留空）。 */
   docTitle: { type: String, default: '' },
-  docChars: { type: Number, default: null }
+  docChars: { type: Number, default: null },
+  /**
+   * 〔批次76-R2 任务4〕此刻那一页若是内嵌浏览器（应用面），这里带它正在跑的地址。
+   * 应用面顶部那行常驻网址撤了，读数不消失、只是搬进这条**已有**的状态栏——所以它是「载体」
+   * 那一项里多出来的一段，不是第五项。宿主现取后传进来，本组件依旧不认识桥（只读）。
+   */
+  address: { type: String, default: '' },
+  /** 地址来源的说法（清单声明／工程覆盖），只进悬浮提示。 */
+  addressNote: { type: String, default: '' }
 })
 
 /** 服务灯唯一的可点语义：交回宿主打开既有的「服务与通知」节，这里不自己弹窗。 */
@@ -44,6 +53,12 @@ function lightTitle(light) {
   return `${light?.title ?? light?.id}：${colorLabel(light?.color)}${notices}（点开通知与日志）`
 }
 const charsText = computed(() => (Number.isFinite(props.docChars) ? `${props.docChars} 字` : '—'))
+/** 「载体」那一项的悬浮提示：带上网址与来源层，作者不必把省略号后的地址再点开一处看。 */
+const carrierTitle = computed(() => {
+  const base = `当前载体：${props.carrier || '无'}｜页组：${props.pageGroup || '无'}`
+  if (!props.address) return base
+  return `${base}｜内嵌浏览器地址：${props.address}${props.addressNote ? `（${props.addressNote}）` : ''}`
+})
 </script>
 
 <template>
@@ -69,11 +84,17 @@ const charsText = computed(() => (Number.isFinite(props.docChars) ? `${props.doc
       </span>
     </button>
 
-    <!-- ② 当前载体／页组：作者此刻站在哪块板、哪一组。 -->
-    <span class="nx-status-item is-carrier" data-test="status-carrier" :title="`当前载体：${carrier || '无'}｜页组：${pageGroup || '无'}`">
+    <!-- ② 当前载体／页组：作者此刻站在哪块板、哪一组。
+         〔批次76-R2 任务4〕这一项末尾可以挂一段网址——只有此刻那一页是内嵌浏览器时才出。 -->
+    <span
+      class="nx-status-item is-carrier"
+      data-test="status-carrier"
+      :title="carrierTitle"
+    >
       <span class="nx-status-key">载体</span>
       <span class="nx-status-value">{{ carrier || '—' }}</span>
       <span v-if="pageGroup" class="nx-status-value nx-status-group">{{ pageGroup }}</span>
+      <span v-if="address" class="nx-status-value nx-status-address" data-test="status-address">{{ address }}</span>
     </span>
 
     <!-- ③「1＋N 的 N」：在册窗数（工作区 v3 现取）。数字本身是读数，不是钮。 -->
@@ -183,6 +204,15 @@ const charsText = computed(() => (Number.isFinite(props.docChars) ? `${props.doc
 .nx-status-value {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+}
+/* 〔批次76-R2 任务4〕网址：应用面顶部那行 URL 撤了，读数落在这条已有状态栏的「载体」项末尾。
+   颜色仍走 --text-secondary（对比那条判据不因少一行 chrome 而松动）；长度钳住、超了省略——
+   完整地址在同一项的悬浮提示里，抄出去走页签右键菜单。 */
+.nx-status-address {
+  min-width: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .nx-status-plain {
   color: var(--text-secondary);

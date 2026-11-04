@@ -614,7 +614,9 @@ body {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  /* 正文是核心区的主角：面板占满剩余高度，编辑面跟着长，不在下面留一块空白。 */
+  /* 正文是核心区的主角：面板占满剩余高度，编辑面跟着长，不在下面留一块空白。
+     〔批次76-R2 任务1〕这两句（flex＋min-height:0）是高度链上的一环：父级 `.nx-pane-window-body`
+     本批改成 flex 列之后才真正生效——之前 pane 用内容高度自断链，iframe 只剩 150px。 */
   flex: 1 1 auto;
   min-height: 0;
   font-size: var(--nx-fs-md);
@@ -1051,6 +1053,12 @@ input.doc-title {
   overflow: auto;
   padding: 8px;
   scrollbar-width: thin;
+  /* 〔批次76-R2 任务1〕高度链：这一行原来只是 block，子节点 `.pane` 那句 `flex:1 1 auto` 落空
+     （flex 属性对 block 容器的子节点无效），于是 pane 用内容高度自断链条、iframe 只剩 150px。
+     改成 flex 列后 pane 吃满窗 body 的可用高度，编辑面与应用面各自长到该长的位置。
+     〔守卫⑫〕这条链上不许出现 `height: auto` 断点。 */
+  display: flex;
+  flex-direction: column;
 }
 /* —— 收起态＝右下角悬浮球（批次76 · 〔裁定B〕）——————————————————————————
    原来这里是右缘一竖列竖排文字标签（`writing-mode: vertical-rl`），
@@ -1220,9 +1228,11 @@ input.doc-title {
 .nx-pane-window.is-dragging {
   cursor: grabbing;
 }
-/* —— 页签栏（批次61 · 〔铁律四〕）——————————————————————————————
-   它不是第二套窗口壳：一条横向签列，只回答「哪一页是当前页」。
-   签上没有拖拽句柄、没有缩放角、没有任何常驻形态钮——形态切换只在右键菜单里（裁定③）。
+/* —— 页签栏（批次61 · 〔铁律四〕；批次76-R2 任务2／3 改了它的职责）————————————————
+   它不是第二套窗口壳：一条横向签列，回答「哪一页是当前页」＋「这块板还有哪面没开」。
+   签上没有常驻形态钮——形态切换只在右键菜单里（裁定③）。
+   〔批次76-R2 任务2〕页态窗头撤了之后，这一行同时是**标题行与拖拽手柄**：
+   点＝揭示，×＝关页，按住拖＝吸附换形态（起点在这里，判定与预览仍在 PaneWindow），右键＝形态菜单。
    度量抄的是浏览器／IDE 的常见档：签高 28px，窄屏不折行、超出横向滚。 */
 .nx-page-tabstrip {
   display: flex;
@@ -1251,6 +1261,27 @@ input.doc-title {
   font-size: var(--nx-fs-md);
   cursor: pointer;
   user-select: none;
+  /* 页签行现在是页态窗口的拖拽起点：不声明 touch-action，指针一按下去浏览器先滚动、拖不动。 */
+  touch-action: none;
+}
+/* 〔批次76-R2 任务2〕页态那一档的签就是标题行，按住它可拖——给一个 grab 的说法。 */
+.nx-page-tab.is-form-page {
+  cursor: grab;
+}
+.nx-page-tab.is-form-page:active {
+  cursor: grabbing;
+}
+/* 〔批次76-R2 任务3〕同载体多面中栏 pane 的「待开签」：那块面还没占页，签上是虚线待填的样子。
+   它不是一支第二行页签条——切换职责并进这一行后，上面那条 nx-center-tabs 整条退役。 */
+.nx-page-tab.is-pending-pane {
+  color: var(--text-muted);
+  border-style: dashed;
+  border-color: var(--hairline-soft);
+  background: transparent;
+  cursor: pointer;
+}
+.nx-page-tab.is-pending-pane:hover {
+  border-style: solid;
 }
 .nx-page-tab:hover {
   color: var(--archive-ink);

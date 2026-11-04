@@ -155,6 +155,14 @@ const pageDataMap = new Map()
 const pageDataVersion = ref(0)
 /** instance → 这页此刻materialize 的是哪份文档；用来判「已载入就别重取」（会冲掉手上草稿）。 */
 const pageResource = new Map()
+/**
+ * 〔批次76-R2 任务4〕instance → 这一页此刻是内嵌浏览器时正在跑的那个地址。
+ * 地址行撤了之后它只剩三个读处：页签的悬浮提示、底栏状态栏那一段、页签右键菜单里那条「复制地址单开」。
+ * 值是 ExternalAppHost 现算上报的（清单＋工程覆盖，批次54 那条逻辑不在这里重算一遍）——
+ * 宿主只转述，绝不自己拼第二个地址（拼出来的那种叫猜）。
+ */
+const appAddress = reactive({})
+const APP_URL_SOURCE_WORDS = Object.freeze({ override: '工程覆盖', manifest: '清单声明' })
 let claimPanesSnapshot = []
 
 function pageDataOf(instance) {
@@ -177,6 +185,8 @@ function prunePageData() {
     pageDataMap.get(instance).dispose?.()
     pageDataMap.delete(instance)
     pageResource.delete(instance)
+    // 〔批次76-R2 任务4〕地址那本账跟着页一起清：页关了还留着网址，状态栏就会报一页不存在的东西。
+    delete appAddress[instance]
     pageDataVersion.value += 1
   }
 }
@@ -488,6 +498,13 @@ const statusPageGroup = computed(() => {
 
 /** 「1＋N 的 N」：此刻在册的窗数（页／浮窗／收进悬浮球的那些都算）。 */
 const statusWindows = computed(() => openWindows.value.length)
+
+/**
+ * 〔批次76-R2 任务4〕状态栏那一段网址：此刻焦点页是内嵌浏览器才有读数，其余页面是空串（那一段不渲染）。
+ * 应用面顶部常驻的 URL 行撤了，「跑的是谁的端口」这个信息不该跟着消失——它挂进**已有**的状态栏，
+ * 不新增第五项，也不新开一行 chrome。
+ */
+const statusAddress = computed(() => addressOf(focusedInstance()))
 
 /** 编辑面与草稿位的对照：草稿非空就读草稿（作者手上那份），否则读盘上那份的 totalChars。 */
 const STATUS_DOC_FIELDS = [
@@ -1387,9 +1404,94 @@ const tabStripPages = computed(() => {
     title: windowTitle(win),
     form: win.entry.form,
     group: win.entry.group,
-    active: win.entry.instance === current
+    active: win.entry.instance === current,
+    // 〔批次76-R2 任务4〕应用面的网址进这枚签的悬浮提示（顶部那行常驻 URL 撤了，读数不能跟着没了）。
+    address: appAddress[win.entry.instance]?.url ?? ''
   }))
 })
+
+/**
+ * 〔批次76-R2 任务3〕顶部那行 nx-center-tabs 退役后，同一块板里还没开出来的中栏面挂成「待开页签」。
+ * 判据按工单那句话：**同一屏幕不许出现两行都在列同一批 pane**——所以只列「这块板声明了、且当前
+ * 没有任何一页占着」的那几块；已经开着的（页／浮窗／收进悬浮球都算）由上面那条页签列管，不重复出签。
+ * 一块板只有一块中栏 pane 时整组不显（与原切换条同一条守卫：不给单面板添视觉噪声）。
+ */
+const pendingCenterPanes = computed(() => {
+  const panes = activeBoard.value?.centerPanes ?? []
+  if (panes.length < 2) return []
+  const occupied = new Set(openWindows.value.map((win) => win.entry.pane))
+  return panes
+    .filter((pane) => !occupied.has(String(pane.id)))
+    .map((pane) => ({ pane: String(pane.id), title: String(pane.title ?? pane.id) }))
+})
+
+/**
+ * 应用面上报地址（〔批次76-R2 任务4〕）：CarrierPaneHost 把 ExternalAppHost 那一句原样转上来。
+ * 同值不写——这一句在每次渲染里都可能被拨一下，写一次就是一次快照变更。
+ */
+function onAppAddress(instance, report) {
+  const id = String(instance ?? '')
+  if (!id) return
+  const url = String(report?.url ?? '').trim()
+  if (!url) {
+    if (appAddress[id]) delete appAddress[id]
+    return
+  }
+  const source = String(report?.source ?? 'manifest')
+  const current = appAddress[id]
+  if (current?.url === url && current?.source === source) return
+  appAddress[id] = { url, source }
+}
+
+/** 此刻那一页的地址（状态栏那一段与菜单里那一项都读它；不是应用面就是空）。 */
+function addressOf(instance) {
+  const hit = instance ? appAddress[String(instance)] : null
+  if (!hit?.url) return { url: '', note: '' }
+  return { url: hit.url, note: APP_URL_SOURCE_WORDS[hit.source] ?? hit.source }
+}
+
+let appCopyTimer = null
+/**
+ * 「复制地址单开」（〔批次76-R2 任务4〕）：从应用面底部那行常驻钮搬进页签右键菜单这一处。
+ * 反馈不新开 chrome——用的是这一页数据面上既有的 notice 那一行（CarrierPaneHost 顶部那条），
+ * 说过一次就自己收掉；复制失败也如实说，不假装成功。
+ */
+async function copyAppAddress(instance) {
+  const hit = appAddress[String(instance)]
+  const page = pageDataOf(instance)
+  if (!hit?.url) return false
+  let ok = false
+  try {
+    await globalThis.navigator?.clipboard?.writeText?.(hit.url)
+    ok = true
+  } catch {
+    ok = false
+  }
+  page.notice = ok
+    ? `已复制地址，可在新标签页打开：${hit.url}`
+    : `这个环境没给剪贴板权限，地址没复制出去：${hit.url}`
+  if (globalThis.clearTimeout) globalThis.clearTimeout(appCopyTimer)
+  if (globalThis.setTimeout) {
+    appCopyTimer = setTimeout(() => {
+      if (String(page.notice ?? '').startsWith('已复制地址') || String(page.notice ?? '').startsWith('这个环境没给剪贴板')) page.notice = ''
+    }, 6000)
+  }
+  return ok
+}
+
+/**
+ * 〔批次76-R2 任务2〕页态没有窗头了，页签行就是拖拽起点：这一下指针交回那一页自己的
+ * PaneWindow.startDrag（吸附判定／预览／落位仍是唯一那一份实现，这里只做接线）。
+ * 拿不到窗实例（那一页没在屏幕上，例如浮窗态的签）就不动——浮窗自己的标题行仍是起点。
+ */
+const windowRefs = new Map()
+function setWindowRef(instance, element) {
+  if (element) windowRefs.set(instance, element)
+  else windowRefs.delete(instance)
+}
+function onTabDragStart(instance, event) {
+  windowRefs.get(String(instance))?.startDrag?.(event)
+}
 
 /** 此刻说话的那一页（页签高亮与 aria-selected 的口径，与 activeData 同源）。 */
 const currentInstance = computed(() => focusedInstance() ?? '')
@@ -1497,7 +1599,17 @@ const formMenuTarget = computed(() => {
   if (!menu) return null
   const entry = hostWorkspace.get(menu.instance)
   if (!entry) return null
-  return { instance: menu.instance, anchor: { x: menu.x, y: menu.y }, forms: descriptorFor(entry.pane)?.forms ?? [], form: entry.form, group: entry.group }
+  // 〔批次76-R2 任务4〕这一页若是内嵌浏览器，菜单多一组「复制地址单开」；其余页 address 为空、那一组不渲染。
+  const address = addressOf(menu.instance)
+  return {
+    instance: menu.instance,
+    anchor: { x: menu.x, y: menu.y },
+    forms: descriptorFor(entry.pane)?.forms ?? [],
+    form: entry.form,
+    group: entry.group,
+    address: address.url,
+    addressNote: address.note
+  }
 })
 
 /**
@@ -1511,7 +1623,12 @@ function revealPage(instance) {
   else if (entry.form === 'floating') hostWorkspace.bringToFront(instance)
   else hostWorkspace.setActive(entry.group, instance)
   const board = boardForPane(entry.pane)
-  if (board) activeBoardId.value = board.id
+  if (board) {
+    activeBoardId.value = board.id
+    // 〔批次76-R2 任务3〕切换条没了，但「这块板作者要的是哪面中栏」那本账还得跟着页签走：
+    // 索引树／画廊／跳转落点都靠 chosenCenterPaneFor 认这一块，揭示哪面就记哪面。
+    if ((board.centerPanes ?? []).some((pane) => String(pane.id) === entry.pane)) centerPaneChoice[board.id] = entry.pane
+  }
   void ensurePaneData(instance, entry.pane)
   return instance
 }
@@ -1626,6 +1743,8 @@ function applyFormAction(instance, action) {
   const entry = hostWorkspace.get(instance)
   if (!entry) return null
   if (action === 'close') return closeWindow(instance)
+  // 〔批次76-R2 任务4〕「复制地址单开」不是形态：应用面底部那行常驻钮退役后，动作只有这一个入口。
+  if (action === 'copy-url') return void copyAppAddress(instance)
   const target = MENU_TARGET_FORM[action]
   if (!target) return null
   const result = hostWorkspace.setForm(instance, target)
@@ -1687,25 +1806,22 @@ async function openProposalFromSettings(item) {
 /**
  * 核心区挂哪块 center pane：一块板可能声明两块以上（comic.editor 与 comic.canvas 同载体双 center）。
  * 作者选过的那块按板记住（centerPaneChoice[boardId]）；没选过或已不在板上时回落第一块。
- * 批次58 实拍的「双中栏 pane 无切换入口」由这条选择 + 下方切换条收口。
+ * 〔批次76-R2 任务3〕批次58 那行「顶部切换条」（nx-center-tabs）整条退役，这本账改由页签行驱动：
+ * 点待开页签＝openCenterPane，揭示已有页＝revealPage 里顺手记一笔。选择本身语义不变。
  */
 const centerPaneChoice = reactive({})
-const activeCenterPanes = computed(() => activeBoard.value?.centerPanes ?? [])
-const activeCenterPane = computed(() => chosenCenterPaneFor(activeBoard.value))
-/** 同一块板有两块以上中栏 pane 时才出切换条（单 pane 的板维持原样，不新增视觉噪声）。 */
-const centerPaneTabs = computed(() => (activeCenterPanes.value.length > 1 ? activeCenterPanes.value : []))
 /**
- * 同载体双中栏 pane 的切换：旧窗收进悬浮球、新窗接着占位。
- * 二者仍是同一套 PaneWindow，只是内容 pane 换了。
- * （批次61 v3：页态天然铺满所在页组，原来那句「旧窗最大化则新窗也最大化」没有对应落点，删。）
+ * 待开页签点下去＝把那块面开成一页（旧「切换＝旧窗收进悬浮球、新窗占位」那条语义原样保留：
+ * 同一块板的多面中栏pane 仍然只有一面占着屏幕，另一面收进那颗球，随时可从页签放回来）。
  */
-function chooseCenterPane(paneId) {
+function openCenterPane(paneId) {
   const board = activeBoard.value
   if (!board) return null
   const id = String(paneId ?? '')
+  if (!(board.centerPanes ?? []).some((pane) => String(pane.id) === id)) return null
   centerPaneChoice[board.id] = id
   for (const pane of board.centerPanes ?? []) {
-    if (pane.id === id) continue
+    if (String(pane.id) === id) continue
     const instance = paneInstance(pane.id)
     if (hostWorkspace.get(instance)) collapseWindow(instance)
   }
@@ -2302,6 +2418,13 @@ onBeforeUnmount(() => {
     projectEventTimer = null
   }
   pendingProjectEventKinds.clear()
+  // 〔批次76-R2 任务2／4〕页签行的拖拽起点按实例查窗实例，壳拆了这本账就没意义；
+  // 复制地址那条一次性反馈的计时器也一起收——人都不在屏幕前了，还定时往数据面写 notice 没道理。
+  windowRefs.clear()
+  if (appCopyTimer) {
+    clearTimeout(appCopyTimer)
+    appCopyTimer = null
+  }
   document.removeEventListener('keydown', onTitlebarKeydown)
   document.removeEventListener('pointerdown', onTitlebarPointerDown)
   window.removeEventListener('keydown', onWindowKeydown, true)
@@ -2416,37 +2539,19 @@ onBeforeUnmount(() => {
 
         <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
 
-        <!-- 批次53：一块板声明多块中栏 pane 时（comic.editor／comic.canvas），顶部出切换条；
-             切换＝旧窗收成标签、新窗接着占位（仍是同一套 PaneWindow）。单 pane 板不显。 -->
-        <div
-          v-if="centerPaneTabs.length"
-          class="nx-center-tabs"
-          role="tablist"
-          aria-label="核心区视图切换"
-          data-test="center-pane-tabs"
-        >
-          <button
-            v-for="pane in centerPaneTabs"
-            :key="pane.id"
-            type="button"
-            class="control-quiet nx-center-tab"
-            :class="{ 'is-active': pane.id === activeCenterPane?.id }"
-            role="tab"
-            :aria-selected="pane.id === activeCenterPane?.id"
-            :data-pane="pane.id"
-            @click="chooseCenterPane(pane.id)"
-          >{{ pane.title ?? pane.id }}</button>
-        </div>
-
-        <!-- 中间 doc 区＝页底座（批次61 · 〔铁律一〕）：页签栏在上，页层按页组排版，
-             浮窗叠在同一层里，全都走同一个 PaneWindow（〔铁律四〕不出第二套窗口壳）；
-             收起态（form:'tab'）在这一层不渲染任何东西，呈现归右下角那颗球（〔裁定B〕）。 -->
+        <!-- 〔批次76-R2 任务3〕批次53 那行顶部切换条（nx-center-tabs）整条退役：
+             判据是「同一屏幕不许出现两行都在列同一批 pane」。它那点职责（同载体多面中栏的切换）
+             并进了下面那一行页签条——没开出来的面以「待开页签」挂在同一行末尾（:pending-panes），
+             开着的面本来就是页签。少一行 chrome，一个动作都没少。 -->
         <PaneTabStrip
           :pages="tabStripPages"
+          :pending-panes="pendingCenterPanes"
           :current-instance="currentInstance"
           @reveal="revealPage"
           @close="closeWindow"
           @menu="openFormMenu"
+          @drag="onTabDragStart"
+          @open-pane="openCenterPane"
         />
         <div class="nx-window-layer" data-test="window-layer">
           <!-- 图库模板（批次60）：没有左栏也没有缺省文档窗，核心区就是一整面素材卡片墙；
@@ -2469,6 +2574,7 @@ onBeforeUnmount(() => {
           <PaneWindow
             v-for="win in visibleWindows"
             :key="win.entry.instance"
+            :ref="(el) => setWindowRef(win.entry.instance, el)"
             :instance="win.entry.instance"
             :pane-id="win.entry.pane"
             :title="windowTitle(win)"
@@ -2509,6 +2615,7 @@ onBeforeUnmount(() => {
               :data="pageDataOf(win.entry.instance)"
               :project-root="project?.root ?? ''"
               @history="openHistoryFor"
+              @address="onAppAddress(win.entry.instance, $event)"
             />
           </PaneWindow>
         </div>
@@ -2518,6 +2625,8 @@ onBeforeUnmount(() => {
           :forms="formMenuTarget.forms"
           :form="formMenuTarget.form"
           :group="formMenuTarget.group"
+          :address="formMenuTarget.address"
+          :address-note="formMenuTarget.addressNote"
           @action="applyFormAction(formMenuTarget.instance, $event)"
           @dismiss="closeFormMenu"
         />
@@ -2595,39 +2704,13 @@ onBeforeUnmount(() => {
       :windows="statusWindows"
       :doc-title="statusDoc.title"
       :doc-chars="statusDoc.chars"
+      :address="statusAddress.url"
+      :address-note="statusAddress.note"
       @open-services="openSection('services')"
     />
   </div>
 </template>
 
-<style scoped>
-/* 批次53：一块板声明多块中栏 pane 时的切换条。
-   形态沿用老版侧栏行的度量与色阶：发丝分隔线、muted 底、选中走 workbench-selected。 */
-.nx-center-tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-  padding: 4px 12px;
-  border-bottom: 1px solid var(--hairline-soft);
-  background: var(--surface-workbench-muted);
-}
-.nx-center-tab {
-  min-height: 26px;
-  padding: 0 10px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-control);
-  background: transparent;
-  color: var(--text-muted);
-  font-size: var(--nx-fs-md);
-}
-.nx-center-tab:hover {
-  background: var(--workbench-selected);
-  color: var(--archive-ink);
-}
-.nx-center-tab.is-active {
-  background: var(--surface-workbench);
-  border-color: var(--hairline-soft);
-  color: var(--archive-ink);
-}
-</style>
+<!-- 〔批次76-R2 任务3〕这里原来是一段 scoped 样式：批次53 那行顶部切换条（nx-center-tabs／
+     .nx-center-tab）的度量。那一行整条退役、职责并进页签条（样式住在 next-shell.css 的
+     .nx-page-tab* 那一族），本组件不再有只剩注释的空样式块。 -->

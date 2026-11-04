@@ -1570,7 +1570,7 @@ describe('Obsidian 三栏', () => {
     wrapper.unmount()
   })
 
-  it('同载体双中栏 pane（批次58 实拍缺口）：顶部出切换条，点第二块换核心区', async () => {
+  it('同载体双中栏 pane（批次58 实拍缺口 → 批次76-R2 任务3 并进页签条）：一块板一行，点待开签换核心区', async () => {
     const view = {
       ...carrierView(),
       carriers: [{ id: 'fixture.comic', title: '漫画（夹具）', primary: { projectKind: 'generic' }, isPrimary: false, isEnabled: true, capabilities: [], requires: [], scopes: [], dataDirs: ['漫画'], settings: [] }],
@@ -1583,17 +1583,96 @@ describe('Obsidian 三栏', () => {
     const wrapper = mount(AppNext, { props: { bridge: stubBridge(view) } })
     await flushPromises()
 
-    const tabs = wrapper.find('[data-test="center-pane-tabs"]')
-    expect(tabs.exists()).toBe(true)
-    expect(tabs.findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['编辑器', '画布'])
-    expect(tabs.find('[role="tab"][data-pane="comic.editor"]').attributes('aria-selected')).toBe('true')
+    // 〔批次76-R2 任务3〕判据是「同一屏幕不许出现两行都在列同一批 pane」：
+    // 顶部那行 nx-center-tabs 整条退役，切换职责落在同一行页签条上——没开出来的面出「待开签」。
+    expect(wrapper.find('[data-test="center-pane-tabs"]').exists(), 'nx-center-tabs 那行已退役').toBe(false)
+    const strip = wrapper.find('[data-test="page-tabstrip"]')
+    expect(strip.exists()).toBe(true)
+    const pending = strip.find('[data-pending-pane="comic.canvas"]')
+    expect(pending.exists(), '另一面中栏 pane 挂成待开页签').toBe(true)
+    expect(pending.text()).toBe('画布')
+    expect(strip.find('.nx-page-tab.is-pending-pane').classes()).toContain('is-pending-pane')
+    // 开着的那一面本来就是页签（不再另有一行说自己被选中）。
+    expect(strip.find('[data-page-instance="comic.editor#1"]').attributes('aria-selected')).toBe('true')
     expect(wrapper.find('[data-pane-id="comic.editor"]').exists()).toBe(true)
 
-    await tabs.find('[data-pane="comic.canvas"]').trigger('click')
+    await pending.trigger('click')
     await flushPromises()
+    // 旧语义一条没少：切换＝旧窗收进悬浮球、新窗接着占位，二者仍是同一套 PaneWindow。
     expect(wrapper.find('[data-pane-id="comic.canvas"]').exists()).toBe(true)
     expect(wrapper.find('[data-pane-id="comic.editor"]').exists()).toBe(false)
-    expect(wrapper.find('[role="tab"][data-pane="comic.canvas"]').attributes('aria-selected')).toBe('true')
+    const canvasTab = strip.find('[data-page-instance="comic.canvas#1"]')
+    expect(canvasTab.exists(), '开出来的那面自己有签，待开签随之消失').toBe(true)
+    expect(strip.find('[data-pending-pane="comic.canvas"]').exists()).toBe(false)
+    expect(canvasTab.attributes('aria-selected')).toBe('true')
+    expect(strip.find('[data-page-instance="comic.editor#1"]').attributes('data-page-form')).toBe('tab')
+    wrapper.unmount()
+  })
+
+  it('批次76-R2 任务4：地址不画在应用面上，作读数进页签 tooltip／状态栏／右键菜单这三处', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    // 宿主侧才碰剪贴板（内容组件不许自己抄）；platform 一并给上，别让别处读 navigator.platform 落空。
+    vi.stubGlobal('navigator', { clipboard: { writeText }, platform: 'Win32' })
+    const view = {
+      ...carrierView(),
+      carriers: [{ id: 'fixture.comic', title: '漫画（夹具）', primary: { projectKind: 'generic' }, isPrimary: false, isEnabled: true, capabilities: [], requires: [], scopes: [], dataDirs: ['漫画'], settings: [] }],
+      left: [{ slot: 'left-dock', id: 'comic.board', title: '漫画板', icon: 'board', pluginId: 'fixture.comic', pluginTitle: '漫画（夹具）', view: 'pinax.view.tree', kind: 'records-editor' }],
+      center: [
+        { slot: 'center', id: 'comic.canvas', title: '画布', icon: 'board', pluginId: 'fixture.comic', pluginTitle: '漫画（夹具）', view: 'pinax.view.app', kind: 'external-app', app: { url: 'http://127.0.0.1:3010' } }
+      ]
+    }
+    const wrapper = mount(AppNext, { props: { bridge: stubBridge(view) } })
+    await flushPromises()
+    try {
+      const url = 'http://127.0.0.1:3010'
+      // ① 面上不画地址：网址行与常驻复制脚行都不该在（iframe 自己是这一面的全部）。
+      expect(wrapper.find('[data-test="external-app-frame"]').exists(), '应用面开着').toBe(true)
+      expect(wrapper.find('.nx-external-app-url').exists(), '地址不许再当一行 chrome 画在面上').toBe(false)
+      expect(wrapper.find('[data-test="app-copy-url"]').exists(), '常驻复制钮已退役').toBe(false)
+
+      // ② 页签 tooltip 带得上这份读数（data-page-address 与 title 同源，鼠标悬停即可看见端口）。
+      const tab = wrapper.find('[data-page-instance="comic.canvas#1"]')
+      expect(tab.exists()).toBe(true)
+      expect(tab.attributes('data-page-address')).toBe(url)
+      expect(tab.attributes('title')).toContain(url)
+
+      // ③ 状态栏那条「载体」读数末尾多的是内嵌浏览器地址，不是新辟一格。
+      const status = wrapper.find('[data-test="status-address"]')
+      expect(status.exists(), '状态栏要能看见这一页开的是哪个端口').toBe(true)
+      expect(status.text()).toBe(url)
+
+      // ④ 复制动作落在右键菜单那一项；反馈用的是这一页数据面上既有的 notice 行，不新开 chrome。
+      tab.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }))
+      await flushPromises()
+      const menu = wrapper.find('[data-test="pane-form-menu"]')
+      expect(menu.exists()).toBe(true)
+      const copyItem = menu.find('[data-test="form-menu-copy-url"]')
+      expect(copyItem.exists(), '「复制地址单开」搬进了右键菜单').toBe(true)
+      expect(copyItem.text()).toContain('复制地址单开')
+      await copyItem.trigger('click')
+      await flushPromises()
+      expect(writeText).toHaveBeenCalledWith(url)
+      expect(wrapper.find('.pane-notice').text()).toContain('已复制地址')
+      expect(wrapper.find('.pane-notice').text()).toContain(url)
+      wrapper.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('批次76-R2 任务4：不是应用面的页就没有地址读数，状态栏与菜单都不凭空多出一段', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
+    await flushPromises()
+
+    const tab = wrapper.find('[data-page-instance="novel.editor#1"]')
+    expect(tab.exists()).toBe(true)
+    expect(tab.attributes('data-page-address') ?? '', '正文页没有内嵌浏览器地址').toBe('')
+    expect(wrapper.find('[data-test="status-address"]').exists(), '没有地址就别在状态栏编一条').toBe(false)
+
+    tab.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }))
+    await flushPromises()
+    expect(wrapper.find('[data-test="pane-form-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="form-menu-copy-url"]').exists(), '不是应用面就不给「复制地址单开」').toBe(false)
     wrapper.unmount()
   })
 
@@ -3525,6 +3604,9 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(hostWorkspace.get('outline.editor#1').geometry).toBeTruthy()
     const floating = wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
     expect(floating.attributes('data-window-state')).toBe('floating')
+    // 〔守卫⑪ 的正向那一半〕浮窗必须有窗头：页态压平不等于全壳撤掉 chrome——
+    // 拖动、双击最大化、右键改形态这三件事都挂在这一行上，撤了它这扇窗就没法搬。
+    expect(floating.find('.nx-pane-window-head').exists(), '浮窗那一档必须渲染窗头').toBe(true)
     // 只有浮窗给四角手柄（页态／标签态由宿主排版，没有可拖的矩形）。
     expect(floating.findAll('.nx-pane-window-resize')).toHaveLength(4)
     // 菜单是一次性浮层：动作完就收，不留第二份。
@@ -3550,8 +3632,12 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     await openOutlineBoard(wrapper)
 
     const win = () => wrapper.find('.nx-pane-window[data-window-pane="outline.editor"]')
+    // 〔批次76-R2 任务2〕页态没有窗头了（〔守卫⑪〕），拖拽起点落在这一页自己的页签上：
+    // 宿主把那一下 pointerdown 转进这一页的 PaneWindow.startDrag，吸附判定／预览仍是同一份实现。
+    const tab = () => wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]')
+    expect(win().find('.nx-pane-window-head').exists(), '〔守卫⑪〕页态窗不许渲染窗头').toBe(false)
     // 拖动中先亮预览（〔工单守卫④〕无预览不落位——预览是落位的前置条件，不是装饰）。
-    await dragTo(win().find('.nx-pane-window-head'), { x: 950, y: 400 })
+    await dragTo(tab(), { x: 950, y: 400 })
     expect(win().attributes('data-window-snap')).toBe('right')
     const preview = wrapper.find('.nx-pane-snap-preview')
     expect(preview.exists(), '右缘命中圈亮时要有半屏预览').toBe(true)
@@ -3570,7 +3656,7 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(wrapper.find('.nx-pane-snap-preview').exists()).toBe(false)
 
     // 拖回左缘＝解除：搬回对面那一组，side 组空了，屏幕上只剩一张页。
-    await dragTo(win().find('.nx-pane-window-head'), { x: 40, y: 400 })
+    await dragTo(tab(), { x: 40, y: 400 })
     expect(win().attributes('data-window-snap')).toBe('left')
     await release({ x: 40, y: 400 })
     expect(groupOf('outline.editor#1')).toBe('main')
@@ -3579,7 +3665,8 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(wrapper.findAll('.nx-pane-window.is-page')).toHaveLength(1)
 
     // 〔作者批次61 裁定③〕键盘／无障碍的兜底还在：右键菜单那一项落的是同一个地方。
-    rightClick(win().find('.nx-pane-window-head'))
+    // 〔批次76-R2 任务2〕页态的右键入口跟着窗头一起搬到页签行上（形态菜单本来就是页签／窗头两处同一条通路）。
+    rightClick(tab())
     await flushPromises()
     await wrapper.find('[data-test="form-menu-side"]').trigger('click')
     await flushPromises()
@@ -3614,9 +3701,10 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(hostWorkspace.get('outline.widget#1').maximized).toBe(true)
     // 页态拖到同一个位置不该有任何反应（v3 没有「页再最大化」那一档）——判据在 paneSnap 的纯函数里，
     // 这里补一条界面层的对照：把上面那扇收回页态，再拖顶缘，预览与 maximized 都不该动。
+    // 〔批次76-R2 任务2〕页态的拖拽起点在页签上（窗头已撤）。
     await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]').trigger('click')
     await flushPromises()
-    await dragTo(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#1"]').find('.nx-pane-window-head'), { x: 500, y: 60 })
+    await dragTo(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]'), { x: 500, y: 60 })
     expect(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#1"]').attributes('data-window-snap')).toBe('')
     await release({ x: 500, y: 60 })
     expect(hostWorkspace.get('outline.editor#1').maximized).toBe(false)
@@ -3938,15 +4026,14 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(tabText('outline.editor#3')).toContain('大纲 · 第一折：停摆的表')
 
     // 一页一份文档面（D-2）：揭示 #2 看到的是第一个节点，揭示 #3 看到的是第二个——两份草稿互不覆盖。
-    // 判据从「内容层那一行读态标题」换成「这一页自己的窗头」：批次76 之后标题面只有窗头，指向不变。
+    // 判据从「内容层那一行读态标题」→「这一页自己的窗头」→（〔批次76-R2 任务2〕）「这一页自己的页签」：
+    // 页态没有窗头了，标题面跟着那一行签走，指向（哪一页装哪份文档）一个字没改。
     await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#2"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#2"] .nx-pane-window-title').text())
-      .toBe('大纲 · 开场：雨夜进城')
+    expect(tabText('outline.editor#2')).toBe('大纲 · 开场：雨夜进城')
     await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#3"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-pane-window[data-window-instance="outline.editor#3"] .nx-pane-window-title').text())
-      .toBe('大纲 · 第一折：停摆的表')
+    expect(tabText('outline.editor#3')).toBe('大纲 · 第一折：停摆的表')
 
     // 关掉其中一页：另一页的记录与文档都不动。
     await wrapper.find('.nx-page-tab[data-page-instance="outline.editor#3"] [data-page-action="close"]').trigger('click')
@@ -3956,22 +4043,27 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     wrapper.unmount()
   })
 
-  it('批次76 裁定A：标题面只剩窗头一行「载体 · 文档」，内容层零自绘、也不漏内部 id', async () => {
+  it('批次76 裁定A ＋ 批次76-R2 任务2：标题面只剩一行「载体 · 文档」，页态那一行就是页签本身', async () => {
     globalThis.localStorage?.clear()
     const wrapper = mount(AppNext, { props: { bridge: pageBridge() } })
     await flushPromises()
 
-    // ① 窗头那一行读作「载体中文名 · 文档名」（作者原话的口径是「小说 第一章」）。
-    const head = wrapper.find('.nx-pane-window[data-window-instance="novel.editor#1"] .nx-pane-window-title')
-    expect(head.exists(), '页态窗必须有窗头标题行——批次76 之后它是唯一的标题面').toBe(true)
-    expect(head.text()).toBe('小说（夹具） · 雨夜')
+    // ① 〔批次76-R2 任务2〕页态连窗头都不渲染：活动页签就是这一页的标题行
+    //    （作者那句「画布页签条 → 页签条 → 窗头标题 → 网址 → 内容」五层里，中间那两层压平成一层）。
+    const tab = wrapper.find('.nx-page-tab[data-page-instance="novel.editor#1"]')
+    expect(tab.exists(), '页态的标题面＝这一页自己的页签').toBe(true)
+    expect(tab.text()).toBe('小说（夹具） · 雨夜')
+    // 〔守卫⑪〕页态窗的 DOM 里不许出现 nx-pane-window-head（正向那一半——浮窗必须出现——在「形态只从右键菜单改」那条用例里对照）。
+    expect(wrapper.find('.nx-pane-window[data-window-instance="novel.editor#1"] .nx-pane-window-head').exists())
+      .toBe(false)
+    expect(wrapper.findAll('.nx-pane-window-head')).toHaveLength(0)
 
     // ② 内容层不再自绘任何一行标题：h2.doc-title 在整个壳里必须是 0（守卫⑤的运行时那半，源码侧在 visual-contract）。
     expect(wrapper.findAll('h2.doc-title').length, '内容层还自绘标题行，同一份文档名会同屏出现两遍').toBe(0)
 
     // ③ 内部 id 不上屏：resource 里的数字尾巴（record:material:7 → 7）不许当标题；
     //    标题只能来自这一页数据面回读到的真名字，回读不到就只显示载体名。
-    expect(head.text()).not.toMatch(/\b(novel|chapter|record|editor)\b/u)
+    expect(tab.text()).not.toMatch(/\b(novel|chapter|record|editor)\b/u)
     wrapper.unmount()
   })
 
@@ -4514,9 +4606,10 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
       await flushPromises()
       const paneNow = () => wrapper.find('[data-pane-id="outline.editor"]')
       expect(paneNow().exists()).toBe(true)
-      // 〔批次76 裁定A〕原判据「内容层头部那一行标题＝节点名」改判：那一行撤了，节点名上移到窗头。
+      // 〔批次76 裁定A〕原判据「内容层头部那一行标题＝节点名」改判：那一行撤了；
+      // 〔批次76-R2 任务2〕再上移一层——页态不渲染窗头，节点名读自这一页自己的页签。
       expect(paneNow().find('.doc-title').exists()).toBe(false)
-      expect(wrapper.find('.nx-pane-window-title').text()).toBe('大纲 · 开场：雨夜进城')
+      expect(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]').text()).toBe('大纲 · 开场：雨夜进城')
       // 批次43：大纲面默认是阅读态——正文是渲染出来的备注（标题那一行已由批次76 撤走）。
       expect(paneNow().find('[data-test="outline-rendered"]').exists()).toBe(true)
       expect(paneNow().find('.editor-foot').exists()).toBe(false)
@@ -4732,9 +4825,10 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await flushPromises()
     const read = bridge.calls.filter((call) => call.tool === 'pinax_worldbook_read').at(-1)
     expect(read.args).toEqual({ path: '世界书/编年/编年·雨夜.md' })
-    // 〔批次76 裁定A〕原判据「详情面头部 .doc-title＝条目名」改判：条目名上移到窗头，详情面从正文第一行开始。
+    // 〔批次76 裁定A〕原判据「详情面头部 .doc-title＝条目名」改判：那一行撤了；
+    // 〔批次76-R2 任务2〕条目名读自这一页自己的页签（页态没有窗头）。详情面从正文第一行开始。
     expect(wrapper.find('[data-pane-id="worldbook.entries"] .doc-title').exists()).toBe(false)
-    expect(wrapper.find('.nx-pane-window-title').text()).toBe('世界书 · 编年·雨夜')
+    expect(wrapper.find('.nx-page-tab[data-page-instance="worldbook.entries#1"]').text()).toBe('世界书 · 编年·雨夜')
     wrapper.unmount()
   })
 

@@ -20,6 +20,10 @@ import { snapPreviewBox, snapTargetAt } from './paneSnap.mjs'
  * tab 态在这里**不渲染任何东西**（〔裁定B〕：竖排缘签「用文字代表吸附、还堆叠，看不清也点不到」，
  * 整条撤掉，收起态统一由 AppNext 的 CollapseOrb 呈现）。
  *
+ * 〔批次76-R2 任务2〕页态连**窗头也不渲染**（作者：「画布页签条 → 页签条 → 窗头标题 → 网址 → 内容」
+ * 五层太多，「浏览器 IDE 的分屏就是普通的平级」）：活动页签就是这一页的标题，× 与拖拽手柄都在页签上，
+ * 右键形态菜单跟页签行走。浮窗／最大化没有页签可代替标题行，那两档窗头照旧。
+ *
  * 浮窗态可拖标题栏移动、可拖四角缩放；双击标题栏＝最大化／还原（占满中栏）——
  * `maximized` 在 v3 只是浮窗的子态：页态天然铺满所在页组，没有「再最大化」一档。
  *
@@ -93,6 +97,8 @@ function parentRect() {
  *   move 浮窗态＝跟着指针改矩形，同时算吸附
  *   snap 页态＝矩形不归它管（不写 localGeometry），只跟指针算吸附
  * 松手时：命中圈里就 emit('snap')（宿主落形态），否则浮窗 emit('geometry')。
+ * 〔批次76-R2 任务2〕页态的起点不再是自己那行窗头（窗头撤了）：宿主把页签行的 pointerdown
+ * 转进这里（见 defineExpose），吸附判定与预览仍是同一份代码，没有第二套手势实现。
  */
 let dragSession = null
 function startDrag(event) {
@@ -228,7 +234,12 @@ function onContextMenu(event) {
   emit('menu', { x: event.clientX, y: event.clientY })
 }
 
-defineExpose({ state })
+/**
+ * 〔批次76-R2 任务2〕页态没有窗头可拖，宿主拿这句把**页签行**的 pointerdown 接成拖拽起点：
+ * 起点在页签、判定与预览仍在本组件（吸附的唯一实现处）。startDrag 内部按 state 分 move／snap，
+ * 页态走 snap 模式：不写矩形，只跟指针算吸附，命中圈里松手 emit('snap')。
+ */
+defineExpose({ state, startDrag })
 onBeforeUnmount(() => {
   stopDrag()
   stopResize()
@@ -262,9 +273,13 @@ onBeforeUnmount(() => {
     :data-window-snap="snap || ''"
     @pointerdown="emit('focus')"
   >
+    <!-- 〔批次76-R2 任务2〕页态不再渲染窗头：活动页签就是标题（×与拖拽手柄都落在页签上，
+         由宿主把这一下 pointerdown 接回下面那句 startDrag）。浮窗／最大化没有页签可代替标题行，头保留。
+         〔守卫⑪〕state==='page' 的窗口 DOM 里不得出现 nx-pane-window-head。 -->
     <header
+      v-if="state !== 'page'"
       class="nx-pane-window-head"
-      :title="state === 'page' ? '拖到核心区边缘换形态（左／右＝对半分，右下角＝收进悬浮球）；右键换形态' : '拖动可移动；拖到边缘吸附；双击最大化；右键换形态'"
+      title="拖动可移动；拖到边缘吸附；双击最大化；右键换形态"
       @pointerdown="startDrag"
       @dblclick="onTitleDblclick"
       @contextmenu="onContextMenu"

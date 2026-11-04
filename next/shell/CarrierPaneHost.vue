@@ -83,7 +83,7 @@ const props = defineProps({
   /** 当前项目根：看板区用它拼视图记忆的 localStorage 键（换项目＝各记各的）。 */
   projectRoot: { type: String, default: '' }
 })
-const emit = defineEmits(['history'])
+const emit = defineEmits(['history', 'address'])
 
 /**
  * 视图解析（M2.5-C 任务二）：pane 声明 `view: 'pinax.view.*'`，宿主查注册表拿内容面；
@@ -477,32 +477,11 @@ async function copyName(name) {
 }
 
 /**
- * 应用面的地址另开一条路（批次58）：内嵌浏览器载不动时，作者可以把地址复制出去自己开。
- * 地址来自 pane.app.url（清单声明），这里不猜、不补全。
+ * 应用面的地址（批次58 的「复制地址单开」）本批不在这里管了（〔批次76-R2 任务4〕）：
+ * 地址由 ExternalAppHost 现算（清单＋工程覆盖），经 `address` 事件一路上抛给宿主——
+ * 落点是页签 tooltip 与底栏状态栏，复制动作进页签右键菜单。常驻脚行连同 copyAppUrl 一起退役，
+ * 不在内容组件里留第二条「没人按的旁路」。
  */
-const appUrl = computed(() => String(props.pane?.app?.url ?? '').trim())
-const appCopyNote = ref('')
-let appCopyTimer = null
-async function copyAppUrl() {
-  if (!appUrl.value) return
-  try {
-    // 剪贴板 API 整体缺席时 optional-call 会 resolve(undefined)，不能当成功（批次58 调度方验收补刀）。
-    if (typeof globalThis.navigator?.clipboard?.writeText !== 'function') {
-      appCopyNote.value = '复制失败，请手动选中地址'
-      return
-    }
-    await globalThis.navigator.clipboard.writeText(appUrl.value)
-  } catch {
-    appCopyNote.value = '复制失败，请手动选中地址'
-    return
-  }
-  appCopyNote.value = '已复制，可以在浏览器里单开'
-  if (appCopyTimer) clearTimeout(appCopyTimer)
-  appCopyTimer = setTimeout(() => {
-    appCopyNote.value = ''
-    appCopyTimer = null
-  }, 1600)
-}
 
 function onToolsKeydown(event) {
   if (event.key !== 'Escape' || !toolsOpen.value) return
@@ -864,7 +843,6 @@ watch(() => props.data.saveFeedback, (feedback) => {
 onBeforeUnmount(() => {
   if (chipTimer) clearTimeout(chipTimer)
   if (copiedTimer) clearTimeout(copiedTimer)
-  if (appCopyTimer) clearTimeout(appCopyTimer)
   if (effectFrame) {
     if (typeof globalThis.cancelAnimationFrame === 'function') globalThis.cancelAnimationFrame(effectFrame)
     else globalThis.clearTimeout(effectFrame)
@@ -1493,17 +1471,14 @@ function actOnSaveChip() {
       </div>
     </template>
 
-    <!-- 应用面（批次44 · 作者 2026-10-31：「后续假如我们真的要把 ComfyUI 挪进来，
-         那一定是要通过浏览器去把这个端口承载起来，而不可能说我们自己手搓一个组件」）。
-         外部应用不手搓：宿主给一块 iframe，端口那个页面自己长什么样就是什么样。 -->
+    <!-- 应用面（批次44 · 〔批次76-R2 任务4〕chrome 减层后＝iframe 独占）。
+         外部应用不手搓：宿主给一块内嵌浏览器，端口那个页面自己长什么样就是什么样。
+         原来这里两行 chrome 都撤了：顶部那行 URL（ExternalAppHost 头）与底部这行「复制地址单开」——
+         地址的读数改进页签 tooltip 与底栏状态栏条目，复制动作改走页签右键菜单（作者裁定③：不做常驻死钮）。
+         空态与载入失败的文案仍在 ExternalAppHost 内部，那是「载不动」的说明，不是 chrome。 -->
     <template v-else-if="viewKind === 'external-app'">
       <div class="nx-app-pane">
-        <ExternalAppHost :pane="pane" :data="data" />
-        <!-- 载不动时另开一条路：地址复制出去自己开（底部提示行，不抢应用面本身的头）。 -->
-        <p v-if="appUrl" class="nx-app-pane-foot">
-          <button type="button" class="control-quiet nx-app-copy" data-test="app-copy-url" @click="copyAppUrl">复制地址单开</button>
-          <span v-if="appCopyNote" class="nx-app-copy-note" data-test="app-copy-note">{{ appCopyNote }}</span>
-        </p>
+        <ExternalAppHost :pane="pane" :data="data" @address="emit('address', $event)" />
       </div>
     </template>
 
@@ -2097,28 +2072,23 @@ function actOnSaveChip() {
   text-underline-offset: 2px;
 }
 
-/* 应用面（批次58）：内嵌浏览器占满正文区，底部只留一条 quiet 提示行（地址可复制出去单开）。 */
+/* 应用面（批次58 起，批次76-R2 任务1＋4 收口）：内嵌浏览器就是这一面的全部——
+   地址行与常驻复制脚行都撤了，所以这里只剩一条高度链：
+   `.pane`（flex:1 1 auto）→ `.nx-app-pane` → `.nx-external-app` → iframe。
+   〔守卫⑫〕这条链上每一环都只写 flex/min-height，不许出现 `height: auto` 断点：
+   旧版 .nx-app-pane 用 height:100% 撑高，父级（窗 body 当时是块容器）没有确定高度，
+   100% 就拍平在内容上，iframe 实测只剩 150px。 */
 .nx-app-pane {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  height: 100%;
   min-height: 0;
 }
 .nx-app-pane :deep(.nx-external-app) {
-  flex: 1 1 auto;
-  min-height: 0;
-  height: auto;
-}
-.nx-app-pane-foot {
-  flex: none;
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 6px 0 0;
-}
-.nx-app-copy-note {
-  font-size: var(--nx-fs-2xs);
-  color: var(--text-muted);
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
 }
 </style>
 

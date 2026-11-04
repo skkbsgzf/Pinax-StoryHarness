@@ -14,6 +14,10 @@ import { PAGE_ACTIONS, formMenuItems } from './paneForms.mjs'
  * （登记未采用照 chain 先例），三值与 FORM_ACTIONS 一一同构，菜单里不存在「点了没差别」的项。
  * 「收进悬浮球／关闭这一页」属于页操作，不在 forms 词表里，所以恒在
  * （〔批次76 裁定B〕改的是文案：收起的落点从右缘那一竖列标签换成右下角那颗球，动作键 `tab` 不动）。
+ *
+ * 〔批次76-R2 任务4 · 越界补登记〕多了一个可选入参 `address`：应用面（内嵌浏览器）那行常驻的
+ * 「复制地址单开」随 chrome 减层退役，动作搬进这同一份菜单——作者裁定③「不做常驻死按钮」的落点
+ * 就是这里。没有地址（不是应用面）时这一组根本不渲染，普通稿件页的菜单与批次76 一模一样。
  */
 const props = defineProps({
   /** 锚点（视口坐标）：{ x, y }，来自 contextmenu 事件。 */
@@ -22,7 +26,11 @@ const props = defineProps({
   forms: { type: Array, default: () => [] },
   /** 这一页此刻的形态与所在页组：已经是这个形态的项置灰（点了没变化不给假动作）。 */
   form: { type: String, default: 'page' },
-  group: { type: String, default: 'main' }
+  group: { type: String, default: 'main' },
+  /** 应用面的地址（其余页为空）：非空才出「复制地址单开」那一项。 */
+  address: { type: String, default: '' },
+  /** 地址来源的说法（清单声明／工程覆盖），只进这一项的悬浮提示。 */
+  addressNote: { type: String, default: '' }
 })
 const emit = defineEmits(['action', 'dismiss'])
 
@@ -44,12 +52,20 @@ const pageItems = computed(() => PAGE_ACTIONS.map((item) => ({
   disabled: item.action === 'tab' && props.form === 'tab'
 })))
 
+/** 地址组：只有内嵌浏览器那一面出这一项（「复制」与「拿它去别处单开」一句里说清）。 */
+const addressItems = computed(() => (props.address
+  ? [{ action: 'copy-url', label: '复制地址单开', note: props.addressNote }]
+  : []))
+
 const menuStyle = computed(() => {
   const anchor = props.anchor
   if (!anchor) return {}
   const viewportWidth = Number(globalThis.innerWidth) || 0
   const viewportHeight = Number(globalThis.innerHeight) || 0
-  const menuHeight = 30 + (formItems.value.length + pageItems.value.length) * ITEM_HEIGHT + (formItems.value.length ? 22 : 0) + 16
+  // 分隔条只在「真的有两组」之间出，所以高度按组数算，不按固定 22 硬加。
+  const groups = [formItems.value.length, pageItems.value.length, addressItems.value.length].filter(Boolean).length
+  const items = formItems.value.length + pageItems.value.length + addressItems.value.length
+  const menuHeight = 30 + items * ITEM_HEIGHT + Math.max(0, groups - 1) * 22 + 16
   const left = Math.max(8, Math.min(Number(anchor.x) || 0, Math.max(8, viewportWidth - MENU_WIDTH - 8)))
   const top = Math.max(8, Math.min(Number(anchor.y) || 0, Math.max(8, viewportHeight - menuHeight - 8)))
   return { left: `${left}px`, top: `${top}px` }
@@ -76,7 +92,7 @@ onBeforeUnmount(() => {
   globalThis.removeEventListener?.('keydown', onKeydown, true)
 })
 
-defineExpose({ formItems, pageItems })
+defineExpose({ formItems, pageItems, addressItems })
 </script>
 
 <template>
@@ -118,5 +134,22 @@ defineExpose({ formItems, pageItems })
       :disabled="item.disabled"
       @click="onAction(item.action)"
     >{{ item.label }}</button>
+    <!-- 〔批次76-R2 任务4〕应用面常驻那行「复制地址单开」搬进来的这一组：没有地址就不渲染，
+         普通稿件页看不见多出来的一行——菜单不长成第二套 chrome。 -->
+    <template v-if="addressItems.length">
+      <div class="nx-context-separator" role="separator"></div>
+      <p class="nx-context-group">地址</p>
+      <button
+        v-for="item in addressItems"
+        :key="item.action"
+        type="button"
+        class="control-quiet nx-context-item nx-form-menu-item"
+        role="menuitem"
+        :data-form-action="item.action"
+        :data-test="`form-menu-${item.action}`"
+        :title="item.note ? `${item.label}（${item.note}）` : item.label"
+        @click="onAction(item.action)"
+      >{{ item.label }}</button>
+    </template>
   </div>
 </template>

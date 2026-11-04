@@ -962,3 +962,121 @@ test('〔批次77 守卫⑥〕正文渲染单一来源：v-html 只认 mdRender�
   assert.equal(/v-html/u.test(questionBlock), false, '用户消息走了 v-html：作者打的标记符号会被改写')
   assert.match(questionBlock, /\{\{ message\.text \}\}/u, '用户消息不再是原样插值')
 })
+
+/**
+ * 〔批次76-R2 守卫⑪〕页态无窗头。
+ *
+ * jsdom 没有排版、也没有真实的窗口层叠，量不出「这扇窗有几行 chrome」——所以这一批的两条新守卫
+ * 都落在**声明级**：钉源码里那一行的存在性与归属，不钉量出来的像素。
+ * 运行时那一半（DOM 里到底有没有 nx-pane-window-head）在 shell-ui.spec.mjs 的用例里验。
+ */
+test('〔批次76-R2 守卫⑪〕页态不渲染窗头：nx-pane-window-head 只属于浮窗／最大化那一档', async () => {
+  const paneWindow = stripComments(await readFile(join(shellDir, 'PaneWindow.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  // ① 那一句 v-if 就贴在 header 上，条件是「不是页态」——写成常驻渲染＝守卫⑪红。
+  assert.match(paneWindow, /<header[^>]*v-if="state !== 'page'"[^>]*\n?\s*class="nx-pane-window-head"/u,
+    '窗头必须按 state !== page 条件渲染（页态的标题面是页签，不是第二行）')
+  // ② 拖拽／双击／右键三个手势仍挂在那一行上（浮窗靠它，撤了浮窗就没法拖了）。
+  const head = paneWindow.slice(paneWindow.indexOf('class="nx-pane-window-head"'))
+  for (const needle of ['@pointerdown="startDrag"', '@dblclick="onTitleDblclick"', '@contextmenu="onContextMenu"']) {
+    assert.ok(head.slice(0, 400).includes(needle), `浮窗窗头缺手势落点：${needle}`)
+  }
+  // ③ 页态的拖拽起点靠宿主转发：startDrag 必须暴露出去（否则页签那一下接不回同一份吸附实现）。
+  assert.match(paneWindow, /defineExpose\(\{[^}]*startDrag[^}]*\}\)/u, 'PaneWindow 要把 startDrag 暴露给宿主（页签行是页态的拖拽起点）')
+  // ④ 吸附判定与预览不许有第二套实现：仍然只有 paneSnap 那一份。
+  assert.match(paneWindow, /from '\.\/paneSnap\.mjs'/u, '吸附判定必须来自 paneSnap（不能有第二份）')
+
+  // ⑤ 顶上那行视图切换条整条退役：样式与宿主 markup 都不许再留（〔任务3〕判据＝同屏不出两行列同一批 pane）。
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  for (const gone of ['.nx-center-tabs', '.nx-center-tab']) {
+    assert.equal(layout.includes(gone), false, `next-shell.css 还留着退役的切换条规则：${gone}`)
+  }
+  const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  for (const gone of ['nx-center-tabs', 'center-pane-tabs', 'chooseCenterPane', 'centerPaneTabs']) {
+    assert.equal(app.includes(gone), false, `AppNext 还留着顶部切换条那一行：${gone}`)
+  }
+  assert.equal((app.match(/<style scoped>/gu) ?? []).length, 0, 'AppNext 的 scoped 样式块只为那行切换条存在，行撤了块也撤（不留空壳）')
+  // ⑥ 职责并进页签条：三处接线缺一不可（待开签的数据、点开它的那一句、页态拖拽起点）。
+  const tabStrip = stripComments(await readFile(join(shellDir, 'PaneTabStrip.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  for (const needle of ['pendingPanes', 'data-pending-pane', 'open-pane', "entry.form !== 'page'", 'emit(\'drag\'']) {
+    assert.ok(tabStrip.includes(needle), `页签条缺合并后的落点：${needle}`)
+  }
+  assert.equal((tabStrip.match(/<button/gu) ?? []).length, 1, '待开签是签不是钮：页签条上仍只许 × 一枚钮（〔裁定③〕不做常驻死按钮）')
+  for (const needle of [':pending-panes="pendingCenterPanes"', '@open-pane="openCenterPane"', '@drag="onTabDragStart"']) {
+    assert.ok(app.includes(needle), `AppNext 没把那一行接回页签条：${needle}`)
+  }
+  assert.ok(app.includes('const pendingCenterPanes'), 'AppNext 要现算「这块板还没开出来的中栏面」（不是另存一份清单）')
+})
+
+/**
+ * 〔批次76-R2 任务1 + 守卫⑫〕应用面高度链与 chrome 减层。
+ *
+ * 症状（工单实测）：窗 body 830px → `.pane` 量到 216px → `.nx-app-pane` 的 height:100% 拍平在内容上
+ * → iframe 只剩 150px。作者那句「你限制了它的宽高，那它怎么去展示出自己」是这一条的由来。
+ * 判据是声明级的：链上每一环都只许写 flex 撑高＋min-height:0，**不许出现 height:auto／height:100% 断点**
+ * （jsdom 量不出 clientHeight，真机半屏复测记在批记录的「未真机复核」账上，不由这条测试冒充）。
+ */
+test('〔批次76-R2 守卫⑫〕应用面高度链：窗 body → pane → 应用面 → iframe，一环都不许写回 auto', async () => {
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  const carrierSource = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
+  const hostSource = await readFile(join(shellDir, 'ExternalAppHost.vue'), 'utf-8')
+  // 一个文件可能有多段 <style>，把每段都取出来拼一起——只取最后一段会看漏前面那环。
+  const scopedOf = (source) => [...source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gu)].map((m) => m[1]).join('\n')
+
+  // leaf=true 的那一环是 iframe 本体：它是这条 flex 列的**子项**，自己不必是 flex 容器，
+  // 但它照样得写 flex:1 1 auto + min-height:0，否则父级给的高度吃不到。
+  const chain = [
+    ['next-shell.css · .nx-pane-window-body（本批从块容器改成 flex 列——断点就在这）', layout, '.nx-pane-window-body {', false],
+    ['next-shell.css · .pane（载体面板根）', layout, '.pane {', false],
+    ['CarrierPaneHost · .nx-app-pane', scopedOf(carrierSource), '.nx-app-pane {', false],
+    ['CarrierPaneHost · :deep(.nx-external-app)', scopedOf(carrierSource), '.nx-app-pane :deep(.nx-external-app) {', false],
+    ['ExternalAppHost · .nx-external-app（根）', scopedOf(hostSource), '.nx-external-app {', false],
+    ['ExternalAppHost · .nx-external-app-frame（iframe 本体＝链尾，flex 子项）', scopedOf(hostSource), '.nx-external-app-frame {', true]
+  ]
+  const offenders = []
+  for (const [label, css, selector, leaf] of chain) {
+    const body = ruleBody(css, selector)
+    if (!body) {
+      offenders.push(`${label}：找不到规则 ${selector}`)
+      continue
+    }
+    if (!leaf && !/display:\s*flex/u.test(body)) offenders.push(`${label}：不是 flex 容器，flex:1 不生效`)
+    if (!/min-height:\s*0/u.test(body)) offenders.push(`${label}：缺 min-height:0（内容一撑就把链顶断）`)
+    if (!/flex:\s*1/u.test(body)) offenders.push(`${label}：缺 flex:1 …（吃不到父级给的高度）`)
+    if (/height:\s*(auto|100%)/u.test(body)) offenders.push(`${label}：还留着 height:auto／100% 断点`)
+  }
+  assert.deepEqual(offenders, [], `应用面高度链有断点：\n${offenders.join('\n')}`)
+
+  // 〔任务4〕应用面＝iframe 独占：常驻的网址行与底部复制脚行都不许留在内容层。
+  // 判据只看**代码**（注释里记录「撤了什么」是留痕，不是还画着）——所以先剥注释再查。
+  const codeOf = (source) => stripComments(source).replace(/<!--[\s\S]*?-->/gu, '')
+  const hostCode = codeOf(hostSource)
+  const carrierCode = codeOf(carrierSource)
+  for (const gone of ['nx-external-app-head', 'nx-external-app-url', 'nx-external-app-source']) {
+    assert.equal(hostCode.includes(gone), false, `ExternalAppHost 还自绘地址行：${gone}`)
+  }
+  for (const gone of ['nx-app-pane-foot', 'nx-app-copy-note', 'app-copy-url', 'app-copy-note']) {
+    assert.equal(carrierCode.includes(gone), false, `CarrierPaneHost 还留着常驻脚行：${gone}`)
+  }
+  assert.equal((hostCode.match(/<iframe/gu) ?? []).length, 1, '应用面只有一块内嵌浏览器（不多不少）')
+  // 地址改走**读数**通道：属性留档 + 上抛宿主（页签 tooltip／状态栏／右键菜单都吃这一份）。
+  for (const needle of ['data-app-url', 'data-app-url-source', "defineEmits(['address'])", 'emit(\'address\'']) {
+    assert.ok(hostSource.includes(needle), `ExternalAppHost 的地址读数通道缺落点：${needle}`)
+  }
+  // 安全属性一字未动（工单禁止边界；这里正向钉住，防止「顺手清理」把它改了）。
+  assert.match(hostSource, /referrerpolicy="no-referrer"/u, 'iframe 的 referrerpolicy 不许动')
+  assert.match(hostSource, /sandbox="allow-scripts allow-forms allow-same-origin allow-popups"/u, 'iframe 的 sandbox 白名单不许动')
+
+  // 宿主侧三个读处都在（页签 tooltip／状态栏那一段／右键菜单那一项），且地址只有一处来源。
+  const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  for (const needle of ['onAppAddress', 'addressOf(', 'copyAppAddress(', 'statusAddress', 'appAddress']) {
+    assert.ok(app.includes(needle), `AppNext 缺地址上抛后的落点：${needle}`)
+  }
+  const strip = stripComments(await readFile(join(shellDir, 'PaneTabStrip.vue'), 'utf-8'))
+  assert.ok(strip.includes('data-page-address') && strip.includes('entry.address'), '页签 tooltip 没带上地址')
+  const status = await readFile(join(shellDir, 'StatusBar.vue'), 'utf-8')
+  assert.ok(status.includes('data-test="status-address"') && status.includes('address: { type: String'), '状态栏没接地址那一段')
+  const menu = await readFile(join(shellDir, 'PaneFormMenu.vue'), 'utf-8')
+  assert.ok(menu.includes('copy-url') && menu.includes('复制地址单开'), '「复制地址单开」没搬进右键菜单')
+  // 内容组件不许自己去碰剪贴板（复制归宿主那一份菜单，不留第二条旁路）。
+  assert.equal(/clipboard[\s\S]{0,120}app/i.test(hostSource), false, 'ExternalAppHost 不该自己抄地址')
+})

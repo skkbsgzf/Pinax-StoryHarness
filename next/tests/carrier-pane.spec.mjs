@@ -409,7 +409,7 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
-  it('文档头归一（批次33 → 批次43 → 批次76 改判）：标题面只剩窗头一行，内容层不自绘、底部那行只在有话可说时才出现', async () => {
+  it('文档头归一（批次33 → 批次43 → 批次76 → 批次76-R2 改判）：标题面只剩页签那一行，内容层不自绘、底部那行只在有话可说时才出现', async () => {
     const tools = fakeTools()
     const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -417,18 +417,21 @@ describe('小说载体', () => {
 
     const pane = wrapper.find('[data-pane-id="novel.editor"]')
     // 〔批次76 裁定A〕原判据「头部只有一行 .doc-title＝第002章」改判：文档名已经从内容层撤走，
-    // 内容层头部只剩右端那一行动作；同屏那一份文档名归窗头（下一条断言）。理由写在这里，不静默删。
+    // 内容层头部只剩右端那一行动作；同屏那一份文档名归标题面（下一条断言）。理由写在这里，不静默删。
     expect(pane.find('.doc-head .doc-title').exists()).toBe(false)
     expect(pane.find('.pane-sub').exists()).toBe(false)
     expect(pane.find('.editor-meta').exists()).toBe(false)
     // 批次43：底部那行不再摆路径 · 第 N 版 · N 字；没有未落盘的改动时整行都不出现。
     expect(pane.find('.doc-meta-hint').exists()).toBe(false)
-    // 唯一标题面＝窗头，且它在正文之前（原「标题在正文之上」的同义改写，只是那一行换了位置）。
-    const head = wrapper.find('.nx-pane-window-title')
-    expect(head.exists(), '窗头标题行是批次76 之后唯一的标题面').toBe(true)
-    expect(head.text()).toContain('小说')
+    // 〔批次76-R2 任务2〕原判据「唯一标题面＝窗头那一行」再改判一次：页态连窗头都不渲染了，
+    // 标题面上移成这一页自己的页签（作者：「画布页签条 → 页签条 → 窗头标题 → 网址 → 内容」层太多）。
+    const tab = wrapper.find('.nx-page-tab[data-page-instance="novel.editor#1"]')
+    expect(tab.exists(), '页态的标题面＝这一页自己的页签').toBe(true)
+    expect(tab.text()).toContain('小说')
+    expect(wrapper.find('.nx-pane-window-title').exists(), '〔守卫⑪〕页态窗不许渲染窗头').toBe(false)
+    // 「标题在正文之上」这条相对位置没变，只是那一行换了住户：页签条在页层之前。
     const shellHtml = wrapper.element.innerHTML
-    expect(shellHtml.indexOf('nx-pane-window-title')).toBeLessThan(shellHtml.indexOf('chapter-rendered'))
+    expect(shellHtml.indexOf('nx-page-tabstrip')).toBeLessThan(shellHtml.indexOf('chapter-rendered'))
     wrapper.unmount()
   })
 
@@ -627,10 +630,12 @@ describe('小说载体', () => {
     const outlineRow = wrapper.findAll('.nx-tree-item').find((row) => row.text().includes('开场：雨夜进城'))
     await outlineRow.trigger('click')
     await flushPromises()
-    // 〔批次76 裁定A〕原判据「阅读态头部一行标题＝节点名本身」改判：那一行撤了，节点名归窗头。
+    // 〔批次76 裁定A〕原判据「阅读态头部一行标题＝节点名本身」改判：那一行撤了，节点名归标题面。
+    // 〔批次76-R2 任务2〕标题面再上移一层：页态没有窗头了，节点名读自这一页自己的页签。
     // 换判据的理由写在这行——同名文档名同屏只留一处，内容层从备注正文开始。
     expect(wrapper.find('[data-test="outline-reading-title"]').exists()).toBe(false)
-    expect(wrapper.find('.nx-pane-window-title').text()).toBe('大纲 · 开场：雨夜进城')
+    expect(wrapper.find('.nx-page-tab[data-page-instance="outline.editor#1"]').text()).toBe('大纲 · 开场：雨夜进城')
+    expect(wrapper.find('.nx-pane-window-title').exists(), '〔守卫⑪〕页态窗不许渲染窗头').toBe(false)
     expect(wrapper.find('[aria-label="大纲节点标题"]').exists()).toBe(false)
     expect(wrapper.find('.control-primary').exists()).toBe(false)
     // 批次43：底部那行不再摆路径 · 版本 · 节点数（没有未落盘的改动时整行都不在）。
@@ -2259,17 +2264,25 @@ describe('应用面（批次44）：外部端口上的网页由内嵌浏览器�
     expect(frame.exists(), '应用面要给一块内嵌浏览器').toBe(true)
     expect(frame.attributes('src')).toBe('http://127.0.0.1:8188/')
     expect(frame.attributes('sandbox')).toContain('allow-scripts')
-    // 地址摆出来：作者要能一眼看见自己开的是哪个端口（也能复制出去单开）。
-    expect(wrapper.find('.nx-external-app-url').text()).toBe('http://127.0.0.1:8188/')
-    expect(wrapper.find('[data-test="app-copy-url"]').exists(), '要另给「复制地址单开」').toBe(true)
+    // 〔批次76-R2 任务4〕应用面顶部那行常驻网址撤了，底部那行常驻「复制地址单开」也撤了：
+    // 判据从「这一行文字在不在」换成「这块面只剩 iframe ＋ 地址作为**读数**上抛／落在属性上」。
+    // 地址本身的可见性不丢——它进页签 tooltip 与底栏状态栏（宿主侧用例在 shell-ui）。
+    expect(wrapper.find('.nx-external-app-head').exists(), '地址行不许留在内容层').toBe(false)
+    expect(wrapper.find('.nx-external-app-url').exists()).toBe(false)
+    expect(wrapper.find('[data-test="app-copy-url"]').exists(), '常驻复制钮已退役（动作进页签右键菜单）').toBe(false)
+    expect(wrapper.find('[data-test="external-app"]').attributes('data-app-url')).toBe('http://127.0.0.1:8188/')
+    expect(wrapper.find('[data-test="external-app"]').attributes('data-app-url-source')).toBe('manifest')
+    // iframe 的安全属性一字未动（工单禁止边界）。
+    expect(frame.attributes('referrerpolicy')).toBe('no-referrer')
     // 〔批次76 裁定A〕原判据「.doc-title 文本＝ComfyUI」改判：面板名不再在内容层自绘第二行标题，
-    // 它归窗头那一行「载体 · 面板名」（本用例挂的是裸 CarrierPaneHost，没有窗头，只查「不再自绘」）；
-    // 这一行剩下的是只有这里才有的读数——地址与来源层。
+    // 它归标题面那一行（本批起＝页签）；这一行剩下的是只有这里才有的读数——地址与来源层。
     expect(wrapper.find('.doc-title').exists()).toBe(false)
+    // 地址上抛给宿主（页签 tooltip／状态栏的那份数据源）：挂载即报一次，不等作者去点。
+    expect(wrapper.emitted('address')?.at(-1)?.[0]).toMatchObject({ url: 'http://127.0.0.1:8188/', source: 'manifest', paneId: 'comfy.canvas' })
     wrapper.unmount()
   })
 
-  it('批次58：地址复制出去自己开（剪贴板拿到的是清单里声明的那个回环地址）', async () => {
+  it('批次58 → 批次76-R2 任务4：复制地址的动作搬进宿主那一份右键菜单，内容层不再自己抄', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     const data = useBoardData(fakeTools())
@@ -2284,10 +2297,11 @@ describe('应用面（批次44）：外部端口上的网页由内嵌浏览器�
     const wrapper = mount(CarrierPaneHost, { props: { pane, data } })
     await flushPromises()
     try {
-      await wrapper.find('[data-test="app-copy-url"]').trigger('click')
-      await flushPromises()
-      expect(writeText).toHaveBeenCalledWith('http://127.0.0.1:3010')
-      expect(wrapper.find('[data-test="app-copy-note"]').text()).toContain('已复制')
+      // 内容组件手里没有这颗钮了（常驻脚行退役）；它只负责把地址现算出来报上去。
+      expect(wrapper.find('[data-test="app-copy-url"]').exists()).toBe(false)
+      expect(writeText).not.toHaveBeenCalled()
+      expect(wrapper.emitted('address')?.at(-1)?.[0]).toMatchObject({ url: 'http://127.0.0.1:3010', source: 'manifest' })
+      // 真正的「复制地址单开」在 AppNext：页签右键菜单那一条，用例见 shell-ui 的 chrome 归一那组。
     } finally {
       vi.unstubAllGlobals()
       wrapper.unmount()
@@ -2314,8 +2328,11 @@ describe('应用面（批次44）：外部端口上的网页由内嵌浏览器�
       await flushPromises()
       expect(request).toHaveBeenCalledWith(IPC_CHANNELS.carrierOverrides, {})
       expect(wrapper.find('[data-test="external-app-frame"]').attributes('src')).toBe('http://127.0.0.1:8199/')
-      expect(wrapper.find('.nx-external-app-url').text()).toBe('http://127.0.0.1:8199/')
-      expect(wrapper.find('[data-test="external-app-source"]').text()).toBe('工程覆盖')
+      // 〔批次76-R2 任务4〕地址与来源层的读数从「文字行」换成「根节点上的属性＋上抛的那一份」——
+      // 覆盖那条逻辑（批次54）一个字没动，改的只是它怎么被端出来。
+      expect(wrapper.find('[data-test="external-app"]').attributes('data-app-url')).toBe('http://127.0.0.1:8199/')
+      expect(wrapper.find('[data-test="external-app"]').attributes('data-app-url-source')).toBe('override')
+      expect(wrapper.emitted('address')?.at(-1)?.[0]).toMatchObject({ url: 'http://127.0.0.1:8199/', source: 'override' })
       wrapper.unmount()
     } finally {
       vi.unstubAllGlobals()
@@ -2341,7 +2358,9 @@ describe('应用面（批次44）：外部端口上的网页由内嵌浏览器�
       const wrapper = mount(ExternalAppHost, { props: { pane } })
       await flushPromises()
       expect(wrapper.find('[data-test="external-app-frame"]').attributes('src')).toBe('http://127.0.0.1:3010')
-      expect(wrapper.find('[data-test="external-app-source"]').exists()).toBe(false)
+      // 〔批次76-R2 任务4〕来源层的判据跟着地址行一起换成属性（不是删掉）。
+      expect(wrapper.find('[data-test="external-app"]').attributes('data-app-url-source')).toBe('manifest')
+      expect(wrapper.emitted('address')?.at(-1)?.[0]).toMatchObject({ url: 'http://127.0.0.1:3010', source: 'manifest' })
       wrapper.unmount()
     } finally {
       vi.unstubAllGlobals()
