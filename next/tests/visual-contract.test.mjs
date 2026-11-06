@@ -1001,10 +1001,30 @@ test('〔批次76-R2 守卫⑪〕页态不渲染窗头：nx-pane-window-head 只
     assert.ok(tabStrip.includes(needle), `页签条缺合并后的落点：${needle}`)
   }
   assert.equal((tabStrip.match(/<button/gu) ?? []).length, 1, '待开签是签不是钮：页签条上仍只许 × 一枚钮（〔裁定③〕不做常驻死按钮）')
-  for (const needle of [':pending-panes="pendingCenterPanes"', '@open-pane="openCenterPane"', '@drag="onTabDragStart"']) {
-    assert.ok(app.includes(needle), `AppNext 没把那一行接回页签条：${needle}`)
+  // 〔批次76-R3 任务1〕那三处接线原样保留，只是**落点从全局那一条移进各组自己的条**：
+  // 待开签的数据仍是 `pendingCenterPanes` 现算的那一份（不另存清单），条上仍按 `grp.pendingPanes` 接进去，
+  // 点开仍走 `openCenterPane`，拖拽起点仍是 `onTabDragStart`。判据不加不减，只把「一条」换成「每组一条」。
+  for (const needle of [':pending-panes="grp.pendingPanes"', '@open-pane="openCenterPane"', '@drag="onTabDragStart"', ':group="grp.id"']) {
+    assert.ok(app.includes(needle), `AppNext 没把那一行接回本组的页签条：${needle}`)
   }
   assert.ok(app.includes('const pendingCenterPanes'), 'AppNext 要现算「这块板还没开出来的中栏面」（不是另存一份清单）')
+  assert.ok(app.includes('pendingPanes: pending'), '待开签要挂进组条的数据里（挂哪组＝缺省开出那一组＝主组）')
+  // 每组一列、条是列内首行：列容器与分组标识都要在，且**只剩这一处**页签条站点（全局那一条已撤）。
+  assert.equal((app.match(/<PaneTabStrip/gu) ?? []).length, 1, '页签条只有一个渲染站点，按组 v-for——不许回潮成「全局一条＋组内各一条」')
+  for (const needle of ['v-for="grp in centerGroups"', 'class="nx-pane-group"', ':data-pane-group="grp.id"', 'const centerGroups = computed']) {
+    assert.ok(app.includes(needle), `AppNext 缺页组列的落点：${needle}`)
+  }
+  assert.equal(app.includes('tabStripPages'), false, '全局那一条的数据源已撤（留着就是第二本账）')
+  for (const needle of ['.nx-pane-group', '.nx-pane-group.is-overlay-group', '.nx-pane-group.is-blurred-group', '.nx-page-tabstrip.is-group-side']) {
+    assert.ok(layout.includes(needle), `next-shell.css 缺页组列的样式落点：${needle}`)
+  }
+  const groupRule = ruleBody(layout, '.nx-pane-group {')
+  assert.ok(groupRule, 'next-shell.css 里没有 .nx-pane-group 规则')
+  assert.match(groupRule, /flex-direction:\s*column/u, '组列必须是 flex 列：签行才是「组内首行」，不浮不叠')
+  assert.match(groupRule, /flex:\s*1 1 0/u, '组列按组等分（两组各半＝原来的分屏，一组就铺满）')
+  assert.match(groupRule, /min-width:\s*0/u, '组列缺 min-width:0：签一多就把半屏撑破')
+  assert.equal(/position\s*:/u.test(groupRule), false,
+    '〔守卫④的根〕组列本身不许定位：一给列定位，页态窗拖拽量到的「层」就缩水成半个屏，吸附分界跟着改判')
 })
 
 /**
@@ -1014,6 +1034,9 @@ test('〔批次76-R2 守卫⑪〕页态不渲染窗头：nx-pane-window-head 只
  * → iframe 只剩 150px。作者那句「你限制了它的宽高，那它怎么去展示出自己」是这一条的由来。
  * 判据是声明级的：链上每一环都只许写 flex 撑高＋min-height:0，**不许出现 height:auto／height:100% 断点**
  * （jsdom 量不出 clientHeight，真机半屏复测记在批记录的「未真机复核」账上，不由这条测试冒充）。
+ *
+ * 〔批次76-R3 任务2〕链首多两环：页态窗从「窗层直接子项」变成**组列那一根 flex 列的子项**（列内首行是签行），
+ * 于是「组列 → 页态窗」这两环也在同一张板上，缺一条就整条断——只加不减，原有各环原样保留。
  */
 test('〔批次76-R2 守卫⑫〕应用面高度链：窗 body → pane → 应用面 → iframe，一环都不许写回 auto', async () => {
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
@@ -1024,7 +1047,11 @@ test('〔批次76-R2 守卫⑫〕应用面高度链：窗 body → pane → 应�
 
   // leaf=true 的那一环是 iframe 本体：它是这条 flex 列的**子项**，自己不必是 flex 容器，
   // 但它照样得写 flex:1 1 auto + min-height:0，否则父级给的高度吃不到。
+  // 〔批次76-R3 任务2〕页态窗与组列进场后，这个旗标的含义＝「只当 flex 子项、不要求自己声明 display:flex」：
+  // 页态窗的那句 display:flex 写在基座 .nx-pane-window 上（不在 .is-page 那条规则里），照旧继承得到。
   const chain = [
+    ['next-shell.css · .nx-pane-group（〔76-R3〕组列＝签行＋窗所在的那根 flex 列，链首）', layout, '.nx-pane-group {', false],
+    ['next-shell.css · .nx-pane-window.is-page（〔76-R3〕页态窗＝组列子项，缺 min-height:0 长稿就撑破整列）', layout, '.nx-pane-window.is-page {', true],
     ['next-shell.css · .nx-pane-window-body（本批从块容器改成 flex 列——断点就在这）', layout, '.nx-pane-window-body {', false],
     ['next-shell.css · .pane（载体面板根）', layout, '.pane {', false],
     ['CarrierPaneHost · .nx-app-pane', scopedOf(carrierSource), '.nx-app-pane {', false],
@@ -1079,4 +1106,38 @@ test('〔批次76-R2 守卫⑫〕应用面高度链：窗 body → pane → 应�
   assert.ok(menu.includes('copy-url') && menu.includes('复制地址单开'), '「复制地址单开」没搬进右键菜单')
   // 内容组件不许自己去碰剪贴板（复制归宿主那一份菜单，不留第二条旁路）。
   assert.equal(/clipboard[\s\S]{0,120}app/i.test(hostSource), false, 'ExternalAppHost 不该自己抄地址')
+})
+
+/**
+ * 〔批次76-R3 守卫⑬「有窗必有签」〕声明级那一半（运行时那一半在 shell-ui.spec.mjs 的用例里）。
+ *
+ * 作者裁定：「右边半个屏既然跟左边共用分屏，就必须显示出那个窗口的名字」→ 页签行**按页组出**，
+ * 一条只列本组的页；任何摊开在屏幕上的页态窗，头顶必须有本组那一行条。
+ * jsdom 没有排版，所以这里钉的是**源码里的归属规则**：谁进哪一条、空组出不出条、条挂在哪一层。
+ */
+test('〔批次76-R3 守卫⑬〕有窗必有签：一条只列本组、空组不出条、条是组内首行', async () => {
+  const tabStrip = stripComments(await readFile(join(shellDir, 'PaneTabStrip.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  // ① 组是条的属性：`group` 进 props，DOM 上留 `data-tabstrip-group`（守卫⑬运行时就按这一格认归属）。
+  assert.match(tabStrip, /group: \{ type: String, default: 'main' \}/u, '页签条必须按组出：group 是它的属性')
+  for (const needle of [':data-tabstrip-group="group"', 'is-group-${group}']) {
+    assert.ok(tabStrip.includes(needle), `页签条缺分组标识的落点：${needle}`)
+  }
+
+  const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
+  // ② 归属规则只有一条，且写在数据层（不是渲染层临时拼的）：侧组条＝侧组的页；主组条＝本组的页＋没有页组归宿的那些。
+  assert.ok(app.includes("row.form === 'page' && row.group === 'side'"), '侧组条要只列侧组的页')
+  assert.ok(app.includes("row.form !== 'page' || row.group !== 'side'"), '主组条要收留浮窗／收起态那些没有页组归宿的页')
+  assert.match(app, /const pages = own\.filter\(\(row\) => row\.form === 'page'\)[\s\S]{0,200}return \[\.\.\.pages, \.\.\.orphans\]/u,
+    '主组条的序＝本组的页在前、收留的挂条尾')
+  // ③ 空组不出条：侧组那一列只在侧组真有页时进 centerGroups（「有条无内容」与「有窗无签」同为违规态）。
+  assert.match(app, /if \(sideWindow\) \{\s*groups\.push\(\{/u, '侧组列必须按「侧组有没有摊开的页」决定出不出现')
+  assert.match(app, /if \(mainWindow \|\| mainStripPages\.value\.length \|\| pending\.length\)/u,
+    '主组列的出场条件＝有本组的页 / 有条尾收留的页 / 有待开签，三者都没有就不出列')
+  // ④ 高亮各亮各组的：每条读的是本组 active，全局那一份 currentInstance 已撤（留着就是第二本账）。
+  assert.ok(app.includes('function groupCurrentInstance(group)'), '每组的高亮要按本组的当前页算')
+  assert.match(app, /const active = snap\.active\?\.\[group\]/u, '高亮的读数只能来自工作区 v3 的 active（不另存一份）')
+  assert.equal(app.includes('const currentInstance = computed'), false, '全局那一份「此刻那一页」的高亮已随全局条撤掉')
+  // ⑤ 条在列内、且列只有一个渲染站点：签行是列内首行（不是绝对定位浮在上面，也不许回潮成「全局一条＋组内各一条」）。
+  const markup = app.slice(app.indexOf('v-for="grp in centerGroups"'))
+  assert.ok(markup.indexOf('<PaneTabStrip') < markup.indexOf('<PaneWindow'), '组列里签行必须排在窗之前（组内首行）')
 })

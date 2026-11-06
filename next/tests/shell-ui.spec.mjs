@@ -1586,7 +1586,11 @@ describe('Obsidian 三栏', () => {
     // 〔批次76-R2 任务3〕判据是「同一屏幕不许出现两行都在列同一批 pane」：
     // 顶部那行 nx-center-tabs 整条退役，切换职责落在同一行页签条上——没开出来的面出「待开签」。
     expect(wrapper.find('[data-test="center-pane-tabs"]').exists(), 'nx-center-tabs 那行已退役').toBe(false)
-    const strip = wrapper.find('[data-test="page-tabstrip"]')
+    // 〔批次76-R3 任务4〕按组模型改写：待开签挂在**缺省开出的那一组**（主组）那条的条尾——
+    // 全局那一条已经撤了，所以这里要指名读主组那一行，不再用「屏上第一条」含糊带过。
+    expect(wrapper.findAll('.nx-page-tabstrip').map((node) => node.attributes('data-tabstrip-group'))).toEqual(['main'],
+      '只有主组摊着页：侧组那一列连同它的条都不该出现')
+    const strip = wrapper.find('.nx-page-tabstrip[data-tabstrip-group="main"]')
     expect(strip.exists()).toBe(true)
     const pending = strip.find('[data-pending-pane="comic.canvas"]')
     expect(pending.exists(), '另一面中栏 pane 挂成待开页签').toBe(true)
@@ -3524,8 +3528,11 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     // 开窗决策的五种结果里没有「新建浮窗」这一档：整张工作区此刻一条非页态记录都没有。
     expect(hostWorkspace.list().filter((entry) => entry.form !== 'page')).toEqual([])
 
-    // 页签栏＝全部页（按叠序），高亮跟着此刻这一页；中心区只画当前那一张。
-    const tabs = wrapper.findAll('.nx-page-tab')
+    // 页签栏＝本组全部页（按叠序），高亮跟着此刻这一页；中心区只画当前那一张。
+    // 〔批次76-R3 任务4〕归组后这条读的是**主组那一行**（这两页都在主组，侧组此刻没有页、也就没有侧组条）。
+    const stripOfMain = () => wrapper.find('.nx-page-tabstrip[data-tabstrip-group="main"]')
+    expect(wrapper.findAll('.nx-page-tabstrip').map((node) => node.attributes('data-tabstrip-group'))).toEqual(['main'])
+    const tabs = stripOfMain().findAll('.nx-page-tab')
     expect(tabs.map((tab) => tab.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1'])
     expect(tabs[1].classes()).toContain('is-active')
     expect(tabs[1].attributes('data-page-form')).toBe('page')
@@ -3550,7 +3557,9 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     // 浮窗那条记录有矩形、页态两条没有：排版与浮动各归各的轴。
     expect(hostWorkspace.get('outline.widget#1')).toMatchObject({ form: 'floating' })
     expect(hostWorkspace.get('outline.widget#1').geometry).toBeTruthy()
-    const tabs = () => wrapper.findAll('.nx-page-tab')
+    // 〔批次76-R3 任务4〕这三条都没有页组归宿之外的去处：两条页在主组、浮窗挂主组条尾，
+    // 所以「点页签＝揭示」那套原判据整条读**主组那一行**即可（侧组此刻没有页）。
+    const tabs = () => wrapper.find('.nx-page-tabstrip[data-tabstrip-group="main"]').findAll('.nx-page-tab')
     expect(tabs().map((tab) => tab.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1', 'outline.widget#1'])
     // 浮窗也上签：否则「看得见」只覆盖了一半。〔批次76 裁定A〕后缀从「浮窗」两个字换成一枚 12px 图标点，
     // 屏幕上不再念文字状态（原判据在此改判，理由：文字角标与窗头/页签的标题抢层级；形态读数改走属性与 aria）。
@@ -3885,7 +3894,10 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(wrapper.find('[data-test="orb-badge"]').exists()).toBe(false)
 
     // 页签栏那条 × 仍是删记录（原判据在这里成立，与球共用同一个 close）。
-    expect(wrapper.findAll('.nx-page-tab').map((node) => node.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1'])
+    // 〔批次76-R3 任务4〕按组模型指名：这两页同属主组，所以它们出现在**主组那一行**里（不是「屏上随便哪一条」）。
+    expect(wrapper.findAll('.nx-page-tabstrip').map((node) => node.attributes('data-tabstrip-group'))).toEqual(['main'])
+    expect(wrapper.find('.nx-page-tabstrip[data-tabstrip-group="main"]').findAll('.nx-page-tab')
+      .map((node) => node.attributes('data-page-instance'))).toEqual(['novel.editor#1', 'outline.editor#1'])
     // 中心区只画「所在组的当前页」：main 的当前页是最后切出来的那一页（大纲编辑），
     // 正文那条仍在册、签上有名，但同组的第二页不占屏——〔铁律一〕不给同一组画两次窗。
     // 刚关掉的那条是浮窗：它不占页组，退场时当前页指针根本不用重指（原判据「指针回指 novel」是猜的，实测不成立）。
@@ -4065,6 +4077,102 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     //    标题只能来自这一页数据面回读到的真名字，回读不到就只显示载体名。
     expect(tab.text()).not.toMatch(/\b(novel|chapter|record|editor)\b/u)
     wrapper.unmount()
+  })
+
+  /**
+   * 〔批次76-R3 守卫⑬「有窗必有签」〕运行时那一半。
+   *
+   * jsdom 没有排版，量不出「签行画在窗上方」这件事，所以判据落在 **DOM 归属**：屏上每摊开一页，
+   * 它必须就在**本组那一列**（`.nx-pane-group[data-pane-group=<组>]`）里，而那一列的**首行**必须是
+   * 本组自己的签行（`.nx-page-tabstrip[data-tabstrip-group=<组>]`），且那一行里就有这一页的签。
+   * 反过来不许留「有条无内容」：侧组没有页就没有侧组那一列，也就没有侧组条
+   * （主组条要收留浮窗／收起态那些没有页组归宿的页，本来就可能没有本组的窗，那一侧不适用）。
+   */
+  function expectEveryPageHasItsGroupTab(wrapper) {
+    for (const win of wrapper.findAll('.nx-pane-window[data-window-state="page"]')) {
+      const instance = win.attributes('data-window-instance')
+      const group = win.attributes('data-window-group')
+      const column = win.element.closest('[data-pane-group]')
+      expect(column, `${instance} 这一页不在任何页组列里（守卫⑬）`).toBeTruthy()
+      expect(column.getAttribute('data-pane-group'), `${instance} 落错了页组那一列`).toBe(group)
+      const strip = column.querySelector(`.nx-page-tabstrip[data-tabstrip-group="${group}"]`)
+      expect(strip, `${group} 组摊着窗却没有自己的签行（守卫⑬：有窗必有签）`).toBeTruthy()
+      expect(strip.querySelector(`.nx-page-tab[data-page-instance="${instance}"]`), `${instance} 的签不在本组那一行里`).toBeTruthy()
+      expect(column.firstElementChild, '签行是组内首行（〔任务2〕不浮不叠）').toBe(strip)
+    }
+    const sideStrip = wrapper.find('.nx-page-tabstrip[data-tabstrip-group="side"]')
+    const sidePages = wrapper.findAll('.nx-pane-window[data-window-state="page"][data-window-group="side"]')
+    expect(sideStrip.exists(), sidePages.length ? '侧组摊着页却没有侧组那一行条' : '侧组没有页却留着侧组条（有条无内容）')
+      .toBe(sidePages.length > 0)
+    return sidePages.length
+  }
+
+  it('〔批次76-R3 守卫⑬〕有窗必有签：每组一列、条是列内首行；两组各亮自己那组的当前页（互不抢）', async () => {
+    const workspace = {
+      version: 3,
+      entries: {
+        'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', resource: null, group: 'main', order: 0, form: 'page', geometry: null, z: 1, maximized: false },
+        'outline.editor#1': { instance: 'outline.editor#1', pane: 'outline.editor', resource: null, group: 'side', order: 0, form: 'page', geometry: null, z: 2, maximized: false },
+        'outline.widget#1': { instance: 'outline.widget#1', pane: 'outline.widget', resource: null, group: 'main', order: 1, form: 'floating', geometry: { x: 40, y: 60, w: 320, h: 300 }, z: 3, maximized: false },
+        'outline.widget#2': { instance: 'outline.widget#2', pane: 'outline.widget', resource: null, group: 'main', order: 2, form: 'tab', geometry: null, z: 4, maximized: false, restore: { form: 'page', group: 'main', geometry: null, maximized: false } }
+      },
+      active: { main: 'novel.editor#1', side: 'outline.editor#1' },
+      focus: 'side'
+    }
+    const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    await flushPromises()
+
+    // ① 两组各一列、各一条；两条都通过守卫⑬那条归属判据。
+    expect(expectEveryPageHasItsGroupTab(wrapper), '侧组那页应在侧组那一列里').toBe(1)
+    const columns = wrapper.findAll('[data-test="pane-group"]')
+    expect(columns.map((node) => node.attributes('data-pane-group'))).toEqual(['main', 'side', 'floating'],
+      '主组列＋侧组列＋浮窗那一列（浮窗列只是绝对定位的容器，签归主组条尾收留）')
+    expect(wrapper.findAll('.nx-page-tabstrip')).toHaveLength(2, '屏幕上只剩「每组一条」：全局那一条已撤，浮窗列不出条')
+    expect(columns[2].find('.nx-page-tabstrip').exists(), '浮窗那一列不许自己长出条').toBe(false)
+
+    // ② 一条只列本组：主组条＝本组的页＋条尾收留的浮窗与收起态；侧组条＝只有侧组那一页。
+    const mainStrip = wrapper.find('.nx-page-tabstrip[data-tabstrip-group="main"]')
+    const sideStrip = wrapper.find('.nx-page-tabstrip[data-tabstrip-group="side"]')
+    expect(mainStrip.findAll('.nx-page-tab').map((node) => node.attributes('data-page-instance')))
+      .toEqual(['novel.editor#1', 'outline.widget#1', 'outline.widget#2'], '主组条＝本组的页在前、没有页组归宿的挂条尾')
+    expect(sideStrip.findAll('.nx-page-tab').map((node) => node.attributes('data-page-instance')))
+      .toEqual(['outline.editor#1'], '侧组条只列侧组的页——别人家的页不许跨条混列')
+
+    // ③ 互不抢：焦点在侧组，主组条仍亮着主组自己的当前页，侧组条亮侧组那一页（VS Code 两个编辑器组各亮各的）。
+    expect(mainStrip.find('.nx-page-tab.is-active').attributes('data-page-instance')).toBe('novel.editor#1')
+    expect(sideStrip.find('.nx-page-tab.is-active').attributes('data-page-instance')).toBe('outline.editor#1')
+    expect(sideStrip.find('.nx-page-tab.is-active').attributes('aria-selected'), '侧组当前页的签要读得出「我是本组的当前页」').toBe('true')
+    expect(columns[0].classes()).toContain('is-blurred-group', '焦点不在主组：那条底色退一档，但高亮照旧亮自己那组的页')
+    expect(columns[1].classes()).not.toContain('is-blurred-group')
+    // 侧组条带与窗体同一条左缘分隔（作者裁定：右半屏要「显示出那个窗口的名字」，分界得从标题行续到内容）。
+    expect(sideStrip.classes()).toContain('is-group-side')
+
+    // ④ 点另一组的签＝把焦点给那一组（不搬窗、不换形态）——这条语义在归组后仍然只由 setActive 那一句承担。
+    await sideStrip.find('.nx-page-tab[data-page-instance="outline.editor#1"]').trigger('click')
+    await flushPromises()
+    expect(hostWorkspace.snapshot().focus).toBe('side')
+    expect(formOf('outline.editor#1')).toBe('page')
+    expect(groupOf('outline.editor#1')).toBe('side')
+
+    // ⑤ 条尾收留的那两枚照样可以点回来：浮窗＝抬到最前（不改形态），收起态＝按 restore 放回它原来那一档。
+    await mainStrip.find('.nx-page-tab[data-page-instance="outline.widget#1"]').trigger('click')
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('floating')
+    await mainStrip.find('.nx-page-tab[data-page-instance="outline.widget#2"]').trigger('click')
+    await flushPromises()
+    expect(formOf('outline.widget#2')).toBe('page')
+    expect(groupOf('outline.widget#2')).toBe('main')
+    expect(expectEveryPageHasItsGroupTab(wrapper)).toBe(1)
+    wrapper.unmount()
+
+    // ⑥ 侧组空了就整列不渲染：只有主组那一页时，屏幕上只有主组那一条，也不会有「侧组条配空内容」。
+    const solo = { version: 3, entries: { 'novel.editor#1': { instance: 'novel.editor#1', pane: 'novel.editor', resource: null, group: 'main', order: 0, form: 'page', geometry: null, z: 1, maximized: false } }, active: { main: 'novel.editor#1', side: null }, focus: 'main' }
+    const soloWrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace: solo }) } })
+    await flushPromises()
+    expect(soloWrapper.findAll('[data-test="pane-group"]').map((node) => node.attributes('data-pane-group'))).toEqual(['main'])
+    expect(soloWrapper.findAll('.nx-page-tabstrip').map((node) => node.attributes('data-tabstrip-group'))).toEqual(['main'])
+    expectEveryPageHasItsGroupTab(soloWrapper)
+    soloWrapper.unmount()
   })
 
   it('version:2 存档在 UI 层一次迁移到 v3：maximized→页、tab→标签、贴靠→对面页组、其余→浮窗', async () => {

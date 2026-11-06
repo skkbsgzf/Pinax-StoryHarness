@@ -1383,7 +1383,7 @@ function resourceLabel(resource, page = null) {
  * 内容层不再自绘第二行标题（`h2.doc-title` 已全部撤掉），页签的 `pane.title`（如「正文」）
  * 不再进窗头——它回答的是「哪块 pane」，而作者要的那一行是「哪个载体的哪份文档」。
  */
-function windowTitle(win) {
+function windowTitleParts(win) {
   const carrierName = win.pane.pluginTitle ?? win.pane.carrierTitle ?? win.pane.title ?? win.entry.pane
   // 读一下页数据面的计数：它是普通 Map，新增那一下 Vue 追不到，不拨这一下标题会停在「只有载体名」。
   void pageDataVersion.value
@@ -1392,22 +1392,116 @@ function windowTitle(win) {
   // 直接问这一页自己的 selection 装的是哪份——窗头报的是作者此刻看见的那篇，不是台账里那条旧账。
   const label = resourceLabel(win.entry.resource || selectionResource(page), page)
     || ((win.pane.title && win.pane.title !== carrierName) ? win.pane.title : '')
+  return { head: carrierName, tail: label || '' }
+}
+
+function windowTitle(win) {
+  const { head: carrierName, tail: label } = windowTitleParts(win)
   return label ? `${carrierName} · ${label}` : carrierName
 }
 
-/** 页签栏的数据源：全部页记录（四种形态都在内），高亮跟着作者此刻那一页。 */
-const tabStripPages = computed(() => {
-  const current = focusedInstance() ?? ''
-  return openWindows.value.map((win) => ({
-    instance: win.entry.instance,
-    pane: win.entry.pane,
+/**
+ * 〔批次76-R3 任务1〕页签行归组（VS Code 编辑器组模型）：一条只列本组，不再有横跨整屏的全局那一条。
+ * 归属规则（守卫⑬「有窗必有签」就按这一条判）：
+ *   · 页态按页组分流——`group === 'side'` 进侧组条，其余页态进主组条；
+ *   · 浮窗与收进悬浮球的那些页**没有页组归宿**（它们的 group 只是「占为页时回哪一侧」的记忆），
+ *     一律挂主组条尾收留：仍然是可以点（揭示／抬前）、可以右键换形态的落点，一条都不落。
+ * `active` 那一格删了：高亮改由每条自己的 `currentInstance` 决定（各亮各组的当前页，互不抢），
+ * 再留一份全局的「哪一页 active」就是第二本账。
+ */
+function stripRowOf(win) {
+  const entry = win.entry
+  // 签名仍是裁定A 那一行「载体 · 文档」（整串只在 windowTitle 一处拼），这里另交两段给签行：
+  // 窄签里先省略载体名、保住文档名（同一插件的两面都以插件名开头，整串截断会把唯一能区分它们的那半截切掉）。
+  const parts = windowTitleParts(win)
+  return {
+    instance: entry.instance,
+    pane: entry.pane,
     title: windowTitle(win),
-    form: win.entry.form,
-    group: win.entry.group,
-    active: win.entry.instance === current,
+    titleHead: parts.head,
+    titleTail: parts.tail,
+    form: entry.form,
+    group: entry.group,
     // 〔批次76-R2 任务4〕应用面的网址进这枚签的悬浮提示（顶部那行常驻 URL 撤了，读数不能跟着没了）。
-    address: appAddress[win.entry.instance]?.url ?? ''
-  }))
+    address: appAddress[entry.instance]?.url ?? ''
+  }
+}
+const mainStripPages = computed(() => {
+  const rows = openWindows.value.map(stripRowOf)
+  const own = rows.filter((row) => row.form !== 'page' || row.group !== 'side')
+  // 条序＝本组的页在前（按组内序号），收留的浮窗／收起态在尾：作者先看见「这一组摊开的那几页」。
+  const pages = own.filter((row) => row.form === 'page')
+  const orphans = own.filter((row) => row.form !== 'page')
+  return [...pages, ...orphans]
+})
+const sideStripPages = computed(() => openWindows.value.map(stripRowOf)
+  .filter((row) => row.form === 'page' && row.group === 'side'))
+
+/**
+ * 〔批次76-R3 任务2〕本条的高亮跟的是**本组**的当前页：焦点在哪组、哪组亮自己那一组的签，
+ * 另一组照旧亮它自己那一组的当前页（VS Code 那两个编辑器组各有一行页签，从不抢）。
+ * 主组没有页时，焦点若正落在条尾收留的浮窗上，就亮那一条。
+ */
+function groupCurrentInstance(group) {
+  const snap = workspaceSnapshot.value
+  const active = snap.active?.[group]
+  if (active && snap.entries[active]) return active
+  if (group !== 'main') return ''
+  const focused = focusedInstance()
+  const entry = focused ? snap.entries[focused] : null
+  return entry && entry.form !== 'page' ? focused : ''
+}
+
+/**
+ * 〔批次76-R3 任务1/2/3〕中心区按页组渲染：每组一列，列内**首行**＝本组自己的签行（组内 flex 首行，不浮不叠）。
+ *   · main 恒挂：它还要挂条尾收留的浮窗／收起态签，以及这块板的待开签；
+ *   · side 只在侧组真有页时挂——空组整列不渲染，「有条无内容」是违规态（守卫⑬的另一半）；
+ *   · 浮窗自成一列（is-overlay）：绝对定位铺满窗口层、不占版面宽度，签行归主组条尾收留，所以这一列不出条。
+ * 列本身保持 position: static：给列定位就等于把页态窗拖拽时量到的「层」缩水成半个屏，
+ * paneSnap 那套吸附分界会跟着改判——拖左缘落主组、拖右缘落侧组那条语义的根在这里，别动。
+ */
+/** 中心区那两句说明（原判据不变，〔批次76-R3 任务2〕只是落进主组那一列的内容区，不再压在列外面）。 */
+const centerEmptyNote = computed(() => {
+  if (visibleWindows.value.length) return ''
+  return sideTabWindows.value.length
+    ? '核心区的页都收进右下角那颗球了。点球或者点页签，把它放回来。'
+    : '中心区还没有页。点竖条上的载体，或在左树里点一份文档。'
+})
+
+const centerGroups = computed(() => {
+  const focus = workspaceSnapshot.value.focus
+  const note = centerEmptyNote.value
+  const mainWindow = activePageWindow('main')
+  const sideWindow = activePageWindow('side')
+  const pending = pendingCenterPanes.value
+  const groups = []
+  if (mainWindow || mainStripPages.value.length || pending.length) {
+    groups.push({
+      id: 'main',
+      focused: focus === 'main',
+      pages: mainStripPages.value,
+      current: groupCurrentInstance('main'),
+      pendingPanes: pending,
+      windows: mainWindow ? [mainWindow] : [],
+      empty: mainWindow ? '' : note
+    })
+  }
+  if (sideWindow) {
+    groups.push({
+      id: 'side',
+      focused: focus === 'side',
+      pages: sideStripPages.value,
+      current: groupCurrentInstance('side'),
+      pendingPanes: [],
+      windows: [sideWindow],
+      empty: ''
+    })
+  }
+  const floats = floatWindows.value
+  if (floats.length) {
+    groups.push({ id: 'floating', overlay: true, focused: false, pages: [], current: '', pendingPanes: [], windows: floats, empty: '' })
+  }
+  return groups
 })
 
 /**
@@ -1493,8 +1587,10 @@ function onTabDragStart(instance, event) {
   windowRefs.get(String(instance))?.startDrag?.(event)
 }
 
-/** 此刻说话的那一页（页签高亮与 aria-selected 的口径，与 activeData 同源）。 */
-const currentInstance = computed(() => focusedInstance() ?? '')
+/**
+ * 〔批次76-R3 任务2〕这里不再有「此刻说话的那一页」那一份全局高亮：页签按组各亮各的
+ * （groupCurrentInstance(group)），全局那一条高亮本身就是被撤掉的东西。
+ */
 
 /**
  * 索引窗／画廊跟着走的那一页：当前板的那块中栏 pane 里序号最靠前的页。
@@ -2539,20 +2635,11 @@ onBeforeUnmount(() => {
 
         <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
 
-        <!-- 〔批次76-R2 任务3〕批次53 那行顶部切换条（nx-center-tabs）整条退役：
-             判据是「同一屏幕不许出现两行都在列同一批 pane」。它那点职责（同载体多面中栏的切换）
-             并进了下面那一行页签条——没开出来的面以「待开页签」挂在同一行末尾（:pending-panes），
-             开着的面本来就是页签。少一行 chrome，一个动作都没少。 -->
-        <PaneTabStrip
-          :pages="tabStripPages"
-          :pending-panes="pendingCenterPanes"
-          :current-instance="currentInstance"
-          @reveal="revealPage"
-          @close="closeWindow"
-          @menu="openFormMenu"
-          @drag="onTabDragStart"
-          @open-pane="openCenterPane"
-        />
+        <!-- 〔批次76-R3 任务1／2〕页签行归组（VS Code 编辑器组模型）：不再有横跨整屏的全局那一条。
+             每个页组一列，列内**首行**＝本组自己的签行，签行只列本组的页；side 列只在侧组真有页时出现
+             （〔任务3〕空组整列不渲染——「有条无内容」与「有窗无签」同样是违规态，守卫⑬两头都钉）。
+             〔批次76-R2 任务3〕那条「顶部切换条退役、待开签并到行末」的职责原样搬进**各组条尾**（待开面
+             落在缺省开出的那一组＝主组）；少的是全局那一条，一个动作都没少。 -->
         <div class="nx-window-layer" data-test="window-layer">
           <!-- 图库模板（批次60）：没有左栏也没有缺省文档窗，核心区就是一整面素材卡片墙；
                窗户仍叠在它上面，点一张卡才开那条记录的素材窗。 -->
@@ -2562,62 +2649,79 @@ onBeforeUnmount(() => {
             :data="indexData"
             @open="showBoardWindow(activeBoard)"
           />
-          <p v-else-if="!visibleWindows.length && !sideTabWindows.length" class="center-empty">
-            中心区还没有页。点竖条上的载体，或在左树里点一份文档。
-          </p>
-          <p v-else-if="!visibleWindows.length" class="center-empty">
-            核心区的页都收进右下角那颗球了。点球或者点页签，把它放回来。
-          </p>
-          <!-- 页层与浮窗层同一条 v-for（〔铁律四〕PaneWindow 是唯一窗口壳，排版差异交给 CSS：
-               页态 flex 占位、主／侧两组各半＝原来的分屏；浮窗态绝对定位可拖可缩）。
-               〔批次76 裁定A〕窗头只剩一枚 ×；换形态改由拖拽吸附（@snap）与右键菜单承担。 -->
-          <PaneWindow
-            v-for="win in visibleWindows"
-            :key="win.entry.instance"
-            :ref="(el) => setWindowRef(win.entry.instance, el)"
-            :instance="win.entry.instance"
-            :pane-id="win.entry.pane"
-            :title="windowTitle(win)"
-            :form="win.entry.form"
-            :group="win.entry.group"
-            :geometry="win.entry.geometry"
-            :maximized="win.entry.maximized"
-            :z="win.entry.z"
-            :suspend-esc="settingsOpen"
-            @close="closeWindow(win.entry.instance)"
-            @maximize="toggleWindowMaximized(win.entry.instance)"
-            @focus="hostWorkspace.bringToFront(win.entry.instance)"
-            @geometry="saveWindowGeometry(win.entry.instance, $event)"
-            @snap="applySnapTarget(win.entry.instance, $event)"
-            @menu="openFormMenu(win.entry.instance, $event)"
+          <p v-if="!centerGroups.length && activeLayoutTemplate !== 'gallery'" class="center-empty">{{ centerEmptyNote }}</p>
+          <div
+            v-for="grp in centerGroups"
+            :key="grp.id"
+            class="nx-pane-group"
+            :class="{ 'is-side-group': grp.id === 'side', 'is-overlay-group': grp.overlay, 'is-blurred-group': grp.focused === false }"
+            data-test="pane-group"
+            :data-pane-group="grp.id"
           >
-            <template v-if="win.entry.pane === 'outline.widget'">
-              <p v-if="overlayLoading[win.entry.instance]" class="nx-overlay-empty">正在载入大纲…</p>
-              <p v-else-if="pageDataOf(win.entry.instance).outlineError" class="nx-overlay-error">{{ pageDataOf(win.entry.instance).outlineError }}</p>
-              <p v-else-if="!pageDataOf(win.entry.instance).outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
-              <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
-                <li v-for="(node, index) in pageDataOf(win.entry.instance).outline" :key="node.id ?? `overlay-node-${index}`">
-                  <button
-                    type="button"
-                    class="workspace-nav-item workspace-nav-item--tree nx-tree-row"
-                    @click="openOutlineNodeFromWidget(index)"
-                  >
-                    <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
-                  </button>
-                </li>
-              </ul>
-            </template>
-            <!-- 其余窗口（中栏／自带面板）：内容渲染不随窗态变，一律走同一个 CarrierPaneHost；
-                 〔裁定④〕数据面用的是这一页自己的那一份，不是基座——两页各看各的稿子。 -->
-            <CarrierPaneHost
-              v-else
-              :pane="win.pane"
-              :data="pageDataOf(win.entry.instance)"
-              :project-root="project?.root ?? ''"
-              @history="openHistoryFor"
-              @address="onAppAddress(win.entry.instance, $event)"
+            <PaneTabStrip
+              :group="grp.id"
+              :pages="grp.pages"
+              :pending-panes="grp.pendingPanes"
+              :current-instance="grp.current"
+              @reveal="revealPage"
+              @close="closeWindow"
+              @menu="openFormMenu"
+              @drag="onTabDragStart"
+              @open-pane="openCenterPane"
             />
-          </PaneWindow>
+            <p v-if="grp.empty" class="center-empty">{{ grp.empty }}</p>
+            <!-- 页层与浮窗层同一条 v-for（〔铁律四〕PaneWindow 是唯一窗口壳，排版差异交给 CSS：
+                 页态在本组那一列里 flex 撑高、主／侧两组各半＝原来的分屏；浮窗态绝对定位可拖可缩，
+                 它自成一列（is-overlay）铺满窗口层、不占版面宽度——〔批次76-R3 任务2〕。
+                 〔批次76 裁定A〕窗头只剩一枚 ×；换形态改由拖拽吸附（@snap）与右键菜单承担。 -->
+            <PaneWindow
+              v-for="win in grp.windows"
+              :key="win.entry.instance"
+              :ref="(el) => setWindowRef(win.entry.instance, el)"
+              :instance="win.entry.instance"
+              :pane-id="win.entry.pane"
+              :title="windowTitle(win)"
+              :form="win.entry.form"
+              :group="win.entry.group"
+              :geometry="win.entry.geometry"
+              :maximized="win.entry.maximized"
+              :z="win.entry.z"
+              :suspend-esc="settingsOpen"
+              @close="closeWindow(win.entry.instance)"
+              @maximize="toggleWindowMaximized(win.entry.instance)"
+              @focus="hostWorkspace.bringToFront(win.entry.instance)"
+              @geometry="saveWindowGeometry(win.entry.instance, $event)"
+              @snap="applySnapTarget(win.entry.instance, $event)"
+              @menu="openFormMenu(win.entry.instance, $event)"
+            >
+              <template v-if="win.entry.pane === 'outline.widget'">
+                <p v-if="overlayLoading[win.entry.instance]" class="nx-overlay-empty">正在载入大纲…</p>
+                <p v-else-if="pageDataOf(win.entry.instance).outlineError" class="nx-overlay-error">{{ pageDataOf(win.entry.instance).outlineError }}</p>
+                <p v-else-if="!pageDataOf(win.entry.instance).outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
+                <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
+                  <li v-for="(node, index) in pageDataOf(win.entry.instance).outline" :key="node.id ?? `overlay-node-${index}`">
+                    <button
+                      type="button"
+                      class="workspace-nav-item workspace-nav-item--tree nx-tree-row"
+                      @click="openOutlineNodeFromWidget(index)"
+                    >
+                      <span class="workspace-nav-label">{{ index + 1 }}. {{ node.title }}</span>
+                    </button>
+                  </li>
+                </ul>
+              </template>
+              <!-- 其余窗口（中栏／自带面板）：内容渲染不随窗态变，一律走同一个 CarrierPaneHost；
+                   〔裁定④〕数据面用的是这一页自己的那一份，不是基座——两页各看各的稿子。 -->
+              <CarrierPaneHost
+                v-else
+                :pane="win.pane"
+                :data="pageDataOf(win.entry.instance)"
+                :project-root="project?.root ?? ''"
+                @history="openHistoryFor"
+                @address="onAppAddress(win.entry.instance, $event)"
+              />
+            </PaneWindow>
+          </div>
         </div>
         <PaneFormMenu
           v-if="formMenuTarget"

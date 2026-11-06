@@ -959,6 +959,31 @@ input.doc-title {
   min-height: 0;
   overflow: hidden;
 }
+/* —— 页组列（批次76-R3 任务1／2 · VS Code 编辑器组模型）————————————————————————
+   作者裁定那一句：「右边半个屏既然跟左边共用分屏，就必须显示出那个窗口的名字」——
+   一组一列，列内**首行**＝本组自己的签行（不再有横跨整屏、两组共用的一条全局条），
+   列内其余＝本组此刻摊开的那一页。空组整列不渲染（〔任务3〕「有条无内容」＝违规态）。
+   列本身一律保持 position: static：一旦给列定位，页态窗拖拽时 parentRect() 量到的「层」
+   就缩水成半个屏，paneSnap 那套吸附分界（拖左缘落主组／拖右缘落侧组）会跟着改判——
+   浮窗那一列因此也只作绝对定位的容器，不占版面宽度，几何基准仍是整块窗口层。 */
+.nx-pane-group {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+/* 焦点不在本组：本组条退一档底色，但**仍亮着自己那一组的当前页**（〔任务2〕互不抢——
+   不是把整列压暗，只是把「哪一组在说话」这一步交给底色；读数走变量，不新开色值）。 */
+.nx-pane-group.is-blurred-group {
+  --nx-tabstrip-surface: color-mix(in srgb, var(--surface-workbench-muted) 55%, transparent);
+}
+.nx-pane-group.is-overlay-group {
+  position: absolute;
+  inset: 0;
+  flex: none;
+  pointer-events: none;
+}
 .nx-pane-window {
   position: absolute;
   display: flex;
@@ -968,6 +993,10 @@ input.doc-title {
   background: var(--surface-workbench-raised);
   box-shadow: 0 12px 30px color-mix(in srgb, var(--archive-ink) 16%, transparent);
   overflow: hidden;
+  /* 〔批次76-R3 任务2〕浮窗那一列（.is-overlay-group）不吃指针，窗体自己要吃得回来——
+     写在基座规则上，是为了不去新建一条含 `.nx-pane-window {` 字样的复合选择器：
+     视觉契约里那条 ruleBody(‘.nx-pane-window {’) 取的是**第一条**命中，复合选择器会把它带偏。 */
+  pointer-events: auto;
 }
 /* 页态：不绝对定位、不领阴影——它是所在页组的那一页，铺满由排版决定（〔铁律一〕）。
    侧页组那一扇加左缘细线，让「对半」有一条可读的分界。 */
@@ -975,6 +1004,9 @@ input.doc-title {
   position: relative;
   flex: 1 1 0;
   min-width: 0;
+  /* 〔批次76-R3 任务2〕页态现在是**组列那一根 flex 列**的子项（列内首行是签行、它排其后）：
+     缺 min-height:0 就等于「内容多长窗多高」，长稿会把整列撑破——守卫⑫那条高度链在这一环断掉。 */
+  min-height: 0;
   border-radius: 0;
   border-top: 0;
   border-bottom: 0;
@@ -1228,8 +1260,9 @@ input.doc-title {
 .nx-pane-window.is-dragging {
   cursor: grabbing;
 }
-/* —— 页签栏（批次61 · 〔铁律四〕；批次76-R2 任务2／3 改了它的职责）————————————————
-   它不是第二套窗口壳：一条横向签列，回答「哪一页是当前页」＋「这块板还有哪面没开」。
+/* —— 页组的页签栏（批次61 · 〔铁律四〕；批次76-R2 任务2／3 改了它的职责；
+   〔批次76-R3 任务1〕它按页组出，一条只列本组）————————————————————————————————
+   它不是第二套窗口壳：一条横向签列，回答「这一组里哪一页是当前页」＋「这块板还有哪面没开」。
    签上没有常驻形态钮——形态切换只在右键菜单里（裁定③）。
    〔批次76-R2 任务2〕页态窗头撤了之后，这一行同时是**标题行与拖拽手柄**：
    点＝揭示，×＝关页，按住拖＝吸附换形态（起点在这里，判定与预览仍在 PaneWindow），右键＝形态菜单。
@@ -1242,16 +1275,30 @@ input.doc-title {
   min-height: 30px;
   padding: 0 4px;
   border-bottom: 1px solid var(--hairline-soft);
-  background: var(--surface-workbench-muted);
+  background: var(--nx-tabstrip-surface, var(--surface-workbench-muted));
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
+  /* 签多了横向滚，但不画那道滚动条（它在签行底下是一条粗灰杠）：竖滚轮在签行上横滚、当前签自动滚入视野，
+     两件都在 PaneTabStrip 里——跟 VS Code 编辑器组的签行同一个手感。 */
+  scrollbar-width: none;
+}
+.nx-page-tabstrip::-webkit-scrollbar {
+  display: none;
+}
+/* 〔批次76-R3 任务2〕侧组条加与 76-R2 同款的左缘分隔：窗体那一条竖线（.nx-pane-window.is-page.is-in-side）
+   只铺到窗体，签行这一段空着——右半屏的「半个屏」分界就得从标题行一直续到内容，两段接上才读得出那一半是谁。 */
+.nx-page-tabstrip.is-group-side {
+  border-left: 1px solid var(--hairline-soft);
 }
 .nx-page-tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: 0 1 200px;
+  /* 〔批次76-R3 补刀〕签宽按 IDE（VS Code「fit」档）：按内容宽、不挤扁，装不下就整条横滚——
+     原来的浏览器式「一起挤扁到 96px」把半屏里七八枚签全压成「小..00…」这种残桩，一枚都认不出来。
+     上限 240px：再长的文档名才开始省略（先省载体名，见 .nx-page-tab-head）。 */
+  flex: none;
+  max-width: 240px;
   min-width: 96px;
   padding: 5px 6px 5px 10px;
   border: 1px solid transparent;
@@ -1297,10 +1344,30 @@ input.doc-title {
   background: var(--surface-workbench-raised);
 }
 .nx-page-tab-label {
+  display: flex;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* 签名两段的截断次序：载体名（head）先让，文档名（tail）不参与收缩——只在比整段还长时才被上限截。
+   （按 flex-shrink 比例分摊的写法不行：收缩量按内容宽加权，tail 总会分到零点几像素，亚像素溢出也出省略号。）
+   同一插件两面都以插件名开头，先切 head 才认得出是哪一面。 */
+.nx-page-tab-head {
+  flex: 0 1 auto;
+  min-width: 1.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nx-page-tab-sep {
+  flex: none;
+  /* 分隔符自己是 flex 项：首尾空白会被当成行首行尾吞掉，「载体·文档」就粘成一串。 */
+  white-space: pre;
+}
+.nx-page-tab-tail {
+  flex: none;
+  max-width: calc(100% - 2.5em);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* 浮窗／侧缘标签在签上留一个词——「看得见」要覆盖四种形态，不只页态。 */
 .nx-page-tab-flag {
