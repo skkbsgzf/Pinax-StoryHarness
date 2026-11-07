@@ -95,7 +95,7 @@ describe('CarrierSettingsGeneric（批次45）', () => {
     expect(chip.text()).toContain('没有声明设置')
   })
 
-  it('批次54：effective 带来源层——overlay 值回填、显示「工程覆盖」、volatile 决定可写', async () => {
+  it('批次54：effective 带来源层——overlay 值回填、来源上屏说人话、volatile 决定可写', async () => {
     const bridge = bridgeStub({
       load: {
         ok: true,
@@ -113,7 +113,7 @@ describe('CarrierSettingsGeneric（批次45）', () => {
     const wrapper = mountGeneric({ id: 'density', title: '密度', type: 'enum', options: ['compact', 'comfortable'], default: 'comfortable' }, { bridge })
     await flushPromises()
     expect(wrapper.find('[data-test="generic-enum-density"]').element.value).toBe('compact')
-    expect(wrapper.find('[data-test="generic-source-density"]').text()).toBe('工程覆盖')
+    expect(wrapper.find('[data-test="generic-source-density"]').text()).toBe('本机改过的值')
     expect(wrapper.find('[data-test="generic-save-density"]').exists()).toBe(true)
   })
 
@@ -137,7 +137,7 @@ describe('CarrierSettingsGeneric（批次45）', () => {
     expect(wrapper.find('[data-test="generic-string-accent"]').attributes('disabled')).toBeDefined()
     expect(wrapper.find('[data-test="generic-save-accent"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="generic-readonly-accent"]').text()).toContain('只读')
-    expect(wrapper.find('[data-test="generic-source-accent"]').text()).toBe('清单默认')
+    expect(wrapper.find('[data-test="generic-source-accent"]').text()).toBe('插件自带的默认值')
   })
 
   it('批次54：number 越界／非步长在界面先挡，不发 settings:save', async () => {

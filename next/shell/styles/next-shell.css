@@ -41,7 +41,7 @@ body {
   background: var(--surface-workbench-muted);
   color: var(--archive-ink);
   font-family: var(--font-interface);
-  font-size: var(--fs-base);
+  font-size: var(--nx-fs-md);
 }
 
 /* —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
@@ -71,7 +71,7 @@ body {
 }
 .nx-titlebar-brand {
   flex: 0 0 auto;
-  font-family: var(--font-display);
+  font-family: var(--font-interface);
   font-size: var(--nx-fs-md);
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -195,8 +195,8 @@ body {
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--archive-ink-soft);
-  font-family: var(--font-sans);
-  font-size: var(--fs-base);
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
   line-height: 1.45;
   text-align: left;
   cursor: pointer;
@@ -224,8 +224,8 @@ body {
   border-radius: var(--radius-control);
   background: var(--surface-workbench-input);
   color: var(--archive-ink);
-  font-family: var(--font-sans);
-  font-size: var(--fs-base);
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
   line-height: 1.6;
   resize: vertical;
 
@@ -400,12 +400,12 @@ body {
 }
 .nx-index-empty {
   margin: 6px 10px;
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   color: var(--text-muted);
 }
 .nx-index-error {
   margin: 6px 10px;
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.6;
   color: var(--control-danger);
 }
@@ -477,7 +477,7 @@ body {
   margin: 0 24px;
   padding: 10px 14px;
   border-radius: var(--radius-control);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.6;
 }
 .banner.is-error {
@@ -582,7 +582,7 @@ body {
    右栏 storage 节也有一块面板内标题，同一做法）。 */
 .settings-panel-heading {
   margin: 0 0 12px;
-  font-family: var(--font-display);
+  font-family: var(--font-interface);
   font-size: var(--nx-fs-xl);
   font-weight: 600;
   color: var(--archive-ink);
@@ -716,7 +716,9 @@ body {
   border-style: none;
   background: transparent;
   color: var(--archive-ink);
-  font-family: var(--font-writing);
+  /* 字体单轨制：正文编辑面是「作品」那一面，只许文楷（--font-display）。
+     --font-writing 是等宽栈（Menlo／Consolas），拿它当正文字体与写作偏好里那句承诺相反。 */
+  font-family: var(--font-display);
   /* 工单B 写作偏好：字号/行高由 AppNext 读到偏好后在根节点写 --writing-*；没写时回退到刻度默认
      （17px＝--nx-fs-lg、1.9），与 next/runtime/appPreferences.mjs 的 PREFS_DEFAULTS 一致。 */
   font-size: var(--writing-font-size, var(--nx-fs-lg));
@@ -731,7 +733,7 @@ body {
    规则名／提案审阅的文件名），不再叠「正文」「演示之书 · novel」这类身份标签。 */
 .doc-title {
   margin: 0;
-  font-family: var(--font-writing);
+  font-family: var(--font-display);
   font-size: var(--nx-fs-xl);
   font-weight: 600;
   line-height: 1.4;
@@ -749,7 +751,7 @@ input.doc-title {
   padding: 2px 0;
   border-style: none;
   background: transparent;
-  font-family: var(--font-writing);
+  font-family: var(--font-display);
   font-size: var(--nx-fs-md);
   line-height: 1.7;
   color: var(--text-primary);
@@ -821,7 +823,7 @@ input.doc-title {
 .entry-text {
   margin: 0;
   white-space: pre-wrap;
-  font-family: var(--font-body);
+  font-family: var(--font-display);
   font-size: var(--nx-fs-lg);
   line-height: 1.85;
   color: var(--archive-ink);
@@ -839,7 +841,7 @@ input.doc-title {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  font-family: var(--font-writing);
+  font-family: var(--font-display);
   font-size: var(--writing-font-size, var(--nx-fs-lg));
   line-height: var(--writing-line-height, 1.9);
 }
@@ -1228,7 +1230,7 @@ input.doc-title {
 }
 .nx-collapse-orb-empty {
   margin: 0;
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.5;
   color: var(--text-secondary);
 }
@@ -1237,7 +1239,7 @@ input.doc-title {
   align-self: flex-start;
   padding: 0 6px;
   color: var(--text-secondary);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
 }
 .nx-collapse-orb-jump:hover:not(:disabled) {
   background: var(--workbench-selected);
@@ -1442,14 +1444,14 @@ input.doc-title {
   margin: 0;
   padding: 6px 4px;
   color: var(--text-muted);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.6;
 }
 .nx-overlay-error {
   margin: 0;
   padding: 6px 4px;
   color: var(--control-danger);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.6;
 }
 
@@ -1515,7 +1517,23 @@ input.doc-title {
    新元素的度量。阅读面的行高与字号（P18 裁定）一个字都不动：正文容器 .nx-rendered-md
    的基础度量仍由 CarrierPaneHost 的 .entry-text 带。
    为什么写在布局层：载体阅读面的 scoped 样式已经盖住老元素，新元素是所有阅读面共用的，
-   放进全局层一次到位。 */
+   放进全局层一次到位。
+
+   〔批次68-R1 任务2〕标题与行内代码的**档位**也归这里。原先只有 CarrierPaneHost 的 scoped
+   :deep() 管到了 h1–h6，另外两个共用 .nx-rendered-md 的面（条目详情面板、右栏对话正文）没被覆盖，
+   于是浏览器缺省从 2em／1.5em／.9em 里冒出来——实测同屏多出 30px×2、22.5px×1、13.33px×14。
+   档位取和阅读面同一套（h1=2xl、h2=xl、h3=lg、h4–h6=md、行内代码=md）：三个面读同一本刻度，
+   不是给谁另立一套。 */
+.nx-rendered-md h1 { font-size: var(--nx-fs-2xl); }
+.nx-rendered-md h2 { font-size: var(--nx-fs-xl); }
+.nx-rendered-md h3 { font-size: var(--nx-fs-lg); }
+.nx-rendered-md h4,
+.nx-rendered-md h5,
+.nx-rendered-md h6 { font-size: var(--nx-fs-md); }
+/* 行内 code／kbd／samp：Chrome 的 UA 样式表给这三枚「13.3333px」，不写档位就是第六档。
+   等宽只留给代码本身（字体单轨制），字号仍走刻度。 */
+.nx-rendered-md code,
+.nx-rendered-md samp { font-size: var(--nx-fs-md); }
 .nx-rendered-md table {
   margin: 0 0 0.9em;
   border-collapse: collapse;
@@ -1661,7 +1679,7 @@ input.doc-title {
 .nx-writing-text {
   margin: 8px 0 0;
   padding: 0;
-  font-family: var(--font-writing);
+  font-family: var(--font-display);
   font-size: var(--writing-font-size, var(--nx-fs-lg));
   line-height: var(--writing-line-height, 1.9);
   color: var(--archive-ink-soft);
@@ -1943,7 +1961,7 @@ input.doc-title {
 }
 .nx-tools-name:hover { background: var(--nav-hover); }
 .nx-tools-name-text {
-  font-family: var(--font-writing);
+  font-family: var(--font-interface);
   font-size: var(--nx-fs-md);
   color: var(--archive-ink);
 }
@@ -2136,5 +2154,27 @@ input.doc-title {
   margin: 0;
   padding: 10px 14px;
   color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+
+/* —— 老轨导航词汇的字体与档位回收（批次68-R1 任务1②＋任务2）————————————————
+   索引窗的行直接复用老 web 轨的 .workspace-nav-* 词汇（文件头那条复用口径），
+   那份 CSS 里写的是 `var(--font-sans)` ＋ 15/14/12px 裸值——**作用面一路漏到壳层**：
+   实测左栏 19 处文字吃到的是老轨那一套，与壳层刻度断链（调度方报的「Arial 漏」就是这条）。
+   `src/**` 是原件、不许动，所以清它的**壳层作用面**只能在 next-shell.css 里做——
+   legacy.mjs 把本文件排在老轨之后引入，同特异性后置即胜。这里只改「族与档位」两行，
+   行高／悬停／选中／焦点环仍归原件（那是复用，不是本批的面）。 */
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-item,
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-label {
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-lg);
+}
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-item--tree,
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-item--tree .workspace-nav-label {
+  font-size: var(--nx-fs-md);
+}
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-meta,
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-section {
+  font-family: var(--font-interface);
   font-size: var(--nx-fs-2xs);
 }

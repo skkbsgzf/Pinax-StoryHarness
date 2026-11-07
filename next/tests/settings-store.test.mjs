@@ -291,7 +291,7 @@ test('批次54：carrier:overrides 通道只读——有项目时读覆盖文件
     const missing = createIpcDispatcher({ session: { projectRoot: root } })
     const missingRead = await missing.dispatch(IPC_CHANNELS.carrierOverrides, {})
     assert.equal(missingRead.ok, false)
-    assert.match(missingRead.error.message, /工程覆盖服务未接入/u)
+    assert.match(missingRead.error.message, /本机改动读不出来/u)
 
     const noProject = createIpcDispatcher({ session: { projectRoot: null }, carrierOverridesFor: () => overrides })
     const noProjectRead = await noProject.dispatch(IPC_CHANNELS.carrierOverrides, {})

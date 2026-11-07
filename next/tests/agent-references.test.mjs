@@ -106,7 +106,7 @@ test('resolveRefs：取不到的那条如实标注，不静默丢、也不编内
   const resolved = await resolveRefs([
     { kind: 'chapter', title: '第009章', path: '正文/第009章.md' },
     { kind: 'entry', title: '空条目', path: '世界书/空条目.md' },
-    { title: '清单里没有这条' }
+    { title: '项目里查不到这条' }
   ], tool)
 
   assert.equal(resolved.length, 3, '失败的那条也要留在结果里')
@@ -116,7 +116,8 @@ test('resolveRefs：取不到的那条如实标注，不静默丢、也不编内
   assert.equal(resolved[1].ok, false)
   assert.match(resolved[1].note, /空/)
   assert.equal(resolved[2].ok, false)
-  assert.match(resolved[2].note, /清单/)
+  // 批次68-R1 文案：这句是屏上给作者看的，说「项目里还没有这一条」，不说「清单里没有」。
+  assert.match(resolved[2].note, /还没有这一条/)
 
   // 工具抛错与「没有工具面」：同样标注，不把整次提问打掉。
   const throwing = await resolveRefs([{ kind: 'chapter', title: '炸', path: '正文/炸.md' }], async () => {

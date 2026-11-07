@@ -36,7 +36,7 @@ const props = defineProps({
    * 那一项里多出来的一段，不是第五项。宿主现取后传进来，本组件依旧不认识桥（只读）。
    */
   address: { type: String, default: '' },
-  /** 地址来源的说法（清单声明／工程覆盖），只进悬浮提示。 */
+  /** 地址来源的说法（插件自带／本机改过），只进悬浮提示。 */
   addressNote: { type: String, default: '' }
 })
 
@@ -130,7 +130,7 @@ const carrierTitle = computed(() => {
   border-top: 1px solid var(--hairline-soft);
   background: var(--surface-workbench-muted);
   color: var(--text-secondary);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 26px;
   overflow: hidden;
 }
@@ -147,7 +147,7 @@ const carrierTitle = computed(() => {
   border-radius: var(--radius-control);
   background: transparent;
   color: var(--text-secondary);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.4;
   white-space: nowrap;
 }

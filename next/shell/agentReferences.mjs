@@ -118,7 +118,7 @@ export async function resolveRefs(refs, tool, options = {}) {
     const kind = String(ref?.kind ?? '').trim()
     if (!title) continue
     if (!kind) {
-      resolved.push({ kind: '', title, ok: false, note: '项目清单里没有这一条（可能已删除，或那一栏还没打开过）' })
+      resolved.push({ kind: '', title, ok: false, note: '项目里还没有这一条（可能已删除，或那一栏还没打开过）' })
       continue
     }
     const call = referenceCall(ref)

@@ -1734,7 +1734,7 @@ function actOnSaveChip() {
   color: var(--archive-ink);
 }
 .proposal-note {
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   color: var(--text-muted);
 }
 .proposal-text {
@@ -2097,7 +2097,8 @@ function actOnSaveChip() {
    基准在 src/pages/Writing.scoped.css:213-250（src/pages/Authoring.vue:12-17 引用的就是这一枚；
    样式实际住在 Writing.scoped.css，不在 Authoring.vue 的 SFC 里）。
    只换数据源：老版读 saveStatus，这里读 useBoardData.saveFeedback；视觉不另起一套。
-   颜色一律走 token；11px 字号／12px 圆角是老版原件的度量，本块按门禁的 legacy-copied 例外保留。 */
+   颜色一律走 token；12px 圆角是老版原件的度量，本块按门禁的 legacy-copied 例外保留。
+   字号那一档不例外——11px 与 --nx-fs-2xs 是同一个数，写成 token 既不改观感，也不会漏成第六档。 */
 .nx-save-chip {
   display: inline-flex;
   align-items: center;
@@ -2106,7 +2107,7 @@ function actOnSaveChip() {
   border-radius: 12px;
   border: 1px solid var(--archive-olive);
   background: color-mix(in srgb, var(--bg-secondary) 70%, var(--archive-olive) 8%);
-  font-size: 11px;
+  font-size: var(--nx-fs-2xs);
   color: var(--text-primary);
   box-shadow:
     inset 0 1px 0 var(--surface-workbench-raised),
@@ -2133,7 +2134,7 @@ function actOnSaveChip() {
   color: var(--archive-rose);
 }
 .nx-save-chip-state {
-  font-family: var(--font-display);
+  font-family: var(--font-interface);
   font-weight: 500;
   color: var(--archive-olive);
 }

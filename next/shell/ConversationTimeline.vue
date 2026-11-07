@@ -118,9 +118,10 @@ function onToggle(event) {
       </ol>
       <p v-else class="nx-timeline__note" data-test="timeline-empty">这一问没有留下运行过程。</p>
 
-      <!-- thinking 块型装的是「非工具的运行过程行」；模型真正的思维链文本本批没有来源，如实说没有，不编内容。 -->
+      <!-- thinking 块型装的是「非工具的运行过程行」；模型真正的思维链文本这一问没有来源，
+           就照实说没有（工单实锤的那句行话文案已换成作者语言）。 -->
       <p v-if="hasThinking" class="nx-timeline__note" data-test="timeline-thinking-note">
-        思维链文本：这一问上游没回报，只列运行过程行（批次77 留位，批次78 接子代理时一并接）
+        这一轮没有思维链文本，只记录了运行过程。
       </p>
     </component>
   </div>

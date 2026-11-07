@@ -146,7 +146,7 @@ function statusText(status) {
 .proposals-state {
   margin: 0;
   color: var(--text-muted);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.7;
 }
 .proposals-state.is-error {
@@ -184,7 +184,7 @@ function statusText(status) {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--archive-ink);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
 }
 .proposals-row-meta {
   flex: none;

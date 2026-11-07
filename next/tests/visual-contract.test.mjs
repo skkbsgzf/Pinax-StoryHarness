@@ -1141,3 +1141,190 @@ test('〔批次76-R3 守卫⑬〕有窗必有签：一条只列本组、空组�
   const markup = app.slice(app.indexOf('v-for="grp in centerGroups"'))
   assert.ok(markup.indexOf('<PaneTabStrip') < markup.indexOf('<PaneWindow'), '组列里签行必须排在窗之前（组内首行）')
 })
+
+/**
+ * 〔批次68-R1 门禁⑭〕字号单轨：壳层里「字有多大」只有一本刻度。
+ *
+ * 症状（工单实测）：同屏九档——--nx-fs-*(11/13/15/17/19) 与老轨 --fs-sm(12)/--fs-base(14) 双刻度并存，
+ * 各 SFC 的 scoped 里再散着裸 14/13/12/11px、21px、.88em，加上没样式化的 md 节点从浏览器缺省里冒出
+ * 13.33/22.5/30px。刻度不是审美偏好，是「同一块板上有多少种密度」的唯一读数口，所以这里钉三条：
+ *   1. 不许再引老轨那两个 token（var(--fs-…)）；
+ *   2. 不许再写裸 px 字号——`font:` 简写里的也算（那条最容易被人顺手写回去）；
+ *   3. 白名单只有两类：导出/下载用的**独立 HTML**（它脱离本软件排版，不是壳层 UI），
+ *      与第三方内嵌件。文楷正文面不豁免——它的字号走 --writing-* 与 --nx-fs-* 两条正常通道。
+ * var(--nx-fs-*, 11px) 这种「带兜底值的 token 引用」不算裸 px：真读数仍是刻度。
+ */
+const FONT_SIZE_ALLOWLIST = [
+  // 导出 HTML 自带样式：那是一份脱离外壳排版的独立文档（工单：第三方／导出面白名单）。
+  { file: 'exportService.mjs', reason: '导出的 HTML 自带 <style>，不是壳层 UI' }
+]
+
+test('〔批次68-R1 门禁⑭〕字号单轨：壳层样式不引 --fs-* 老轨、不写裸 px 字号', async () => {
+  const sources = await authoredStyleSources()
+  assert.ok(sources.length > 10, 'next/shell 样式扫描面空了等于没测')
+  const offenders = []
+  const allowed = (path) => FONT_SIZE_ALLOWLIST.some((entry) => path.endsWith(entry.file))
+  for (const source of sources) {
+    if (allowed(source.path)) continue
+    const css = stripComments(source.text)
+    // var(--nx-fs-2xs, 11px) 那种「带兜底值的 token 引用」真读数是刻度，不算裸 px：
+    // 先把 var() 的整段参数摘掉再找数，剩下的才是写在值位上的裸 px／em。
+    const tokenless = css.replace(/var\([^()]*\)/gu, 'var()')
+    // 值位上的裸 px：font-size 直接给数，或 `font:` 简写里藏一个数。
+    for (const match of tokenless.matchAll(/font-size\s*:\s*[^;}]*?\b\d+(?:\.\d+)?px/gu)) {
+      offenders.push(`${source.path}: ${match[0].trim().slice(0, 60)}`)
+    }
+    for (const match of tokenless.matchAll(/\bfont\s*:\s*[^;}]*\b\d+(?:\.\d+)?px/gu)) {
+      offenders.push(`${source.path}: ${match[0].trim().slice(0, 60)}`)
+    }
+    // 老轨那两个 token 不再被引：刻度只剩 --nx-fs-* 一本。
+    for (const match of css.matchAll(/var\(\s*--fs-(?:sm|base)\b/gu)) {
+      offenders.push(`${source.path}: ${match[0]}（老轨刻度，改 --nx-fs-*）`)
+    }
+  }
+  // 相对值（.88em／1.08em 那一类）会把同一块板上的读数乘出第六、第七档——一并钉住。
+  for (const source of sources) {
+    if (allowed(source.path)) continue
+    const tokenless = stripComments(source.text).replace(/var\([^()]*\)/gu, 'var()')
+    for (const match of tokenless.matchAll(/font-size\s*:\s*(?:\.\d+|\d*\.?\d+)em\b/gu)) {
+      offenders.push(`${source.path}: ${match[0].trim()}（相对字号会飘出新档，改 --nx-fs-*）`)
+    }
+  }
+  assert.deepEqual(offenders, [], `字号不在 --nx-fs-* 五档上：\n${offenders.join('\n')}`)
+
+  // 正向：五档 token 真的在被用（全改成别的写法不该让这条也「绿」）。
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  const layoutWithoutSpaces = layout.replace(/\s+/gu, '')
+  for (const token of ['--nx-fs-2xs', '--nx-fs-md', '--nx-fs-lg', '--nx-fs-xl', '--nx-fs-2xl']) {
+    assert.ok(layoutWithoutSpaces.includes(`var(${token}`), `布局层没用 ${token}：刻度定义成了摆设`)
+  }
+})
+
+/**
+ * 〔批次68-R1 门禁⑮〕文案去行话：作者看得见的地方不写实现口径。
+ *
+ * 工单的两条实锤（思维链那句「批次77 留位，批次78 接子代理时一并接」、地址来源的「（清单声明）」）
+ * 都不是个案，是一类：**注释可以记排线，屏上不行**。这条把话变成机器判据——
+ * 剥掉注释之后，next/shell 的每一份源码里再出现批次号或那四个工程词，就是又有一句实现口径走上屏。
+ * 词表按工单点名的那四条加「批次\d+」；显示层的转写表（sourceVocabulary.mjs）认的是 source 标识、
+ * 不是中文 label，所以它不需要在这份词表上开口子。
+ */
+const BANNED_ON_SCREEN_WORDS = [
+  { pattern: /批次\s*\d+/gu, label: '批次号（排线计划不上屏）' },
+  { pattern: /清单声明/gu, label: '「清单声明」' },
+  { pattern: /工程覆盖/gu, label: '「工程覆盖」' },
+  { pattern: /承载位/gu, label: '「承载位」' },
+  { pattern: /写族闸/gu, label: '「写族闸」' }
+]
+
+test('〔批次68-R1 门禁⑮〕出屏文案不含批次号与工程词：注释可记排线，界面上不行', async () => {
+  const files = (await walk(shellDir)).filter((file) => /\.(?:vue|mjs|css)$/u.test(file))
+  assert.ok(files.length > 10, 'next/shell 扫描面空了等于没测')
+  const offenders = []
+  for (const file of files) {
+    const raw = await readFile(file, 'utf-8')
+    // 三类注释全剥：JS 块注释、JS 行注释、模板注释。行注释只在**前面是空白或行首**时剥——
+    // 否则 'http://127.0.0.1' 这种地址会被剥掉半句，把该看的东西看成不存在（假绿比假红更坏）。
+    const code = raw
+      .replace(/\/\*[\s\S]*?\*\//gu, '')
+      .replace(/^[ \t]*\/\/[^\n]*$/gmu, '')
+      .replace(/(^|[\t ])\/\/[^\n]*/gu, '$1')
+      .replace(/<!--[\s\S]*?-->/gu, '')
+    for (const { pattern, label } of BANNED_ON_SCREEN_WORDS) {
+      pattern.lastIndex = 0
+      for (const match of code.matchAll(pattern)) {
+        offenders.push(`${file.slice(shellDir.length + 1).replace(/\\/gu, '/')}：${label} →「${match[0]}」`)
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `实现行话走上屏了：\n${offenders.join('\n')}`)
+
+  // 正向：两处实锤确实改成了作者语言（改回别的句子要连这条一起想清楚）。
+  const timeline = await readFile(join(shellDir, 'ConversationTimeline.vue'), 'utf-8')
+  assert.match(timeline, /这一轮没有思维链文本，只记录了运行过程/u, '思维链那句没换成作者语言')
+  const appNext = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  assert.match(appNext, /APP_URL_SOURCE_WORDS = Object\.freeze\(\{\s*override: '[^']*地址',\s*manifest: '[^']*地址'/u,
+    '地址来源那两词不是作者语言（应说「插件自带的地址／本机改过的地址」）')
+})
+
+/**
+ * 〔批次68-R1 门禁⑯〕字体三族的使用面：一族只回答一个问题。
+ *
+ * 决策表在 记录 §1：interface＝一切 UI chrome；display（文楷）＝**只**归正文阅读／编辑面与世界书条目正文；
+ * mono＝只归真正的代码上下文。三轨混跑的根因不是有人写错了字族，是 **--font-writing 名义上是「写作面」、
+ * 实际是 Menlo／Consolas 等宽栈**——把它挂在正文面上，正文就成了代码的样子。
+ * jsdom 量不出排版，所以这条钉声明级：谁引了哪一个族，一眼能看到。
+ * 选择器归属用「就近前一个 {」反推，@media 里嵌套的规则也能认（嵌套时那个 { 就是 @media 自己那一个）。
+ */
+const DISPLAY_FACE_ALLOWLIST = [
+  '.editor-area', '.doc-title', '.doc-field', '.entry-text', '.doc-reading', '.nx-writing-text'
+]
+const MONO_FACE_ALLOWLIST = [
+  'code', 'kbd', 'samp', 'pre', '.history-diff-line', '.nx-writing-preview-text'
+]
+const ELEMENT_FACES = new Set(['code', 'kbd', 'samp', 'pre'])
+
+/** 选择器片段是否真的用了那个元素族：裸元素名要整段相等，'.preview-text' 不能被 'pre' 蒙过去。 */
+function faceMatches(part, face) {
+  // Vue 的 :deep(code) 与 :deep(.entry-text) 是作用域穿透写法，判族时按里面那层选择器算。
+  const normalized = part.replace(/:deep\(([^)]*)\)/gu, '$1')
+  if (!ELEMENT_FACES.has(face)) return normalized.includes(face)
+  return normalized.split(/[\s>+~]+/u).some((token) => {
+    if (token === face) return true
+    if (!token.startsWith(face)) return false
+    const next = token[face.length]
+    return typeof next === 'string' && '.:['.includes(next)
+  })
+}
+
+/**
+ * 从一处 var(--font-*) 反推「它挂在哪条声明、哪一条选择器上」。
+ * 反推错一次就会把整条规则的声明当成选择器（那样每条都算越界，门禁红得没有信息量）：
+ * 声明取花括号后按 ; 切开的最后一段，选择器取上一条规则收尾到本规则花括号之间、并剥掉 @media 那一层。
+ */
+function faceRuleContext(css, index) {
+  const brace = css.lastIndexOf('{', index)
+  if (brace < 0) return null
+  const declaration = css.slice(brace + 1, index).split(';').pop().trim()
+  if (!/^font(?:-family)?\s*:/u.test(declaration)) return null
+  const previousRuleEnd = css.lastIndexOf('}', brace)
+  const selector = css.slice(previousRuleEnd + 1, brace).split('{').pop().replace(/\s+/gu, ' ').trim()
+  return selector ? { selector } : null
+}
+
+test('〔批次68-R1 门禁⑯〕字体三族使用面：chrome 里出 display／mono 即红，--font-writing 全域退役', async () => {
+  const sources = await authoredStyleSources()
+  const offenders = []
+  for (const source of sources) {
+    const css = stripComments(source.text)
+    const relative = source.path.slice(shellDir.length + 1).replace(/\\/gu, '/')
+    for (const match of css.matchAll(/(--font-writing|--font-display|--font-mono)\b/gu)) {
+      const context = faceRuleContext(css, match.index)
+      if (!context) continue
+      if (match[1] === '--font-writing') {
+        offenders.push(`${relative}：还引着 --font-writing（等宽栈冒充写作字体，正文面改 --font-display）→ ${context.selector}`)
+        continue
+      }
+      const allowlist = match[1] === '--font-display' ? DISPLAY_FACE_ALLOWLIST : MONO_FACE_ALLOWLIST
+      const parts = context.selector.split(',').map((part) => part.trim()).filter(Boolean)
+      const strays = parts.filter((part) => !allowlist.some((face) => faceMatches(part, face)))
+      if (strays.length) offenders.push(`${relative}：${match[1]} 出在不该用的选择器上 → ${strays.join(' / ')}`)
+    }
+  }
+  assert.deepEqual(offenders, [], `字体三族的使用面越界了：\n${offenders.join('\n')}`)
+
+  // 正向：正文面确实在文楷那一轨上（把 .editor-area 改回系统等宽，这里就红）。
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  for (const selector of ['.editor-area {', '.doc-reading {', '.entry-text {', '.nx-writing-text {']) {
+    const body = ruleBody(layout, selector)
+    assert.ok(body, `布局层找不到 ${selector}`)
+    assert.match(body, /font-family:\s*var\(--font-display\)/u, `${selector} 不在文楷那一轨上`)
+  }
+  // 老轨导航词汇那一段（Arial 漏的落点）必须在壳层把族指回界面栈——src/** 不许动，清作用面只有这一处。
+  assert.match(layout, /\.theme-legacy \.app-shell \.workspace-sidebar \.workspace-nav-label\s*\{[^}]*font-family:\s*var\(--font-interface\)/u,
+    '索引窗左栏的族没改指壳层 token：老轨那份 --font-sans＋硬编码仍会漏进界面')
+  // 工具面那一叠不再是等宽主读数（46 行裸 id 是工单点名的症状）。
+  const dialog = await readFile(join(shellDir, 'AssistantDialog.vue'), 'utf-8')
+  assert.match(dialog, /class="authoring-knowledge__agent-name"/u, '工具面没有中文名那一读')
+  assert.equal(/<code>\{\{\s*tool\.name\s*\}\}<\/code>/u.test(dialog), false, '工具面又回到「一行裸 id 的等宽 code」')
+})

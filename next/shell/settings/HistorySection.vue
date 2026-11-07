@@ -151,7 +151,7 @@ async function performRestore() {
     }
     const result = props.restore
       ? await props.restore({ target: props.target, oid: selectedOid.value, text: shown.value })
-      : { ok: false, message: '恢复通道未接入（外壳没有提供载体保存回调）' }
+      : { ok: false, message: '这一面还没接上写回文档的通道，暂时不能恢复' }
     if (!result?.ok) {
       feedback.value = { kind: 'error', text: result?.message ?? '恢复失败' }
       return
@@ -270,7 +270,7 @@ function formatWhen(when) {
 .history-state {
   margin: 0;
   color: var(--text-muted);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.7;
 }
 .history-unavailable {
@@ -324,7 +324,7 @@ function formatWhen(when) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
 }
 .history-row-time {
   color: var(--text-muted);
@@ -349,7 +349,7 @@ function formatWhen(when) {
 }
 .history-diff-label {
   color: var(--text-muted);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
 }
 .history-confirm {
   display: flex;
@@ -360,12 +360,12 @@ function formatWhen(when) {
   border: 1px solid var(--signal-warm);
   border-radius: var(--radius-control);
   color: var(--signal-warm);
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.6;
 }
 .history-feedback {
   margin: 0;
-  font-size: var(--fs-sm);
+  font-size: var(--nx-fs-md);
   line-height: 1.6;
 }
 .history-feedback.is-ok {

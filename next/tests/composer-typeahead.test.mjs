@@ -100,12 +100,14 @@ test('〔批次77 任务3〕@ 按类分组走既有词表（章节／条目／�
   const search = buildComposerMenu({ trigger: '@', query: '长街', references, referenceKindOrder: REFERENCE_KIND_ORDER, referenceKindLabels: REFERENCE_KIND_LABELS })
   assert.deepEqual(search.items.map((item) => item.label), ['@《长街》'])
 
-  // 工单第 1 条：# 的角色清单要等批次78——本批只出「暂无」那一句，且它不是一枚可点的钮。
+  // 工单第 1 条：# 这一类只有「暂无」那一句，且它不是一枚可点的钮。
+  // 〔批次68-R1 任务3〕那一句改成作者语言（原来那句写着「等工作流那一批（批次78）才生成」——排线计划不上屏）。
   const roles = buildComposerMenu({ trigger: '#', query: '', roles: [] })
   assert.deepEqual(roles.items, [])
   assert.equal(roles.empty.kind, 'role')
   assert.equal(roles.empty.empty, true)
-  assert.match(roles.empty.label, /批次78/u)
+  assert.match(roles.empty.label, /还没有可引用的角色/u)
+  assert.equal(/批次\s*\d/u.test(roles.empty.label), false, '出屏空态里不许带批次号')
   const withRoles = buildComposerMenu({ trigger: '#', query: '', roles: [{ name: '研究员', desc: '查伏笔' }] })
   assert.deepEqual(withRoles.items.map((item) => item.value), ['#研究员'])
   assert.equal(withRoles.empty, null)

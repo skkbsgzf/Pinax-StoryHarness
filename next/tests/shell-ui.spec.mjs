@@ -443,7 +443,7 @@ describe('运行时栏', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-test="usage-chip"]').text()).toBe('1200 in／380 out')
-    expect(wrapper.find('[data-test="usage-chip"]').attributes('title')).toBe('本轮模型回报的用量')
+    expect(wrapper.find('[data-test="usage-chip"]').attributes('title')).toBe('这一轮模型给出的用量')
     expect(wrapper.find('[data-test="session-usage"]').text()).toContain('最近一轮 1200 in／380 out（计 1580）')
 
     // 状态那一格走的是 messageStatus 唯一读判口；老数据没有 status 字段也读得出「已完成」。
@@ -466,7 +466,7 @@ describe('运行时栏', () => {
    * 但那是在告诉作者这一轮花了 0 token。字数更不是 token，不许换算。
    * 顺手把「出错」那一格钉了：失败的回答状态读作 error，不是 completed。
    */
-  it('〔批次77 守卫⑦〕上游没回报用量就说「本轮未回报用量」，DOM 里不许出现 0 tokens；失败那条读作出错', async () => {
+  it('〔批次77 守卫⑦〕上游没回报用量就说「这一轮没有用量」，DOM 里不许出现 0 tokens；失败那条读作出错', async () => {
     const bridge = stubBridge(emptyFrameworkView(), {
       [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '第三章更好。' } })
     })
@@ -476,8 +476,8 @@ describe('运行时栏', () => {
     await flushPromises()
 
     const chip = wrapper.find('[data-test="usage-chip"]')
-    expect(chip.text()).toBe('本轮未回报用量')
-    expect(chip.attributes('title')).toBe('上游这一轮没有回报用量')
+    expect(chip.text()).toBe('这一轮没有用量')
+    expect(chip.attributes('title')).toBe('这一轮没有给出用量')
     // 负断言：屏上任何地方都不许出现「0 tokens」，也不许出现「0 in／0 out」这种假数。
     expect(wrapper.text()).not.toContain('0 tokens')
     expect(wrapper.text()).not.toContain('0 in')
@@ -1334,10 +1334,12 @@ describe('运行时栏', () => {
     expect(menuKinds(wrapper)).toEqual(['reference', 'reference'])
     expect(menuItems(wrapper)[0].text()).toContain('@《第一章 雪》')
 
-    // `#`：角色清单要等批次78——这一类只有那一句实话，而且它**不是一枚点不动的钮**（工单：不留死钮）。
+    // `#`：这一类只有那一句实话，而且它**不是一枚点不动的钮**（工单：不留死钮）。
+    // 〔批次68-R1 任务3〕那一句是作者语言，屏上不许出现批次号。
     await type(wrapper, '#')
     expect(wrapper.findAll('[data-item-kind]').length).toBe(0)
-    expect(wrapper.find('[data-test="composer-empty"]').text()).toContain('批次78')
+    expect(wrapper.find('[data-test="composer-empty"]').text()).toContain('还没有可引用的角色')
+    expect(wrapper.find('[data-test="composer-empty"]').text()).not.toMatch(/批次\s*\d/u)
 
     wrapper.unmount()
   })

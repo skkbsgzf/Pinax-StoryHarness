@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { IPC_CHANNELS } from '../ipcContract.mjs'
+import { sourceFaceWord, DEFAULT_SOURCE } from '../sourceVocabulary.mjs'
 
 /**
  * 通用载体设置渲染器（批次45 · 任务③）：按清单声明出控件，不按载编写死任何一节。
@@ -45,9 +46,13 @@ function defaultValue(setting) {
 const draft = ref(defaultValue(props.setting))
 const busy = ref(false)
 const feedback = ref(null)
-/** 可写性以主进程算出的 effective 为准；IPC 没接上时退回清单声明的 volatile。 */
+/** 可写性以主进程算出的 effective 为准；IPC 没接上时退回声明里那一份 volatile。 */
 const volatile = ref(props.setting?.volatile === true)
-const sourceLabel = ref('清单默认')
+/**
+ * 来源读的是 effective 里的 `source` 标识（stored／override／manifest／section），
+ * 上屏那一读由 `sourceVocabulary` 转写成作者的话——存储给的那份 label 是实现口径，不直接摆出来。
+ */
+const source = ref(DEFAULT_SOURCE)
 
 onMounted(async () => {
   if (!props.bridge?.request || !props.carrierId || !props.setting?.id) return
@@ -57,11 +62,14 @@ onMounted(async () => {
   if (row) {
     if (row.value !== undefined) draft.value = row.value
     volatile.value = row.volatile === true
-    sourceLabel.value = row.label ?? sourceLabel.value
+    source.value = row.source ?? source.value
     return
   }
   const stored = result.value?.carriers?.[props.carrierId]?.[props.setting.id]
-  if (stored !== undefined) draft.value = stored
+  if (stored !== undefined) {
+    draft.value = stored
+    source.value = 'stored'
+  }
 })
 
 /** 界面先挡一次范围／步长：与主进程 validateDeclaredValue 同一套判据（min 为步长基准）。 */
@@ -171,8 +179,9 @@ function optionLabel(option) {
         >
           <option v-for="option in setting.options ?? []" :key="String(option)" :value="option">{{ optionLabel(option) }}</option>
         </select>
-        <!-- 来源层：这一项的有效值是项目设置、工程覆盖还是清单默认。 -->
-        <span class="generic-source" :data-test="`generic-source-${setting.id}`">{{ sourceLabel }}</span>
+        <!-- 来源层：这一项的有效值是项目里存过的、本机改过的、还是插件自带的默认值。
+             存储给的是实现口径那一份真值，上屏这一读走 sourceVocabulary 转写（批次68-R1 任务3）。 -->
+        <span class="generic-source" :data-test="`generic-source-${setting.id}`">{{ sourceFaceWord(source) }}</span>
         <button
           v-if="volatile"
           type="button"
@@ -185,7 +194,7 @@ function optionLabel(option) {
           v-else
           class="generic-readonly"
           :data-test="`generic-readonly-${setting.id}`"
-        >只读（清单未标 volatile）</span>
+        >只读：这一项要改得动项目里的文件</span>
         <span
           v-if="feedback"
           class="nx-save-chip"
@@ -245,7 +254,7 @@ function optionLabel(option) {
   color: var(--archive-rose);
 }
 .nx-save-chip-state {
-  font-family: var(--font-display);
+  font-family: var(--font-interface);
   font-weight: 500;
   color: var(--archive-olive);
 }

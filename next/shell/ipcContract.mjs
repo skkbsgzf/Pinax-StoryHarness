@@ -610,11 +610,12 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
       }
       // 批次54：工程覆盖只读。应用面（外部应用 url）与设置页（来源层）读同一份；
       // 写覆盖是作者改项目文件，这条通道不开写口——没有 set/remove。
+      // 〔批次68-R1 任务3〕这三句是**会显示在界面上的错误**，主语换成作者能看到的事实，不留实现口径。
       case IPC_CHANNELS.carrierOverrides: {
-        if (typeof carrierOverridesFor !== 'function') return fail('INVALID_INPUT', '工程覆盖服务未接入（主进程未创建 carrierOverridesStore）：这条通道现在只报缺')
-        if (!session.projectRoot) return fail('INVALID_INPUT', '工程覆盖读取需要先打开一个项目')
+        if (typeof carrierOverridesFor !== 'function') return fail('INVALID_INPUT', '这一项本机改动读不出来：这条通道当前不可用')
+        if (!session.projectRoot) return fail('INVALID_INPUT', '要先打开一个项目，才看得到它的本机改动')
         const store = carrierOverridesFor(session.projectRoot)
-        return store ? store.read() : fail('INVALID_INPUT', '工程覆盖存储不可用：拿不到当前项目的覆盖文件')
+        return store ? store.read() : fail('INVALID_INPUT', '拿不到当前项目里那份本机改动（.pinax/carrier-overrides.json）')
       }
       // 批次77 任务5：技能库设置面。四条都只把载荷交给技能服务——启停真值、两层目录、拒装原因
       // 的口径全在 next/skills/loadSkills.mjs 那一份，通道这层不留第二套判定。

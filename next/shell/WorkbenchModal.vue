@@ -119,10 +119,10 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
 }
-/* 标题沿用老 .wizard h3 的那一档（font-display／--nx-fs-xl），不另起刻度。 */
+/* 标题走界面族＋--nx-fs-xl 那一档：弹窗头是 UI chrome，不是作品版面（字体单轨制）。 */
 .workbench-modal-title {
   margin: 0;
-  font-family: var(--font-display);
+  font-family: var(--font-interface);
   font-size: var(--nx-fs-xl);
   font-weight: 600;
   color: var(--archive-ink);

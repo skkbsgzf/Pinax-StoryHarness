@@ -125,7 +125,7 @@ const sessions = computed(() => snapshot.value.sessions)
 const activeSessionId = computed(() => snapshot.value.activeId)
 const busy = computed(() => snapshot.value.busy)
 const canAsk = computed(() => Boolean(props.bridge?.request))
-const tools = computed(() => props.runtime.tools.map((tool) => ({ name: tool.name })))
+const tools = computed(() => props.runtime.tools.map((tool) => ({ name: tool.name, title: tool.title ?? '', owner: tool.owner ?? '' })))
 /**
  * 〔批次77 任务3〕`/` 菜单要的技能清单：主进程运行时**真装载**的那一份
  * （`surfaceInfo().skills.catalog`，来源是 loadSkills）。整包拒装的那些不在这里——

@@ -19,6 +19,7 @@ import {
 } from './hotkeys.mjs'
 import { formatRelativeTime, messageStatus } from './agentSessions.mjs'
 import { buildTimelineBlocks, timelinePath } from './conversationTimeline.mjs'
+import { toolDisplayRows } from './toolDisplay.mjs'
 import ConversationTimeline from './ConversationTimeline.vue'
 import { renderMarkdown } from './mdRender.mjs'
 
@@ -113,6 +114,13 @@ const modeTitle = computed(() => ({
   blocked: '锁定模式：写入一律被拒，也不出提案（这块目录只读）'
 }[props.mode] ?? '审阅模式：AI 产出走提案，确认后才落盘'))
 watch(() => props.mode, () => { pendingAuto.value = false })
+
+/**
+ * 〔批次68-R1 任务1〕工具面折叠层的两读行：中文名在前、原始 id 在后。
+ * 取名规则不在这里写（`toolDisplay.mjs`，node:test 直接测那份纯函数）——
+ * 组件只负责摆，不负责造词。
+ */
+const toolRows = computed(() => toolDisplayRows(props.tools))
 
 function requestMode() {
   // 从两档「更 unsafe」的档位回 review 都不设闸：点一下就回，不留确认条（既有口径）。
@@ -448,7 +456,7 @@ function statusLabel(message) {
  */
 function usageText(message) {
   const usage = message?.usage
-  if (!usage) return '本轮未回报用量'
+  if (!usage) return '这一轮没有用量'
   return `${usage.input} in／${usage.output} out`
 }
 
@@ -837,7 +845,7 @@ onBeforeUnmount(() => {
                 aria-label="重新生成"
                 @click="regenerate(message)"
               ><WorkbenchIcon name="refresh" :size="13" /></button>
-              <span class="authoring-knowledge__usage" data-test="usage-chip" :title="message.usage ? '本轮模型回报的用量' : '上游这一轮没有回报用量'">{{ usageText(message) }}</span>
+              <span class="authoring-knowledge__usage" data-test="usage-chip" :title="message.usage ? '这一轮模型给出的用量' : '这一轮没有给出用量'">{{ usageText(message) }}</span>
             </div>
             <!-- 批次29 起这一层就叫「过程」；〔批次77 任务4〕把它从「一叠事件行」升级成「运行块时间线」：
                  五类块（梳理上下文／给出回答／调用的工具／只读并组／子代理）＋四态文案＋缺省收起的那一层。
@@ -873,7 +881,10 @@ onBeforeUnmount(() => {
       <details v-if="tools.length" class="authoring-knowledge__agent-detail">
         <summary><WorkbenchIcon name="chevron-down" :size="12" />工具面（{{ tools.length }}）</summary>
         <ul class="authoring-knowledge__agent-list">
-          <li v-for="tool in tools" :key="tool.name"><code>{{ tool.name }}</code></li>
+          <li v-for="tool in toolRows" :key="tool.name" class="authoring-knowledge__agent-item">
+            <span class="authoring-knowledge__agent-name" :title="tool.name">{{ tool.displayName }}</span>
+            <span class="authoring-knowledge__agent-id">{{ tool.name }}</span>
+          </li>
         </ul>
       </details>
 
@@ -957,16 +968,18 @@ onBeforeUnmount(() => {
 
 <style scoped>
 /* legacy-copied：度量与配色逐条抄自 src/components/authoring/AuthoringKnowledgeAssistant.vue（老版原话）。
-   本块在视觉合同里豁免「裸 px 字号/圆角」检查——那是复用老版度量，不是另立刻度；
-   Next 自己加的样式在后面的 style 块（审稿意见／会话弹层／slash 命令／@ 引用），走 --nx-* 刻度，受门禁管。 */
-.authoring-knowledge { position: relative; display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; color: var(--text-primary); background: var(--surface-assistant); font: 14px/1.5 var(--font-interface, var(--font-sans)); }
+   〔批次68-R1 任务2〕这一块**字号不再享受 legacy-copied 的裸 px 豁免**：复用老版的是形态与间距，字号刻度必须和壳层同一本——
+   14/13/12/11 与 .88em／.92em／1.08em 那些散档全部归进 --nx-* 五档，`font:` 简写拆成三行
+   （var() 进简写在部分解析路径不可靠，拆行后门禁也能逐条数）。老版那几档圆角仍是原度量，走 legacy-copied 例外。
+   判据见 next/tests/visual-contract.test.mjs 的门禁⑭（字号单轨，整块不跳过）。 */
+.authoring-knowledge { position: relative; display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; color: var(--text-primary); background: var(--surface-assistant); font-family: var(--font-interface); font-size: var(--nx-fs-md); line-height: 1.5; }
 .authoring-knowledge__toolbar { display: flex; min-height: 52px; box-sizing: border-box; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 12px 7px 14px; border-bottom: 0; }
 .authoring-knowledge__toolbar-primary { min-width: 0; }
 .authoring-knowledge__model { display: grid; min-width: 0; gap: 1px; }
-.authoring-knowledge__model strong { overflow: hidden; font-size: 14px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
+.authoring-knowledge__model strong { overflow: hidden; font-size: var(--nx-fs-md); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .authoring-knowledge__body { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; }
 .authoring-knowledge__intro { width: 100%; flex: none; margin: 0 auto 32px; text-align: center; }
-.authoring-knowledge__intro h3 { margin: 0; color: var(--archive-ink); font: 500 21px/1.45 var(--font-interface, var(--font-sans)); letter-spacing: -.025em; }
+.authoring-knowledge__intro h3 { margin: 0; color: var(--archive-ink); font-family: var(--font-interface); font-size: var(--nx-fs-2xl); font-weight: 500; line-height: 1.45; letter-spacing: -.025em; }
 /* 起始态那句引导语是老版左对齐的，老版靠 body 的 gutter（--assistant-gutter: 16px）让它离边；
    这份拷贝少了那条 gutter，手机上那句会贴着屏幕边。 */
 .authoring-knowledge.is-starting .authoring-knowledge__body { padding-inline: 16px; }
@@ -975,12 +988,12 @@ onBeforeUnmount(() => {
 .authoring-knowledge__thread { position: relative; min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 20px 16px 28px; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .authoring-knowledge__question-row { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: min(100%, calc(88% + 38px)); margin: 0 0 22px auto; }
 .authoring-knowledge__question { min-width: 0; width: fit-content; max-width: 100%; margin: 0; padding: 10px 16px; border-radius: 18px; background: var(--surface-workbench-input); overflow-wrap: anywhere; }
-.authoring-knowledge__question p { margin: 0; font: 15px/1.7 var(--font-interface, var(--font-sans)); }
+.authoring-knowledge__question p { margin: 0; font-family: var(--font-interface); font-size: var(--nx-fs-lg); line-height: 1.7; }
 .authoring-knowledge__answer { margin: 0 0 32px; }
-.authoring-knowledge__answer-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--text-secondary); font: 13px/1.5 var(--font-interface, var(--font-sans)); }
+.authoring-knowledge__answer-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--text-secondary); font-family: var(--font-interface); font-size: var(--nx-fs-md); line-height: 1.5; }
 .authoring-knowledge__answer-meta > span { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-weight: 500; }
-.authoring-knowledge__answer-meta time { color: var(--text-muted); font-size: 12px; }
-.authoring-knowledge__answer-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.85 var(--font-interface, var(--font-sans)); }
+.authoring-knowledge__answer-meta time { color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__answer-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-interface); font-size: var(--nx-fs-lg); line-height: 1.85; }
 /* 批次77 任务1：助手正文走 mdRender（与阅读面同一条渲染链）。下面这一组逐条抄自
    src/components/authoring/AuthoringKnowledgeAssistant.vue:740-757 的 :deep() md 规则——
    老版会话面的 md 度量就是它，不再另立一套。markdown 版式自己管段落间距，
@@ -989,7 +1002,11 @@ onBeforeUnmount(() => {
 .authoring-knowledge__markdown :deep(p) { margin: 0 0 1em; }
 .authoring-knowledge__markdown :deep(> :first-child) { margin-top: 0; }
 .authoring-knowledge__markdown :deep(> :last-child) { margin-bottom: 0; }
-.authoring-knowledge__markdown :deep(h1), .authoring-knowledge__markdown :deep(h2), .authoring-knowledge__markdown :deep(h3), .authoring-knowledge__markdown :deep(h4), .authoring-knowledge__markdown :deep(h5), .authoring-knowledge__markdown :deep(h6) { margin: 1.3em 0 .55em; color: var(--text-primary); font-size: 1.08em; font-weight: 600; line-height: 1.5; }
+.authoring-knowledge__markdown :deep(h1) { font-size: var(--nx-fs-2xl); }
+.authoring-knowledge__markdown :deep(h2) { font-size: var(--nx-fs-xl); }
+.authoring-knowledge__markdown :deep(h3) { font-size: var(--nx-fs-lg); }
+.authoring-knowledge__markdown :deep(h4), .authoring-knowledge__markdown :deep(h5), .authoring-knowledge__markdown :deep(h6) { font-size: var(--nx-fs-md); }
+.authoring-knowledge__markdown :deep(h1), .authoring-knowledge__markdown :deep(h2), .authoring-knowledge__markdown :deep(h3), .authoring-knowledge__markdown :deep(h4), .authoring-knowledge__markdown :deep(h5), .authoring-knowledge__markdown :deep(h6) { margin: 1.3em 0 .55em; color: var(--text-primary); font-weight: 600; line-height: 1.5; }
 .authoring-knowledge__markdown :deep(strong) { font-weight: 600; }
 .authoring-knowledge__markdown :deep(ul), .authoring-knowledge__markdown :deep(ol) { margin: .6em 0 1em; padding-inline-start: 1.5em; }
 .authoring-knowledge__markdown :deep(li) { margin: .35em 0; padding-inline-start: .2em; }
@@ -997,17 +1014,17 @@ onBeforeUnmount(() => {
 .authoring-knowledge__markdown :deep(hr) { margin: 1.3em 0; border: 0; border-top: 1px solid var(--hairline-soft); }
 .authoring-knowledge__markdown :deep(blockquote) { margin: 1em 0; padding-inline-start: 1em; border-inline-start: 2px solid var(--hairline-soft); color: var(--text-secondary); }
 .authoring-knowledge__markdown :deep(a) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
-.authoring-knowledge__markdown :deep(pre) { max-width: 100%; overflow-x: auto; margin: 1em 0; padding: 12px; background: var(--surface-workbench-muted); border-radius: var(--radius-control); font-size: .88em; line-height: 1.6; }
-.authoring-knowledge__markdown :deep(code) { font-family: var(--font-mono, monospace); white-space: pre-wrap; }
+.authoring-knowledge__markdown :deep(pre) { max-width: 100%; overflow-x: auto; margin: 1em 0; padding: 12px; background: var(--surface-workbench-muted); border-radius: var(--radius-control); font-size: var(--nx-fs-md); line-height: 1.6; }
+.authoring-knowledge__markdown :deep(code) { font-family: var(--font-mono); font-size: var(--nx-fs-md); white-space: pre-wrap; }
 .authoring-knowledge__markdown :deep(pre code) { white-space: pre; }
-.authoring-knowledge__markdown :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; font-size: .92em; }
+.authoring-knowledge__markdown :deep(table) { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1em 0; font-size: var(--nx-fs-md); }
 .authoring-knowledge__markdown :deep(th), .authoring-knowledge__markdown :deep(td) { padding: 6px 10px; border-bottom: 1px solid var(--hairline-soft); text-align: start; }
 .authoring-knowledge__markdown :deep(img) { max-width: 100%; height: auto; }
-.authoring-knowledge__thinking { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 13px; }
+.authoring-knowledge__thinking { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--nx-fs-md); }
 /* 〔批次77 任务4〕在途那一问的平铺时间线：紧跟状态行，自己不额外撑出一段空。 */
 .authoring-knowledge__live-trail { margin-top: 4px; }
 .authoring-knowledge__thinking span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-primary, var(--accent)); animation: knowledge-pulse 900ms ease-in-out infinite alternate; }
-.authoring-knowledge__error { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: var(--archive-paper); color: var(--text-secondary); font-size: 13px; text-align: start; }
+.authoring-knowledge__error { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: var(--archive-paper); color: var(--text-secondary); font-size: var(--nx-fs-md); text-align: start; }
 .authoring-knowledge__error-retry { border: 0; background: transparent; color: var(--accent-primary, var(--accent)); cursor: pointer; }
 </style>
 
@@ -1037,20 +1054,25 @@ onBeforeUnmount(() => {
 .authoring-knowledge__composer { position: relative; z-index: 1; flex: none; padding: 10px 16px 16px; background: var(--surface-assistant); }
 .authoring-knowledge__input-row { position: relative; box-sizing: border-box; display: flex; min-height: 98px; flex-direction: column; align-items: stretch; gap: 12px; padding: 14px; border: 1px solid var(--hairline-soft); border-radius: 20px; background: var(--surface-workbench-input); box-shadow: none; }
 .authoring-knowledge__input-row:focus-within { outline: 2px solid var(--workbench-focus); outline-offset: 1px; border-color: transparent; }
-.authoring-knowledge__input-row textarea { display: block; box-sizing: border-box; flex: none; width: 100%; min-width: 0; min-height: 28px; max-height: 160px; resize: none; border: 0; outline: 0; padding: 0 4px; background: transparent; color: var(--text-primary); font: 15px/28px var(--font-interface, var(--font-sans)); }
+.authoring-knowledge__input-row textarea { display: block; box-sizing: border-box; flex: none; width: 100%; min-width: 0; min-height: 28px; max-height: 160px; resize: none; border: 0; outline: 0; padding: 0 4px; background: transparent; color: var(--text-primary); font-family: var(--font-interface); font-size: var(--nx-fs-lg); line-height: 28px; }
 .authoring-knowledge__input-row textarea::placeholder { color: var(--text-muted); opacity: 1; }
 .authoring-knowledge__composer-actions { display: flex; min-width: 0; align-items: center; flex-wrap: nowrap; gap: 4px; }
 .authoring-knowledge__send { display: grid; flex: none; width: var(--workspace-control-height, 36px); height: var(--workspace-control-height, 36px); margin-inline-start: auto; place-items: center; border: 0; border-radius: 50%; background: var(--workbench-action); color: var(--workbench-action-text); cursor: pointer; }
 .authoring-knowledge__send:hover:not(:disabled) { background: var(--workbench-action-hover); color: var(--workbench-action-text); }
 .authoring-knowledge__send:disabled { background: var(--nav-hover); color: var(--text-muted); cursor: default; }
 .authoring-knowledge button:focus-visible, .authoring-knowledge summary:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 3px; }
-.authoring-knowledge__agent-detail { margin: 0 0 8px; padding: 0; border: 0; background: transparent; color: var(--text-muted); font-size: 12px; }
+.authoring-knowledge__agent-detail { margin: 0 0 8px; padding: 0; border: 0; background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
 .authoring-knowledge__agent-detail summary { cursor: pointer; min-height: 30px; padding: 0; display: flex; align-items: center; gap: 6px; line-height: 1.5; list-style: none; }
 .authoring-knowledge__agent-detail[open] summary svg { transform: rotate(180deg); }
 .authoring-knowledge__agent-detail summary::-webkit-details-marker { display: none; }
 .authoring-knowledge__agent-detail summary:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 2px; }
-.authoring-knowledge__agent-list { margin: 4px 0 0; padding-left: 18px; }
-.authoring-knowledge__agent-list code { color: var(--accent); font-size: 11px; }
+.authoring-knowledge__agent-list { margin: 4px 0 0; padding-left: 18px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+/* 〔批次68-R1 任务1〕工具面那一叠原来是 46 行**等宽裸工具 id**（pinax_project_list…）——
+   作者读不出那是什么，等宽还把界面读成代码。现在一行两读：主读数＝清单里的中文名（界面族＋次要色），
+   次要行＝原始 id（角注档），悬停仍能把 id 单独报出来。清单里没有中文名的如实写「未命名工具」，不编造。 */
+.authoring-knowledge__agent-item { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.authoring-knowledge__agent-name { font-family: var(--font-interface); font-size: var(--nx-fs-md); color: var(--text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.authoring-knowledge__agent-id { font-family: var(--font-interface); font-size: var(--nx-fs-2xs); color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes knowledge-pulse { to { opacity: .28; transform: scale(.72); } }
 @media (pointer: coarse) {
   .authoring-knowledge__send { width: 44px; height: 44px; }

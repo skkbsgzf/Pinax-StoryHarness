@@ -177,7 +177,7 @@ export function buildComposerMenu({
  * 角色＝批次78 才产清单，本批只有这一句实话（工单：先出「暂无」空态，不留死钮）。
  */
 function emptyLineFor(trigger) {
-  if (trigger === '#') return { kind: 'role', empty: true, label: '角色清单要等工作流那一批（批次78）才生成；现在按 # 只有这一句实话' }
+  if (trigger === '#') return { kind: 'role', empty: true, label: '这个项目还没有可引用的角色（在正文里写「角色：」那一类内容后这里就有）' }
   if (trigger === '/') return { kind: 'skill', empty: true, label: '没有可用的命令或技能。技能整包没装载时这里就是空的——去「设置 → 技能库」看每一条的拒装原因' }
   if (trigger === '@') return { kind: 'reference', empty: true, label: '当前项目还没有可引用的内容（打开对应栏目后这里就有）' }
   return null

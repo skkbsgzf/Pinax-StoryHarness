@@ -213,8 +213,8 @@ onMounted(reload)
         </button>
       </div>
       <p class="pane-hint">
-        这一格还没接系统目录对话框（要接得动 <code>main.mjs</code> 的选目录白名单，批次77 未登记）：先手工粘绝对路径。
-        导入只写 <code>.pinax/skills/</code>，随包那份技能永远赢同名仲裁。
+        这一格还没接上系统的选目录对话框，先手工粘一个绝对路径。
+        导入只写进本项目的 <code>.pinax/skills/</code>；随软件一起给的那份技能，同名时以它为准。
       </p>
       <div v-if="importResult" class="skills-import-result" data-test="skills-import-result">
         <p v-if="importResult.imported?.length" data-test="skills-imported">

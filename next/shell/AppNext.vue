@@ -158,11 +158,13 @@ const pageResource = new Map()
 /**
  * 〔批次76-R2 任务4〕instance → 这一页此刻是内嵌浏览器时正在跑的那个地址。
  * 地址行撤了之后它只剩三个读处：页签的悬浮提示、底栏状态栏那一段、页签右键菜单里那条「复制地址单开」。
- * 值是 ExternalAppHost 现算上报的（清单＋工程覆盖，批次54 那条逻辑不在这里重算一遍）——
+ * 值是 ExternalAppHost 现算上报的（插件清单里那一条，或本机改过的那一条，批次54 那条逻辑不在这里重算一遍）——
  * 宿主只转述，绝不自己拼第二个地址（拼出来的那种叫猜）。
  */
 const appAddress = reactive({})
-const APP_URL_SOURCE_WORDS = Object.freeze({ override: '工程覆盖', manifest: '清单声明' })
+/** 〔批次68-R1 任务3〕这两个词是**出屏文案**（页签 tooltip／底栏状态栏／右键菜单都读它），
+ *  所以按作者看得懂的那句话说「这个地址是哪儿来的」，不写实现口径。 */
+const APP_URL_SOURCE_WORDS = Object.freeze({ override: '本机改过的地址', manifest: '插件自带的地址' })
 let claimPanesSnapshot = []
 
 function pageDataOf(instance) {
