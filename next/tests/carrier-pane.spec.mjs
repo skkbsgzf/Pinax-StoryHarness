@@ -373,12 +373,14 @@ async function openProposalsSection(wrapper) {
 }
 
 /**
- * 批次43：正文／构思／大纲／约束四个面默认落在阅读态（md 渲染过的一篇文），
- * 要动编辑区先按头部那枚「编辑」。这里把这一步收成一行，测试里不重复写。
+ * 批次43：正文／构思／大纲／约束四个面默认落在阅读态（md 渲染过的一篇文）。
+ * 〔批次68-R6 任务二〕正文的入口换了：「编辑」钮退役，改点阅读面本体（点入即改，判据㉑）；
+ * 其余三面仍是头部「编辑」钮。这里把这一步收成一行，测试里不重复写——判定逻辑一字不动。
  */
 async function enterEditing(wrapper, testId = 'chapter-edit') {
   const button = wrapper.find(`[data-test="${testId}"]`)
   if (button.exists()) await button.trigger('click')
+  else if (testId === 'chapter-edit') await wrapper.find('[data-test="chapter-rendered"]').trigger('click')
   await flushPromises()
 }
 
@@ -449,7 +451,7 @@ describe('小说载体', () => {
     // 〔批次76 裁定A〕原判据「头部只有一行 .doc-title」反过来了：内容层不再自绘标题，
     // 文档名归窗头那一行（挂载的是裸 CarrierPaneHost，没有窗头可查，这里只查「不再自绘」）。
     expect(wrapper.find('.doc-head .doc-title').exists()).toBe(false)
-    // 批次43：正文面默认是阅读态（md 渲染过的一篇文），要动它先按头部那枚「编辑」。
+    // 批次43：正文面默认是阅读态（md 渲染过的一篇文）。〔批次68-R6 任务二〕点阅读面就地接稿（「编辑」钮退役，判据㉑）。
     expect(wrapper.find('.editor-area').exists()).toBe(false)
     await enterEditing(wrapper)
     await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。')
@@ -1544,11 +1546,14 @@ describe('批次43：md 原生渲染 · 改了就落盘 · 去掉无效提示', 
       const wrapper = mount(AppNext, { props: { bridge } })
       await flushPromises()
 
+      // 〔批次68-R6 任务二〕这道闸换了拦法：半截草稿根本进不了编辑态——
+      // 点阅读面接稿前先补载后半段（loadFullChapterDraft），补不齐（这一份 fake 的 offset 读
+      // 永远读不回全文）就停手：不打开 textarea，也不会有任何一笔落盘。「自动保存不会动它」照旧。
       await enterEditing(wrapper)
-      await wrapper.find('.editor-area').setValue('雨从檐口滴下来。有人。')
+      expect(wrapper.find('.editor-area').exists()).toBe(false)
       vi.advanceTimersByTime(1600)
       await flushPromises()
-      // 没自动存（否则盘上的后半段就没了）。
+      // 没自动存（否则盘上的后半段就没了），也没有手动存：编辑态就没开成。
       expect(tools.calls.filter((call) => call.tool === 'pinax_chapter_save')).toHaveLength(0)
       // 作者看得见这件事：底部那一行说明为什么没自动存。
       const hint = wrapper.find('[data-pane-id="novel.editor"] .doc-meta-hint').text()

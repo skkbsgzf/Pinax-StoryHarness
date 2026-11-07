@@ -96,7 +96,7 @@ describe('载体面板接真会话', () => {
   it('中栏从磁盘读出章节并载入正文；改一笔落盘，第二次的修订号为 2', async () => {
     const { root, session } = await makeProject('editor')
     const wrapper = mount(AppNext, { props: { bridge: realBridge(session) } })
-    // 批次43：正文面默认是阅读态（md 渲染过的一篇文），要动它先按「编辑」。
+    // 批次43：正文面默认是阅读态（md 渲染过的一篇文）。〔批次68-R6 任务二〕入口换成「点入即改」：点阅读面就地接稿。
     await waitFor(() => wrapper.find('[data-pane-id="novel.editor"]').exists() && wrapper.find('[data-test="chapter-rendered"]').exists(), { note: '正文面没从磁盘载入章节' })
 
     expect(wrapper.find('[data-pane-id="novel.editor"]').exists()).toBe(true)
@@ -104,7 +104,7 @@ describe('载体面板接真会话', () => {
     // 批次43：路径不再摆在文档面上（它在索引窗那一行的 title 上）。
     expect(wrapper.find('.nx-index-window .nx-tree-item').attributes('title')).toContain('第001章-入场.md')
 
-    await wrapper.find('[data-test="chapter-edit"]').trigger('click')
+    await wrapper.find('[data-test="chapter-rendered"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('.editor-area').element.value).toBe('雨从檐口滴下来，巷子里没人。')
     await wrapper.find('.editor-area').setValue('雨从檐口滴下来，巷子里没人。柯秒在巷口站住。')

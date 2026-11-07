@@ -428,6 +428,11 @@ body {
      主面板是它的定位父级（球的锚点跟着中心区走，Agent 右栏永远不被它盖住）。 */
   position: relative;
   flex: 1 1 auto;
+  /* 〔批次68-R6 任务一〕占位化闭环：三列同排时中心区必须能缩到 0——缺了 min-width:0，
+     一条不折行的长稿会把本列顶到 min-content 宽，右缘控件跟着溢出列界，
+     Agent 坞（flex: 0 0 auto + 显式宽度）就被挤出可视区、像被浮层「盖住」。
+     加上这条，长内容只会在本列内滚动，坞永远稳稳占着自己那一段版面。 */
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
   display: flex;

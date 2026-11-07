@@ -50,7 +50,7 @@ async function mountedPane({ editing = false } = {}) {
   const wrapper = mount(CarrierPaneHost, { props: { pane: { id: 'novel.editor', title: '正文' }, data } })
   await flushPromises()
   if (editing) {
-    await wrapper.find('[data-test="chapter-edit"]').trigger('click')
+    await wrapper.find('[data-test="chapter-rendered"]').trigger('click')
     await flushPromises()
   }
   return { wrapper, data, bridge }

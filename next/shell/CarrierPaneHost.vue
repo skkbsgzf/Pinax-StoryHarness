@@ -125,7 +125,9 @@ const recordHtml = computed(() => renderMarkdown(props.data.record?.body ?? ''))
  * 与条目／资料／剧本那几面（早就有阅读态）不是一回事。现在它们与那几面对齐：
  *   1) 阅读态＝源文渲染成 HTML（标题／粗体／列表／引用／代码块…），走同一条 mdRender 路径；
  *   2) 编辑态＝textarea 拿源文（作者改的是源文，不是渲染结果）；
- *   3) 头部一枚「编辑」按钮切过去、「取消」切回来——默认落在阅读态（文档先是一篇文，再是编辑器）。
+ *   3) 〔批次68-R6 任务二〕正文的入口换成「点入即改」：阅读面点一段＝就地接稿那一段（textarea
+ *      在同一段落的位置接管），失焦或 Ctrl+S 保存回渲染态；「编辑」钮退役，「取消」与保存 chip 保留。
+ *      构思／大纲／约束不在本批面内（工单登记：其余载体不下），仍是头部「编辑」钮切换。
  * 批次55：正文阅读面再按 preview.loading 分两档（见下面的分页块），构思／大纲／约束仍是整读。
  */
 const noteHtml = computed(() => renderMarkdown(props.data.noteDraft ?? ''))
@@ -318,15 +320,128 @@ onMounted(applyChapterLinks)
 
 function onChapterRenderedClick(event) {
   const link = event.target?.closest?.('.nx-wikilink')
-  if (!link) return
-  const item = chapterEntryTokenMap.value.get(String(link.dataset.entry ?? ''))
-  if (!item) return
-  // 蓝链的目标是另一块 pane 的文档：交回宿主的唯一通路，不在这一页里就地换装（〔任务四〕归一）。
-  if (typeof openKnowledge === 'function') {
-    openKnowledge({ kind: 'entry', item })
+  if (link) {
+    const item = chapterEntryTokenMap.value.get(String(link.dataset.entry ?? ''))
+    if (!item) return
+    // 蓝链的目标是另一块 pane 的文档：交回宿主的唯一通路，不在这一页里就地换装（〔任务四〕归一）。
+    if (typeof openKnowledge === 'function') {
+      openKnowledge({ kind: 'entry', item })
+      return
+    }
+    props.data.openEntry(item)
     return
   }
-  props.data.openEntry(item)
+  // 〔批次68-R6 任务二〕点入即改：阅读面上不是蓝链的一下，就地接稿（判据㉑的交互声明）。
+  void enterChapterEditingFrom(event)
+}
+
+/**
+ * 〔批次68-R6 任务二〕阅读面某一段 → 源文那一段的光标落点。
+ *
+ * 映射口径（工单允许的「整块 textarea 接管」档，逐段说明为什么这样近似）：
+ *   - 第 n 个渲染块 ↔ 页源文里第 n 个「非空行段」（空行分块）：散文的绝大多数块
+ *     （纯段落、标题、列表、引用）是一一对得上的；含空行的围栏代码是已知例外，落点会偏到
+ *     围栏后的第一段——偏的是段内起点，不是整篇，字一个不会丢。
+ *   - 字级偏移不做（caretRangeFromPoint 拿到的渲染偏移与源文偏移隔着 md 标记，对不准），
+ *     落点定在**那一段的段首**；点不到块（空白处）落整页末尾。
+ *   - 滚动位置随光标走：接稿后把 textarea 滚到那一行（见 enterChapterEditingFrom），
+ *     「在同一段落的位置接管」量的是这个，不是复制 scrollTop 的像素值。
+ */
+function chapterBlockIndexFromEvent(event) {
+  const container = chapterRenderedEl.value
+  const node = event?.target
+  if (!container || !node || node === container || !container.contains(node)) return null
+  let cursor = node
+  while (cursor.parentElement && cursor.parentElement !== container) cursor = cursor.parentElement
+  if (!cursor.parentElement) return null
+  const index = Array.from(container.children).indexOf(cursor)
+  return index >= 0 ? index : null
+}
+
+/** 页源文按空行分块，取第 n 块的起始字符偏移；n 越界／缺省＝整页末尾。 */
+function chapterBlockStart(text, blockIndex) {
+  const value = String(text ?? '')
+  if (!Number.isSafeInteger(blockIndex) || blockIndex < 0) return value.length
+  let cursor = 0
+  let blocks = 0
+  let inBlock = false
+  while (cursor < value.length) {
+    const lineEnd = value.indexOf('\n', cursor)
+    const end = lineEnd === -1 ? value.length : lineEnd
+    if (value.slice(cursor, end).trim()) {
+      if (!inBlock) {
+        if (blocks === blockIndex) return cursor
+        blocks += 1
+      }
+      inBlock = true
+    } else {
+      inBlock = false
+    }
+    cursor = end + 1
+  }
+  return value.length
+}
+
+/**
+ * 整章展开：分页阅读面下草稿可能只载了前段（openChapter 的 maxChars 闸）。
+ * 「编辑＝改整篇」的前提是手里有整篇——补载走 useBoardData 的 loadFullChapterDraft
+ * 〔越界补登记〕（那是「多载入」不是「改动」：不置脏、对齐指纹基线，自动保存语义一字未动）。
+ * 补载失败就不进编辑态：宁可作者还在读，也不让半截草稿带着「保存会抹掉后段」的风险去改字。
+ */
+async function expandChapterForEditing() {
+  if (props.data.chapter?.truncated !== true) return true
+  if (typeof props.data.loadFullChapterDraft !== 'function') return false
+  const result = await props.data.loadFullChapterDraft()
+  if (!result?.ok) {
+    chapterPageError.value = result?.message ?? '后半段补载失败：这一章还只能整段读，先别在草稿上改。'
+    return false
+  }
+  return true
+}
+
+async function enterChapterEditingFrom(event) {
+  if (chapterEditing.value) return
+  const blockIndex = chapterBlockIndexFromEvent(event)
+  const pageStart = chapterBlockStart(chapterReadingSourceText.value, blockIndex)
+  const caret = (textPagesReading.value ? chapterPageIndex.value * CHAPTER_PAGE_CHARS : 0) + pageStart
+  if (!(await expandChapterForEditing())) return
+  chapterEditing.value = true
+  await nextTick()
+  const el = chapterArea.value
+  if (!el) return
+  const bounded = Math.min(caret, String(props.data.draft ?? '').length)
+  el.focus?.()
+  el.setSelectionRange?.(bounded, bounded)
+  props.data.setDraftSelection?.(bounded, bounded)
+  // 接稿的位置：textarea 滚到光标那一行（与打字机滚动同一把尺——隐藏镜像量光标纵坐标）。
+  const caretTop = caretTopIn(el)
+  if (caretTop > 0 && el.clientHeight > 0) {
+    el.scrollTop = Math.max(0, caretTop - el.clientHeight * 0.3)
+  }
+}
+
+/**
+ * 〔批次68-R6 任务二〕失焦／Ctrl+S 的收口：保存回渲染态。
+ * 有未落盘的改动才走保存（只点开看一眼不该推修订号）；落完回阅读面并翻回作者改的那一页
+ * （页码从光标位置现算——分页档下保存回分页，不回到页 1）。
+ */
+let committingChapter = false
+async function commitChapterEditing() {
+  if (committingChapter) return
+  committingChapter = true
+  try {
+    const caret = Number(chapterArea.value?.selectionStart ?? 0)
+    // 有未落盘的改动才走保存：只点开看一眼不该推修订号（自动保存那条指纹纪律的同一口径）。
+    if (props.data.pendingSave?.chapter) await props.data.save()
+    // 落盘没成（chip 正在报「版本冲突／保存失败」）就留在编辑态：稿子还在作者手里，退路是 chip 上的重试。
+    if (!props.data.pendingSave?.chapter) {
+      chapterEditing.value = false
+      // 分页档回到作者改的那一页（不是页 1）——「保存回分页」的那一步。
+      if (textPagesReading.value && props.data.chapter && caret > 0) void loadChapterPage(Math.floor(caret / CHAPTER_PAGE_CHARS))
+    }
+  } finally {
+    committingChapter = false
+  }
 }
 
 /**
@@ -439,6 +554,9 @@ function generateNames() {
 async function insertAtCaret(snippet) {
   const value = String(snippet ?? '')
   if (!value) return
+  // 〔批次68-R6 任务二〕插入走「点入即改」同一条入口：先整章展开再落字——
+  // 半截草稿上落字，下一次保存会把没载入的后段抹掉；补载失败就停手（错误句已摆在页提示位）。
+  if (props.data.chapter?.truncated === true && !(await expandChapterForEditing())) return
   if (!chapterEditing.value) chapterEditing.value = true
   await nextTick()
   const el = chapterArea.value
@@ -575,9 +693,18 @@ function onEditorFocus(event) {
   scheduleEditorEffects(event?.target)
 }
 
-function onEditorBlur() {
+function onEditorBlur(event) {
   editorFocused.value = false
   focusBand.value = { top: 0, bottom: 0 }
+  // 〔批次68-R6 任务二〕失焦＝保存回渲染态。焦点落在本面板内（取消钮、保存 chip 的「重试」）时
+  // 不插一脚：快捷词／动作条那些钮自带 mousedown.prevent，焦点根本不会走；真会走到这里的
+  // （取消、chip）由它们自己的语义收口，blur 不替它们保存。
+  if (!chapterEditing.value || committingChapter) return
+  const next = event?.relatedTarget
+  // 焦点走去的是**这一块面板自己**的控件才算「面板内挪焦」——分屏时另一格的 .pane 不算（否则两页互点会漏保存）。
+  const root = event?.currentTarget?.closest?.('.pane')
+  if (root && next && root.contains(next)) return
+  void commitChapterEditing()
 }
 
 function onEditorInput(event) {
@@ -861,6 +988,11 @@ function onPaneKeydown(event) {
   // 批次28：大纲节点备注（textarea.outline-note）同样属于大纲草稿，按 Ctrl+S 落整份保存。
   if (!event.target?.matches?.('textarea.editor-area, textarea.entry-meta-summary, textarea.outline-note, input.outline-title')) return
   event.preventDefault()
+  // 〔批次68-R6 任务二〕正文编辑态的 Ctrl+S＝保存并回渲染态（与失焦同一条收口，不是第二次保存实现）。
+  if (viewKind.value === 'chapter-editor' && chapterEditing.value) {
+    void commitChapterEditing()
+    return
+  }
   void saveCurrent()
 }
 
@@ -1079,19 +1211,23 @@ function actOnSaveChip() {
                 </div>
               </div>
             </span>
-            <!-- 阅读态／编辑态（批次43）：默认是读（md 渲染过的一篇文），要改就按这一枚「编辑」。 -->
-            <button v-if="!chapterEditing" type="button" class="control-secondary chapter-edit" data-test="chapter-edit" @click="chapterEditing = true">编辑</button>
-            <button v-else type="button" class="control-quiet chapter-cancel" data-test="chapter-cancel" @click="chapterEditing = false">取消</button>
+            <!-- 〔批次68-R6 任务二〕「编辑」钮退役（判据㉑）：正文改从阅读面点入——
+                 默认就是能改的一篇文，不需要先按一枚钮声明「我要开始编辑了」。
+                 「取消」保留：它收的是编辑态这条路，与保存 chip 一起构成退出口。 -->
+            <button v-if="chapterEditing" type="button" class="control-quiet chapter-cancel" data-test="chapter-cancel" @click="chapterEditing = false">取消</button>
           </span>
         </div>
         <!-- 阅读态（批次43）：正文是 md 稿子，默认渲染出来（标题／粗体／列表…），不再是裸源码。
-             批次55：text-pages 档只渲染当前页；key 带页号，翻页时整块重渲染（旧蓝链不残留）。 -->
+             批次55：text-pages 档只渲染当前页；key 带页号，翻页时整块重渲染（旧蓝链不残留）。
+             〔任务二〕点一段就地接稿（data-click-to-edit 是这条交互的机器声明，判据㉑钉它）；
+             蓝链自己先吸掉点击（词表与锚点同页，跨页不残留的纪律照旧）。 -->
         <div
           v-if="!chapterEditing"
           :key="chapterReadingKey"
           ref="chapterRenderedEl"
           class="entry-text nx-rendered-md doc-reading chapter-reading"
           data-test="chapter-rendered"
+          data-click-to-edit="chapter"
           :data-page-mode="chapterLoadingMode"
           :data-page-index="chapterPageIndex"
           :data-page-count="chapterPageCount"

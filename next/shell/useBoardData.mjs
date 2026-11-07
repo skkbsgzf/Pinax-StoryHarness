@@ -341,6 +341,44 @@ export function useBoardData(bridge) {
     noteClaim({ path: item.file, kind: 'chapter' })
   }
 
+  /**
+   * 〔批次68-R6 任务二 · 越界补登记〕整章展开：把只载入前段的大稿补完整。
+   *
+   * 「多载入」不是「改动」：不走 setDraft（不置脏、不起自动保存计时器），
+   * 拼完把指纹直接对齐到新基线——与 openChapter 落地时 markBaseline 同一套语义，
+   * 展开本身不该让「未保存的改动」亮起来，也不该推修订号。
+   * 尾段按 offset／maxChars 分段读（工具单次上限 200000 字，正常一章一两段就够；留 200 段保险丝）。
+   * 拒收不猜：读失败、读到一半修订号变了（外部动过盘），都原样返回原因、一个字节不动草稿，
+   * truncated 语义照旧——界面继续按「只载入前段」的纪律走。
+   */
+  async function loadFullChapterDraft() {
+    if (!state.chapter) return { ok: false, message: '当前没有打开的章节。' }
+    if (state.chapter.truncated !== true) return { ok: true, completed: true }
+    const file = state.chapter.file
+    const base = state.chapter.revision
+    let merged = String(state.draft ?? '')
+    for (let step = 0; step < 200; step += 1) {
+      const read = await tool('pinax_chapter_read', { file, offset: merged.length, maxChars: 200000 })
+      if (!read.ok) return { ok: false, message: read.message ?? '后半段补载失败。' }
+      if (Number.isSafeInteger(read.value?.revision) && read.value.revision !== base) {
+        return { ok: false, message: '这一章中途被外部改动过，后半段不合并：请重新载入该章。' }
+      }
+      merged += String(read.value?.text ?? '')
+      if (read.value?.truncated !== true) {
+        const total = Number(read.value?.totalChars)
+        state.draft = merged
+        state.chapter = {
+          ...state.chapter,
+          truncated: false,
+          totalChars: Number.isSafeInteger(total) && total >= merged.length ? total : merged.length
+        }
+        markBaseline('chapter')
+        return { ok: true, completed: true }
+      }
+    }
+    return { ok: false, message: '这一章过长，整章展开停在保险丝内。' }
+  }
+
   /** 保存＝作者按 Ctrl+S 的那一下（工单H1：常驻保存按钮已移除）：带读到的修订号走 pinax_chapter_save，
    *  冲突由文件服务拒，不静默覆盖；结果只进保存 chip，不再写一条常驻提示。
    *  auto=true 是自动保存发起的同一件事：同一套修订号闸、同一枚 chip，只是 chip 不报版本号、
@@ -2237,6 +2275,7 @@ export function useBoardData(bridge) {
     saveOutline,
     setDraft,
     setDraftSelection,
+    loadFullChapterDraft,
     requestWriting,
     applyWriting,
     discardWriting,

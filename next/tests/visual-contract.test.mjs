@@ -1691,3 +1691,73 @@ test('〔批次68-R3 门禁⑲／批次68-R4 扩展〕设置弹窗常驻文案�
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
   assert.ok(layout.includes('.nx-note-details'), '「细节」折叠的样式落点要在布局层')
 })
+
+/**
+ * 〔批次68-R6 门禁⑳〕右栏停靠占位化：Agent 坞是版面里的**占位兄弟列**，不是浮层。
+ *
+ * 工单口径：正文右缘的常驻控件（分页条／快捷词弹层／保存 chip）永远不许压在 Agent 面板上。
+ * jsdom 量不了 rect，这一半归调度方真窗复拍；这里钉的是声明级链路——
+ *   1) 绑定链：dockWidth ref → .col-dock 的 :style 宽度 → 拖拽闸 320..680 同一条 clamp；
+ *   2) 排版：.col-dock 必须是 flex 占位项（0 0 auto）且**绝不**定位；
+ *      .col-center 必须 min-width:0（长稿不许把坞顶出可视区）——占位化的另一半是「中心区可缩」；
+ *   3) 正文右缘控件不借视口坐标：.nx-tools 绝对定位（锚在面板内的 relative 挂点），
+ *      而不是 fixed；.chapter-pager 不领任何定位规则。
+ * 浮层清单（哪些能盖内容、哪些必须留在自己栏内）见执行记录 §7-1 任务一的表——
+ * 这一闸只钉「常驻／半常驻类不出栏」这条纪律的声明级样本，清单本身归人裁。
+ */
+test('〔批次68-R6 门禁⑳〕右栏是占位列：绑定链完整、坞不定位、中心区可缩、右缘控件不出栏', async () => {
+  const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/gu, '')
+  assert.match(app, /const dockWidth = ref\(\d+\)/u, '坞宽要有唯一的状态出处（dockWidth ref）')
+  assert.match(app, /class="col-dock"[\s\S]{0,80}:style="\{ width: dockWidth \+ 'px' \}"/u, '.col-dock 的宽度必须绑在 dockWidth 上——拖拽与占位共用这一格数')
+  assert.match(app, /dockWidth\.value = Math\.min\(680, Math\.max\(320, next\)\)/u, '拖拽闸的 320..680 clamp 要在（坞不许被拖成零宽或满屏）')
+
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  const dockBody = ruleBody(layout, '.col-dock {')
+  assert.ok(dockBody && /flex:\s*0 0 auto/.test(dockBody), '.col-dock 必须是 flex 占位项（0 0 auto）——不是占位就是浮层')
+  assert.equal(/position:\s*(fixed|absolute)/.test(dockBody ?? ''), false, '坞本体绝不许定位：占位列靠排版活着')
+  const centerBody = ruleBody(layout, '.col-center {')
+  assert.ok(centerBody && /min-width:\s*0/.test(centerBody), '中心区缺 min-width:0：一条不折行的长稿就能把坞顶出可视区（占位化的一半是中心区可缩）')
+  const dockInside = ruleBody(layout, '.dock {')
+  assert.equal(/position:\s*(fixed|absolute)/.test(dockInside ?? ''), false, '对话框容器也不许定位')
+  const toolsBody = ruleBody(layout, '.nx-tools {')
+  assert.ok(toolsBody && /position:\s*absolute/.test(toolsBody), '快捷词弹层要绝对定位在面板内的挂点上——fixed 等于借视口坐标，会盖过坞')
+  assert.equal(/position:\s*fixed/.test(toolsBody ?? ''), false, '正文右缘的常驻控件不许 fixed')
+  const anchorBody = ruleBody(layout, '.nx-tools-anchor {')
+  assert.ok(anchorBody && /position:\s*relative/.test(anchorBody), '弹层的挂点必须是 relative（absolute 有爹可认，才出不了栏）')
+  const pagerBody = ruleBody(layout, '.chapter-pager {')
+  assert.equal(/position:\s*(fixed|absolute)/.test(pagerBody ?? ''), false, '分页条是流内件：它可以有样式，但不许领定位规则')
+
+  // 坞的兄弟关系钉在宿主结构里：col-center 与 col-dock 同排，中间只隔把手。
+  const centerAt = app.indexOf('class="col-center"')
+  const dockAt = app.indexOf('class="col-dock"')
+  assert.ok(centerAt >= 0 && dockAt > centerAt, '右栏必须还是中心区的占位兄弟列——结构挪了就回到浮层老账')
+  assert.ok(app.slice(centerAt, dockAt).includes('class="resizer"'), '两列之间只应隔一条拖拽把手（坞宽唯一入口还是那个拖拽）')
+})
+
+/**
+ * 〔批次68-R6 门禁㉑〕正文默认实时编辑渲染：「编辑」钮退役，阅读面自己声明可点入。
+ *
+ * 两半判据（工单原文）：模板不再保留 chapter-edit 入口钮（保存 chip 与「取消」例外）；
+ * 阅读面容器挂着「点入进编辑」的交互声明（data-click-to-edit），点击处理里那条
+ * 「非蓝链 → enterChapterEditingFrom」的分支在，失焦与 Ctrl+S 收口走同一条 commit。
+ */
+test('〔批次68-R6 门禁㉑〕正文编辑入口是「点入即改」：chapter-edit 钮绝迹，阅读面挂交互声明', async () => {
+  const carrier = stripComments(await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/gu, '')
+  assert.equal(carrier.includes('data-test="chapter-edit"'), false, '「编辑」入口钮退役了又回来')
+  assert.equal(carrier.includes('class="control-secondary chapter-edit"'), false, 'chapter-edit 的控件词汇也该随钮一起退')
+  // 例外两支保留：取消（编辑态退路）与保存 chip（状态读数）。
+  assert.match(carrier, /data-test="chapter-cancel"/u, '「取消」不在退役面内：它是编辑态的退路')
+  assert.match(carrier, /class="nx-save-chip"/u, '保存 chip 不在退役面内')
+  // 交互声明：阅读面容器上钉着点入语义，判据看的是声明本身。
+  assert.match(carrier, /data-test="chapter-rendered"[\s\S]{0,20}data-click-to-edit="chapter"/u, '阅读面容器没有「点入进编辑」的机器声明')
+  // 分支在位：蓝链先吸掉，其余点击进就地接稿；就地接稿真的会点亮编辑态。
+  assert.match(carrier, /function onChapterRenderedClick[\s\S]{0,900}enterChapterEditingFrom\(event\)/u, '点击处理没接上就地接稿（else 分支断了）')
+  assert.match(carrier, /async function enterChapterEditingFrom[\s\S]{0,1200}chapterEditing\.value = true/u, '就地接稿不点亮编辑态就是假入口')
+  // 收口两条都走同一份 commit：失焦与 Ctrl+S；展开走同一份 expandChapterForEditing（不长第二套）。
+  assert.match(carrier, /function onEditorBlur[\s\S]{0,700}commitChapterEditing\(\)/u, '失焦没接保存回渲染态')
+  assert.match(carrier, /onPaneKeydown[\s\S]{0,900}commitChapterEditing\(\)/u, '正文的 Ctrl+S 没接保存回渲染态')
+  assert.match(carrier, /async function commitChapterEditing[\s\S]{0,700}await props\.data\.save\(\)[\s\S]{0,200}chapterEditing\.value = false/u, 'commit 必须保存后回渲染态（两步缺一步都不算「保存回渲染态」）')
+  assert.match(carrier, /async function insertAtCaret[\s\S]{0,600}expandChapterForEditing\(\)/u, '快捷词／取名插入没走整章展开就落字：半截草稿上落字＝下一次保存抹掉后段')
+  // 分页兼容：编辑态下分页条整块让位（v-if 谓词在），回到阅读态由 watch 现补当前页。
+  assert.match(carrier, /v-if="!chapterEditing && textPagesReading && chapterPageCount > 1" class="chapter-pager"/u, '编辑态没让位分页条（「进入编辑自动整章展开」的版面前提）')
+})

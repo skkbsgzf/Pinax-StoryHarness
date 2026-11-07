@@ -48,8 +48,8 @@ async function mountedPane(options) {
   await data.loadChapters()
   const wrapper = mount(CarrierPaneHost, { props: { pane: { id: 'novel.editor', title: '正文' }, data } })
   await flushPromises()
-  // 批次43：正文面默认是阅读态——写作动作带挂在编辑器上，先按「编辑」进编辑区。
-  await wrapper.find('[data-test="chapter-edit"]').trigger('click')
+  // 批次43：正文面默认是阅读态——写作动作带挂在编辑器上。〔批次68-R6 任务二〕点阅读面就地接稿（「编辑」钮已退役）。
+  await wrapper.find('[data-test="chapter-rendered"]').trigger('click')
   await flushPromises()
   return { wrapper, data, bridge }
 }
@@ -125,8 +125,8 @@ describe('正文写作动作（批次41）', () => {
     await data.loadChapters()
     const wrapper = mount(CarrierPaneHost, { props: { pane: { id: 'novel.editor', title: '正文' }, data } })
     await flushPromises()
-    // 批次43：正文面默认是阅读态，写作动作带挂在编辑器上——先按「编辑」。
-    await wrapper.find('[data-test="chapter-edit"]').trigger('click')
+    // 批次43：正文面默认是阅读态，写作动作带挂在编辑器上。〔批次68-R6 任务二〕点阅读面就地接稿。
+    await wrapper.find('[data-test="chapter-rendered"]').trigger('click')
     await flushPromises()
     await wrapper.find('.editor-area').trigger('focus')
     await wrapper.find('[data-test="writing-continue"]').trigger('click')
