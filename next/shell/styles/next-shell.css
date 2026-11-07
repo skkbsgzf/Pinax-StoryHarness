@@ -404,6 +404,10 @@ body {
   font-size: var(--nx-fs-md);
   color: var(--text-muted);
 }
+/* 〔批次68-R5〕左栏空态的主操作钮与句子同排（照大纲「新建大纲」的先例，同一控件词汇）。 */
+.nx-index-empty .nx-index-add {
+  margin-inline-start: 6px;
+}
 .nx-index-error {
   margin: 6px 10px;
   font-size: var(--nx-fs-md);

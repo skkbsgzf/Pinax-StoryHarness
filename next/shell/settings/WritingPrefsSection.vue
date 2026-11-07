@@ -125,8 +125,8 @@ async function save() {
           max="22"
           step="1"
           aria-label="正文字号（14–22）"
+          title="14–22 的整数，默认 17"
         >
-        <span class="prefs-row-hint">14–22 的整数（默认 17）</span>
       </div>
       <div class="prefs-row">
         <span class="prefs-row-label">正文行高</span>
@@ -138,8 +138,8 @@ async function save() {
           max="2.4"
           step="0.05"
           aria-label="正文行高（1.6–2.4，步进 0.05）"
+          title="1.6–2.4，步进 0.05，默认 1.9"
         >
-        <span class="prefs-row-hint">1.6–2.4，步进 0.05（默认 1.9）</span>
       </div>
       <div class="prefs-row">
         <span class="prefs-row-label">段落间距</span>
@@ -151,8 +151,8 @@ async function save() {
           max="2"
           step="0.1"
           aria-label="段落间距（0–2em，步进 0.1）"
+          title="0–2em，步进 0.1，默认 0.8"
         >
-        <span class="prefs-row-hint">0–2em，步进 0.1（默认 0.8）</span>
       </div>
       <div class="prefs-row">
         <span class="prefs-row-label">首行缩进</span>
@@ -164,8 +164,8 @@ async function save() {
           max="2"
           step="0.5"
           aria-label="首行缩进（0–2em，步进 0.5）"
+          title="0–2em，步进 0.5，默认 2（0＝不缩进）"
         >
-        <span class="prefs-row-hint">0–2em，步进 0.5（默认 2）</span>
       </div>
       <div class="prefs-row">
         <span class="prefs-row-label">打字机滚动</span>

@@ -254,6 +254,10 @@ const recordSet = computed(() => {
   return (key && props.data.recordSets?.[key]) || { records: [], error: null, loaded: false }
 })
 
+/** 〔批次68-R5 发现2〕设定与资料两段都空＝只说一个空态；各判各的「干净地空」（报错另有那行）。 */
+const dossierDocumentsEmpty = computed(() => !props.data.documents.length && !props.data.documentsError)
+const dossierRulesEmpty = computed(() => !props.data.rules.length && !props.data.rulesError)
+
 /** 树所在的目录名：取板块认领的第一个目录（小说＝正文，大纲＝大纲，构思＝构思…）。 */
 const treeDir = computed(() => props.board?.dataDirs?.[0] ?? props.board?.treePaneTitle ?? '目录')
 
@@ -790,7 +794,9 @@ watch(() => props.board?.id, () => {
             </li>
           </ul>
         </template>
-        <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+        <p v-if="!data.chapters.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('chapters')">新建章节</button>
+        </p>
       </template>
 
       <!-- 大纲（协议 v1.1-A：独立一栏，只有大纲那一棵内容树）。
@@ -904,7 +910,9 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.notes.length && !data.notesError" class="nx-index-empty">构思还没有内容。</p>
+        <p v-if="!data.notes.length && !data.notesError" class="nx-index-empty">构思还没有内容。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('notes')">新建构思</button>
+        </p>
         <p v-if="data.notesError" class="nx-index-error">{{ data.notesError }}</p>
       </template>
 
@@ -954,11 +962,15 @@ watch(() => props.board?.id, () => {
           </select>
         </div>
         <EntriesCategoryTree v-if="data.entries.length" :data="data" />
-        <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。</p>
+        <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('entries')">新建条目</button>
+        </p>
       </template>
 
       <!-- 设定与资料（批次60）：一棵索引树两段——资料在前（数据目录顺位），约束在后。
-           两段各自有新建入口、各自报错；打开行为沿用各自旧栏的做法（资料→阅读面，约束→规则面）。 -->
+           两段各自有新建入口、各自报错；打开行为沿用各自旧栏的做法（资料→阅读面，约束→规则面）。
+           〔批次68-R5 发现2〕两段都空时只说一个空态（一句话＋主操作钮），不再三块噪音并排；
+           只有一段空时那一段自己说。 -->
       <template v-else-if="treeKind === 'dossier'">
         <div class="nx-index-section-head" data-test="dossier-section-documents">
           <p class="workspace-nav-section">资料</p>
@@ -1002,7 +1014,12 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容。</p>
+        <p v-if="dossierDocumentsEmpty && !dossierRulesEmpty" class="nx-index-empty">资料还没有内容。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('documents')">新建资料</button>
+        </p>
+        <p v-if="dossierDocumentsEmpty && dossierRulesEmpty" class="nx-index-empty" data-test="dossier-empty-merged">资料与约束都还没有内容。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('documents')">新建资料</button>
+        </p>
         <p v-if="data.documentsError" class="nx-index-error">{{ data.documentsError }}</p>
 
         <div class="nx-index-section-head" data-test="dossier-section-rules">
@@ -1047,7 +1064,9 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容。</p>
+        <p v-if="dossierRulesEmpty && !dossierDocumentsEmpty" class="nx-index-empty">约束还没有内容。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('rules')">新建约束</button>
+        </p>
         <p v-if="data.rulesError" class="nx-index-error">{{ data.rulesError }}</p>
       </template>
 
@@ -1097,7 +1116,9 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容。</p>
+        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('rules')">新建约束</button>
+        </p>
         <p v-if="data.rulesError" class="nx-index-error">{{ data.rulesError }}</p>
       </template>
 
@@ -1147,7 +1168,9 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容。</p>
+        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('documents')">新建资料</button>
+        </p>
         <p v-if="data.documentsError" class="nx-index-error">{{ data.documentsError }}</p>
       </template>
 
@@ -1197,7 +1220,9 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.scripts.length && !data.scriptsError" class="nx-index-empty">剧本还没有内容。</p>
+        <p v-if="!data.scripts.length && !data.scriptsError" class="nx-index-empty">剧本还没有内容。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('scripts')">新建剧本</button>
+        </p>
         <p v-if="data.scriptsError" class="nx-index-error">{{ data.scriptsError }}</p>
       </template>
 
@@ -1248,6 +1273,7 @@ watch(() => props.board?.id, () => {
         </ul>
         <p v-if="!recordSet.records.length && !recordSet.error" class="nx-index-empty">
           {{ recordCarrier?.title }}还没有记录。
+          <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('records')">新建{{ recordCarrier?.title ?? '记录' }}</button>
         </p>
         <p v-if="recordSet.error" class="nx-index-error">{{ recordSet.error }}</p>
       </template>

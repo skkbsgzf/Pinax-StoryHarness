@@ -51,7 +51,7 @@ watch(targetPath, () => { void loadHistory() })
 
 async function request(channel, payload) {
   if (!props.bridge?.request) {
-    return { ok: false, error: { message: '渲染层未接主进程桥（preload 的 pinaxNext 通道）。' } }
+    return { ok: false, error: { message: '这一步没连上本地服务，暂时办不了。请重启应用后再试。' } }
   }
   try {
     return await props.bridge.request(channel, payload)
@@ -151,7 +151,7 @@ async function performRestore() {
     }
     const result = props.restore
       ? await props.restore({ target: props.target, oid: selectedOid.value, text: shown.value })
-      : { ok: false, message: '这一面还没接上写回文档的通道，暂时不能恢复' }
+      : { ok: false, message: '这一格还没接上把旧版本写回文档的能力，暂时不能恢复。' }
     if (!result?.ok) {
       feedback.value = { kind: 'error', text: result?.message ?? '恢复失败' }
       return

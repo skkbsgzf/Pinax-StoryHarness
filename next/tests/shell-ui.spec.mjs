@@ -1615,6 +1615,26 @@ describe('运行时栏', () => {
     expect(bare.find('[data-test="composer-more"]').exists()).toBe(false)
     bare.unmount()
   })
+
+  /**
+   * 〔批次68-R5 发现6〕双「未回报」不许同屏：答过而全线没有 usage 回报时，卡片 chip
+   * 「这一轮没有用量」就是那一格诚实回报，状态排的 tokens 格省略；没答过时状态排照常如实报。
+   */
+  it('〔批次68-R5 发现6〕回答在场且无用量回报时，状态排 tokens 那格省略；无回答时仍如实「未回报」', async () => {
+    const answered = mount(AssistantDialog, {
+      props: { messages: [{ id: 'a1', role: 'agent', text: '第三章更好。', at: '10:01' }] }
+    })
+    expect(answered.find('[data-test="usage-chip"]').text()).toBe('这一轮没有用量')
+    expect(answered.find('[data-test="status-tokens"]').exists(), '两格并报是同一件事说两遍').toBe(false)
+    expect(answered.find('[data-test="status-envelope"]').exists(), '只省略 tokens 那一格，其余状态排不动').toBe(true)
+    answered.unmount()
+
+    const withUsage = mount(AssistantDialog, {
+      props: { messages: [{ id: 'a1', role: 'agent', text: '好。', at: '10:01', usage: { input: 10, output: 5, total: 15 } }] }
+    })
+    expect(withUsage.find('[data-test="status-tokens"]').text()).toBe('本轮 15 tokens')
+    withUsage.unmount()
+  })
 })
 
 describe('Obsidian 三栏', () => {
@@ -2078,7 +2098,10 @@ describe('偏好与模型面板（批次8①）', () => {
     expect(probe).toHaveBeenCalledTimes(1)
     const state = wrapper.find('.prefs-state')
     expect(state.classes()).toContain('is-error')
-    expect(state.text()).toContain('模型面不可达')
+    // 〔批次68-R4 任务2〕按钮与结果同一词表（「模型服务」），常驻句子里不再出现进程名与端点机制词。
+    expect(state.text()).toContain('模型服务不可达')
+    expect(state.text()).not.toMatch(/serve:pinax|pi-agent|任务面/u)
+    expect(wrapper.find('[aria-label="偏好与模型"]').text()).not.toMatch(/serve:pinax|pi-agent/u)
 
     const panel = wrapper.find('[aria-label="偏好与模型"]')
     await panel.find('.prefs-input').setValue('')
@@ -3307,12 +3330,22 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await flushPromises()
 
     // 组标题来自各节的 group 字段（AppNext.settingsSections），不是写死在弹窗里的第二份清单。
+    // 〔批次68-R4 任务1〕只有单节的组（技能／载体）已拍平，不出组头，所以清单到此为止。
     const labels = wrapper.findAll('.settings-group-label').map((node) => node.text())
-    expect(labels.slice(0, 3)).toEqual(['应用', '项目', '文档'])
+    expect(labels).toEqual(['应用', '项目', '文档'])
 
     // 静态八节按组序排列：应用（偏好与模型/备份与恢复/服务与通知）→ 项目（载体管理/导入既有稿/新建项目/主载体选择）→ 文档（文档历史）。
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
     expect(tabs.slice(0, 8)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '载体管理', '导入既有稿', '新建项目', '主载体选择', '文档历史'])
+    // 〔批次68-R4 任务1·实测发现1〕组头是纯视觉层：不是 tab、不可聚焦、不参与方向键换节。
+    const headers = wrapper.findAll('.settings-navigation .settings-group-label')
+    expect(headers).toHaveLength(3)
+    for (const header of headers) {
+      expect(header.element.tagName).toBe('P')
+      expect(header.attributes('role')).toBeUndefined()
+      expect(header.attributes('aria-hidden')).toBe('true')
+      expect(header.attributes('tabindex')).toBeUndefined()
+    }
     wrapper.unmount()
   })
 
@@ -3392,8 +3425,12 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
     await flushPromises()
 
-    // 有声明的载体进「载体」组，目录项文案就是声明里的 title——不再是按载体标题伪造的「<载体> 设置」。
-    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toContain('载体')
+    // 有声明的载体进目录，目录项文案就是声明里的 title——不再是按载体标题伪造的「<载体> 设置」。
+    // 〔批次68-R4 任务1〕单节组拍平：「载体」「技能」都不再出组头（组头与那一格同义），
+    // 写作偏好／技能库 作为顶级页面项出现并带分隔样式；应用／项目／文档 三组头照旧。
+    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toEqual(['应用', '项目', '文档'])
+    const standalone = wrapper.findAll('.settings-navigation .settings-tab.is-standalone').map((node) => node.text())
+    expect(standalone).toEqual(expect.arrayContaining(['技能库', '写作偏好']))
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
     expect(tabs).toContain('写作偏好')
     expect(tabs).not.toContain('小说（夹具） 设置')

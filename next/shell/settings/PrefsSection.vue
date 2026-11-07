@@ -21,12 +21,18 @@ const prefsBusy = ref(false)
 const prefsFeedback = ref(null)
 const probeState = ref(null)
 const probeClass = computed(() => ({ ready: 'is-ready', 'no-model': 'is-warn', unreachable: 'is-error' })[probeState.value?.state ?? ''] ?? 'is-warn')
+/**
+ * 〔批次68-R4 任务2〕探测结果三态是状态层，照留；话术与按钮同一词表（「模型服务」），
+ * 机制细节（谁持有端点、进程名叫什么）不再写进常驻句子——挪到这一行的 title。
+ * 上游那句真话（detail）原样带出，不加工。
+ */
 const probeText = computed(() => {
   const state = probeState.value
   if (!state) return ''
-  if (state.state === 'ready') return `模型面就绪：${state.endpoint}`
-  if (state.state === 'no-model') return `任务面可达但未配模型：请在 serve:pinax 一侧选择模型（${state.endpoint}）`
-  return `模型面不可达：${state.endpoint}${state.detail ? `（${state.detail}）` : ''}。请启动 pi-agent 任务面（serve:pinax）或修改端点。`
+  const endpoint = state.endpoint ?? ''
+  if (state.state === 'ready') return endpoint ? `模型服务就绪：${endpoint}` : '模型服务就绪'
+  if (state.state === 'no-model') return `模型服务可达，但还没有可选的模型：请在模型服务里选定模型${endpoint ? `（${endpoint}）` : ''}`
+  return `模型服务不可达${endpoint ? `：${endpoint}` : ''}${state.detail ? `（${state.detail}）` : ''}。请确认服务已经启动，或者改上面的端点再检测一次。`
 })
 /** 外观主题走 theme.mjs 的 localStorage 契约（与老前端共用 app_theme），偏好面只给它一个入口。 */
 const themeDraft = ref(props.scheme)
@@ -85,18 +91,34 @@ function applyThemeChoice() {
         <span class="prefs-row-label">外观主题</span>
         <label class="wizard-companion"><input v-model="themeDraft" type="radio" name="prefs-theme" value="light" @change="applyThemeChoice"> 浅色</label>
         <label class="wizard-companion"><input v-model="themeDraft" type="radio" name="prefs-theme" value="dark" @change="applyThemeChoice"> 深色</label>
-        <span class="prefs-row-hint">与老前端共用同一份偏好，改了那边也跟着变</span>
+        <!-- 〔批次68-R4 任务2〕存储机制（与老前端共用一份偏好）退到 title，正文给作者视角那句。 -->
+        <span class="prefs-row-hint" title="与老前端共用同一份偏好，改了那边也跟着变">选完立刻换肤，不用保存</span>
       </div>
       <div class="prefs-row">
-        <span class="prefs-row-label">模型面端点</span>
-        <input v-model="prefsDraft.modelPlaneEndpoint" class="nx-field prefs-input" type="text" placeholder="http://127.0.0.1:8451（留空＝默认 8451）">
-        <button type="button" class="control-secondary" :disabled="prefsBusy" @click="probePlane">检测模型面</button>
+        <span class="prefs-row-label">模型服务端点</span>
+        <input
+          v-model="prefsDraft.modelPlaneEndpoint"
+          class="nx-field prefs-input"
+          type="text"
+          placeholder="http://127.0.0.1:8451（留空＝默认 8451）"
+          title="留空回到默认端点；模型凭据仍由模型服务自己持有，这里只改地址"
+        >
+        <button type="button" class="control-secondary" :disabled="prefsBusy" @click="probePlane">检测模型服务</button>
       </div>
-      <p v-if="probeState" class="prefs-state" :class="probeClass">{{ probeText }}</p>
+      <p v-if="probeState" class="prefs-state" :class="probeClass" title="模型服务＝本机 pi-agent 任务面（serve:pinax，默认 8451）；这一行只报它当前通不通">
+        {{ probeText }}
+      </p>
       <div class="prefs-row">
         <span class="prefs-row-label">界面缩放</span>
-        <input v-model.number="prefsDraft.uiZoom" class="nx-field prefs-zoom" type="number" min="0.5" max="2" step="0.05">
-        <span class="prefs-row-hint">0.5–2.0，保存即生效</span>
+        <input
+          v-model.number="prefsDraft.uiZoom"
+          class="nx-field prefs-zoom"
+          type="number"
+          min="0.5"
+          max="2"
+          step="0.05"
+          title="0.5–2.0，保存即生效"
+        >
       </div>
       <div class="prefs-actions">
         <button type="button" class="control-primary" :disabled="prefsBusy" @click="savePrefs">保存并生效</button>

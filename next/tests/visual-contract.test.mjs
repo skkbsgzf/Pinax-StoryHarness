@@ -361,6 +361,13 @@ test('统一设置二级页：SettingsModal 存在且用老版设置弹窗的目
   }
   // D2：目录分两组（设置／文档），文档历史节登记在「文档」组里。
   assert.ok(settings.includes('settings-group-label'), 'SettingsModal 缺分组标题（设置／文档）的目录词汇')
+  // 〔批次68-R4 任务1〕组头是纯视觉层，且只有一节的组拍平：目录里不许再出现一行与那一格同义、又点不动的标题。
+  assert.match(settings, /<p v-if="group\.labeled" class="settings-group-label" aria-hidden="true"/u,
+    'SettingsModal 的分组标题必须是有条件的静态 <p>（aria-hidden，不是 tab、不可点）')
+  assert.match(settings, /labeled: \(declaredGroupSize\.value\.get\(name\) \?\? 0\) >= 2/u,
+    '单节组拍平的判据要写在声明结构上（搜索把一组滤成一节时组头不许跟着消失）')
+  assert.doesNotMatch(settings, /<p class="settings-group-label"/u,
+    '组头不许回到无条件渲染——那样「技能」「载体」这类同义组头会重新占一格')
 })
 
 /**
@@ -1473,12 +1480,8 @@ test('〔批次68-R3 门禁⑰〕沉默层：球在零收起零通知时零渲�
  */
 const EMPTY_STATE_ALLOWLIST = [
   { file: 'CarrierPaneHost.vue', snippet: '还没有可用的词', reason: '纯只读：快捷词由世界书条目与正文词频自动收录，没有可点的主操作' },
-  { file: 'IndexWindow.vue', snippet: '构思还没有内容', reason: '新建动作在本区标题行的 ＋（hover 显形），不在命中行旁边' },
-  { file: 'IndexWindow.vue', snippet: '资料还没有内容', reason: '同上：「资料」区标题行右侧的 ＋' },
-  { file: 'IndexWindow.vue', snippet: '约束还没有内容', reason: '同上：「约束」区标题行右侧的 ＋' },
-  { file: 'IndexWindow.vue', snippet: '剧本还没有内容', reason: '同上：「剧本」区标题行右侧的 ＋' },
-  { file: 'IndexWindow.vue', snippet: '还没有记录', reason: '记录型载体：新建动作在本区标题行的 ＋' },
-  { file: 'IndexWindow.vue', snippet: '这一栏还没有条目', reason: '世界书：新建动作在本栏标题行（web 模板）' },
+  // 〔批次68-R5 任务1〕左栏各树空态改为「一句话＋同排新建钮」（照「新建大纲」先例），
+  // R3 登记的那几条 hover-＋ 例外全部就地消化，账不留僵尸：构思／资料／约束／剧本／记录／条目／章节。
   { file: 'EntriesBoard.vue', snippet: '这一栏还没有条目', reason: '看板区：新建入口在本板顶栏（类别＋标题＋新建）' },
   { file: 'EntryGraph.vue', snippet: '还没有登记关系', reason: '纯只读图：关系由条目面板登记，图上不造第二入口' },
   { file: 'SettingsModal.vue', snippet: '该载体的设置项还没有内容', reason: '纯只读：载体没声明设置项，任何动作都是假口' },
@@ -1540,10 +1543,12 @@ test('〔批次68-R3 门禁⑱〕空态文案要么带同容器主操作钮，�
 
 /**
  * 〔批次68-R3 门禁⑲〕指南层：设置节常驻文案不得含机制 token。
- *
- * 症状（工单实测）：备份节整段开发手册上屏（`.pinax/history.git`、backup-manifest.json、dryRun……）。
- * 判据：settings/*.vue 的 <template> 里，剥掉注释、title 属性与「细节」折叠块之后，
- * 常驻版面文本再出现机制 token 即红。路径／文件名／格式的去处只有两个：title，或 nx-note-details。
+ * 〔批次68-R4 任务2 扩展面登记〕扫描面从「settings/*.vue 的 <template>」扩到两处：
+ *   ① 加上目录本体 SettingsModal.vue（设置弹窗里常驻的话，不只是各节的话）；
+ *   ② 加上各文件的 <script> 字符串字面量——R3 只看模板，把常驻句写在 computed 里就能绕过
+ *      （PrefsSection 的探测结果句正是这一形态：serve:pinax 藏在脚本串里上了屏）。
+ * 脚本侧只查含汉字的字面量：那是要读给人听的话；'outline.json'、payload.dryRun 这类
+ * 逻辑常量与标识符不是文案，不在这个面里（判据按「上屏的话」划，不按「文件里有没有这个词」划）。
  */
 const MECHANISM_TOKENS = [
   { pattern: /\.pinax\//gu, label: '.pinax/ 路径' },
@@ -1551,29 +1556,126 @@ const MECHANISM_TOKENS = [
   { pattern: /\.json\b/gu, label: '*.json 文件名' },
   { pattern: /history\.git/gu, label: 'history.git' },
   { pattern: /\bdryRun\b/gu, label: 'dryRun' },
-  { pattern: /serve:pinax/gu, label: 'serve:pinax 端点名' }
+  { pattern: /serve:pinax/gu, label: 'serve:pinax 端点名' },
+  // 〔批次68-R4〕开发口径的进程名与「面」系黑话：常驻文案一律换成作者读得懂的「模型服务」。
+  { pattern: /\bpi-agent\b|任务面/gu, label: 'pi-agent／任务面（进程黑话）' },
+  { pattern: /模型面/gu, label: '模型面（与按钮「检测模型服务」不同词表）' }
 ]
 
-test('〔批次68-R3 门禁⑲〕设置节常驻文案不含机制 token（title／细节折叠除外）', async () => {
+/**
+ * 脚本段的字面量取样：单引号／双引号／反引号都算，模板串的 ${…} 里嵌套的字面量并回同一句
+ * （否则一句常驻话被插值截断，后半句里的机制词就从这一闸眼皮底下溜走）。
+ * 注释逐字符跳过——注释是实现说明，不上屏；串里的 `//`（如 http://127.0.0.1）不会被当成注释。
+ */
+function scanStringEnd(text, i) {
+  const quote = text[i]
+  let j = i + 1
+  while (j < text.length) {
+    const c = text[j]
+    if (c === '\\') { j += 2; continue }
+    if (c === quote) return j + 1
+    if (quote !== '`' && c === '\n') return j
+    if (quote === '`' && c === '$' && text[j + 1] === '{') { j = skipBraces(text, j); continue }
+    j += 1
+  }
+  return j
+}
+
+function skipBraces(text, i) {
+  let depth = 0
+  let j = i
+  while (j < text.length) {
+    const c = text[j]
+    if (c === '{') { depth += 1; j += 1; continue }
+    if (c === '}') { depth -= 1; j += 1; if (depth === 0) return j; continue }
+    if (c === "'" || c === '"' || c === '`') { j = scanStringEnd(text, j); continue }
+    j += 1
+  }
+  return j
+}
+
+/** 取出每一处字符串字面量的正文；模板串 ${…} 里的嵌套字面量并进同一句（一句话被插值截开也算一句）。 */
+function collectLiterals(text, out = []) {
+  const n = text.length
+  let i = 0
+  while (i < n) {
+    const ch = text[i]
+    if (ch === '/' && text[i + 1] === '/') {
+      i += 2
+      while (i < n && text[i] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && text[i + 1] === '*') {
+      const end = text.indexOf('*/', i + 2)
+      i = end < 0 ? n : end + 2
+      continue
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      let j = i + 1
+      let body = ''
+      let closed = false
+      while (j < n) {
+        const c = text[j]
+        if (c === '\\') { body += text[j + 1] ?? ''; j += 2; continue }
+        if (c === ch) { closed = true; break }
+        if (ch !== '`' && c === '\n') break
+        if (ch === '`' && c === '$' && text[j + 1] === '{') {
+          const end = skipBraces(text, j)
+          const nested = []
+          collectLiterals(text.slice(j + 2, end - 1), nested)
+          body += nested.join('')
+          j = end
+          continue
+        }
+        body += c
+        j += 1
+      }
+      i = closed ? j + 1 : j
+      if (body) out.push(body)
+      continue
+    }
+    i += 1
+  }
+  return out
+}
+
+test('〔批次68-R3 门禁⑲／批次68-R4 扩展〕设置弹窗常驻文案不含机制 token（title／细节折叠除外）', async () => {
   const settingsDir = join(shellDir, 'settings')
   const files = (await readdir(settingsDir, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && entry.name.endsWith('.vue'))
     .map((entry) => join(settingsDir, entry.name))
   assert.ok(files.length >= 14, `设置节扫描面只有 ${files.length} 份（应有 14 节），空了等于没测`)
+  // 〔批次68-R4〕目录本体进面：SettingsModal 的常驻话（空态、搜索无命中、组头）也归这一闸管。
+  const scoped = [...files, join(shellDir, 'SettingsModal.vue')]
   const offenders = []
-  for (const file of files) {
+  for (const file of scoped) {
     const raw = await readFile(file, 'utf-8')
+    const relative = file.slice(shellDir.length + 1).replace(/\\/gu, '/')
     const start = raw.indexOf('<template')
-    if (start < 0) continue
-    let template = raw.slice(start, raw.lastIndexOf('</template>') + 11)
-      .replace(/<!--[\s\S]*?-->/gu, '')
-      // title／占位符这类悬浮说明是许可落点：整值剥掉再查常驻文本。
-      .replace(/(?:@|:)?[\w.-]+="[^"]*"/gu, '=""')
-    template = template.replace(/<details[\s\S]*?<\/details>/gu, '') // 「细节」折叠整块豁免
-    for (const { pattern, label } of MECHANISM_TOKENS) {
-      pattern.lastIndex = 0
-      for (const match of template.matchAll(pattern)) {
-        offenders.push(`${file.slice(shellDir.length + 1).replace(/\\/gu, '/')}：${label} →「${match[0]}」`)
+    if (start >= 0) {
+      let template = raw.slice(start, raw.lastIndexOf('</template>') + 11)
+        .replace(/<!--[\s\S]*?-->/gu, '')
+        // title／占位符这类悬浮说明是许可落点：整值剥掉再查常驻文本。
+        .replace(/(?:@|:)?[\w.-]+="[^"]*"/gu, '=""')
+      template = template.replace(/<details[\s\S]*?<\/details>/gu, '') // 「细节」折叠整块豁免
+      for (const { pattern, label } of MECHANISM_TOKENS) {
+        pattern.lastIndex = 0
+        for (const match of template.matchAll(pattern)) {
+          offenders.push(`${relative}（模板）：${label} →「${match[0]}」`)
+        }
+      }
+    }
+    // 脚本侧：只查带汉字的产品语句（注释由 collectLiterals 逐字跳过；'outline.json' 这类逻辑常量不上屏，不进这一面）。
+    const scriptStart = raw.indexOf('<script')
+    if (scriptStart >= 0) {
+      const script = raw.slice(scriptStart, raw.indexOf('</script>') + 9)
+      for (const prose of collectLiterals(script).filter((text) => /[\u4e00-\u9fff]/u.test(text))) {
+        for (const { pattern, label } of MECHANISM_TOKENS) {
+          pattern.lastIndex = 0
+          for (const match of prose.matchAll(pattern)) {
+            offenders.push(`${relative}（脚本常驻句）：${label} →「${match[0]}」`)
+          }
+        }
       }
     }
   }
@@ -1582,6 +1684,10 @@ test('〔批次68-R3 门禁⑲〕设置节常驻文案不含机制 token（title
   // 正向：样板节真的用了「一句话＋细节折叠」这套落点（BackupSection 是工单点名的样板）。
   const backup = await readFile(join(settingsDir, 'BackupSection.vue'), 'utf-8')
   assert.match(backup, /<details class="nx-note-details">/u, '样板节没了「细节」折叠，口径就断了')
+  // 正向：〔批次68-R4〕PrefsSection 的探测结果句真的走「模型服务」词表，不再把进程名甩给作者。
+  const prefs = await readFile(join(settingsDir, 'PrefsSection.vue'), 'utf-8')
+  assert.match(prefs, /检测模型服务/u, '「检测模型面」要改口成「检测模型服务」')
+  assert.match(prefs, /模型服务不可达/u, '探测结果的常驻句要用同一个词表')
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
   assert.ok(layout.includes('.nx-note-details'), '「细节」折叠的样式落点要在布局层')
 })

@@ -513,6 +513,17 @@ const sessionUsage = computed(() => {
 })
 
 /**
+ * 〔批次68-R5 发现6〕双「未回报」同屏判据：已经答过、而全线没有任何 usage 回报时，
+ * 卡片上的「这一轮没有用量」chip 就是那格诚实回报，状态排再摆一句「本轮 tokens 未回报」
+ * 是同一件事说两遍——同屏时省略状态排那一格。没答过（或压根没消息）时状态排照常如实报。
+ */
+const tokensCellRedundant = computed(() => {
+  if (sessionUsage.value) return false
+  const list = Array.isArray(props.messages) ? props.messages : []
+  return list.some((message) => message?.role === 'agent')
+})
+
+/**
  * 〔批次68-R2 任务三〕状态排「上下文组装」读数：最近一条真 `envelope` 运行事件
  * （runnerAdvisor 组装完信封发出的那条 {stage:'envelope', blocks, chars}）。
  * 先看 in-flight 的 liveTrail，定格了就回找最近一条带 trail 的消息——两处都没有就如实「未回报」，
@@ -1087,7 +1098,7 @@ onBeforeUnmount(() => {
       <div class="nx-composer-status" data-test="composer-status">
         <span data-test="status-inflight">在途 {{ inflight }}</span>
         <span data-test="status-envelope">{{ envelopeReading ? `上下文 ${Number(envelopeReading.blocks) || 0} 块／${Number(envelopeReading.chars) || 0} 字` : '上下文 未回报' }}</span>
-        <span data-test="status-tokens">{{ sessionUsage ? `本轮 ${sessionUsage.total} tokens` : '本轮 tokens 未回报' }}</span>
+        <span v-if="!tokensCellRedundant" data-test="status-tokens">{{ sessionUsage ? `本轮 ${sessionUsage.total} tokens` : '本轮 tokens 未回报' }}</span>
       </div>
 
       <!-- 既有「工具面」折叠层与 session-usage 收进状态排下方的这一层折叠区：内容一字未动，只挪位。

@@ -82,11 +82,11 @@ function samePath(a, b) {
 
 async function request(channel, payload) {
   if (!props.bridge?.request) {
-    return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '渲染层未接主进程桥（preload 的 pinaxNext 通道）' } }
+    return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '这一步没连上本地服务，暂时办不了。请重启应用后再试。' } }
   }
   const result = await props.bridge.request(channel, payload)
   if (result?.ok) return result
-  return { ok: false, error: result?.error ?? { code: 'PINAX_INVALID_INPUT', message: `通道 ${channel} 调用失败` } }
+  return { ok: false, error: result?.error ?? { code: 'PINAX_INVALID_INPUT', message: '这一步没有回结果，请稍后再试。' } }
 }
 
 function resetResult() {
@@ -233,7 +233,7 @@ async function runImport() {
         <button type="button" class="control-primary" data-test="import-apply" :disabled="!canApply" @click="runImport">
           {{ busy === 'apply' ? '导入中…' : '执行导入' }}
         </button>
-        <span class="prefs-row-hint">执行会按计划落盘：只新增标准目录里的文件，不覆盖已有内容。</span>
+        <span class="prefs-row-hint">执行会按计划写进项目：只新增标准目录里的文件，不覆盖已有内容。</span>
       </div>
     </section>
 

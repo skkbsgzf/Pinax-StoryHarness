@@ -163,10 +163,12 @@ describe('技能库设置节', () => {
     expect(wrapper.find('.skills-section').exists()).toBe(true)
   })
 
-  it('没有桥也照常渲染，并说清是桥没接上', async () => {
+  it('没有桥也照常渲染，并用作者读得懂的话说清连不上', async () => {
     const wrapper = mount(SkillsSection, { props: { bridge: null } })
     await flushPromises()
-    expect(wrapper.find('[data-test="skills-feedback"]').text()).toContain('IPC 桥未接入')
+    // 〔批次68-R4 任务2〕常驻错误句去行话：不再出现「IPC／桥」，同一句话只说「连不上本地服务」。
+    expect(wrapper.find('[data-test="skills-feedback"]').text()).toContain('这一格没连上本地服务')
+    expect(wrapper.find('[data-test="skills-feedback"]').text()).not.toMatch(/IPC|桥|通道/u)
   })
 })
 

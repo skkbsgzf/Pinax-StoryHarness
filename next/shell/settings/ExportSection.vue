@@ -32,7 +32,7 @@ const charCount = computed(() => String(doc.value?.text ?? '').length)
 async function runExport() {
   if (busy.value || emptyText.value) return
   if (!props.bridge?.request) {
-    feedback.value = { kind: 'error', text: '渲染层未接主进程桥（preload 的 pinaxNext 通道）。' }
+    feedback.value = { kind: 'error', text: '这一步没连上本地服务，暂时办不了。请重启应用后再试。' }
     return
   }
   busy.value = true

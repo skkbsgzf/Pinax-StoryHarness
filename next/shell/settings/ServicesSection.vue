@@ -44,7 +44,7 @@ function clockOf(at) {
 }
 
 async function request(channel, payload) {
-  if (!props.bridge?.request) return { ok: false, error: { message: 'IPC 桥未接入' } }
+  if (!props.bridge?.request) return { ok: false, error: { message: '这一格没连上本地服务。' } }
   try {
     return await props.bridge.request(channel, payload)
   } catch (error) {
@@ -62,7 +62,7 @@ async function acknowledge() {
     feedback.value = { kind: 'error', text: result?.error?.message ?? '确认失败。' }
     return
   }
-  feedback.value = { kind: 'ok', text: '已确认：这条时间之前的通知都不再计为未读。' }
+  feedback.value = { kind: 'ok', text: '已确认：这之前的通知不再算待确认。' }
   await props.reload?.()
 }
 
@@ -76,14 +76,14 @@ async function restart(item) {
     feedback.value = { kind: 'error', text: result?.error?.message ?? `重启 ${item.id} 失败。` }
     return
   }
-  feedback.value = { kind: 'ok', text: `已请求重启 ${item.id}：状态变化会从池里推过来。` }
+  feedback.value = { kind: 'ok', text: `已请求重启 ${item.id}：状态一变，这一行会跟着更新。` }
   await props.reload?.()
 }
 </script>
 
 <template>
   <div class="services-section">
-    <p class="wizard-note" title="含服务与外部 MCP 的运行状态、最近日志与待确认通知；「知道了」只记在这台机器的应用偏好里，不进项目">服务与外部连接的状态、日志与待确认通知；确认只记在这台机器上。</p>
+    <p class="wizard-note" title="「知道了」只记在这台机器的应用偏好里，不进项目；确认水位之前的通知不再计为未读">这里看服务和外部连接当前通不通、最近日志，以及有没有等你确认的通知。</p>
     <p v-if="!rows.length" class="pane-hint" data-test="services-empty">当前项目没有声明任何服务或外部 MCP</p>
     <div v-else class="prefs-grid">
       <div

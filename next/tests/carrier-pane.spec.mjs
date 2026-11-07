@@ -1148,6 +1148,24 @@ describe('小说载体', () => {
     wrapper.unmount()
   })
 
+  it('〔批次68-R5 任务1〕左栏空态一句话旁边就摆主操作钮：「新建构思」点开输入行，不再只靠 hover ＋', async () => {
+    const tools = fakeTools()
+    const bridge = { request: async (channel, payload) => (channel === IPC_CHANNELS.view ? { ok: true, value: shellView() } : tools.request(channel, payload)) }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '构思')
+
+    const emptyLine = wrapper.find('.nx-index-window .nx-index-empty')
+    expect(emptyLine.text()).toContain('构思还没有内容。')
+    expect(emptyLine.text(), '机制路径不进常驻版面').not.toContain('构思/')
+    const go = emptyLine.find('button.nx-index-add')
+    expect(go.text()).toBe('新建构思')
+    await go.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="新构思标题"]').exists()).toBe(true, '主操作钮点开同一条新建通路')
+    wrapper.unmount()
+  })
+
   it('板块声明不再摆在正文面板上：清单仍从 view 通道拿得到，只是不占界面', async () => {
     const tools = fakeTools()
     const data = useBoardData(tools)
@@ -1674,7 +1692,14 @@ describe('设定与资料载体', () => {
 
     await wrapper.findAll('.nx-ribbon-item').find((item) => item.attributes('aria-label') === '设定与资料').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-index-window').text()).toContain('资料还没有内容。')
+    // 〔批次68-R5 发现2〕两段都空＝只说一个空态：合并句在场、分节句与「从左边索引窗里选一篇资料」
+    // 的第三块噪音都不在（检索框保留，提示语并给这个单空态），主操作钮就在句子旁边。
+    const indexText = wrapper.find('.nx-index-window').text()
+    expect(indexText).toContain('资料与约束都还没有内容。')
+    expect(indexText).not.toContain('资料还没有内容。')
+    expect(indexText).not.toContain('约束还没有内容。')
+    expect(wrapper.find('.nx-index-window [data-test="dossier-empty-merged"] button').text()).toBe('新建资料')
+    expect(wrapper.text()).not.toContain('从左边索引窗里选一篇资料')
 
     await wrapper.find('[aria-label="新建资料"]').trigger('click')
     await flushPromises()

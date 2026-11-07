@@ -1554,7 +1554,9 @@ function actOnSaveChip() {
           只载入了前 {{ data.document.text?.length ?? 0 }} 字，全篇 {{ data.document.totalChars }} 字：保存会覆盖未载入的部分。
         </p>
       </div>
-      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-document" title="也可以在那里新建一篇：「资料」区标题右侧的 ＋">
+      <!-- 〔批次68-R5 发现2〕资料树还空着时这句「从左边索引窗里选一篇」就是第三块噪音——
+           选无可选，提示语并给左栏那个单空态（新建资料钮在那），这里只留检索框。 -->
+      <div v-else-if="!data.busy && !data.error && data.documents.length" class="pane-hint nx-empty-guide" data-test="empty-guide-document" title="也可以在那里新建一篇：「资料」区标题右侧的 ＋">
         <p>从左边索引窗里选一篇资料。</p>
         <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
       </div>

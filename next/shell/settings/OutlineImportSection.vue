@@ -48,11 +48,11 @@ const itemRows = computed(() => (result.value ?? scan.value)?.items ?? [])
 
 async function request(channel, payload) {
   if (!props.bridge?.request) {
-    return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '渲染层未接主进程桥（preload 的 pinaxNext 通道）' } }
+    return { ok: false, error: { code: 'PINAX_INVALID_INPUT', message: '这一步没连上本地服务，暂时办不了。请重启应用后再试。' } }
   }
   const called = await props.bridge.request(channel, payload)
   if (called?.ok) return called
-  return { ok: false, error: called?.error ?? { code: 'PINAX_INVALID_INPUT', message: `通道 ${channel} 调用失败` } }
+  return { ok: false, error: called?.error ?? { code: 'PINAX_INVALID_INPUT', message: '这一步没有回结果，请稍后再试。' } }
 }
 
 async function runScan() {
@@ -127,7 +127,7 @@ onUnmounted(() => {
       <div class="prefs-row">
         <span class="prefs-row-label">扫描结果</span>
         <span class="prefs-row-hint" data-test="outline-scan">
-          <template v-if="busy === 'scan'">正在扫描 大纲/ …</template>
+          <template v-if="busy === 'scan'">正在扫描大纲目录…</template>
           <template v-else-if="result">{{ result.files }} 份 md · {{ result.chapters }} 个章节标题（本次导入 {{ result.imported }} 章，复用 {{ result.reused }} 章）</template>
           <template v-else-if="scan">{{ scanSummary }}（待追加 {{ scan.imported }} 章，复用 {{ scan.reused }} 章）</template>
           <template v-else>还没有扫描结果。</template>
@@ -138,7 +138,7 @@ onUnmounted(() => {
         <button type="button" class="control-primary" data-test="outline-apply" :disabled="!canApply" @click="apply">
           {{ busy === 'apply' ? '转换中…' : '转换并导入' }}
         </button>
-        <span v-if="scan && !pendingCount" class="prefs-row-hint">没有新章节：现有节点已覆盖这些章节稿（重跑幂等，不会重复追加）。</span>
+        <span v-if="scan && !pendingCount" class="prefs-row-hint" title="重跑幂等：同一章节稿再点一次不会重复追加">没有新章节：现有节点已经覆盖这些章节稿。</span>
         <span v-else-if="!scan && !error" class="prefs-row-hint">先扫描，再决定是否转换。</span>
       </div>
     </div>

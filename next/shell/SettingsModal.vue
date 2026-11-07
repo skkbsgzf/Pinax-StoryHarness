@@ -29,6 +29,7 @@ import SkillsSection from './settings/SkillsSection.vue'
  * 组件表只是同一个键上的附加物；AppNext 只负责提供组件与当前偏好 props。
  * 未登记的功能不许开弹窗（门禁：next/tests/visual-contract.test.mjs「目录外弹窗不允许存在」的机器版）。
  * 分组标签和目录项同在 tablist 里：标签是 <p>，不是 tab，不参与 roving tabindex；搜索框在 tablist 之外。
+ * 〔批次68-R4 任务1〕只有一节的组不再出标签（技能／载体拍平，见 declaredGroupSize）。
  *
  * 键盘语义取老版 tablist 的那半：目录 roving tabindex＋方向键换节（SettingsPopup.vue:489-501）。
  * 焦点陷阱（批次15 B · 差异表 #10；取代批次13 记账里「trapFocusWithin 不在 Next 落地、Tab 走浏览器默认顺序」
@@ -108,6 +109,7 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
  * 两段拼出来的，中间插一段内置节是这一层已有的形状（载体节的 group 也是在这里现算的，不在 AppNext 写死）。
  * 分组给「技能」而不是塞进「项目」：组序按首次出现算，插进 项目 会把既有目录的节序整体推后一格——
  * 那条节序是 shell-ui 用例钉着的规格，不是可以顺手挪的排版。
+ * 〔批次68-R4 任务1〕这一组只有一节，组头随之拍平（目录里只出「技能库」这一格，不多一行不能点的「技能」）。
  */
 const builtInSections = computed(() => [{
   id: 'skills',
@@ -150,6 +152,23 @@ function matchesQuery(section) {
 
 const visibleSections = computed(() => allSections.value.filter(matchesQuery))
 
+/**
+ * 〔批次68-R4 任务1〕组头的去留看「这一组声明里真有几节」，且判据取静态结构而不是搜索过滤后的可见数。
+ * 为什么不能用可见数：搜「备份」时「应用」组只剩一格可见，那是查询滤出来的临时形状，
+ * 组头跟着消失会让作者以为应用类设置真的只剩备份这一项（shell-ui 用例把「搜『备份』仍出『应用』」钉成规格）。
+ * 单节组拍平（技能→技能库、载体→写作偏好）：组头与那一格同义，留着的是一行不能点、也说不清话的字。
+ * 「应用」组头保留：它底下是三节（偏好与模型／备份与恢复／服务与通知），与任何单节都不同义，
+ * 不是排版上的赘物——这一条判据按工单任务1 的「同义才删」执行。
+ */
+const declaredGroupSize = computed(() => {
+  const sizes = new Map()
+  for (const section of allSections.value) {
+    const name = section.group ?? '设置'
+    sizes.set(name, (sizes.get(name) ?? 0) + 1)
+  }
+  return sizes
+})
+
 /** 按 group 归组（同组只出一个标题；组序取首次出现顺序，不要求注册表里连续）。 */
 const groupedSections = computed(() => {
   const order = []
@@ -162,7 +181,7 @@ const groupedSections = computed(() => {
     }
     groups.get(name).push(section)
   }
-  return order.map((name) => ({ name, items: groups.get(name) }))
+  return order.map((name) => ({ name, items: groups.get(name), labeled: (declaredGroupSize.value.get(name) ?? 0) >= 2 }))
 })
 
 const visibleIds = computed(() => visibleSections.value.map((section) => section.id))
@@ -220,14 +239,15 @@ function onTablistKeydown(event) {
         >
         <nav class="settings-tabs settings-navigation" role="tablist" aria-label="设置分区" @keydown="onTablistKeydown">
           <template v-for="group in groupedSections" :key="group.name">
-            <!-- 分组标题：同一 tablist 里的静态标题，不是 tab，不参与方向键换节。 -->
-            <p class="settings-group-label" aria-hidden="true">{{ group.name }}</p>
+            <!-- 分组标题：同一 tablist 里的静态标题，不是 tab、不可聚焦、不参与方向键换节；
+                 单节组已拍平，不再出这一行（〔批次68-R4 任务1〕）。 -->
+            <p v-if="group.labeled" class="settings-group-label" aria-hidden="true" data-test="settings-group-label">{{ group.name }}</p>
             <button
               v-for="section in group.items"
               :id="`settings-tab-${section.id}`"
               :key="section.id"
               class="settings-tab nx-row"
-              :class="{ active: section.id === current?.id }"
+              :class="{ active: section.id === current?.id, 'is-standalone': !group.labeled }"
               :data-test="`settings-tab-${section.id}`"
               role="tab"
               :aria-selected="(section.id === current?.id).toString()"
@@ -331,14 +351,25 @@ function onTablistKeydown(event) {
   text-align: left;
   color: var(--text-secondary);
 }
-/* 分组标题（应用／项目／文档／载体）：老版设置弹窗的目录分段语义，静态文本不是 tab。 */
+/* 分组标题（应用／项目／文档）：老版设置弹窗的目录分段语义，静态文本不是 tab。
+   〔批次68-R4 任务1〕视觉上与页面项拉开：更小一号、muted 色、加字距、明确不可点（cursor: default），
+   单节组不再出这行——「技能库」「写作偏好」直接是页面项。 */
 .settings-navigation .settings-group-label {
-  margin: 8px 12px 2px;
+  margin: 10px 12px 2px;
   color: var(--text-muted);
   font-size: var(--nx-fs-2xs);
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  cursor: default;
+  user-select: none;
 }
-.settings-navigation .settings-group-label:first-child {
+/* 拍平后的独立页面项：上面没有组头指路，用一段比组内间距（4px）宽的空隙隔开，
+   免得读成上一组的尾巴；行本体形状交给 .nx-row，不在这里另刻一档圆角。 */
+.settings-navigation .settings-tab.is-standalone {
+  margin-top: 12px;
+}
+.settings-navigation .settings-group-label:first-child,
+.settings-navigation .settings-tab:first-child {
   margin-top: 0;
 }
 .settings-navigation .settings-tab.active {
@@ -362,5 +393,7 @@ function onTablistKeydown(event) {
   .settings-navigation { flex-direction: row; flex-wrap: nowrap; overflow-x: auto; overflow-y: hidden; }
   .settings-navigation .settings-tab { min-height: 44px; flex: none; }
   .settings-navigation .settings-group-label { display: none; }
+  /* 窄屏是一行横条、组头一律不画：此时分组结构本来就不可见，拍平项不再单独给空隙（那会把两个项压下去半格）。 */
+  .settings-navigation .settings-tab.is-standalone { margin-top: 0; }
 }
 </style>

@@ -36,9 +36,9 @@ const enabledRows = computed(() => rows.value.filter((row) => row.enabled))
 const disabledRows = computed(() => rows.value.filter((row) => !row.enabled))
 
 function request(channel, payload) {
-  if (!props.bridge?.request) return Promise.resolve({ ok: false, error: { message: 'IPC 桥未接入' } })
+  if (!props.bridge?.request) return Promise.resolve({ ok: false, error: { message: '这一格没连上本地服务。' } })
   return props.bridge.request(channel, payload).then(
-    (result) => result ?? { ok: false, error: { message: '技能通道没有回结果' } },
+    (result) => result ?? { ok: false, error: { message: '技能服务没有回结果。' } },
     (error) => ({ ok: false, error: { message: String(error?.message || error) } })
   )
 }
@@ -145,7 +145,7 @@ onMounted(reload)
     </ul>
 
     <p v-if="!rows.length && !rejected.length && !loading" class="pane-hint" data-test="skills-empty">
-      当前没有可装载的技能包{{ surface && !surface.started ? '（工具面还没装配，装载校验做不了）' : '' }}
+      当前没有可装载的技能包{{ surface && !surface.started ? '（技能服务还没就绪，暂时校验不了）' : '' }}
     </p>
 
     <div v-for="group in [{ label: '生效中', items: enabledRows }, { label: '已停用', items: disabledRows }]" :key="group.label">
@@ -215,7 +215,7 @@ onMounted(reload)
         </button>
       </div>
       <p class="pane-hint" title="导入只写进本项目的 .pinax/skills/；随软件一起给的那份技能，同名时以它为准">
-        这一格还没接上系统的选目录对话框，先手工粘一个绝对路径。
+        还没接上系统的选目录对话框：粘一个技能包目录的绝对路径，再点上面的「导入到本项目」。
       </p>
       <div v-if="importResult" class="skills-import-result" data-test="skills-import-result">
         <p v-if="importResult.imported?.length" data-test="skills-imported">
