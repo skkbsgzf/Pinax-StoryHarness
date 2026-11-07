@@ -30,7 +30,15 @@ const props = defineProps({
   chipStale: { type: Boolean, default: false },
   chipText: { type: String, default: '' },
   /** 没有选中条目时的那句提示（看板区与独立详情面给的措辞不一样）。 */
-  emptyHint: { type: String, default: '从左边索引窗里选一条设定。' }
+  emptyHint: { type: String, default: '从左边索引窗里选一条设定。' },
+  /**
+   * 〔批次68-R2 任务二〕维基阅读皮：在世界书三栏工作区里为真——
+   * 条目名以 `.doc-title` 大标题回到阅读列首（76 裁定A 的「标题面唯一＝窗头」是文档面的口径，
+   * 本批作者口径明写「条目名＝大标题」，随工单翻案，登记在执行记录）；
+   * 正文容器挂 `.nx-wiki-article`（h2 底线／导语／引用块／蓝链胶囊的版式在布局层照这个类生效）；
+   * 关系列表让位给右侧信息卡（同一份 data.entry.relations，不摆两遍）。
+   */
+  wiki: { type: Boolean, default: false }
 })
 const emit = defineEmits(['chip-action'])
 /** 跨载体跳转（批次60）：宿主在 AppNext 里给的一枚路由；没有时退回只开条目。 */
@@ -171,6 +179,8 @@ const entryMetaLine = computed(() => {
         <button v-else type="button" class="control-quiet entry-cancel" :disabled="data.busy" @click="data.cancelEditEntry()">取消</button>
       </span>
     </div>
+    <!-- 〔批次68-R2 任务二〕wiki 皮的阅读列首：条目名＝大标题（编辑态不加，编辑面先是正文）。 -->
+    <h1 v-if="wiki && !data.editingEntry" class="doc-title nx-wiki-title" data-test="entry-wiki-title">{{ data.entry.name }}</h1>
     <!-- 条目信息（批次31 · P18 第 4 条）：关键词／标签／摘要／关系默认收起，编辑面先是正文；
          这一行点开才是字段（照 Obsidian properties）。裸 md 没有 frontmatter：改成一句说明。 -->
     <div v-if="data.editingEntry && data.entry.contract" class="entry-meta-row">
@@ -270,8 +280,9 @@ const entryMetaLine = computed(() => {
     <p v-else-if="data.editingEntry" class="entry-meta-bare" data-test="entry-meta-bare">
       这篇没有 frontmatter（未按世界书文件契约建档），关键词／标签／摘要改不了；保存仍按原样整份写正文。
     </p>
-    <!-- 阅读态的关系（批次28 · 工单2b）：一行一条「目标 · 类型 · 立场」；没有关系就不摆这块。 -->
-    <ul v-if="!data.editingEntry && entryRelations.length" class="entry-relations-read" data-test="entry-relations-read">
+    <!-- 阅读态的关系（批次28 · 工单2b）：一行一条「目标 · 类型 · 立场」；没有关系就不摆这块。
+         〔批次68-R2 任务二〕wiki 皮里这块让位给右侧信息卡（同一份 relations，不摆两遍）。 -->
+    <ul v-if="!data.editingEntry && !wiki && entryRelations.length" class="entry-relations-read" data-test="entry-relations-read">
       <li v-for="(relation, index) in entryRelations" :key="`rel-read-${index}`">{{ relationLine(relation) }}</li>
     </ul>
     <textarea
@@ -291,6 +302,7 @@ const entryMetaLine = computed(() => {
       :key="data.entry?.path || data.entry?.name"
       ref="entryRenderedEl"
       class="entry-text nx-rendered-md"
+      :class="{ 'nx-wiki-article': wiki }"
       data-test="entry-rendered"
       @click="onRenderedClick"
       v-html="entryHtml"

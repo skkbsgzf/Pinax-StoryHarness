@@ -16,7 +16,13 @@ import { ENTRY_CAT_PALETTE, ENTRY_UNCAT_COLOR, entryEdges, radialLayout } from '
  */
 const props = defineProps({
   /** 世界书条目清单（与列表／表格同源 data.entries，不新增工具调用）。 */
-  entries: { type: Array, default: () => [] }
+  entries: { type: Array, default: () => [] },
+  /**
+   * 〔批次68-R2 任务二 · 挂载位适配〕挂载场合：'board'＝中栏图谱切换态（默认，行为一字不动）；
+   * 'infobox'＝信息卡底部 260px 缩览——同一组件同一数据源，只换 data-test 锚点
+   * （entries-infobox-graph，让「中栏图谱态」的既有判据不被缩览分身误命中）与画布高度。
+   */
+  variant: { type: String, default: 'board' }
 })
 const emit = defineEmits(['open'])
 
@@ -111,7 +117,7 @@ function openPoint(point) {
 </script>
 
 <template>
-  <div class="nx-entry-graph" data-test="entries-graph">
+  <div class="nx-entry-graph" :data-test="variant === 'infobox' ? 'entries-infobox-graph' : 'entries-graph'">
     <svg
       ref="svgEl"
       class="nx-entry-graph-canvas"
@@ -175,7 +181,9 @@ function openPoint(point) {
 .nx-entry-graph-canvas {
   display: block;
   width: 100%;
-  height: 340px;
+  /* 〔批次68-R2 任务二〕高度可由挂载方给（信息卡底部缩览 260px：外层设 --nx-entry-graph-height）；
+     不设就还是原来那块 340px 方形画布。 */
+  height: var(--nx-entry-graph-height, 340px);
   border: 1px solid var(--hairline-soft);
   border-radius: var(--nx-radius-xs);
   background: color-mix(in srgb, var(--surface-workbench-muted) 60%, transparent);

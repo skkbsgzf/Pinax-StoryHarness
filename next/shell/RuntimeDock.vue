@@ -250,15 +250,17 @@ function brokenStageText(trail, failed) {
 /**
  * 在途请求计数：作者可以在 A 会话提问后切到 B 再问一句。
  * 每一问都把结果写回它出发的那个会话（append 的第二参），忙态则等最后一问落地才收。
+ * 〔批次68-R2 任务三〕改 ref：composer 状态排要读这一格真实 ask 计数（原先的裸 let 只在闭包里，
+ * 屏上看不见）。busy 的进出口径一字未动，只是同一份数现在也进模板。
  */
-let inflight = 0
+const inflightCount = ref(0)
 function beginWork() {
-  inflight += 1
+  inflightCount.value += 1
   store.setBusy(true)
 }
 function endWork() {
-  inflight = Math.max(0, inflight - 1)
-  if (!inflight) store.setBusy(false)
+  inflightCount.value = Math.max(0, inflightCount.value - 1)
+  if (!inflightCount.value) store.setBusy(false)
 }
 
 /**
@@ -522,6 +524,7 @@ function removeSession(id) {
       :skills="skillCatalog"
       :hotkeys="hotkeyBindings"
       :suspend-esc="suspendEsc"
+      :inflight="inflightCount"
       @send="ask"
       @retry="retry"
       @stop="stopAsk"

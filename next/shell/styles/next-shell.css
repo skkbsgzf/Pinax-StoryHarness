@@ -33,6 +33,7 @@ body {
   --nx-fs-xl: 17px;  /* 卡片标题 */
   --nx-fs-2xl: 19px; /* 页面主标题 */
   --nx-radius-xs: 6px; /* 小号图标按钮（28px 级） */
+  --nx-radius-pill: 999px; /* 〔批次68-R2 任务二〕胶囊档：蓝链 .tag 皮与信息卡徽章共用（圆角也进刻度，不落裸值） */
   display: flex;
   /* 标题栏（工单F）是根节点里的第一行；三栏本体吃掉剩下的高度。 */
   flex: 1 1 auto;
@@ -419,6 +420,9 @@ body {
 
 /* —— 三栏骨架 ————————————————————————————————————————————— */
 .col-center {
+  /* 〔批次68-R2 任务1〕悬浮球钉在主面板（中心区）右下角，不再是视口坐标——
+     主面板是它的定位父级（球的锚点跟着中心区走，Agent 右栏永远不被它盖住）。 */
+  position: relative;
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -846,11 +850,20 @@ input.doc-title {
   line-height: var(--writing-line-height, 1.9);
 }
 
-/* —— 世界书看板区（批次44 → 批次60）：左肥右窄，没有左树 —————————————————
-   批次44 作者：「上面放图表列，下面放详情信息」；批次60 工单把同一块板改成
-   左约 2/3 以上的图表区 ＋ 右侧固定宽度的窄条详情（左侧大面积给条目，详情只占一窄条）。
-   web 模板本就没有左树（铁律四），条目与详情都长在核心区这一格里；窄屏再叠回上下两段。 */
+/* —— 世界书三栏维基阅读版式（批次68-R2 · 任务二，参照作者自有 NovelPedia 版式语言） ————
+   工单死口径：树 : 阅读 : 信息卡 起排 `260px : 1fr : min(46%, 430px)`；
+   不做拖拽分隔（本批不定分隔条语义）；信息卡可一钮收起（收起后阅读列吃满，flex 自然给出）；
+   窄窗口时信息卡折到阅读列下方（见文末 @media）。批次44／60 的两段式（上图表下详情、
+   左肥右窄 detail 320px）随结构翻案退役。 */
 .nx-entries-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.nx-wiki-cols {
   display: flex;
   flex-direction: row;
   gap: 12px;
@@ -858,24 +871,164 @@ input.doc-title {
   min-width: 0;
   min-height: 0;
 }
-.nx-entries-workspace-board {
-  flex: 1 1 66%;
+.nx-wiki-tree {
+  flex: 0 0 260px;
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.nx-entries-workspace-detail {
-  flex: 0 0 320px;
-  width: 320px;
+.nx-wiki-tree-body {
+  flex: 1 1 auto;
   min-height: 0;
-  padding-left: 12px;
-  border-left: 1px solid var(--hairline-soft);
+  overflow: auto;
+}
+.nx-wiki-center {
+  flex: 1 1 auto;
+  /* 〔调度方补刀〕阅读列保底可读宽：信息卡自动收起（EntriesBoard 内 ResizeObserver）后这里
+     拿得到空间；真被挤到底线以下时宁可横向让渡，不再出 53px 竖条。 */
+  min-width: 240px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
 }
+.nx-wiki-infobox {
+  flex: 0 0 min(46%, 430px);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: color-mix(in srgb, var(--surface-workbench-muted) 45%, transparent);
+}
+.nx-wiki-infobox.is-collapsed {
+  flex: 0 0 auto;
+  padding: 4px;
+}
+/* 〔调度方补刀〕窄容器（主组被对半分屏挤压）下不许任何一栏把行撑爆：
+   树允许压缩到 180px 保底、收起态窄条瘦身——横滚条只在真装不下时出现。 */
+.nx-wiki-cols.is-infobox-collapsed .nx-wiki-tree {
+  flex: 0 1 260px;
+  min-width: 180px;
+}
+.nx-wiki-infobox.is-collapsed .nx-wiki-infobox-expand {
+  font-size: var(--nx-fs-2xs);
+  padding: 4px 6px;
+}
+.nx-wiki-infobox-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.nx-wiki-infobox-caption {
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  color: var(--archive-ink-soft);
+}
+/* 信息卡读数表：左列标签、右列值（缺的字段整行不摆——不编造）。 */
+.nx-wiki-infobox-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  margin: 0 0 8px;
+  font-size: var(--nx-fs-2xs);
+}
+.nx-wiki-infobox-rows dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.nx-wiki-infobox-rows dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.nx-wiki-infobox-badge,
+.nx-wiki-infobox-provenance {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--nx-radius-pill);
+  background: color-mix(in srgb, var(--archive-ink) 8%, transparent);
+  color: var(--archive-ink);
+}
+.nx-wiki-infobox-tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nx-wiki-infobox-hint {
+  color: var(--text-muted);
+}
+/* 信息卡底部的图谱缩览：EntryGraph 画布高度吃这个变量（工单口径 260px）。 */
+.nx-wiki-infobox-graph {
+  --nx-entry-graph-height: 260px;
+}
+
+/* —— 层级 dot（统计口径：按被引用次数分档，树行前缀与信息卡共用） ————————— */
+.nx-wiki-lvl-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.nx-wiki-lvl-dot.is-s {
+  background: var(--signal-warm);
+}
+.nx-wiki-lvl-dot.is-a {
+  background: var(--accent);
+}
+.nx-wiki-lvl-dot.is-b {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.nx-wiki-lvl-dot.is-c {
+  background: transparent;
+  border: 1px solid var(--text-muted);
+}
+.nx-wiki-tree .nx-tree-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* —— wiki 阅读皮（批次68-R2 任务二）：mdRender 管线一字不动，只在渲染产物之上加版式 ————
+   全部规则挂在 .entry-text.nx-wiki-article 下——.entry-text 本就在展示体白名单族里（批次68-R1 闸⑯），
+   这里不新增任何 --font-display 声明，衬线阅读由 .entry-text 继承下来。 */
+.nx-wiki-title {
+  font-size: var(--nx-fs-2xl);
+  line-height: 1.35;
+  margin: 0 0 2px;
+}
+/* h2 章节底线（NovelPedia 的 sec>h2 版式语言）。 */
+.entry-text.nx-wiki-article h2 {
+  margin-top: 1.6em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+/* 首段导语：阅读列的第一段抬一档（--nx-fs-xl，刻度内，不是第六档裸字号）。 */
+.entry-text.nx-wiki-article > p:first-of-type {
+  font-size: var(--nx-fs-xl);
+  color: var(--text-primary);
+}
+/* 引用块＝quote 版式（出处若写在引用行里，随原文如实呈现）。 */
+.entry-text.nx-wiki-article blockquote {
+  margin: 1em 0;
+  padding: 6px 14px;
+  border-inline-start: 3px solid var(--accent);
+  border-radius: var(--nx-radius-xs);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--text-muted);
+}
+/* 条目间蓝链的胶囊皮见下面 .nx-wikilink 基础规则之后（特异度更高，位置无所谓；
+   放在那里是为了 .nx-wikilink { 这条基础规则保持「文件里第一个同名规则」的读数锚点）。 */
 
 /* —— 窄屏（手机）：桌面那三栏在 390px 上会挤成一团，作者在手机侧要能真试 ——————
    竖条转成横条、正文占满上半、Agent 对话固定在下半屏，索引窗改成覆盖式抽屉。
@@ -924,21 +1077,22 @@ input.doc-title {
     flex: 0 0 auto;
     height: 52vh;
   }
-  /* 世界书看板区在窄屏叠回上下两段：左右分栏在手机上会剩不下可读的条目宽度。 */
-  .nx-entries-workspace {
-    flex-direction: column;
+  /* 世界书三栏在窄屏翻折：信息卡整段折到阅读列下方（工单②的 @media 语义），
+     树列收窄、阅读列吃掉一行剩余。 */
+  .nx-wiki-cols {
+    flex-wrap: wrap;
   }
-  .nx-entries-workspace-board {
-    flex: 1 1 55%;
+  .nx-wiki-tree {
+    flex: 0 0 40%;
+    min-width: 180px;
+  }
+  .nx-wiki-center {
+    flex: 1 1 45%;
     min-height: 140px;
   }
-  .nx-entries-workspace-detail {
-    flex: 0 1 45%;
-    width: auto;
-    padding-left: 0;
-    padding-top: 8px;
-    border-left: 0;
-    border-top: 1px solid var(--hairline-soft);
+  .nx-wiki-infobox {
+    order: 3;
+    flex: 1 1 100%;
   }
   .dock {
     border-left: 0;
@@ -1100,9 +1254,13 @@ input.doc-title {
    整段规则连选择器一起删除，收起态不再在屏幕上占一列；呈现与落点统一归 CollapseOrb。
    层级只用既有档位表里的 `--z-floating-action`（260）：本批不给 --z-* 新增任何一档。 */
 .nx-collapse-orb {
-  position: fixed;
+  /* 〔批次68-R2 任务1〕作者口径「悬浮球悬的应该是主面板右下角，不是 Agent 右下角」：
+     原来是 fixed 视口坐标（right 24 落在 Pi-Agent 右栏上），现钉进 col-center（主面板）
+     的右下角——absolute 相对主面板，球随主面板走；侧组对半时球仍在中心区右下角，
+     不居屏幕中缝。收起态唯一回收入口的语义（守卫①②）不变。 */
+  position: absolute;
   right: 24px;
-  bottom: 54px; /* 让开底栏状态栏那一条（26px）再留 28px 余量。 */
+  bottom: 16px; /* 主面板内部贴底留 16px（状态栏在中心区之外，不再需要 54px 让位）。 */
   z-index: var(--z-floating-action);
   display: flex;
   flex-direction: column;
@@ -1619,6 +1777,16 @@ input.doc-title {
   text-underline-offset: 2px;
 }
 .nx-wikilink:hover { text-decoration-style: solid; }
+/* 〔批次68-R2 任务二〕wiki 阅读皮里的蓝链＝胶囊（.tag 版式）：不画下划线、给一层淡底。
+   特异度 (0,3,0) 高于上面基础规则；命中区仍吃 inline padding，纵向 3px 那一档不撤。
+   链的解析与点击一字不动（wikiLinks.mjs 那套），这里只是皮。 */
+.entry-text.nx-wiki-article .nx-wikilink {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--nx-radius-pill);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  text-decoration: none;
+}
 /* 反向链接行：跟 doc-meta-hint 同一档小字，chip 是 quiet 钮（点开跳那条）。 */
 .entry-backlinks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .entry-backlinks-label { color: var(--text-muted); font-size: var(--nx-fs-2xs); }

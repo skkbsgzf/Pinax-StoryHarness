@@ -1554,6 +1554,67 @@ describe('运行时栏', () => {
     await flushPromises()
     wrapper.unmount()
   })
+
+  it('〔批次68-R2 任务三〕composer 卡片三层：＋ 菜单插触发符走同一条 typeahead、状态排全真数据、模型 chip 无清单不可点、不摆麦克风死钮', async () => {
+    const wrapper = mount(AssistantDialog, {
+      props: {
+        inflight: 2,
+        tools: ['pinax_project_list'],
+        messages: [
+          { id: 'q1', role: 'user', text: '这章节奏怎么样？', at: '10:00' },
+          {
+            id: 'a1', role: 'agent', text: '中段拖了。', at: '10:01',
+            usage: { input: 1200, output: 380, total: 1580 },
+            trail: [{ stage: 'envelope', blocks: 6, chars: 1800, missingKinds: [], at: 1000 }]
+          }
+        ]
+      }
+    })
+    // 三层结构：卡片（输入行＋控件排）→ 状态排 → 折叠区。
+    const card = wrapper.find('[data-test="composer-card"]')
+    expect(card.exists()).toBe(true)
+    expect(card.find('.authoring-knowledge__input-row textarea').exists()).toBe(true)
+    expect(card.find('[data-test="composer-controls"]').exists()).toBe(true)
+    // 控件排逐项：左「＋」与写模式 chip，右模型 chip；麦克风压根不出现（语音后端本批不做，不摆死钮）。
+    expect(card.find('[data-test="composer-plus"]').exists()).toBe(true)
+    expect(card.find('.authoring-knowledge__mode-badge').exists()).toBe(true)
+    expect(card.find('[data-test="composer-model-chip"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('麦克风')
+    // 模型 chip：无清单时只显示不可点——不编造。
+    expect(wrapper.find('[data-test="composer-model-chip"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="composer-model-chip"]').text()).toBe('模型未回报')
+
+    // 状态排三项全真数据：在途＝宿主 ask 计数；上下文＝最近一条真 envelope；本轮 tokens＝既有 usage 链。
+    const status = wrapper.find('[data-test="composer-status"]')
+    expect(status.find('[data-test="status-inflight"]').text()).toBe('在途 2')
+    expect(status.find('[data-test="status-envelope"]').text()).toBe('上下文 6 块／1800 字')
+    expect(status.find('[data-test="status-tokens"]').text()).toBe('本轮 1580 tokens')
+    // 工具面与 session-usage 收进状态排下方同一折叠区（内容只挪位）。
+    const more = wrapper.find('[data-test="composer-more"]')
+    expect(more.exists()).toBe(true)
+    expect(more.find('[data-test="session-usage"]').text()).toContain('最近一轮 1200 in／380 out（计 1580）')
+    expect(more.find('.authoring-knowledge__agent-detail').exists()).toBe(true)
+
+    // ＋ 菜单：三项都指向既有触发符；点「技能与命令」＝往草稿插 `/` 并唤起**同一条** typeahead 弹层。
+    await wrapper.find('[data-test="composer-plus"]').trigger('click')
+    const plusMenu = wrapper.find('[data-test="composer-plus-menu"]')
+    expect(plusMenu.exists()).toBe(true)
+    expect(plusMenu.findAll('.nx-composer-plus-item')).toHaveLength(3)
+    await plusMenu.findAll('.nx-composer-plus-item')[1].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe('/')
+    expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="composer-plus-menu"]').exists()).toBe(false)
+    wrapper.unmount()
+
+    // 没数据的状态排如实「未回报」：不换算冒充、不落 0；连明细折叠区都不画。
+    const bare = mount(AssistantDialog, { props: { messages: [] } })
+    expect(bare.find('[data-test="status-inflight"]').text()).toBe('在途 0')
+    expect(bare.find('[data-test="status-envelope"]').text()).toBe('上下文 未回报')
+    expect(bare.find('[data-test="status-tokens"]').text()).toBe('本轮 tokens 未回报')
+    expect(bare.find('[data-test="composer-more"]').exists()).toBe(false)
+    bare.unmount()
+  })
 })
 
 describe('Obsidian 三栏', () => {
@@ -4958,7 +5019,9 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     expect(read.args).toEqual({ path: '世界书/编年/编年·雨夜.md' })
     // 〔批次76 裁定A〕原判据「详情面头部 .doc-title＝条目名」改判：那一行撤了；
     // 〔批次76-R2 任务2〕条目名读自这一页自己的页签（页态没有窗头）。详情面从正文第一行开始。
-    expect(wrapper.find('[data-pane-id="worldbook.entries"] .doc-title').exists()).toBe(false)
+    // 〔批次68-R2 任务二〕再改判：作者口径「条目名＝大标题」（三栏维基阅读版的阅读列首），
+    // 页签那一条仍在（两个面不冲突：页签是页的身份，大标题是文档的题）。断言密度只增不减。
+    expect(wrapper.find('[data-pane-id="worldbook.entries"] .nx-wiki-title').text()).toBe('编年·雨夜')
     expect(wrapper.find('.nx-page-tab[data-page-instance="worldbook.entries#1"]').text()).toBe('世界书 · 编年·雨夜')
     wrapper.unmount()
   })
@@ -4993,12 +5056,13 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
   })
 
   /**
-   * 批次44 · 排布（作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，
-   * 右侧大面积留空，非常别扭，更合理的一个情况是，上面放图表列，下面放详情信息」）。
+   * 批次44 · 排布 → 批次68-R2 · 任务二翻案（工单死口径：「树 : 阅读 : Infobox 起排
+   * `260px : 1fr : min(46%,430px)`」，参照作者自有 NovelPedia 版式语言）。
    *
-   * 机器钉子：核心区是竖排（看板在上、详情在下），窄栏退成类别导航树。
+   * 原判据「上图表列、下详情」两段竖排随三栏阅读版退役（断言事实翻案、判定密度只增不减）：
+   * 工作区单块交给 EntriesBoard，板内是三栏（树／阅读／信息卡），信息卡可一钮收起。
    */
-  it('批次44：世界书核心区竖排——上图表列、下详情；窄栏只留类别导航', async () => {
+  it('批次68-R2：世界书三栏维基阅读版——树260px、阅读1fr、信息卡min(46%,430px)，可收起', async () => {
     globalThis.localStorage?.clear()
     const bridge = writingBridge({ entries: CATEGORIZED, categories: [...CATEGORIES] })
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -5006,20 +5070,50 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await openBoard(wrapper, '世界书')
 
     const workspace = wrapper.find('[data-pane-id="worldbook.entries"] .nx-entries-workspace')
-    expect(workspace.exists(), '核心区该有一块竖排工作区').toBe(true)
-    const children = [...workspace.element.children]
-    expect(children.length, '工作区就是两块：上图表列、下详情').toBe(2)
-    expect(children[0].className).toContain('nx-entries-workspace-board')
-    expect(children[1].className).toContain('nx-entries-workspace-detail')
+    expect(workspace.exists(), '核心区该有一块世界书工作区').toBe(true)
 
-    // 切换控件住在看板区头上，不在任何左栏里。
+    const cols = wrapper.find('[data-test="entries-wiki-cols"]')
+    expect(cols.exists(), '看板区里该有且只有一块三栏排版').toBe(true)
+    const children = [...cols.element.children]
+    expect(children.map((node) => node.className), '三栏顺序：树、阅读、信息卡').toEqual([
+      'nx-wiki-tree',
+      'nx-wiki-center',
+      'nx-wiki-infobox'
+    ])
+
+    // 死口径在声明层核对归 visual-contract.test.mjs（node 轨才有真文件系统读数）；
+    // jsdom 这条链只核 DOM 结构：三栏在场、顺序与收起钮语义。
+
+    // 切换控件仍在看板区里（[data-test="entries-board"] 锚点一字未动）。
     expect(wrapper.find('[data-test="entries-board"] [data-test="entries-view-toggle"]').exists()).toBe(true)
 
     // 批次59 铁律四：世界书是 web 模板，没有左树；类别导航树随左栏一起退场。
     expect(wrapper.find('.nx-index-window').exists()).toBe(false)
     expect(wrapper.find('[data-test="entry-category-tree"]').exists()).toBe(false)
+    // 列表态：中栏是阅读列——表格与整书图谱都不在场（信息卡缩览另挂自己的锚点）。
     expect(wrapper.find('[data-test="entries-table"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="entries-graph"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="entries-infobox-graph"]').exists(), '信息卡底部该有图谱缩览').toBe(true)
+
+    // 阅读列的 wiki 皮：条目名＝大标题（doc-title 族，展示体白名单内），正文容器挂 nx-wiki-article。
+    const title = wrapper.find('[data-test="entry-wiki-title"]')
+    expect(title.exists(), '阅读列首该有条目大标题').toBe(true)
+    expect(title.classes()).toContain('doc-title')
+    expect(wrapper.find('[data-test="entry-rendered"]').classes()).toContain('nx-wiki-article')
+
+    // 树行的层级 dot：统计口径（被引用次数），title 里写明「按被引用次数统计」。
+    const dot = wrapper.find('[data-test="entries-tree-col"] .nx-wiki-lvl-dot')
+    expect(dot.exists(), '树行前缀该有层级 dot').toBe(true)
+    expect(dot.attributes('title')).toContain('按被引用次数统计')
+
+    // 信息卡收起／展开一钮：收起后阅读列吃满（is-infobox-collapsed），只剩展开钮。
+    await wrapper.find('[data-test="entries-infobox-collapse"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="entries-wiki-cols"]').classes()).toContain('is-infobox-collapsed')
+    expect(wrapper.find('[data-test="entries-infobox-expand"]').exists()).toBe(true)
+    await wrapper.find('[data-test="entries-infobox-expand"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="entries-infobox-collapse"]').exists()).toBe(true)
 
     // 类别筛选与看板区共用 entriesFilterCat 一格：下拉一选，行数跟着变。
     await wrapper.find('[data-test="entries-filter-category"]').setValue('编年')

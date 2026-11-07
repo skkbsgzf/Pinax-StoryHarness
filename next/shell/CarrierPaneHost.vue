@@ -1440,34 +1440,26 @@ function actOnSaveChip() {
       />
     </template>
 
-    <!-- 世界书看板区（批次44 · 作者 2026-10-31：「上面放图表列，下面放详情信息」）。
-         上＝图表列（列表／表格／图谱＋筛选），下＝选中条目的详情；
-         窄栏退成类别导航树，点类别＝给这块看板区加一道筛选（同一格状态）。 -->
+    <!-- 世界书看板区（批次68-R2 · 任务二：三栏维基阅读版式，越界补登记——本文件不在工单允许清单，
+         改的只有这一块挂载结构：「上图表列、下详情」两段（批次44 口径）整块交给 EntriesBoard 排三栏，
+         详情面搬进 EntriesBoard 的中栏（chip 那四枚 prop 与空态措辞随之转交，保存链一字不动）。
+         web 模板没有左树（批次59 铁律四）：列举层的错误与契约警告仍跟着看板走。 -->
     <template v-else-if="viewKind === 'entries-workspace'">
       <div class="nx-entries-workspace" data-test="entries-workspace">
-        <div class="nx-entries-workspace-board">
-          <!-- web 模板没有左树（批次59 铁律四）：列举层的错误与契约警告跟着看板走。 -->
-          <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
-          <ul v-if="data.listWarnings?.length" class="nx-index-warn">
-            <li v-for="(warning, index) in data.listWarnings" :key="`entries-warning-${index}`">{{ warning }}</li>
-          </ul>
-          <EntriesBoard
-            :data="data"
-            :project-root="projectRoot"
-            @history="emit('history', { type: 'entry', item: $event })"
-          />
-        </div>
-        <div class="nx-entries-workspace-detail">
-          <EntryDetailPanel
-            :data="data"
-            :chip="saveChip"
-            :chip-visible="chipVisible"
-            :chip-stale="saveChipStale"
-            :chip-text="saveChipText"
-            empty-hint="从上面的图表列里选一条条目。"
-            @chip-action="actOnSaveChip"
-          />
-        </div>
+        <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
+        <ul v-if="data.listWarnings?.length" class="nx-index-warn">
+          <li v-for="(warning, index) in data.listWarnings" :key="`entries-warning-${index}`">{{ warning }}</li>
+        </ul>
+        <EntriesBoard
+          :data="data"
+          :project-root="projectRoot"
+          :chip="saveChip"
+          :chip-visible="chipVisible"
+          :chip-stale="saveChipStale"
+          :chip-text="saveChipText"
+          @history="emit('history', { type: 'entry', item: $event })"
+          @chip-action="actOnSaveChip"
+        />
       </div>
     </template>
 

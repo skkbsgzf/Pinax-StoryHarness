@@ -545,7 +545,13 @@ test('批次59：窗口层与窗口壳的样式就位；层序低于统一二级
   assert.equal(layout.includes('.nx-pane-window-tab'), false, 'next-shell.css 里不许再出现 .nx-pane-window-tab 选择器')
   const orb = ruleBody(layout, '.nx-collapse-orb {')
   assert.ok(orb, 'next-shell.css 里没有悬浮球规则')
-  assert.match(orb, /position:\s*fixed/u, '悬浮球钉在视口右下角')
+  // 〔批次68-R2 任务1〕原判据「悬浮球钉在视口右下角（position: fixed）」随作者口径翻案：
+  // 「球悬的应该是主面板右下角，不是 Agent 右下角」——fixed 的 right:24 落点压在 Pi-Agent 右栏上。
+  // 判据事实改为 absolute＋主面板（.col-center）是定位父级；判定逻辑（量声明、不放宽）一字未动。
+  assert.match(orb, /position:\s*absolute/u, '悬浮球钉在主面板（col-center）右下角')
+  const center = ruleBody(layout, '.col-center {')
+  assert.ok(center, 'next-shell.css 里没有 .col-center 规则')
+  assert.match(center, /position:\s*relative/u, '主面板是悬浮球的定位父级（球跟着主面板走）')
   assert.match(orb, /z-index:\s*var\(--z-floating-action\)/u, '球走既有档位 --z-floating-action，本批不新增层级')
   const orbButton = ruleBody(layout, '.nx-collapse-orb-button {')
   assert.ok(orbButton, '悬浮球本体缺样式')
@@ -883,7 +889,100 @@ test('批次59：布局模板是宿主词汇；folder 有树，web／gallery 没
   assert.ok(index.includes('nx-context-menu'), '大纲／章节自己的右键菜单仍在（内容操作，不是窗口动作）')
 })
 
+test('〔批次68-R2 任务二〕世界书三栏维基阅读版：死口径 260px:1fr:min(46%,430px)、缩览 260px、窄屏折下、wiki 皮挂对容器', async () => {
+  // 新增判据随登记进册（工单禁止边界口径）：这条只钉版式声明与挂载词汇，不放宽任何既有守卫。
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+
+  // ① 三栏死口径（工单原文：「树:阅读:Infobox 起排 260px : 1fr : min(46%,430px)」）。
+  assert.match(ruleBody(layout, '.nx-wiki-tree {'), /flex:\s*0 0 260px/u, '树列起排 260px')
+  assert.match(ruleBody(layout, '.nx-wiki-center {'), /flex:\s*1 1 auto/u, '阅读列吃剩余')
+  assert.match(ruleBody(layout, '.nx-wiki-infobox {'), /flex:\s*0 0 min\(46%, 430px\)/u, '信息卡 min(46%,430px)')
+  // 收起态只收窄自己——阅读列吃满是 flex 自然给出，不许借收起改三栏其它声明。
+  assert.match(ruleBody(layout, '.nx-wiki-infobox.is-collapsed {'), /flex:\s*0 0 auto/u, '信息卡收起＝一钮收窄')
+  // 信息卡底部图谱缩览 260px（EntryGraph 画布高度吃 --nx-entry-graph-height，board 态默认 340px 不动）。
+  assert.match(ruleBody(layout, '.nx-wiki-infobox-graph {'), /--nx-entry-graph-height:\s*260px/u, '信息卡缩览图 260px')
+  const graphVue = stripComments(await readFile(join(shellDir, 'EntryGraph.vue'), 'utf-8'))
+  assert.match(graphVue, /height:\s*var\(--nx-entry-graph-height,\s*340px\)/u, '图谱画布默认高度仍是 340px，缩览由变量给')
+
+  // ② 窄窗口语义：信息卡折到阅读列下方（工单②「@media 语义」）。
+  assert.match(layout, /@media[^{]*\{[\s\S]*?\.nx-wiki-infobox\s*\{[^}]*order:\s*3[^}]*\}/u, '窄屏信息卡要折到阅读列下方')
+
+  // ③ wiki 皮只加在渲染产物上（mdRender 管线一字不动）：规则全部挂 .entry-text.nx-wiki-article——
+  //    .entry-text 在展示体白名单族内（68-R1 闸⑯），这里不许出现新的 --font-display 声明。
+  assert.match(ruleBody(layout, '.entry-text.nx-wiki-article h2 {'), /border-bottom:/u, 'h2 章节底线')
+  assert.match(ruleBody(layout, '.entry-text.nx-wiki-article > p:first-of-type {'), /font-size:\s*var\(--nx-fs-xl\)/u, '首段导语走刻度档位')
+  assert.match(ruleBody(layout, '.entry-text.nx-wiki-article blockquote {'), /border-inline-start:/u, '引用块竖线')
+  assert.match(ruleBody(layout, '.entry-text.nx-wiki-article .nx-wikilink {'), /border-radius:\s*var\(--nx-radius-pill\)/u, '蓝链胶囊走 --nx-radius-pill 刻度')
+  assert.doesNotMatch(layout, /--font-display:[^;]*;[\s\S]{0,80}?\.nx-wiki/u, 'wiki 皮不许自己声明展示体')
+
+  // ④ 挂载词汇：三栏排版在 EntriesBoard；关系列表在信息卡只摆一遍（详情面 wiki 态让位）；
+  //    批次44／60 的两段式容器随结构翻案退役（不许留半截死 DOM）。
+  const board = await readFile(join(shellDir, 'EntriesBoard.vue'), 'utf-8')
+  for (const needle of ['entries-wiki-cols', 'entries-tree-col', 'entries-center-col', 'entries-infobox', 'entries-infobox-collapse', 'entries-infobox-expand', 'infobox-graph']) {
+    assert.ok(board.includes(`data-test="${needle}"`) || board.includes(`data-test="${needle}"`), `EntriesBoard 缺信息卡／三栏锚点：${needle}`)
+  }
+  assert.ok(board.includes('wiki'), '中栏详情面要以 wiki 态挂载')
+  const panel = await readFile(join(shellDir, 'EntryDetailPanel.vue'), 'utf-8')
+  assert.match(panel, /wiki:\s*\{\s*type:\s*Boolean/u, '详情面要有 wiki 开关（默认关，独立详情面行为不动）')
+  assert.match(panel, /class="doc-title nx-wiki-title"/u, '条目名＝大标题（阅读列首，展示体走 .doc-title 白名单族）')
+  assert.match(panel, /!data\.editingEntry && !wiki && entryRelations\.length/u, 'wiki 态下关系列表让位信息卡（同一份数据不摆两遍）')
+  const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
+  assert.ok(!pane.includes('nx-entries-workspace-board') && !pane.includes('nx-entries-workspace-detail'), '两段式容器已翻案退役，不许留死壳')
+})
+
+test('〔批次68-R2 任务三〕composer 卡片三层钉死：＋ 单通路、状态排真读数、模型 chip 无清单不可点、不摆麦克风死钮、停止占发送位', async () => {
+  // 新增判据随登记进册：这条钉结构锚点与数据口径，不放宽任何既有守卫。
+  const dialog = stripComments(await readFile(join(shellDir, 'AssistantDialog.vue'), 'utf-8'))
+
+  // ① 三层锚点：卡片（输入行＋控件排）→ 状态排 → 状态排下方的明细折叠区。
+  for (const needle of [
+    'data-test="composer-card"',
+    'data-test="composer-controls"',
+    'data-test="composer-plus"',
+    'data-test="composer-model-chip"',
+    'data-test="composer-status"',
+    'data-test="status-inflight"',
+    'data-test="status-envelope"',
+    'data-test="status-tokens"',
+    'data-test="composer-more"'
+  ]) {
+    assert.ok(dialog.includes(needle), `composer 三层缺锚点：${needle}`)
+  }
+  // 卡片把老 input-row 收在怀里（测试选择器家族 .authoring-knowledge__input-row textarea 不许改结构）。
+  assert.match(dialog, /data-test="composer-card"[\s\S]*?authoring-knowledge__input-row[\s\S]*?data-test="composer-controls"/u,
+    '卡片里必须是「输入行在上、控件排在下」这一序')
+
+  // ② 麦克风不摆死钮（语音后端本批不做，屏上连字都不许出现；模板注释里的这句话不算上屏）。
+  assert.ok(!dialog.replace(/<!--[\s\S]*?-->/gu, '').includes('麦克风') && !dialog.includes('composer-mic'), '麦克风不该作为钮/锚点出现')
+
+  // ③ 模型 chip：无清单＝disabled（只显示不可点——不编造）；在途读数走宿主真计数。
+  assert.match(dialog, /class="control-quiet nx-composer-model"[\s\S]{0,200}:disabled="!modelNames\.length"/u,
+    '模型 chip 无清单时必须不可点（并落在共享控件词汇 control-quiet 里）')
+  assert.match(dialog, /inflight:\s*\{\s*type:\s*Number/u, '状态排「在途」是宿主传下来的计数，不是 busy 的另一种拼写')
+  const dock = stripComments(await readFile(join(shellDir, 'RuntimeDock.vue'), 'utf-8'))
+  assert.match(dock, /const inflightCount = ref\(0\)/u, 'RuntimeDock 的 ask 计数要进模板，得先是响应式')
+  assert.match(dock, /:inflight="inflightCount"/u, '计数没传给 composer 状态排')
+
+  // ④ 停止钮只在 busy 时出现，且就站在发送钮那一格（v-if/v-else 同一位）。
+  assert.match(dialog, /v-if="busy"[\s\S]{0,200}data-test="composer-stop"[\s\S]*?v-else[\s\S]{0,120}authoring-knowledge__send/u,
+    '停止与发送共用发送位：busy 显停止，否则显发送')
+
+  // ⑤ 「＋」插入菜单只许复用同一条插触发符通路（openSkillMenu 与 pickInsert 都走 insertTrigger）。
+  const triggerCalls = dialog.match(/insertTrigger\(/gu)?.length ?? 0
+  assert.ok(triggerCalls >= 3, '＋菜单与 skill.menu 键位必须共用 insertTrigger 这一条通路')
+
+  // ⑥ 状态排缺数据如实「未回报」，不许换算冒充。
+  assert.match(dialog, /上下文 \$\{Number\(envelopeReading\.blocks\)[\s\S]*?上下文 未回报/u, 'envelope 读数没有真事件时是「未回报」')
+  assert.match(dialog, /本轮 tokens 未回报/u, 'usage 没有回报时是「未回报」')
+
+  // ⑦ 新样式的字号/圆角一律走刻度（门禁⑭⑮的整块读数之外，这里点名三处新档）。
+  assert.match(dialog, /\.nx-composer-card \{[^}]*border-radius:\s*var\(--radius-surface\)/u, '卡片圆角走 token')
+  assert.match(dialog, /\.nx-composer-status \{[^}]*font-size:\s*var\(--nx-fs-2xs\)/u, '状态排字号走刻度')
+  assert.match(dialog, /\.nx-composer-model \{[^}]*border-radius:\s*var\(--nx-radius-pill\)/u, '模型 chip 圆角走刻度')
+})
+
 test('〔批次76 任务4-4〕遍历点名的各处小命中区：度量声明都过 24 这条线', async () => {
+
   // 判据是**度量级**的（jsdom 没有排版，量不出真实 getBoundingClientRect）：
   // 逐条取规则体，① 正向钉住补上去的那一档尺寸，② 反向扫「声明了的 px 尺寸不许 < 24」。
   // 真机逐屏复测（<24×24 计数）仍记在「未真机复核」的账上，不由这条测试冒充。

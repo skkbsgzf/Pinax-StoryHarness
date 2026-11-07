@@ -66,7 +66,8 @@ const props = defineProps({
   /** 没有桥（渲染层没接主进程）时为真：输入框禁用。 */
   disabled: { type: Boolean, default: false },
   title: { type: String, default: 'Pi-Agent' },
-  placeholder: { type: String, default: '就当前项目问一句话…' },
+  /** 〔批次68-R2 任务三〕缺省语换成截图那句：三类触发符直接写进占位，菜单不收起来也能被教到。 */
+  placeholder: { type: String, default: '发消息或创建任务，/ 调用指令，@ 素材' },
   /** 折叠层的工具名清单（默认不展开）。 */
   tools: { type: Array, default: () => [] },
   /** 当前模式：review（提案制）／auto（直写）／blocked（这块目录只读，写入被拒也不出提案）。 */
@@ -86,7 +87,17 @@ const props = defineProps({
   /** 〔批次77 任务3〕键位表（hotkeys.mjs 那张）：宿主读一份经 props 递下来，本组件不硬编码按键。 */
   hotkeys: { type: Object, default: () => ({}) },
   /** 统一二级页开着时为 true：Esc 先归它（照 FloatingWidget 的 suspendEsc 先例）。 */
-  suspendEsc: { type: Boolean, default: false }
+  suspendEsc: { type: Boolean, default: false },
+  /**
+   * 〔批次68-R2 任务三〕状态排「在途」读数：RuntimeDock 那个真实 ask 计数
+   * （beginWork/endWork 一对括号），不是 busy 布尔的另一种拼写。
+   */
+  inflight: { type: Number, default: 0 },
+  /**
+   * 〔批次68-R2 任务三〕模型 chip 的清单数据源：运行时模型面真名（surface 侧有清单才传）。
+   * 本批探针只有 endpoint 与状态、没有模型名 → 缺省空数组，界面按「无清单时只显示不可点」如实画。
+   */
+  modelNames: { type: Array, default: () => [] }
 })
 const emit = defineEmits(['send', 'retry', 'stop', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate', 'branch', 'switch-branch'])
 
@@ -302,20 +313,51 @@ function onInput() {
 
 /** 唤起技能菜单（`skill.menu` 那条键位）：把光标处插进一个 `/`，剩下的交给同一条判定。 */
 function openSkillMenu() {
+  insertTrigger('/')
+}
+
+/**
+ * 〔批次68-R2 任务三〕「＋」插入菜单的唯一通路：往光标处插一个触发符，然后交给
+ * composerTypeahead 那**同一条**判定与菜单——不新增第二套插入通路（工单原话）。
+ * 原来 openSkillMenu 里那一段就地泛化成这个函数，键位那条路（skill.menu）也改走它。
+ */
+function insertTrigger(char) {
   const element = textareaRef.value
   element?.focus?.()
-  if (composerToken.value?.trigger === '/') {
+  if (composerToken.value?.trigger === char) {
     menuClosed.value = false
     return
   }
   const caret = typeof element?.selectionStart === 'number' ? element.selectionStart : draft.value.length
-  draft.value = `${draft.value.slice(0, caret)}/${draft.value.slice(caret)}`
+  draft.value = `${draft.value.slice(0, caret)}${char}${draft.value.slice(caret)}`
   menuClosed.value = false
   nextTick(() => {
     element?.setSelectionRange?.(caret + 1, caret + 1)
     refreshComposer()
   })
 }
+
+/** 「＋」弹层那三项：全部指向既有触发符（@素材 / /技能与命令 / #工作流角色），点了就插、菜单自己唤起。 */
+const INSERT_TRIGGERS = [
+  { char: '@', label: '引用素材', hint: '@' },
+  { char: '/', label: '技能与命令', hint: '/' },
+  { char: '#', label: '工作流角色', hint: '#' }
+]
+const plusOpen = ref(false)
+const plusRoot = ref(null)
+
+function pickInsert(trigger) {
+  plusOpen.value = false
+  insertTrigger(trigger.char)
+}
+
+/**
+ * 〔批次68-R2 任务三〕模型 chip：有真清单才点得开（点开只是把清单摆出来读，
+ * 切模型不归这块界面管）；没清单它就是一行如实的显示件——disabled，不装能点。
+ */
+const modelOpen = ref(false)
+const modelRoot = ref(null)
+const modelChipText = computed(() => (props.modelNames.length ? String(props.modelNames[0] ?? '') : '模型未回报'))
 
 /**
  * 〔批次77 任务3〕宿主键位表落点（六条里除「提案审阅」走原生菜单外，这五条都归对话框）：
@@ -470,6 +512,30 @@ const sessionUsage = computed(() => {
   return null
 })
 
+/**
+ * 〔批次68-R2 任务三〕状态排「上下文组装」读数：最近一条真 `envelope` 运行事件
+ * （runnerAdvisor 组装完信封发出的那条 {stage:'envelope', blocks, chars}）。
+ * 先看 in-flight 的 liveTrail，定格了就回找最近一条带 trail 的消息——两处都没有就如实「未回报」，
+ * 不许拿草稿字数或别的什么换算一个数来冒充。
+ */
+function latestEnvelope(events) {
+  const list = Array.isArray(events) ? events : []
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    if (list[index]?.stage === 'envelope') return list[index]
+  }
+  return null
+}
+const envelopeReading = computed(() => {
+  const live = latestEnvelope(props.liveTrail)
+  if (live) return live
+  const list = Array.isArray(props.messages) ? props.messages : []
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const hit = latestEnvelope(list[index]?.trail)
+    if (hit) return hit
+  }
+  return null
+})
+
 const copiedId = ref('')
 let copyTimer = null
 
@@ -574,14 +640,27 @@ defineExpose({ setDraft })
 function onDocumentKeydown(event) {
   if (onChatHotkey(event)) return
   if (event.key !== 'Escape' || props.suspendEsc) return
+  // 〔批次68-R2 任务三〕「＋」与模型 chip 那两个小弹层也归 Esc 先收（在会话弹层之前收，谁开着收谁）。
+  if (plusOpen.value) {
+    event.preventDefault()
+    plusOpen.value = false
+    return
+  }
+  if (modelOpen.value) {
+    event.preventDefault()
+    modelOpen.value = false
+    return
+  }
   if (!sessionOpen.value) return
   event.preventDefault()
   sessionOpen.value = false
   renamingId.value = null
 }
 
-/** 点会话弹层外面收起（按钮自己 toggle，不参与这条）。 */
+/** 点弹层外面收起（按钮自己 toggle，不参与这条）。〔批次68-R2 任务三〕会话／＋／模型三层同一条口。 */
 function onDocumentPointerDown(event) {
+  if (plusOpen.value && !plusRoot.value?.contains?.(event.target)) plusOpen.value = false
+  if (modelOpen.value && !modelRoot.value?.contains?.(event.target)) modelOpen.value = false
   if (!sessionOpen.value) return
   if (sessionRoot.value?.contains?.(event.target)) return
   sessionOpen.value = false
@@ -631,14 +710,8 @@ onBeforeUnmount(() => {
           title="会话：切换／新建／改名／删除"
           @click="toggleSessions"
         >会话<span class="authoring-knowledge__session-count">{{ sessions.length }}</span></button>
-        <button
-          type="button"
-          class="authoring-knowledge__mode-badge"
-          :class="modeClass"
-          :title="modeTitle"
-          :aria-pressed="pendingAuto.toString()"
-          @click="requestMode"
-        >{{ modeLabel }}</button>
+        <!-- 〔批次68-R2 任务三〕模式徽标从页眉收进 composer 控件排（写模式 chip ▾）：
+             requestMode／modeClass／确认行逻辑与禁用态口径一字未动，只是长在了它管的这件事旁边。 -->
       </div>
 
       <div v-if="sessionOpen" class="authoring-knowledge__sessions" role="dialog" aria-label="会话列表">
@@ -682,21 +755,6 @@ onBeforeUnmount(() => {
         </ul>
       </div>
     </header>
-
-    <div v-if="pendingAuto" class="authoring-knowledge__mode-confirm" role="alertdialog" aria-label="切换写模式">
-      <span class="authoring-knowledge__mode-confirm-text">自动模式下，AI 的产出会直接写入正文，不再走提案。只对当前项目生效。</span>
-      <button type="button" class="authoring-knowledge__mode-confirm-ok" @click="confirmAuto">确认切换</button>
-      <!-- 〔批次77 任务3〕第三档 blocked 的入口（词表已有、UI 只判前两档那处补齐）：
-           它与 auto 是相反方向（更保守），所以不进那句「直接写入」的确认语，单列一枚钮说明白。 -->
-      <button
-        type="button"
-        class="authoring-knowledge__mode-confirm-blocked"
-        data-test="mode-blocked"
-        title="锁定模式：写入一律被拒，也不出提案（比审阅更保守，不需要确认）"
-        @click="confirmBlocked"
-      >切到锁定（只读）</button>
-      <button type="button" class="authoring-knowledge__mode-confirm-cancel" @click="cancelAuto">取消</button>
-    </div>
 
     <div class="authoring-knowledge__body">
       <div v-if="!messages.length" class="authoring-knowledge__intro">
@@ -873,95 +931,183 @@ onBeforeUnmount(() => {
     </div>
 
     <footer class="authoring-knowledge__composer">
-      <!-- 会话级用量（批次77 任务2）：取最近一条真带 usage 的助手消息——这是 DeepWrite 那条
-           「上下文圆环只看最近同模型那一轮」的口径，不做累计估算。数值只记账，不当任何闸。 -->
-      <p v-if="sessionUsage" class="authoring-knowledge__composer-usage" data-test="session-usage">
-        最近一轮 {{ sessionUsage.input }} in／{{ sessionUsage.output }} out（计 {{ sessionUsage.total }}）
-      </p>
-      <details v-if="tools.length" class="authoring-knowledge__agent-detail">
-        <summary><WorkbenchIcon name="chevron-down" :size="12" />工具面（{{ tools.length }}）</summary>
-        <ul class="authoring-knowledge__agent-list">
-          <li v-for="tool in toolRows" :key="tool.name" class="authoring-knowledge__agent-item">
-            <span class="authoring-knowledge__agent-name" :title="tool.name">{{ tool.displayName }}</span>
-            <span class="authoring-knowledge__agent-id">{{ tool.name }}</span>
-          </li>
-        </ul>
-      </details>
+      <!-- 〔批次68-R2 任务三〕composer 卡片三层（参照 Linear 风截图）：
+           ①输入行（typeahead 弹层原地不动，判定/回填仍是 composerTypeahead 那一条纯通路）
+           ②控件排（卡片内底部）：左「＋」插入菜单与写模式 chip，右模型 chip 与发送位。
+             麦克风**不摆死钮**——语音后端本批不做，这一排就没有它。 -->
+      <div class="nx-composer-card" data-test="composer-card">
+        <div class="authoring-knowledge__input-row">
+          <!-- 〔批次77 任务3〕typeahead 弹层：三类触发符共用这一层（判定与菜单在 composerTypeahead.mjs）。
+               头一行教键位——↑↓／Enter／Tab／Esc 这四件事在老版是两套各写一遍的键盘逻辑，
+               谁能用哪个键没人说得清；现在只有一条序列，就把那条序列写在菜单头上。 -->
+          <div
+            v-if="composerMenu"
+            class="authoring-knowledge__typeahead"
+            data-test="composer-menu"
+            role="listbox"
+            :aria-label="`补全菜单（${composerToken?.trigger ?? ''}）`"
+          >
+            <p class="authoring-knowledge__typeahead-keys">↑↓ 移动 · Enter 选中 · Tab 补全 · Esc 关闭</p>
+            <p v-if="composerMenu.empty" class="authoring-knowledge__typeahead-empty" data-test="composer-empty">{{ composerMenu.empty.label }}</p>
+            <template v-for="group in composerMenu.groups" :key="`${group.kind}-${group.label}`">
+              <p class="authoring-knowledge__typeahead-group">{{ group.label }}</p>
+              <button
+                v-for="item in group.items"
+                :key="item.key"
+                type="button"
+                class="authoring-knowledge__typeahead-item"
+                :class="{ 'is-active': composerItems[menuIndex] === item }"
+                role="option"
+                :aria-selected="(composerItems[menuIndex] === item).toString()"
+                :data-item-kind="item.kind"
+                @mousedown.prevent
+                @click="pickComposerItem(item)"
+              >
+                <span class="authoring-knowledge__typeahead-label">{{ item.label }}</span>
+                <span v-if="item.hint" class="authoring-knowledge__typeahead-hint">{{ item.hint }}</span>
+              </button>
+            </template>
+          </div>
 
-      <div class="authoring-knowledge__input-row">
-        <!-- 〔批次77 任务3〕typeahead 弹层：三类触发符共用这一层（判定与菜单在 composerTypeahead.mjs）。
-             头一行教键位——↑↓／Enter／Tab／Esc 这四件事在老版是两套各写一遍的键盘逻辑，
-             谁能用哪个键没人说得清；现在只有一条序列，就把那条序列写在菜单头上。 -->
-        <div
-          v-if="composerMenu"
-          class="authoring-knowledge__typeahead"
-          data-test="composer-menu"
-          role="listbox"
-          :aria-label="`补全菜单（${composerToken?.trigger ?? ''}）`"
-        >
-          <p class="authoring-knowledge__typeahead-keys">↑↓ 移动 · Enter 选中 · Tab 补全 · Esc 关闭</p>
-          <p v-if="composerMenu.empty" class="authoring-knowledge__typeahead-empty" data-test="composer-empty">{{ composerMenu.empty.label }}</p>
-          <template v-for="group in composerMenu.groups" :key="`${group.kind}-${group.label}`">
-            <p class="authoring-knowledge__typeahead-group">{{ group.label }}</p>
-            <button
-              v-for="item in group.items"
-              :key="item.key"
-              type="button"
-              class="authoring-knowledge__typeahead-item"
-              :class="{ 'is-active': composerItems[menuIndex] === item }"
-              role="option"
-              :aria-selected="(composerItems[menuIndex] === item).toString()"
-              :data-item-kind="item.kind"
-              @mousedown.prevent
-              @click="pickComposerItem(item)"
-            >
-              <span class="authoring-knowledge__typeahead-label">{{ item.label }}</span>
-              <span v-if="item.hint" class="authoring-knowledge__typeahead-hint">{{ item.hint }}</span>
-            </button>
-          </template>
+          <textarea
+            ref="textareaRef"
+            v-model="draft"
+            rows="1"
+            :placeholder="placeholder"
+            aria-label="向助手提问"
+            :disabled="disabled || busy"
+            @keydown="onKeydown"
+            @input="onInput"
+            @click="refreshComposer"
+            @keyup.arrow-left="refreshComposer"
+            @keyup.arrow-right="refreshComposer"
+            @blur="composerToken = null"
+          />
         </div>
 
-        <textarea
-          ref="textareaRef"
-          v-model="draft"
-          rows="1"
-          :placeholder="placeholder"
-          aria-label="向助手提问"
-          :disabled="disabled || busy"
-          @keydown="onKeydown"
-          @input="onInput"
-          @click="refreshComposer"
-          @keyup.arrow-left="refreshComposer"
-          @keyup.arrow-right="refreshComposer"
-          @blur="composerToken = null"
-        />
+        <div class="nx-composer-controls" data-test="composer-controls">
+          <div class="nx-composer-controls-primary">
+            <div ref="plusRoot" class="nx-composer-plus-wrap">
+              <button
+                type="button"
+                class="control-icon nx-composer-plus"
+                data-test="composer-plus"
+                :aria-expanded="plusOpen.toString()"
+                :disabled="disabled || busy"
+                title="插入：@素材 · / 技能与命令 · #工作流角色"
+                @click="plusOpen = !plusOpen"
+              >＋</button>
+              <div v-if="plusOpen" class="nx-composer-plus-menu" data-test="composer-plus-menu" role="menu" aria-label="插入菜单">
+                <button
+                  v-for="trigger in INSERT_TRIGGERS"
+                  :key="trigger.char"
+                  type="button"
+                  class="nx-row nx-composer-plus-item"
+                  role="menuitem"
+                  @click="pickInsert(trigger)"
+                ><span class="nx-composer-plus-char">{{ trigger.char }}</span>{{ trigger.label }}</button>
+              </div>
+            </div>
+            <!-- 写模式 chip：原页眉那枚徽标收进来（类名与 requestMode／确认行／禁用态口径一字不动）。 -->
+            <!-- 写模式 chip：原页眉那枚徽标收进来（类名与 requestMode／确认行口径一字不动，也不新加禁用态；
+                 那个 ▾ 走 CSS ::after——文本读数钉着「审阅／自动／锁定」三个词，不许把箭头混进读数里）。 -->
+            <button
+              type="button"
+              class="authoring-knowledge__mode-badge"
+              :class="modeClass"
+              :title="modeTitle"
+              :aria-pressed="pendingAuto.toString()"
+              @click="requestMode"
+            >{{ modeLabel }}</button>
+          </div>
 
-        <div class="authoring-knowledge__composer-actions">
-          <!-- 〔批次77 任务3〕停止钮：只在真有一问在途时出现。点下去的动作是「问主进程把这一问标成已取消」，
-               落不落得停由运行那条链在轮次边界上说了算——界面不自己先把状态改成「已停」。 -->
-          <button
-            v-if="busy"
-            type="button"
-            class="authoring-knowledge__stop"
-            data-test="composer-stop"
-            aria-label="停止这一问"
-            title="停止：这一轮跑完后不再续轮（已跑的部分照常留在会话里）"
-            :disabled="disabled"
-            @click="emit('stop')"
-          >
-            <WorkbenchIcon name="stop" :size="17" />
-          </button>
-          <button
-            type="button"
-            class="authoring-knowledge__send"
-            aria-label="发送问题"
-            :disabled="disabled || busy || !draft.trim()"
-            @click="submit"
-          >
-            <WorkbenchIcon name="arrow-up" :size="19" />
-          </button>
+          <div class="nx-composer-controls-secondary">
+            <!-- 模型 chip：显示当前模型名，点开列运行时模型面清单——**无清单时只显示不可点（不编造）**。
+                 本批探针通路只有 endpoint 与状态、没有模型名，运行时多半传下来空数组，画的就是那行如实的「模型未回报」。 -->
+            <div ref="modelRoot" class="nx-composer-model-wrap">
+              <button
+                type="button"
+                class="control-quiet nx-composer-model"
+                data-test="composer-model-chip"
+                :disabled="!modelNames.length"
+                :aria-expanded="modelOpen ? 'true' : 'false'"
+                :title="modelNames.length ? '运行时模型面清单' : '运行时未回报模型清单（只显示，不当死钮）'"
+                @click="modelOpen = !modelOpen"
+              >{{ modelChipText }}<span v-if="modelNames.length" aria-hidden="true" class="nx-composer-caret">▾</span></button>
+              <ul v-if="modelOpen && modelNames.length" class="nx-composer-model-list" data-test="composer-model-list">
+                <li v-for="name in modelNames" :key="name">{{ name }}</li>
+              </ul>
+            </div>
+            <!-- 〔批次77 任务3〕停止钮：只在真有一问在途时出现，且就站在发送钮那一格。点下去的动作是
+                 「问主进程把这一问标成已取消」，落不落得停由运行那条链在轮次边界上说了算——界面不自己先把状态改成「已停」。 -->
+            <button
+              v-if="busy"
+              type="button"
+              class="authoring-knowledge__stop"
+              data-test="composer-stop"
+              aria-label="停止这一问"
+              title="停止：这一轮跑完后不再续轮（已跑的部分照常留在会话里）"
+              :disabled="disabled"
+              @click="emit('stop')"
+            >
+              <WorkbenchIcon name="stop" :size="17" />
+            </button>
+            <button
+              v-else
+              type="button"
+              class="authoring-knowledge__send"
+              aria-label="发送问题"
+              :disabled="disabled || !draft.trim()"
+              @click="submit"
+            >
+              <WorkbenchIcon name="arrow-up" :size="19" />
+            </button>
+          </div>
         </div>
       </div>
+
+      <!-- 自动档确认行（M2.5-B）：文案与三枚钮一字未动，只是挪到卡片下方——chip 长在卡里，确认就该跟在卡后。 -->
+      <div v-if="pendingAuto" class="authoring-knowledge__mode-confirm" role="alertdialog" aria-label="切换写模式">
+        <span class="authoring-knowledge__mode-confirm-text">自动模式下，AI 的产出会直接写入正文，不再走提案。只对当前项目生效。</span>
+        <button type="button" class="authoring-knowledge__mode-confirm-ok" @click="confirmAuto">确认切换</button>
+        <!-- 〔批次77 任务3〕第三档 blocked 的入口（词表已有、UI 只判前两档那处补齐）：
+             它与 auto 是相反方向（更保守），所以不进那句「直接写入」的确认语，单列一枚钮说明白。 -->
+        <button
+          type="button"
+          class="authoring-knowledge__mode-confirm-blocked"
+          data-test="mode-blocked"
+          title="锁定模式：写入一律被拒，也不出提案（比审阅更保守，不需要确认）"
+          @click="confirmBlocked"
+        >切到锁定（只读）</button>
+        <button type="button" class="authoring-knowledge__mode-confirm-cancel" @click="cancelAuto">取消</button>
+      </div>
+
+      <!-- 状态排（卡片下方小字一行，全部真数据，缺哪条报哪条「未回报」，不换算不冒充）：
+           在途＝RuntimeDock 的 ask 计数；上下文＝最近一条真 envelope 事件；本轮 tokens＝既有 usage 链。 -->
+      <div class="nx-composer-status" data-test="composer-status">
+        <span data-test="status-inflight">在途 {{ inflight }}</span>
+        <span data-test="status-envelope">{{ envelopeReading ? `上下文 ${Number(envelopeReading.blocks) || 0} 块／${Number(envelopeReading.chars) || 0} 字` : '上下文 未回报' }}</span>
+        <span data-test="status-tokens">{{ sessionUsage ? `本轮 ${sessionUsage.total} tokens` : '本轮 tokens 未回报' }}</span>
+      </div>
+
+      <!-- 既有「工具面」折叠层与 session-usage 收进状态排下方的这一层折叠区：内容一字未动，只挪位。
+           会话级用量（批次77 任务2）：取最近一条真带 usage 的助手消息——DeepWrite 那条
+           「上下文圆环只看最近同模型那一轮」的口径，不做累计估算。数值只记账，不当任何闸。 -->
+      <details v-if="sessionUsage || tools.length" class="nx-composer-more" data-test="composer-more">
+        <summary>工具面与用量明细</summary>
+        <p v-if="sessionUsage" class="authoring-knowledge__composer-usage" data-test="session-usage">
+          最近一轮 {{ sessionUsage.input }} in／{{ sessionUsage.output }} out（计 {{ sessionUsage.total }}）
+        </p>
+        <details v-if="tools.length" class="authoring-knowledge__agent-detail">
+          <summary><WorkbenchIcon name="chevron-down" :size="12" />工具面（{{ tools.length }}）</summary>
+          <ul class="authoring-knowledge__agent-list">
+            <li v-for="tool in toolRows" :key="tool.name" class="authoring-knowledge__agent-item">
+              <span class="authoring-knowledge__agent-name" :title="tool.name">{{ tool.displayName }}</span>
+              <span class="authoring-knowledge__agent-id">{{ tool.name }}</span>
+            </li>
+          </ul>
+        </details>
+      </details>
     </footer>
   </section>
 </template>
@@ -1179,4 +1325,39 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .authoring-knowledge__stop { display: grid; flex: none; width: var(--workspace-control-height, 36px); height: var(--workspace-control-height, 36px); place-items: center; border: 1px solid color-mix(in srgb, var(--control-danger) 32%, transparent); border-radius: 50%; background: transparent; color: var(--control-danger); cursor: pointer; }
 .authoring-knowledge__stop:hover:not(:disabled) { background: color-mix(in srgb, var(--control-danger) 10%, transparent); }
 .authoring-knowledge__stop:disabled { color: var(--text-muted); border-color: var(--hairline-soft); cursor: default; }
+</style>
+
+<style scoped>
+/* 〔批次68-R2 任务三〕composer 卡片三层（参照 Linear 风截图逐项）：卡片自己吃边框与圆角，
+   老 input-row 那一份度量在卡内让位（选择器家族 .authoring-knowledge__input-row textarea 原样保留，
+   钉着它的三十多条用例一条不动）。字号/圆角一律走 token 刻度——visual-contract 门禁⑭⑮受管。
+   麦克风不摆死钮：语音后端本批不做，这一排没有它，屏上也不许出现点了没反应的占位。 */
+.nx-composer-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-surface); background: var(--surface-workbench-input); }
+.nx-composer-card:focus-within { outline: 2px solid var(--workbench-focus); outline-offset: 1px; border-color: transparent; }
+.nx-composer-card .authoring-knowledge__input-row { min-height: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+.nx-composer-card .authoring-knowledge__input-row:focus-within { outline: 0; }
+.nx-composer-controls { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
+.nx-composer-controls-primary { display: flex; align-items: center; min-width: 0; gap: 6px; flex: none; }
+.nx-composer-controls-secondary { display: flex; align-items: center; justify-content: flex-end; min-width: 0; gap: 6px; flex: 1 1 auto; }
+.nx-composer-plus-wrap, .nx-composer-model-wrap { position: relative; flex: none; }
+.nx-composer-plus { display: grid; width: 28px; height: 28px; place-items: center; padding: 0; border: 1px solid var(--hairline-soft); border-radius: var(--nx-radius-xs); background: transparent; color: var(--text-secondary); font-size: var(--nx-fs-lg); line-height: 1; cursor: pointer; }
+.nx-composer-plus:hover:not(:disabled) { background: var(--nav-hover); color: var(--text-primary); }
+.nx-composer-plus:disabled { color: var(--text-muted); cursor: default; }
+.nx-composer-plus-menu { position: absolute; z-index: var(--z-popover, 30); bottom: calc(100% + 6px); left: 0; display: flex; min-width: 172px; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--hairline-soft); border-radius: var(--nx-radius-xs); background: var(--surface-workbench-raised); }
+.nx-composer-plus-item { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--text-primary); font-family: var(--font-interface); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
+.nx-composer-plus-item:hover { background: var(--nav-hover); }
+.nx-composer-plus-char { flex: none; width: 18px; color: var(--accent); font-family: var(--font-interface); font-size: var(--nx-fs-md); font-weight: 600; text-align: center; }
+.nx-composer-caret { margin-left: 4px; font-size: var(--nx-fs-2xs); }
+/* 写模式 chip 的 ▾ 走伪元素：徽标的文本读数被用例钉着「审阅／自动／锁定」三个词，箭头不许混进读数。 */
+.authoring-knowledge__mode-badge::after { content: '▾'; margin-left: 4px; font-size: var(--nx-fs-2xs); }
+.nx-composer-model { display: inline-flex; max-width: 168px; min-height: 24px; align-items: center; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--nx-radius-pill); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nx-composer-model:not(:disabled) { color: var(--text-secondary); cursor: pointer; }
+.nx-composer-model-list { position: absolute; z-index: var(--z-popover, 30); right: 0; bottom: calc(100% + 6px); display: flex; min-width: 168px; flex-direction: column; gap: 2px; margin: 0; padding: 6px; list-style: none; border: 1px solid var(--hairline-soft); border-radius: var(--nx-radius-xs); background: var(--surface-workbench-raised); color: var(--text-primary); font-size: var(--nx-fs-md); }
+/* 状态排：卡片下方一行小字，三项全是真数据；缺哪条如实报「未回报」，不换算冒充（守卫⑦同口径）。 */
+.nx-composer-status { display: flex; flex-wrap: wrap; gap: 10px; margin: 2px 4px 0; color: var(--text-muted); font-family: var(--font-interface); font-size: var(--nx-fs-2xs); line-height: 1.5; font-variant-numeric: tabular-nums; }
+/* 折叠区（状态排下方）：原「工具面」details 与 session-usage 收进来，内容一字未动、只挪位。 */
+.nx-composer-more { margin-top: 2px; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.nx-composer-more > summary { display: flex; min-height: 26px; align-items: center; gap: 6px; list-style: none; cursor: pointer; }
+.nx-composer-more > summary::-webkit-details-marker { display: none; }
+.nx-composer-more .authoring-knowledge__composer-usage { margin: 2px 0 4px; text-align: start; }
 </style>
