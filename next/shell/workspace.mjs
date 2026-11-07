@@ -8,7 +8,7 @@
  *
  *   group      main|side        这页住在哪个页组；side 组存在＝分屏（页组，不是形态）
  *   order      组内序号          页签栏的排列依据
- *   form       page|floating|tab 占页／浮窗／收成侧缘标签
+ *   form       page|floating|tab 占页／浮窗／收进悬浮球
  *   resource   string|null      这页装的是哪份文档（D）；null＝按 pane 缺省文档打开
  *   viewState  object|null      批次66 任务三：这一页自己的视图状态（folder 模板＝树收了哪几个卷）
  *   geometry   {x,y,w,h}|null   仅 floating 持有；页态为 null
@@ -37,7 +37,7 @@ export const WORKSPACE_FILE = '.pinax/workspace.json'
 export const PAGE_GROUPS = Object.freeze(['main', 'side'])
 export const DEFAULT_GROUP = 'main'
 
-/** 页的形态：占页（缺省）／浮窗／收成侧缘标签。 */
+/** 页的形态：占页（缺省）／浮窗／收进悬浮球。 */
 export const PAGE_FORMS = Object.freeze(['page', 'floating', 'tab'])
 export const DEFAULT_FORM = 'page'
 
@@ -199,7 +199,7 @@ export function defaultEntry(paneId, index = 1, { group = DEFAULT_GROUP, form = 
 /**
  * 一条页记录的净化（v3）：未知字段丢弃、越界值回落，绝不把脏数据带进状态机。
  * instance 以入参为准（存档里的 instance 不采信，避免一条错误记录挂到别的 pane 上）。
- * 只有浮窗持有几何：页态／侧缘标签的 geometry 一律收成 null（存档里残留的旧矩形不留效）。
+ * 只有浮窗持有几何：页态／收进悬浮球那档的 geometry 一律收成 null（存档里残留的旧矩形不留效）。
  */
 export function normalizeEntry(value, fallbackInstance = '') {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -322,7 +322,7 @@ export function emptyWorkspace() {
 
 /**
  * 组内按 order 升序补齐序号（重复／空洞都算脏，一次收口成 0..n-1）。
- * 只有页态参与；浮窗与侧缘标签不占页组的位置编号。
+ * 只有页态参与；浮窗与收进悬浮球那档不占页组的位置编号。
  */
 function reindexOrders(entries) {
   for (const group of PAGE_GROUPS) {
@@ -556,7 +556,7 @@ export function createWorkspaceStore({ initial = null, save = null } = {}) {
       .sort((a, b) => a.z - b.z || a.instance.localeCompare(b.instance))
   }
 
-  /** 收成侧缘标签的记录，按叠序升序（侧缘那一竖列的数据源）。 */
+  /** 收进悬浮球的记录，按叠序升序（悬浮球回收的数据源）。 */
   function tabList() {
     return Object.values(entries)
       .filter((entry) => entry.form === 'tab')

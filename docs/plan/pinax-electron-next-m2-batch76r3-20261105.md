@@ -138,3 +138,14 @@ ComfyUI 从未在窗内渲染的根因＝ComfyUI 0.39 `server.py` 的 `origin_on
 - **真窗验证**：截图 `147-comfyui-native-live.png`——ComfyUI 原生界面（工作流画布＋「运行」钮＋显存读数）在 Pinax 内完整渲染；诊断流水：首航 `rewritten=true`，子资源改写后天然 same-origin。剩余 404 为 ComfyUI 可选 userdata 端点常态探测，无害。
 - 调试坑存档：①`npm run build:next` 不存在（真名 `next:build:main`／`next:build:shell`／`next:build:renderer`），选择选择性构建会踩 A2 旧患（emptyOutDir 抹 renderer）；②归一清单 `panes` 在顶层不在 `contributes` 下——collectAppOrigins 首版因此空名单，已兼容两形状。
 - 豁免边界重申：本链路只对「清单声明＋工程覆盖」的本机回环 origin 生效；CF2TF 自身 queue gate 纪律不变（其 SPEC §1.1 的提交通路归底座条款未触碰）。
+
+### §8-5 调度方补刀（2026-11-07 · 盘点后的 bug 修复批）
+
+按作者指令「先把 bug 全部修一遍」，可修四项（A4/A5/A7/A8/A12/A13/A15 卡作者裁定不修，A3 归批次78 基建债，A9/A14 低风险留账）：
+
+- **A10 术语残留**：StatusBar/hotkeys/openTarget/workspace 六处「侧缘标签」→「收进悬浮球」（批次76 裁定B 后的旧词清零）。
+- **A16 构建别名**：`npm run build:next`＝renderer→main→shell→next:bundle 一条龙（原脚本名不存在，选择性构建必踩 A2）。
+- **A2 根治**：`vite.next.main.config.mjs` `emptyOutDir:false`（整目录抹掉曾带走门禁刚拷的 skills/ 与 renderer 产物＝「首跑红重跑绿」；陈旧产物由 next:bundle 断言把关），验证：build:next 单发即可用，renderer-next/index.html＋skills 同时在。
+- **A1 测试残壳**：shell-ui.spec 本地 mount 进台账（129 处调用点零改动）＋文件级 afterEach 统一回卷——中途抛错用例的 document 级 keydown 不再替后续用例跑 collapseTopWindow。
+
+门禁：44/44 · 822/822 · 241/241 · eslint 0 · 打包过；产物已重编并拉起（作者试用装）。

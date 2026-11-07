@@ -70,7 +70,7 @@ export function pageIdOf(paneId, resource, { pages = [], multiplicity = 'single'
   return instanceIdFor(id, index)
 }
 
-/** 这块 pane 是否已经开着（任何形态都算——页、浮窗、侧缘标签是一页的三种此刻形态，不是三种东西）。 */
+/** 这块 pane 是否已经开着（任何形态都算——页、浮窗、收进悬浮球是一页的三种此刻形态，不是三种东西）。 */
 function existingOf(pages, paneId) {
   const id = String(paneId ?? '').trim()
   return pages.filter((page) => page.pane === id)

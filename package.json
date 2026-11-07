@@ -92,6 +92,7 @@
     "build:agent-runtime": "node scripts/build-storyagent-runtime.mjs",
     "next:accept": "node next/testing/acceptance.mjs",
     "next:bundle": "node next/testing/bundleAssertions.mjs",
+    "build:next": "npm run next:build:renderer && npm run next:build:main && npm run next:build:shell && npm run next:bundle",
     "next:build:main": "vite build --config next/vite.next.main.config.mjs",
     "next:build:shell": "vite build --config next/vite.next.shell.config.mjs && npm run next:build:preload",
     "next:build:renderer": "vite build --config next/vite.next.renderer.config.mjs",

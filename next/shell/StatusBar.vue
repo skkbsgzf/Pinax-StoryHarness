@@ -98,7 +98,7 @@ const carrierTitle = computed(() => {
     </span>
 
     <!-- ③「1＋N 的 N」：在册窗数（工作区 v3 现取）。数字本身是读数，不是钮。 -->
-    <span class="nx-status-item" data-test="status-windows" title="在册窗数（1＋N 的 N，含页／浮窗／侧缘标签）">
+    <span class="nx-status-item" data-test="status-windows" title="在册窗数（1＋N 的 N，含页／浮窗／收进悬浮球的）">
       <span class="nx-status-key">在册</span>
       <span class="nx-status-value">{{ windows }}</span>
     </span>

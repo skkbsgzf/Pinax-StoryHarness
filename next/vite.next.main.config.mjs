@@ -13,7 +13,10 @@ export default defineConfig({
   build: {
     ssr: 'next/mainEntry.mjs',
     outDir: 'next/.build',
-    emptyOutDir: true,
+    /* 〔批次76-R3 补刀·A2 根治〕emptyOutDir 改 false：整目录抹掉会把门禁刚拷的 skills/ 与
+       renderer 产物一起带走（症状＝「首跑红、原地重跑即绿」）。陈旧产物由 next:bundle 的
+       断言把关（入口 bundle 文件名固定，门禁前先定向清），这里不再整目录清场。 */
+    emptyOutDir: false,
     minify: false,
     sourcemap: false,
     target: 'node22',

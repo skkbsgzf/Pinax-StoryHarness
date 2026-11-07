@@ -30,7 +30,7 @@ export const HOTKEYS_FILE = `${HOTKEYS_DIR}/${HOTKEYS_FILENAME}`
 
 /** 面板唤起是本批新登记的宿主命令 id——它不在应用菜单里，所以键位只能在这张表里有个家。 */
 export const HOTKEY_PALETTE_OPEN = 'palette.open'
-/** Esc 收窗：落点就是批次61 那条「叠序最高的窗收成侧缘标签」，不新造行为。 */
+/** Esc 收窗：落点就是批次76 裁定B 那条「叠序最高的窗收进悬浮球」，不新造行为。 */
 export const HOTKEY_COLLAPSE_TOP = 'workspace.collapse-top'
 
 /**

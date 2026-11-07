@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { flushPromises, mount as vueMount } from '@vue/test-utils'
 import AppNext from '../shell/AppNext.vue'
 import ActivityRail from '../shell/ActivityRail.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
@@ -17,6 +17,27 @@ import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
  */
 beforeEach(() => {
   resetWorkspace()
+})
+
+/**
+ * 〔批次76-R3 补刀·A1〕挂载台账：129 处挂载大多自觉 unmount，但中途抛错的用例来不及——
+ * 残壳留在 document 上的 keydown 会替后续每个用例跑 collapseTopWindow（悬浮球计数虚高）。
+ * 本地 mount 包一层进台账，文件级 afterEach 统一回卷；正常用例自己的 unmount 再跑一次是幂等丢弃。
+ */
+const mountedWrappers = []
+function mount(...args) {
+  const wrapper = vueMount(...args)
+  mountedWrappers.push(wrapper)
+  return wrapper
+}
+afterEach(() => {
+  while (mountedWrappers.length) {
+    try {
+      mountedWrappers.pop().unmount()
+    } catch {
+      // 已经死掉（或用例内异常导致根节点没了）的壳就地丢弃，不让清理本身再炸出第二个红。
+    }
+  }
 })
 
 /**
