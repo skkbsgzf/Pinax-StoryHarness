@@ -2447,7 +2447,6 @@ describe('备份与恢复（工单G2）', () => {
     expect(wrapper.find('[data-test="settings-tab-backup"]').exists()).toBe(true)
 
     // ① 导出：pick(backup-target) → backup:export（includeHistory 默认 false）。
-    const toolCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeToolCall).length
     await panel.find('[data-test="backup-pick-target"]').trigger('click')
     await flushPromises()
     expect(pick).toHaveBeenCalledTimes(1)
@@ -2484,7 +2483,10 @@ describe('备份与恢复（工单G2）', () => {
     expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length).toBeGreaterThan(viewCallsBefore)
 
     // 备份/恢复走 shell 通道，不经内核写族那条 runtimeToolCall（挂载时的章节列表不算数，按前后计数比）。
-    expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeToolCall)).toHaveLength(toolCallsBefore)
+    // 〔批次68-R3〕悬浮球沉默层会在挂载/换项目后各发一枚只读 pinax_proposal_list 计数——
+    // 读数多一枚合法，钉的是「写族零穿越」：整个流程里 runtimeToolCall 不得出现写族工具。
+    const toolCallsAll = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.runtimeToolCall)
+    expect(toolCallsAll.filter(([, payload]) => /_(save|write|delete|rename)$/u.test(String(payload?.tool ?? '')))).toHaveLength(0)
     wrapper.unmount()
   })
 
@@ -2872,8 +2874,10 @@ describe('提案审阅（工单B1 · 协议 v1.1-B：列表在二级页，审阅
     await flushPromises()
 
     // 索引窗不再摆提案区（v1.1-A：小说栏只有正文一棵树）。
+    // 〔批次68-R3〕悬浮球沉默层要提案计数：挂载期那枚只读 pinax_proposal_list 合法（calls.list 记它），
+    // 打开提案审阅节之前不允许有别的提案取数路径。
     expect(wrapper.find('.nx-index-window').text()).not.toContain('提案')
-    expect(bridge.calls.list).toHaveLength(0)
+    expect(bridge.calls.list.length).toBeLessThanOrEqual(1)
 
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.reviewProposals' })
     await flushPromises()
@@ -3890,8 +3894,9 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(widget.find('[data-window-action="collapse"]').exists()).toBe(false)
     expect(widget.find('[data-window-action="split"]').exists()).toBe(false)
     expect(widget.attributes('aria-label')).toBe('大纲窗口')
-    // 球常驻在右下角：收起态没有第二处呈现（缘签整列退役，见下一条用例）。
-    expect(wrapper.find('[data-test="collapse-orb"]').exists()).toBe(true)
+    // 〔批次68-R3 沉默层〕原判据「球本体常驻」翻案：零收起＋零通知＝整球不渲染（判据 ⑰）。
+    // 拖拽落点不受影响——paneSnap 的吸附目标是视口角落的纯几何，不看 DOM。
+    expect(wrapper.find('[data-test="collapse-orb"]').exists()).toBe(false)
     for (const gone of ['[data-action]', '.nx-overlay-widget', '.nx-overlay-head', '.nx-form-bar', '.nx-split', '.nx-overlay-tab', '.nx-overlay-bubble']) {
       expect(wrapper.find(gone).exists(), `${gone} 不该再存在`).toBe(false)
     }
@@ -3935,7 +3940,7 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     // 守卫①：缘签零渲染——右缘那一竖列文字标签整条退役，收起的窗也不画窗体。
     expect(wrapper.findAll('.nx-pane-window-tab')).toHaveLength(0)
     expect(wrapper.find('.nx-pane-window[data-window-instance="outline.widget#1"]').exists()).toBe(false)
-    // 球本体常驻（它同时是拖拽的落点），徽标＝收起数；浮层此刻没开。
+    // 有收起＝球在场（沉默层的反面：此刻它有内容）；徽标＝收起数；浮层此刻没开。
     const orb = wrapper.find('[data-test="collapse-orb"]')
     expect(orb.exists()).toBe(true)
     expect(orb.attributes('data-orb-count')).toBe('1')
@@ -3955,26 +3960,29 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     expect(wrapper.find('[data-test="orb-panel"]').exists()).toBe(false)
     expect(hostWorkspace.get('outline.widget#1').restore).toBe(null)
 
-    // 浮层开着时 Esc 先归这一层：面板收掉，窗口一条都不动（宿主的收窗总线被打断）。
-    await orb.find('[data-test="orb-button"]').trigger('click')
+    // 〔批次68-R3 沉默层〕回收唯一一条后 count=0，球整颗退场（判据⑰）——
+    // 所以「浮层开着时 Esc 先归这一层」要赶在回收前演：再收一次，球回来（新挂载，重找），点开浮层。
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+    expect(formOf('outline.widget#1')).toBe('tab')
+    const orbReborn = wrapper.find('[data-test="collapse-orb"]')
+    expect(orbReborn.exists()).toBe(true)
+    await orbReborn.find('[data-test="orb-button"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[data-test="orb-panel"]').exists()).toBe(true)
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await flushPromises()
     expect(wrapper.find('[data-test="orb-panel"]').exists()).toBe(false)
-    expect(formOf('outline.widget#1')).toBe('floating')
-
-    // 再收一次（这次走 Esc 那条收起的路），然后从球里关：删记录、徽标随之减到 0（球本体不藏，它还是拖拽落点）。
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await flushPromises()
     expect(formOf('outline.widget#1')).toBe('tab')
-    await orb.find('[data-test="orb-button"]').trigger('click')
+
+    // 再从球里关：删记录。归零后整球不渲染（〔68-R3 沉默层〕判据 ⑰）。
+    await orbReborn.find('[data-test="orb-button"]').trigger('click')
     await flushPromises()
     await wrapper.find('[data-test="orb-close"]').trigger('click')
     await flushPromises()
     expect(hostWorkspace.get('outline.widget#1')).toBe(null)
     expect(workspace.entries['outline.widget#1']).toBeUndefined()
-    expect(orb.attributes('data-orb-count')).toBe('0')
+    expect(wrapper.find('[data-test="collapse-orb"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="orb-badge"]').exists()).toBe(false)
 
     // 页签栏那条 × 仍是删记录（原判据在这里成立，与球共用同一个 close）。
@@ -5567,7 +5575,7 @@ describe('大纲转换（批次30）', () => {
     wrapper.unmount()
   })
 
-  it('大纲空态带一句指引：章节稿可在 设置 → 大纲转换 生成节点（纯文案，不放按钮）', async () => {
+  it('大纲空态一句话＋新建钮；转换指引收进 title（〔68-R3 指南层〕常驻版面不再摆第二句机制文案）', async () => {
     const bridge = outlineBridge()
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
@@ -5578,8 +5586,10 @@ describe('大纲转换（批次30）', () => {
 
     const hint = wrapper.find('[data-test="outline-import-hint"]')
     expect(hint.exists()).toBe(true)
-    expect(hint.text()).toContain('设置 → 大纲转换')
-    expect(hint.findAll('button')).toHaveLength(0)
+    expect(hint.text()).toContain('大纲还没有内容')
+    expect(hint.text(), '路径／转换入口不再上常驻版面').not.toContain('outline.json')
+    expect(hint.attributes('title')).toContain('设置 → 大纲转换')
+    expect(hint.find('button').text()).toBe('新建大纲')
     wrapper.unmount()
   })
 })

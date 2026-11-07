@@ -116,12 +116,11 @@ onUnmounted(() => {
 
 <template>
   <div>
-    <p class="wizard-note">
-      把 大纲/ 目录里的散文章节稿（md）转成大纲节点：一份文件可以含多章，按「## 章节标题」拆节点，
-      小节内容进节点备注。现有节点一律不动——只追加还没导入过的章节，重复点不会重复追加。
+    <p class="wizard-note" title="一份文件可以含多章，按「## 章节标题」拆节点，小节内容进节点备注；只追加还没导入过的章节，重复点不会重复追加">
+      把大纲目录里的散文章节稿转成大纲节点，现有节点一律不动。
     </p>
     <p v-if="projectName" class="wizard-note is-tight">
-      当前项目《{{ projectName }}》：转换的是这个项目 大纲/ 目录，源 md 一个字节都不改。
+      当前项目《{{ projectName }}》：转换的是这个项目大纲目录，源文件一个字节都不改。
     </p>
 
     <div class="prefs-grid">
@@ -131,7 +130,7 @@ onUnmounted(() => {
           <template v-if="busy === 'scan'">正在扫描 大纲/ …</template>
           <template v-else-if="result">{{ result.files }} 份 md · {{ result.chapters }} 个章节标题（本次导入 {{ result.imported }} 章，复用 {{ result.reused }} 章）</template>
           <template v-else-if="scan">{{ scanSummary }}（待追加 {{ scan.imported }} 章，复用 {{ scan.reused }} 章）</template>
-          <template v-else>还没有扫描结果</template>
+          <template v-else>还没有扫描结果。</template>
         </span>
         <button type="button" class="control-secondary" data-test="outline-rescan" :disabled="Boolean(busy)" @click="runScan">重新扫描</button>
       </div>

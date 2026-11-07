@@ -29,9 +29,7 @@ const primaryCapable = computed(() => props.carriers.filter((item) => item.prima
          按钮尾巴上还挂着 `carrier.primary.projectKind`——两处都是内部 id 上屏。
          类型的人话本来就是**载体标题**（清单里的 title：小说／剧本／漫画……），外壳不再另建一张中英对照表；
          所以这两处只留标题，词表这一格整条撤掉，连 `kinds` 这个 prop 一起退场（没人读了就不必再传）。 -->
-    <p class="wizard-note">
-      主载体决定这个项目创作的是哪一类内容；下面每一块都是能担任主载体的板块，选定之后项目目录按它的口径建。
-    </p>
+    <p class="wizard-note" title="选定之后项目目录按主载体的口径建">主载体决定这个项目创作哪一类内容。</p>
     <div v-if="canPickPrimary" class="wizard-list">
       <button
         v-for="carrier in primaryCapable"
@@ -43,12 +41,11 @@ const primaryCapable = computed(() => props.carriers.filter((item) => item.prima
         {{ carrier.title }}
       </button>
     </div>
-    <p v-else class="wizard-empty">
-      当前没有可担任主载体的插件板块。不装载体也能进来、能开项目、右栏能提问；
-      随框架发布的小说／设定板块从 M2 起填在这里。
+    <p v-else class="wizard-empty" title="不装载体也能进来、能开项目、右栏能提问；小说／设定板块后续版本会填在这里">
+      当前没有可担任主载体的板块。
     </p>
     <div v-if="canPickPrimary && companions.length" class="wizard-companions">
-      <p class="wizard-note is-tight">伴生板块（默认随行，只读权限——它们给正文补背景，不跟主载体抢写盘）：</p>
+      <p class="wizard-note is-tight" title="只读权限：伴生板块给正文补背景，不跟主载体争着写盘">伴生板块（默认随行，只给正文补背景）：</p>
       <label v-for="carrier in companions" :key="carrier.id" class="wizard-companion">
         <input type="checkbox" :checked="extraEnabled.includes(carrier.id) || carrier.isEnabled" :disabled="carrier.isEnabled" @change="emit('toggle-companion', carrier.id)">
         {{ carrier.title }}

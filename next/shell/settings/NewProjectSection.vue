@@ -46,7 +46,7 @@ async function createProject() {
 
 <template>
   <div>
-    <p class="wizard-note">新项目是磁盘上的一个文件夹（文件夹即数据）：选一个空目录——也可以在对话框里新建，然后在里面开写。</p>
+    <p class="wizard-note" title="文件夹即数据：选一个空目录——也可以在对话框里新建，然后在里面开写">新项目就是磁盘上的一个文件夹。</p>
     <div class="prefs-grid">
       <div class="prefs-row">
         <span class="prefs-row-label">项目名称</span>

@@ -389,7 +389,9 @@ describe('小说载体', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    expect(tools.calls[0].tool).toBe('pinax_chapter_list')
+    // 〔批次68-R3〕悬浮球沉默层要提案计数，挂载期多一枚只读 pinax_proposal_list——
+    // 首调不再是 chapter_list，但章节链路仍必须发生，且全部取数只走 runtimeToolCall 一条通道。
+    expect(tools.calls.some((call) => call.tool === 'pinax_chapter_list')).toBe(true)
     expect(tools.calls.some((call) => call.tool === 'pinax_chapter_read')).toBe(true)
     // 目录树在索引窗，正文在核心区——两者不再挤在同一块。
     // 协议 v1.1-A：小说板只有正文一棵内容树（2 章节行）；大纲/构思是别的栏，不在这里列。
@@ -615,7 +617,8 @@ describe('小说载体', () => {
     const second = mount(AppNext, { props: { bridge: missingBridge } })
     await flushPromises()
     await openBoard(second, '大纲')
-    expect(second.find('.nx-index-window').text()).toContain('大纲还没有内容（大纲/outline.json）')
+    expect(second.find('.nx-index-window').text()).toContain('大纲还没有内容')
+    expect(second.find('.nx-index-window').text(), '机制路径不进常驻版面').not.toContain('outline.json')
     expect(second.find('.nx-index-error').exists()).toBe(false)
     second.unmount()
   })
@@ -882,11 +885,13 @@ describe('小说载体', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 协议 v1.1-A / 工单B1：小说栏只有章节树——提案区连标题都不该出现，也不再替二级页列提案。
+    // 协议 v1.1-A / 工单B1：小说栏只有章节树——提案区连标题都不该出现。
+    // 〔批次68-R3〕悬浮球沉默层要提案计数，挂载期会发一枚只读 pinax_proposal_list（不经索引窗渲染）——
+    // 这里钉的是 UI 面：索引窗不出现提案区，提案列表也不在此预取（只许球的那一枚计数读数）。
     const indexWindow = wrapper.find('.nx-index-window')
     expect(indexWindow.findAll('.workspace-nav-section').map((node) => node.text())).not.toContain('提案')
     expect(indexWindow.text()).not.toContain('提案')
-    expect(tools.calls.some((call) => call.tool === 'pinax_proposal_list')).toBe(false)
+    expect(tools.calls.filter((call) => call.tool === 'pinax_proposal_list')).toHaveLength(1)
 
     // 菜单「项目 → 提案审阅…」打开统一二级页的「文档 → 提案审阅」节。
     await openProposalsSection(wrapper)
@@ -1669,7 +1674,7 @@ describe('设定与资料载体', () => {
 
     await wrapper.findAll('.nx-ribbon-item').find((item) => item.attributes('aria-label') === '设定与资料').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-index-window').text()).toContain('资料还没有内容（资料/）')
+    expect(wrapper.find('.nx-index-window').text()).toContain('资料还没有内容。')
 
     await wrapper.find('[aria-label="新建资料"]').trigger('click')
     await flushPromises()
@@ -1754,8 +1759,10 @@ describe('素材载体（批次60：图库模板，无左栏）', () => {
     const gallery = wrapper.find('[data-test="material-gallery"]')
     // 〔批次76 · 任务4-3〕原判据只钉「素材还没有内容（素材/素材.json）」这一句死话；
     // 现在这句要讲清「空在哪、去哪建」，并且真的带一枚能建的入口。
-    expect(gallery.text()).toContain('素材这一栏还是空的')
-    expect(gallery.text()).toContain('素材/素材.json')
+    // 〔批次68-R3 指南层〕落盘路径（素材/素材.json）撤出常驻版面，收进 line 的 title。
+    expect(gallery.text()).toContain('素材这一栏还没有记录')
+    expect(gallery.text(), '机制路径不进常驻版面').not.toContain('素材/素材.json')
+    expect(gallery.find('.nx-material-empty-line').attributes('title')).toContain('素材/素材.json')
     expect(wrapper.findAll('[data-test="material-card"]')).toHaveLength(0)
     // 换板不凭空开窗这条裁定不因为多了入口而破：没点之前仍然没有素材窗。
     expect(wrapper.find('.nx-pane-window[data-window-pane="material.editor"]').exists()).toBe(false)

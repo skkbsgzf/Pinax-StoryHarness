@@ -102,11 +102,11 @@ async function createFirstRecord() {
     <p v-if="set.error" class="nx-index-error">{{ set.error }}</p>
     <p v-else-if="!set.loaded" class="nx-index-empty">正在载入素材…</p>
     <div v-else-if="!set.records.length" class="nx-material-empty" data-test="material-empty">
-      <p class="nx-material-empty-line">
-        {{ carrier ? `${carrier.title}这一栏还是空的。记录写在项目的 ${carrier.dir}/${carrier.file} 里，建第一条就有卡片了。` : '这块板没有可登记的记录载体。' }}
+      <p class="nx-material-empty-line" :title="carrier ? `记录写在项目的 ${carrier.dir}/${carrier.file} 里` : ''">
+        {{ carrier ? `${carrier.title}这一栏还没有记录，建第一条就有卡片了。` : '这块板没有可登记的记录载体。' }}
       </p>
-      <p class="nx-material-empty-hint">先起名再建档：填好标题按回车，或点「新建{{ carrier?.title ?? '素材' }}」。</p>
-      <div v-if="canCreate" class="nx-material-empty-actions">
+      <!-- 〔批次68-R3 指南层〕常驻只剩一句＋钮：怎么用输入框由占位文案自己说（先起名再建档进 title）。 -->
+      <div v-if="canCreate" class="nx-material-empty-actions" title="先起名再建档：填好标题按回车，或点新建。">
         <input
           v-model="newTitle"
           class="nx-field nx-material-new-title"
@@ -195,11 +195,6 @@ async function createFirstRecord() {
   margin: 0;
   font-size: var(--nx-fs-md);
   color: var(--archive-ink);
-}
-.nx-material-empty-hint {
-  margin: 0;
-  font-size: var(--nx-fs-2xs);
-  color: var(--text-muted);
 }
 .nx-material-empty-actions {
   display: flex;

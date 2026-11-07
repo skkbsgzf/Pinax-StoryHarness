@@ -33,7 +33,7 @@ const emit = defineEmits(['changed'])
 const DECISION_ORDER = [
   ['chapter', '正文'],
   ['outline', '大纲'],
-  ['outline-json', '大纲（outline.json）'],
+  ['outline-json', '大纲（结构化）'],
   ['worldbook', '世界书'],
   ['rule', '约束'],
   ['idea', '构思'],
@@ -177,9 +177,8 @@ async function runImport() {
 
 <template>
   <div>
-    <p class="wizard-note">
-      带稿上车三步：①选稿子目录（只读源）→ ②选一个空目录作为新项目位置（该目录会成为项目根）→ ③先看导入计划，确认后才执行。
-      稿子按类别收进 正文／大纲／世界书／构思／资料／日志／约束 标准目录；原文件只新增不修改。
+    <p class="wizard-note" title="①选稿子目录（只读源）→ ②选一个空目录作为新项目位置（该目录会成为项目根）→ ③先看导入计划，确认后才执行。稿子按类别收进 正文／大纲／世界书／构思／资料／日志／约束 标准目录">
+      带稿上车：先看计划再执行，原文件只新增不修改。
     </p>
     <p v-if="currentProjectName" class="wizard-note is-tight">
       当前打开的是《{{ currentProjectName }}》：导入会新建并切换到新项目，先把手上未保存的改动存好。
@@ -198,7 +197,7 @@ async function runImport() {
       <div class="prefs-row">
         <span class="prefs-row-label">② 项目位置</span>
         <button type="button" class="control-secondary" data-test="import-pick-target" :disabled="Boolean(busy)" @click="pickTarget">选择空目录…</button>
-        <span class="prefs-row-hint" data-test="import-target">{{ targetDir || '尚未选择——选中后该目录成为项目根（需为空目录）' }}</span>
+        <span class="prefs-row-hint" data-test="import-target" title="选中后该目录成为项目根（需为空目录）">{{ targetDir || '尚未选择' }}</span>
       </div>
       <div class="prefs-actions">
         <button type="button" class="control-primary" data-test="import-plan" :disabled="!canPlan" @click="generatePlan">
@@ -215,7 +214,7 @@ async function runImport() {
 
     <section v-if="plan" class="import-plan" data-test="import-plan-view">
       <p class="prefs-state">
-        计划模式（dryRun）：还没有写入任何文件。可导入 {{ plan.importable }} 个文件，跳过 {{ plan.skippedCount }} 个<span v-if="plan.collapsedCount">（同源重复 {{ plan.collapsedCount }} 个已合并）</span>。
+        这是预览，还没有写入任何文件：可导入 {{ plan.importable }} 个，跳过 {{ plan.skippedCount }} 个<span v-if="plan.collapsedCount">（同源重复 {{ plan.collapsedCount }} 个已合并）</span>。
       </p>
       <ul v-if="categoryRows.length" class="import-plan-list">
         <li v-for="row in categoryRows" :key="row.key" data-test="import-category">{{ row.label }}：{{ row.count }}</li>

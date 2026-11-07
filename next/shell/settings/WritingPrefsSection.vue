@@ -113,7 +113,7 @@ async function save() {
 
 <template>
   <div>
-    <p class="wizard-note">应用级偏好，不随项目走。只改正文编辑区的排版；正文字体固定为自托管的霞鹜文楷。</p>
+    <p class="wizard-note" title="只改正文编辑区的排版；正文字体固定为自托管的霞鹜文楷">应用级写作偏好，不随项目走。</p>
     <div class="prefs-grid">
       <div class="prefs-row">
         <span class="prefs-row-label">正文字号</span>

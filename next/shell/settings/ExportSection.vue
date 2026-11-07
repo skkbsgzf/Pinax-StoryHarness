@@ -66,9 +66,9 @@ async function runExport() {
 
 <template>
   <div>
-    <p class="wizard-note">导出当前打开的文档（章节／条目／构思／资料／约束／剧本）。txt 写源文本；doc 用 HTML 包裹，Word 可直接打开。导出不改项目里的原文。</p>
-    <p v-if="emptyText" class="prefs-row-hint" data-test="export-empty">
-      还没有打开的文档：先在索引窗里点开一章／一条／一篇，再回到这里导出。
+    <p class="wizard-note" title="可导出章节／条目／构思／资料／约束／剧本；txt 写源文本，doc 用 HTML 包裹、Word 可直接打开">导出当前打开的文档；导出不改项目里的原文。</p>
+    <p v-if="emptyText" class="prefs-row-hint" data-test="export-empty" title="先在索引窗里点开一章／一条／一篇，再回到这里导出">
+      还没有打开的文档。
     </p>
     <div v-else class="prefs-grid">
       <div class="prefs-row">

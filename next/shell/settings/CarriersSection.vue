@@ -12,7 +12,7 @@ const emit = defineEmits(['set-enabled', 'set-primary', 'close', 'changed'])
 
 <template>
   <div>
-    <p class="wizard-note">这个项目装了哪些板块（载体），在这里启用、停用或换主载体。停用不删数据：目录转只读归档，随时可以再启用。</p>
+    <p class="wizard-note" title="停用不删数据：目录转只读归档，随时可以再启用；主载体决定项目创作哪一类内容">这个项目装了哪些板块，在这里启用、停用或换主载体。</p>
     <div class="carriers-list">
       <div v-for="carrier in carriers" :key="carrier.id" class="carriers-row">
         <div class="carriers-info">

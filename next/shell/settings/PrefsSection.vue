@@ -79,7 +79,7 @@ function applyThemeChoice() {
 
 <template>
   <div>
-    <p class="wizard-note">应用级偏好，不随项目走。模型凭据仍由任务面（serve:pinax）持有——这里只决定「任务面在哪个端点」与界面观感。</p>
+    <p class="wizard-note" title="模型凭据仍由任务面持有——这里只决定「任务面在哪个端点」与界面观感">应用级偏好，不随项目走。</p>
     <div class="prefs-grid">
       <div class="prefs-row">
         <span class="prefs-row-label">外观主题</span>

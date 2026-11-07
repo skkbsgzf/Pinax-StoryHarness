@@ -509,6 +509,23 @@ body {
 .wizard-note.is-tight {
   margin-bottom: 8px;
 }
+/* 〔批次68-R3 指南层〕机制细节永远进 title／这一段「细节」折叠，不进常驻版面。 */
+.nx-note-details {
+  margin: -4px 0 14px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.nx-note-details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.nx-note-details p {
+  margin: 6px 0 0;
+}
+.nx-note-details code {
+  font-family: var(--font-mono);
+}
 .wizard-companions {
   margin-top: 14px;
   padding-top: 12px;
@@ -642,6 +659,16 @@ body {
   margin: 0;
   color: var(--text-muted);
   line-height: 1.7;
+}
+/* 〔批次68-R3 任务2〕载体空态＝指南层：一句话＋一枚主操作钮（点了真的去）。 */
+.nx-empty-guide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.nx-empty-guide p {
+  margin: 0;
 }
 .pane-note {
   margin: 0;
@@ -1384,22 +1411,6 @@ input.doc-title {
 }
 .nx-collapse-orb-close:hover:not(:disabled) {
   color: var(--archive-ink);
-  background: var(--workbench-selected);
-}
-.nx-collapse-orb-empty {
-  margin: 0;
-  font-size: var(--nx-fs-md);
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-.nx-collapse-orb-jump {
-  min-height: 24px;
-  align-self: flex-start;
-  padding: 0 6px;
-  color: var(--text-secondary);
-  font-size: var(--nx-fs-md);
-}
-.nx-collapse-orb-jump:hover:not(:disabled) {
   background: var(--workbench-selected);
 }
 /* —— 拖拽吸附的预览（批次76 · 〔裁定A〕「拖到侧边可以吸附」）——————————————

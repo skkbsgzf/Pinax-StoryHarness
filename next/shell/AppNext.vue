@@ -1126,6 +1126,14 @@ function boardForPane(paneId) {
     ?? null
 }
 
+/* 〔批次68-R3 任务2〕空态主操作钮「去索引窗」的落点：真的去——换到这块 pane 所属的板，并把索引窗打开。
+   只在窄屏会有「开了也盖着」的观感，但 indexOpen 本来就是窄屏的收起开关，语义照旧。 */
+function focusIndexColumn(entry) {
+  const board = boardForPane(entry?.pane)
+  if (board) activeBoardId.value = board.id
+  indexOpen.value = true
+}
+
 /** pane id → 窗口内容声明（只认 center／overlay 槽；左树不是可开窗的内容）。 */
 function descriptorFor(paneId) {
   const id = String(paneId ?? '')
@@ -1462,12 +1470,16 @@ function groupCurrentInstance(group) {
  * 列本身保持 position: static：给列定位就等于把页态窗拖拽时量到的「层」缩水成半个屏，
  * paneSnap 那套吸附分界会跟着改判——拖左缘落主组、拖右缘落侧组那条语义的根在这里，别动。
  */
-/** 中心区那两句说明（原判据不变，〔批次76-R3 任务2〕只是落进主组那一列的内容区，不再压在列外面）。 */
+/**
+ * 中心区那两句说明（原判据不变，〔批次76-R3 任务2〕只是落进主组那一列的内容区，不再压在列外面）。
+ * 〔批次68-R3 指南层〕压成一句话（≤20 字）：这里的「主操作」是屏幕上的竖条与左树本身，
+ * 空态不冒充按钮——完整口径收进 title（判据 ⑱ 白名单，逐个登记在 visual-contract）。
+ */
 const centerEmptyNote = computed(() => {
   if (visibleWindows.value.length) return ''
   return sideTabWindows.value.length
-    ? '核心区的页都收进右下角那颗球了。点球或者点页签，把它放回来。'
-    : '中心区还没有页。点竖条上的载体，或在左树里点一份文档。'
+    ? '页都收进悬浮球了，点球放回来。'
+    : '还没有页。从竖条或左树开一扇。'
 })
 
 const centerGroups = computed(() => {
@@ -1810,6 +1822,17 @@ const collapsedOrbItems = computed(() => sideTabWindows.value.map((win) => ({
   title: windowTitle(win),
   paneId: win.entry.pane
 })))
+
+/* —— 〔批次68-R3 任务1〕悬浮球改沉默层 ————————————————————————————
+   零收起＋零待确认通知＝整球不渲染（组件内部还有同一句 v-if，两处口径一致）。
+   「拖到球上收起」的落点不受影响：paneSnap 的吸附目标是视口角落的纯几何（snapTargetAt），
+   不看 DOM——球显出来时照旧能拖、能收。
+   提案那一行是状态层：读数走根 data 那一份（loadProposals → pinax_proposal_list），不另起一本账；
+   它**不参与**整球显隐（判据 ⑰ 只认收起数与通知数）。 */
+/* 〔批次68-R3 调度方补刀〕orbVisible 已撤：显隐归组件内部 v-if（组件必须常驻挂载，
+   否则它的 Esc 监听晚于宿主总线注册，stopImmediatePropagation 分层失效——见 CollapseOrb 处注释）。 */
+const orbProposalCount = computed(() => (data.proposals ?? [])
+  .filter((item) => item?.status !== 'adopted' && item?.status !== 'discarded').length)
 
 /** 浮窗的双击标题栏：占满中栏是浮窗的子态，页态没有这一档（天然铺满）。 */
 function toggleWindowMaximized(instance) {
@@ -2239,6 +2262,9 @@ async function refresh() {
   const result = await props.bridge.request(IPC_CHANNELS.view, {})
   if (result.ok) {
     view.value = result.value
+    // 〔批次68-R3〕悬浮球是提案数的新消费者：开机/换项目时把根 data 那一份列一次
+    //（仍走 loadProposals → pinax_proposal_list，不另开取数路径）。
+    if (project.value) void data.loadProposals()
     if (!activeBoardId.value) activeBoardId.value = boards.value.find((board) => board.primary)?.id ?? boards.value[0]?.id ?? null
     if (!project.value && !extraEnabled.value.length) {
       extraEnabled.value = companions.value.filter((item) => isReadOnlyCompanion(item) && !item.isEnabled).map((item) => item.id)
@@ -2452,6 +2478,8 @@ const pendingProjectEventKinds = new Set()
 
 function onProjectEvent(payload) {
   const kind = payload?.kind
+  // 〔批次68-R3〕球上的提案读数：提案目录一变（工具循环写下／采纳／弃用）就重列一次根 data 那一份。
+  if (kind === 'proposals-changed') void data.loadProposals()
   if (!refreshTargetsFor(kind).length) return
   pendingProjectEventKinds.add(kind)
   if (projectEventTimer) clearTimeout(projectEventTimer)
@@ -2699,7 +2727,17 @@ onBeforeUnmount(() => {
               <template v-if="win.entry.pane === 'outline.widget'">
                 <p v-if="overlayLoading[win.entry.instance]" class="nx-overlay-empty">正在载入大纲…</p>
                 <p v-else-if="pageDataOf(win.entry.instance).outlineError" class="nx-overlay-error">{{ pageDataOf(win.entry.instance).outlineError }}</p>
-                <p v-else-if="!pageDataOf(win.entry.instance).outline.length" class="nx-overlay-empty">大纲还没有内容（大纲/outline.json）。</p>
+                <div v-else-if="!pageDataOf(win.entry.instance).outline.length" class="nx-overlay-empty">
+                  <p title="大纲存在项目的 大纲/outline.json；在大纲索引列可新建">大纲还没有内容。</p>
+                  <button
+                    type="button"
+                    class="control-quiet nx-empty-guide-go"
+                    data-test="overlay-empty-go-index"
+                    @click="focusIndexColumn(win.entry)"
+                  >
+                    去索引窗新建
+                  </button>
+                </div>
                 <ul v-else class="nx-overlay-tree" aria-label="迷你大纲">
                   <li v-for="(node, index) in pageDataOf(win.entry.instance).outline" :key="node.id ?? `overlay-node-${index}`">
                     <button
@@ -2721,6 +2759,7 @@ onBeforeUnmount(() => {
                 :project-root="project?.root ?? ''"
                 @history="openHistoryFor"
                 @address="onAppAddress(win.entry.instance, $event)"
+                @focus-index="focusIndexColumn(win.entry)"
               />
             </PaneWindow>
           </div>
@@ -2738,10 +2777,14 @@ onBeforeUnmount(() => {
         />
         <!-- 右下角悬浮球（批次76 · 〔裁定B〕）：收起态不再在右缘排一竖列文字标签，
              所有 form:'tab' 的页统一在这颗球里管；通知那一节只转述状态栏服务灯那份读数，
-             点开的落点是设置里既有的两节——球不产生通知，也不另记一份未读账。 -->
+             点开的落点是设置里既有的两节——球不产生通知，也不另记一份未读账。
+             〔批次68-R3 调度方补刀〕组件**常驻挂载**，显隐由组件内部的 v-if 管（沉默层判据⑰看的是
+             那颗球节点）——不能在组件上挂 v-if：挂上后组件晚于宿主的 onWindowKeydown 注册，
+             Esc 分层（stopImmediatePropagation）会失效，面板开着按 Esc 身后窗口照样被收。 -->
         <CollapseOrb
           :items="collapsedOrbItems"
           :notices="statusLights"
+          :proposal-count="orbProposalCount"
           @expand="expandWindow"
           @close="closeWindow"
           @open-services="openSection('services')"

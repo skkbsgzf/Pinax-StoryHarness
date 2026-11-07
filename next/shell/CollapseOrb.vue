@@ -27,7 +27,9 @@ const props = defineProps({
   /** 收起态的页：[{ instance, title, paneId }]，顺序＝工作区里的叠序。 */
   items: { type: Array, default: () => [] },
   /** 服务灯读数：[{ id, title, color, notices }]，与状态栏同一份来源（不另起一处真相）。 */
-  notices: { type: Array, default: () => [] }
+  notices: { type: Array, default: () => [] },
+  /** 待确认提案数（〔批次68-R3〕沉默层后跳转钮不再常驻；有提案才出「AI 产出」那一行）。 */
+  proposalCount: { type: Number, default: 0 }
 })
 const emit = defineEmits(['expand', 'close', 'open-services', 'open-proposals'])
 
@@ -47,7 +49,11 @@ const ORB_LABEL = computed(() => {
   return `${parts.join('，')}（点开管理）`
 })
 
-/** 球没内容时也不藏起来：作者要的是「所有可吸附的内容统一在这里」，常驻才有落点可拖。 */
+/**
+ * 〔批次68-R3 沉默层〕零收起且零通知＝整球不渲染（根节点 v-if）。
+ * 「拖到球上收起」的落点不受影响：paneSnap 的吸附目标是视口角落的纯几何，不看 DOM
+ * （paneSnap.mjs snapTargetAt）；球显出来时照旧能拖、能收。
+ */
 function toggle() {
   open.value = !open.value
 }
@@ -85,7 +91,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="nx-collapse-orb" ref="orb" data-test="collapse-orb" :data-orb-count="count">
+  <div v-if="count || hasNotice" class="nx-collapse-orb" ref="orb" data-test="collapse-orb" :data-orb-count="count">
     <button
       type="button"
       class="control-quiet nx-collapse-orb-button"
@@ -141,11 +147,12 @@ onBeforeUnmount(() => {
           </li>
         </ul>
       </section>
-      <p v-else class="nx-collapse-orb-empty">现在没有收起的面板。把窗口拖到右下角这颗球上，或右键选「收进悬浮球」。</p>
 
-      <section class="nx-collapse-orb-group" data-test="orb-notice-group">
+      <!-- 〔批次68-R3〕通知组只在有未确认读数时出现（沉默层）；跳转不再常驻——
+           「看通知」已经融进每一行本身（点行＝打开通知与日志），空态句整条删除。 -->
+      <section v-if="hasNotice" class="nx-collapse-orb-group" data-test="orb-notice-group">
         <h3 class="nx-collapse-orb-group-title">通知</h3>
-        <ul v-if="noticeRows.length" class="nx-collapse-orb-list">
+        <ul class="nx-collapse-orb-list">
           <li v-for="row in noticeRows" :key="row.id" class="nx-collapse-orb-row" :data-orb-notice="row.id">
             <button
               type="button"
@@ -159,25 +166,25 @@ onBeforeUnmount(() => {
             </button>
           </li>
         </ul>
-        <p v-else class="nx-collapse-orb-empty">服务侧没有待确认通知。</p>
-        <button
-          type="button"
-          class="control-quiet nx-collapse-orb-jump"
-          data-test="orb-open-services"
-          title="打开设置里的「服务与通知」"
-          @click="emit('open-services')"
-        >
-          看通知与日志
-        </button>
-        <button
-          type="button"
-          class="control-quiet nx-collapse-orb-jump"
-          data-test="orb-open-proposals"
-          title="打开设置里的「提案审阅」（模型改稿待确认）"
-          @click="emit('open-proposals')"
-        >
-          看 AI 产出待确认
-        </button>
+      </section>
+
+      <!-- AI 产出：有待确认提案才出这一行（点了真的去——落设置里的提案审阅节），不再常驻。 -->
+      <section v-if="proposalCount > 0" class="nx-collapse-orb-group" data-test="orb-proposal-group">
+        <h3 class="nx-collapse-orb-group-title">AI 产出</h3>
+        <ul class="nx-collapse-orb-list">
+          <li class="nx-collapse-orb-row">
+            <button
+              type="button"
+              class="control-quiet nx-collapse-orb-open"
+              data-test="orb-open-proposals"
+              :title="`${proposalCount} 条模型改稿待确认（打开提案审阅）`"
+              @click="emit('open-proposals')"
+            >
+              <span class="nx-collapse-orb-name">待确认改稿</span>
+              <span class="nx-collapse-orb-count">{{ proposalCount }}</span>
+            </button>
+          </li>
+        </ul>
       </section>
     </div>
   </div>

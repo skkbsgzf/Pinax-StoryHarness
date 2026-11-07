@@ -83,7 +83,9 @@ const props = defineProps({
   /** 当前项目根：看板区用它拼视图记忆的 localStorage 键（换项目＝各记各的）。 */
   projectRoot: { type: String, default: '' }
 })
-const emit = defineEmits(['history', 'address'])
+/* 〔批次68-R2〕'focus-index'：空态的主操作钮——「去索引窗」真的把这块板对应的索引列打开，
+   指南层的铁律：指路必须给动作，光一句话打发不算数。 */
+const emit = defineEmits(['history', 'address', 'focus-index'])
 
 /**
  * 视图解析（M2.5-C 任务二）：pane 声明 `view: 'pinax.view.*'`，宿主查注册表拿内容面；
@@ -992,7 +994,7 @@ function actOnSaveChip() {
                     aria-label="搜索快捷词"
                     spellcheck="false"
                   >
-                  <p v-if="!quickGroupsVisible.length" class="nx-tools-empty">还没有可用的词：世界书条目，以及正文里出现两次以上的词，会自动收进来。</p>
+                  <p v-if="!quickGroupsVisible.length" class="nx-tools-empty" title="世界书条目，以及正文里出现两次以上的词，会自动收进来">还没有可用的词。</p>
                   <template v-else>
                     <div
                       v-for="group in quickGroupsVisible"
@@ -1267,7 +1269,10 @@ function actOnSaveChip() {
           {{ chapterPending }}<em v-if="data.chapter.truncated">只载入了前段（全文 {{ data.chapter.totalChars }} 字）：自动保存不会动它</em>
         </p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一章，或在那里新建一章。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-chapter" title="也可以在那里新建一章：区标题右侧的 ＋">
+        <p>从左边索引窗里选一章。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 构思速记编辑面（工单B1）：照章节编辑器的形态。正文来自 pinax_notes_list 的随手带回，
@@ -1299,7 +1304,10 @@ function actOnSaveChip() {
           {{ notePending }}<em v-if="data.note.truncated">只载入了前段：自动保存不会动它</em>
         </p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇构思，或用索引窗「构思」区的 ＋ 新建一篇。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-note" title="也可以在那里新建一篇：「构思」区标题右侧的 ＋">
+        <p>从左边索引窗里选一篇构思。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 大纲编辑面（工单B2 → 批次31 · P18）：中栏只剩文档本身。
@@ -1347,7 +1355,10 @@ function actOnSaveChip() {
         />
         <p v-if="outlinePending" class="doc-meta-hint">{{ outlinePending }}</p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一个大纲节点。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-outline" title="也可以在那里新建节点：大纲区标题右侧的 ＋">
+        <p>从左边索引窗里选一个大纲节点。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 提案审阅面（工单A）：模型改稿落在 .pinax/proposals/，这里做最后一道人审。
@@ -1392,7 +1403,10 @@ function actOnSaveChip() {
           {{ data.proposal.target?.file ?? '（没有目标章）' }} · {{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字 · {{ stampOf(data.proposal.createdAt) }}
         </p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「提案」区选一条。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-proposal">
+        <p>从左边索引窗的「提案」区选一条。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 约束编辑面（工单E2）：照构思速记的同一形态。正文来自 pinax_rule_list 的随手带回，
@@ -1424,7 +1438,10 @@ function actOnSaveChip() {
           {{ rulePending }}<em v-if="data.rule.truncated">只载入了前段：自动保存不会动它</em>
         </p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗的「约束」区选一份约束，或用那里的 ＋ 新建一份。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-rule" title="也可以在那里新建一份：「约束」区标题右侧的 ＋">
+        <p>从左边索引窗里选一份约束。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 条目详情面（批次44：整块搬进 EntryDetailPanel——看板区要能单独摆它，
@@ -1537,7 +1554,10 @@ function actOnSaveChip() {
           只载入了前 {{ data.document.text?.length ?? 0 }} 字，全篇 {{ data.document.totalChars }} 字：保存会覆盖未载入的部分。
         </p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇资料，或在那里新建一篇。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-document" title="也可以在那里新建一篇：「资料」区标题右侧的 ＋">
+        <p>从左边索引窗里选一篇资料。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 剧本（批次26 · M6 提前）：阅读态＝元信息＋md 渲染正文（场次标题、台词、△ 舞台说明都是 md 文本），
@@ -1570,7 +1590,10 @@ function actOnSaveChip() {
           只载入了前 {{ data.script.text?.length ?? 0 }} 字，全篇 {{ data.script.totalChars }} 字：保存会覆盖未载入的部分。
         </p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一篇剧本，或在那里新建一篇。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-script" title="也可以在那里新建一篇：「剧本」区标题右侧的 ＋">
+        <p>从左边索引窗里选一篇剧本。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 记录型载体（批次40 · M4／M5）：素材／漫画／视频／体验／联机共用这条详情面。
@@ -1675,7 +1698,10 @@ function actOnSaveChip() {
         <p v-if="!data.editingRecord && recordMetaCount" class="pane-hint">这条记录还带着 {{ recordMetaCount }} 项载体私有字段（原样保存，界面不拆）。</p>
         <p v-if="data.record.type || data.record.status" class="doc-meta-hint">{{ data.record.type || '未分类' }} · {{ data.record.status || '无状态' }}</p>
       </div>
-      <p v-else-if="!data.busy && !data.error" class="pane-hint">从左边索引窗里选一条{{ recordCarrier?.title ?? '记录' }}，或在那里新建一条。</p>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-record" :title="`也可以在那里新建一条：「${recordCarrier?.title ?? '记录'}」区标题右侧的 ＋`">
+        <p>从左边索引窗里选一条{{ recordCarrier?.title ?? '记录' }}。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
     </template>
 
     <!-- 自带面板（协议 v3 的 entry 面）：内容面是插件自己的页面，宿主只给一块沙箱 iframe

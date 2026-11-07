@@ -83,7 +83,7 @@ async function restart(item) {
 
 <template>
   <div class="services-section">
-    <p class="wizard-note">服务与外部 MCP 的运行状态、最近日志与待确认通知。确认只记在这台机器上，不随项目走。</p>
+    <p class="wizard-note" title="含服务与外部 MCP 的运行状态、最近日志与待确认通知；「知道了」只记在这台机器的应用偏好里，不进项目">服务与外部连接的状态、日志与待确认通知；确认只记在这台机器上。</p>
     <p v-if="!rows.length" class="pane-hint" data-test="services-empty">当前项目没有声明任何服务或外部 MCP</p>
     <div v-else class="prefs-grid">
       <div

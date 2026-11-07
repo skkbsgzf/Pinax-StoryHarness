@@ -68,7 +68,7 @@ async function toggle(row) {
   feedback.value = {
     kind: 'ok',
     text: row.enabled
-      ? `已停用「${row.name}」：下一问的可用技能清单里不再有它（启停写进了项目内 .pinax/skills.json）。`
+      ? `已停用「${row.name}」：下一问的可用技能清单里不再有它。`
       : `已启用「${row.name}」：下一问的清单里就有它。`
   }
   await reload()
@@ -114,10 +114,12 @@ onMounted(reload)
 
 <template>
   <div class="skills-section">
-    <p class="wizard-note">
-      技能是方法说明书，不是入口：入口仍是斜杠命令与自然语言提问。启停存在<b>本项目</b>的
-      <code>.pinax/skills.json</code>，导入的包落在 <code>.pinax/skills/</code>——都不写全局偏好，换项目不该带走上一本书的开关。
-    </p>
+    <p class="wizard-note">技能是方法说明书，不是入口：入口仍是斜杠命令与提问。</p>
+    <details class="nx-note-details">
+      <summary>细节</summary>
+      <p>启停存在<b>本项目</b>的 <code>.pinax/skills.json</code>，导入的包落在 <code>.pinax/skills/</code>——
+        都不写全局偏好，换项目不该带走上一本书的开关。</p>
+    </details>
 
     <p v-if="surface && !surface.started" class="pane-hint skills-surface-note" data-test="skills-surface-note">{{ surface.note }}</p>
 
@@ -212,9 +214,8 @@ onMounted(reload)
           {{ importing ? '导入中…' : '导入到本项目' }}
         </button>
       </div>
-      <p class="pane-hint">
+      <p class="pane-hint" title="导入只写进本项目的 .pinax/skills/；随软件一起给的那份技能，同名时以它为准">
         这一格还没接上系统的选目录对话框，先手工粘一个绝对路径。
-        导入只写进本项目的 <code>.pinax/skills/</code>；随软件一起给的那份技能，同名时以它为准。
       </p>
       <div v-if="importResult" class="skills-import-result" data-test="skills-import-result">
         <p v-if="importResult.imported?.length" data-test="skills-imported">

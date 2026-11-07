@@ -145,26 +145,28 @@ async function restore() {
 
 <template>
   <div>
-    <p class="wizard-note">
-      备份＝把当前项目目录整份复制成一个新文件夹（项目名-backup-时间戳），不压缩、不做增量；
-      恢复＝从备份复制回一个空目录，绝不覆盖现稿。历史仓（.pinax/history.git）默认不进备份——体积大，
-      而时间线另由「文档历史」负责；要连历史一起带走就勾上下面的选项。
-    </p>
+    <!-- 〔批次68-R3 指南层〕节首只留一句白话；机制细节（目录名、文件名、历史仓路径）进「细节」折叠。 -->
+    <p class="wizard-note">备份＝整份复制项目文件夹；恢复只回空目录，不覆盖现稿。</p>
+    <details class="nx-note-details">
+      <summary>细节</summary>
+      <p>备份文件夹命名为「项目名-backup-时间戳」，不压缩、不做增量。历史仓默认不进备份——体积大，
+        时间线另由「文档历史」负责；要连历史一起带走就勾选下面的选项（历史仓即 .pinax/history.git）。</p>
+    </details>
 
     <section class="backup-block">
       <h3 class="settings-panel-heading">导出备份</h3>
-      <p v-if="!project" class="prefs-row-hint" data-test="backup-no-project">还没有打开项目：先打开一个项目，备份的是它。</p>
+      <p v-if="!project" class="prefs-row-hint" data-test="backup-no-project" title="先打开一个项目，备份的就是它">还没有打开项目。</p>
       <div class="prefs-grid">
         <div class="prefs-row">
           <span class="prefs-row-label">备份位置</span>
           <button type="button" class="control-secondary" data-test="backup-pick-target" :disabled="!canExport" @click="pickAndExport">
             {{ busy === 'export' ? '正在复制…' : '选择备份位置并导出' }}
           </button>
-          <span class="prefs-row-hint" data-test="backup-target">{{ exportParent || '尚未选择——请选一个项目之外的文件夹，备份会落在它下面的新子目录里' }}</span>
+          <span class="prefs-row-hint" data-test="backup-target" title="请选一个项目之外的文件夹，备份会落在它下面的新子目录里">{{ exportParent || '尚未选择' }}</span>
         </div>
-        <label class="backup-toggle">
+        <label class="backup-toggle" title=".pinax/history.git，体积大">
           <input v-model="includeHistory" type="checkbox" data-test="backup-include-history" :disabled="Boolean(busy) || !project">
-          包含历史仓（.pinax/history.git，体积大）
+          包含历史仓（体积大）
         </label>
       </div>
       <p v-if="exportedPath" class="prefs-state is-ready" data-test="backup-done">
@@ -178,9 +180,7 @@ async function restore() {
 
     <section class="backup-block">
       <h3 class="settings-panel-heading">从备份恢复</h3>
-      <p class="wizard-note is-tight">
-        三步：①选备份文件夹（凭 backup-manifest.json 认）→ ②核对摘要 → ③选一个新的空目录并恢复；恢复完会打开这个项目。
-      </p>
+      <p class="wizard-note is-tight" title="选备份文件夹时凭包内的 backup-manifest.json 核对身份">三步：选备份 → 核对摘要 → 选空目录恢复；恢复完会打开这个项目。</p>
       <div class="prefs-grid">
         <div class="prefs-row">
           <span class="prefs-row-label">① 备份文件夹</span>
@@ -198,7 +198,7 @@ async function restore() {
           <button type="button" class="control-secondary" data-test="backup-pick-restore-target" :disabled="!manifest || Boolean(busy)" @click="pickRestoreTarget">
             选择新的空目录…
           </button>
-          <span class="prefs-row-hint" data-test="backup-restore-target">{{ restoreTarget || '尚未选择——恢复只支持空目录（防止覆盖现稿）' }}</span>
+          <span class="prefs-row-hint" data-test="backup-restore-target" title="恢复只支持空目录（防止覆盖现稿）">{{ restoreTarget || '尚未选择' }}</span>
         </div>
         <div class="prefs-actions">
           <button type="button" class="control-primary" data-test="backup-restore" :disabled="!canRestore" @click="restore">

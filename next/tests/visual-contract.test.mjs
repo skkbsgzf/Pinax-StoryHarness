@@ -1427,3 +1427,161 @@ test('〔批次68-R1 门禁⑯〕字体三族使用面：chrome 里出 display�
   assert.match(dialog, /class="authoring-knowledge__agent-name"/u, '工具面没有中文名那一读')
   assert.equal(/<code>\{\{\s*tool\.name\s*\}\}<\/code>/u.test(dialog), false, '工具面又回到「一行裸 id 的等宽 code」')
 })
+
+/**
+ * 〔批次68-R3 门禁⑰〕沉默层：零收起＋零通知＝悬浮球整颗不渲染。
+ *
+ * 作者口径（2026-11-07 裁定经工单转述）：「看见的每样东西都意味着『这里有东西』——
+ * 没有东西就看不见任何容器」。v1 的「球没内容也常驻（它是拖拽落点）」翻案：
+ * paneSnap 的吸附目标是视口角落的纯几何（snapTargetAt），不看 DOM，球藏了收起链路照常在。
+ * 判据分两半：声明级钉在这里（两处 v-if＋两句空态句必须绝迹）；运行时那一半在
+ * shell-ui.spec「统一 chrome」用例里（零收起零通知 → collapse-orb 不在 DOM）。
+ */
+test('〔批次68-R3 门禁⑰〕沉默层：球在零收起零通知时零渲染，空态句与常驻跳转钮绝迹', async () => {
+  const orb = stripComments(await readFile(join(shellDir, 'CollapseOrb.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/gu, '')
+  // ① 组件根：显隐谓词只看「有没有收起的页」与「有没有未确认通知」——提案数不参与（那是组内的事）。
+  assert.match(orb, /<div v-if="count \|\| hasNotice" class="nx-collapse-orb"/u, '球根节点没有沉默层的 v-if（count 与 hasNotice 都不成立时必须整颗不渲染）')
+  assert.match(orb, /v-if="hasNotice" class="nx-collapse-orb-group" data-test="orb-notice-group"/u, '通知组要只在有通知时出现')
+  // ② 两句空态文案（「现在没有收起的面板…」「服务侧没有待确认通知。」）不许以任何形式回来。
+  for (const gone of ['现在没有收起的面板', '服务侧没有待确认通知', 'nx-collapse-orb-empty']) {
+    assert.equal(orb.includes(gone), false, `空态句退役了又回来：${gone}`)
+  }
+  // ③ 跳转不再常驻：通知跳转融进每一行，提案跳转进「AI 产出」组（组本身按 proposalCount 出现）。
+  assert.equal(orb.includes('nx-collapse-orb-jump'), false, '常驻跳转钮的样式类不许回来')
+  assert.equal(orb.includes('data-test="orb-open-services"'), false, '「看通知与日志」不再作为常驻钮存在（跳转在行内）')
+  assert.match(orb, /v-if="proposalCount > 0"[\s\S]{0,80}data-test="orb-proposal-group"/u, 'AI 产出组要按提案数出现')
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  assert.equal(layout.includes('.nx-collapse-orb-empty'), false, '空态句的样式该随句子一起删')
+  assert.equal(layout.includes('.nx-collapse-orb-jump'), false, '常驻跳转钮的样式该随钮一起删')
+  // ④ 宿主侧（〔调度方补刀·翻案〕）：执行方原判「AppNext 挂载处同款 v-if」与组件常驻挂载互斥——
+  //    组件级 v-if 让 CollapseOrb 晚于宿主 onWindowKeydown 注册，Esc 分层（stopImmediatePropagation）
+  //    失效，面板开着按 Esc 身后窗口照样被收（真窗实测）。终口径：组件**常驻挂载**，宿主挂载处禁止
+  //    v-if，沉默层由组件根 v-if 独立承担（上面①）；宿主侧钉的是「orbVisible 谓词不得回潮成挂载条件」。
+  const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/gu, '')
+  assert.equal(/<CollapseOrb\s+v-if=/u.test(app), false, 'CollapseOrb 组件必须常驻挂载：挂载处不得出现 v-if（Esc 分层依赖监听先注册）')
+  assert.equal(app.includes('const orbVisible ='), false, 'orbVisible 谓词不得回潮（显隐唯一出处是组件根 v-if）')
+})
+
+/**
+ * 〔批次68-R3 门禁⑱〕空态可行动：模板里的空态文案必须同容器带可点钮，否则逐个登记白名单。
+ *
+ * 扫描面＝各 SFC 的 <template> 文本（剥 HTML 注释、剥引号属性值——细节收进 title 是许可动作，
+ * 不算上屏文案）。词根取工单点名的四个：还没有／没有内容／请从／请先。
+ * 判据：命中行同句或其后两行内有**不属于别的分支**的 `<button` ＝同容器有主操作（通过）；否则必须能在白名单里逐条对上
+ * （file + snippet），对不上就是「又写了一句只指路不给动作的死话」。白名单条目失效同样红——
+ * 这本账不许攒僵尸条目。
+ */
+const EMPTY_STATE_ALLOWLIST = [
+  { file: 'CarrierPaneHost.vue', snippet: '还没有可用的词', reason: '纯只读：快捷词由世界书条目与正文词频自动收录，没有可点的主操作' },
+  { file: 'IndexWindow.vue', snippet: '构思还没有内容', reason: '新建动作在本区标题行的 ＋（hover 显形），不在命中行旁边' },
+  { file: 'IndexWindow.vue', snippet: '资料还没有内容', reason: '同上：「资料」区标题行右侧的 ＋' },
+  { file: 'IndexWindow.vue', snippet: '约束还没有内容', reason: '同上：「约束」区标题行右侧的 ＋' },
+  { file: 'IndexWindow.vue', snippet: '剧本还没有内容', reason: '同上：「剧本」区标题行右侧的 ＋' },
+  { file: 'IndexWindow.vue', snippet: '还没有记录', reason: '记录型载体：新建动作在本区标题行的 ＋' },
+  { file: 'IndexWindow.vue', snippet: '这一栏还没有条目', reason: '世界书：新建动作在本栏标题行（web 模板）' },
+  { file: 'EntriesBoard.vue', snippet: '这一栏还没有条目', reason: '看板区：新建入口在本板顶栏（类别＋标题＋新建）' },
+  { file: 'EntryGraph.vue', snippet: '还没有登记关系', reason: '纯只读图：关系由条目面板登记，图上不造第二入口' },
+  { file: 'SettingsModal.vue', snippet: '该载体的设置项还没有内容', reason: '纯只读：载体没声明设置项，任何动作都是假口' },
+  { file: 'settings/BackupSection.vue', snippet: '还没有打开项目', reason: '状态层读数：入口在顶栏「打开项目」，备份节里不复制第二个开门钮' },
+  { file: 'MaterialGallery.vue', snippet: '还没有记录', reason: '新建输入与钮就在同容器下方（超出 ±2 行窗口，逐条登记）' },
+  { file: 'settings/ExportSection.vue', snippet: '还没有打开的文档', reason: '动作在索引窗（先去开文档），本节不复制一条假导出钮' },
+  { file: 'settings/HistorySection.vue', snippet: '还没有历史快照', reason: '快照由定时器自动落，无主操作可给' },
+  { file: 'settings/ImportSection.vue', snippet: '还没有写入任何文件', reason: '预览读数句；执行钮 import-apply 在同一计划块里（超出 ±2 行窗口）' },
+  { file: 'settings/ProposalsSection.vue', snippet: '还没有提案', reason: '提案由模型／运行时写下，节内无可造提案的动作' }
+]
+
+test('〔批次68-R3 门禁⑱〕空态文案要么带同容器主操作钮，要么逐条在白名单里', async () => {
+  const files = (await walk(shellDir)).filter((file) => file.endsWith('.vue'))
+  assert.ok(files.length > 10, 'next/shell 扫描面空了等于没测')
+  const TOKEN = /还没有|没有内容|请从|请先/u
+  const violations = []
+  const used = new Set()
+  for (const file of files) {
+    const raw = await readFile(file, 'utf-8')
+    const start = raw.indexOf('<template')
+    if (start < 0) continue
+    const template = raw.slice(start, raw.lastIndexOf('</template>') + 11)
+      .replace(/<!--[\s\S]*?-->/gu, '')
+      // 引号属性值整体剥掉：title 是「细节进悬浮说明」的许可落点，不算常驻文案。
+      .replace(/(?:@|:)?[\w.-]+="[^"]*"/gu, '=""')
+    const lines = template.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      if (!TOKEN.test(lines[i])) continue
+      // 「同容器有主操作」的机器近似：命中行前后两行内出现 <button，且那一行不是分支入口
+      // （带 v-if／v-else 的钮属于**另一条路**，替不了这一句）。只按行数开窗会被邻枝的钮蒙过去，
+      // 于是「只指路不给动作」的死话也能过关——分支指令这道判断就是来堵这个的。
+      const actionable = lines.slice(Math.max(0, i - 2), i + 3).some((line) => (
+        line.includes('<button') && !/\bv-(if|else)/u.test(line)))
+      if (actionable) continue
+      const relative = file.slice(shellDir.length + 1).replace(/\\/gu, '/')
+      const hit = EMPTY_STATE_ALLOWLIST.find((entry) => relative.endsWith(entry.file) && lines[i].includes(entry.snippet))
+      if (hit) {
+        used.add(hit)
+        continue
+      }
+      violations.push(`${relative}:${i + 1} 「${lines[i].trim().slice(0, 60)}」`)
+    }
+  }
+  assert.deepEqual(violations, [], `空态句只指路不给动作，又没登记白名单：\n${violations.join('\n')}`)
+  const stale = EMPTY_STATE_ALLOWLIST.filter((entry) => !used.has(entry))
+  assert.deepEqual(stale, [], `白名单里有对不上号的僵尸条目（改完文案要连同账本一起清）：\n${stale.map((entry) => `${entry.file}#${entry.snippet}`).join('\n')}`)
+
+  // 正向：载体空态指南（判据 #2 的主落点）八块板都在——每块「一句话＋去索引窗钮」成套。
+  const carrier = stripComments(await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/gu, '')
+  const guides = carrier.match(/class="pane-hint nx-empty-guide"/gu) ?? []
+  assert.ok(guides.length >= 8, `载体空态指南只剩 ${guides.length} 块（章／构思／大纲／提案／约束／资料／剧本／记录，一块都不许退回去）`)
+  const goButtons = carrier.match(/data-test="empty-go-index"/gu) ?? []
+  assert.equal(goButtons.length, guides.length, '每一块空态指南都要配恰好一枚「去索引窗」主钮（点了真的去）')
+  assert.match(carrier, /const emit = defineEmits\(\['history', 'address', 'focus-index'\]\)/u, 'focus-index 事件要从这里上抛宿主')
+  const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/gu, '')
+  assert.ok(app.includes('@focus-index="focusIndexColumn(win.entry)"'), '宿主没接住 focus-index（钮点了不会去）')
+  assert.match(app, /function focusIndexColumn\(entry\)[\s\S]{0,200}indexOpen\.value = true/u, 'focus-index 的落点要真的打开索引窗')
+})
+
+/**
+ * 〔批次68-R3 门禁⑲〕指南层：设置节常驻文案不得含机制 token。
+ *
+ * 症状（工单实测）：备份节整段开发手册上屏（`.pinax/history.git`、backup-manifest.json、dryRun……）。
+ * 判据：settings/*.vue 的 <template> 里，剥掉注释、title 属性与「细节」折叠块之后，
+ * 常驻版面文本再出现机制 token 即红。路径／文件名／格式的去处只有两个：title，或 nx-note-details。
+ */
+const MECHANISM_TOKENS = [
+  { pattern: /\.pinax\//gu, label: '.pinax/ 路径' },
+  { pattern: /backup-manifest/gu, label: 'backup-manifest.json' },
+  { pattern: /\.json\b/gu, label: '*.json 文件名' },
+  { pattern: /history\.git/gu, label: 'history.git' },
+  { pattern: /\bdryRun\b/gu, label: 'dryRun' },
+  { pattern: /serve:pinax/gu, label: 'serve:pinax 端点名' }
+]
+
+test('〔批次68-R3 门禁⑲〕设置节常驻文案不含机制 token（title／细节折叠除外）', async () => {
+  const settingsDir = join(shellDir, 'settings')
+  const files = (await readdir(settingsDir, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.vue'))
+    .map((entry) => join(settingsDir, entry.name))
+  assert.ok(files.length >= 14, `设置节扫描面只有 ${files.length} 份（应有 14 节），空了等于没测`)
+  const offenders = []
+  for (const file of files) {
+    const raw = await readFile(file, 'utf-8')
+    const start = raw.indexOf('<template')
+    if (start < 0) continue
+    let template = raw.slice(start, raw.lastIndexOf('</template>') + 11)
+      .replace(/<!--[\s\S]*?-->/gu, '')
+      // title／占位符这类悬浮说明是许可落点：整值剥掉再查常驻文本。
+      .replace(/(?:@|:)?[\w.-]+="[^"]*"/gu, '=""')
+    template = template.replace(/<details[\s\S]*?<\/details>/gu, '') // 「细节」折叠整块豁免
+    for (const { pattern, label } of MECHANISM_TOKENS) {
+      pattern.lastIndex = 0
+      for (const match of template.matchAll(pattern)) {
+        offenders.push(`${file.slice(shellDir.length + 1).replace(/\\/gu, '/')}：${label} →「${match[0]}」`)
+      }
+    }
+  }
+  assert.deepEqual(offenders, [], `机制细节回到常驻版面了：\n${offenders.join('\n')}`)
+
+  // 正向：样板节真的用了「一句话＋细节折叠」这套落点（BackupSection 是工单点名的样板）。
+  const backup = await readFile(join(settingsDir, 'BackupSection.vue'), 'utf-8')
+  assert.match(backup, /<details class="nx-note-details">/u, '样板节没了「细节」折叠，口径就断了')
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  assert.ok(layout.includes('.nx-note-details'), '「细节」折叠的样式落点要在布局层')
+})

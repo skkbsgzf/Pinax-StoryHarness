@@ -182,9 +182,8 @@ function formatWhen(when) {
 
 <template>
   <div class="history-section">
-    <p class="wizard-note">
-      这里看「{{ targetTitle }}」的快照历史。选中一版可以看它相对上一版的改动；
-      恢复会写成一个新版本，不删除任何旧版本。
+    <p class="wizard-note" title="选中一版可以看它相对上一版的改动；恢复会写成新版本，不删除任何旧版本">
+      这里看「{{ targetTitle }}」的快照历史。
     </p>
 
     <div v-if="!target" class="history-state history-empty">
@@ -198,8 +197,8 @@ function formatWhen(when) {
         <button type="button" class="control-secondary history-retry" @click="loadHistory()">重试</button>
       </div>
       <p v-else-if="error" class="history-state is-error">{{ error }}</p>
-      <p v-else-if="!commits.length" class="history-state history-empty">
-        这个文档还没有历史快照。下一次定时快照（默认 5 分钟）会把它记进来。
+      <p v-else-if="!commits.length" class="history-state history-empty" title="下一次定时快照（默认 5 分钟）会把它记进来">
+        这个文档还没有历史快照。
       </p>
 
       <div v-else class="history-layout">

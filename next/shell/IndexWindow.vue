@@ -840,13 +840,11 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty">
-          大纲还没有内容（大纲/outline.json）。
+        <!-- 〔批次68-R3 指南层〕空态只留一句话＋一枚钮；机制细节（文件名／转换入口）进 title，不进常驻版面。 -->
+        <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty" data-test="outline-import-hint"
+           title="大纲存在项目的 大纲/outline.json；目录里有章节稿（md）时，可在 设置 → 大纲转换 一键生成节点。">
+          大纲还没有内容。
           <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="data.startOutline()">新建大纲</button>
-        </p>
-        <!-- 批次30（U13 纯文案，不加按钮）：告诉作者散文章节稿有官方转换入口——不在这里放第二个动作钮。 -->
-        <p v-if="!data.outline.length && !data.outlineError" class="nx-index-empty" data-test="outline-import-hint">
-          大纲目录里有章节稿（md）时，可在 设置 → 大纲转换 一键生成节点。
         </p>
         <p v-if="data.outlineError" class="nx-index-error">{{ data.outlineError }}</p>
       </template>
@@ -906,7 +904,7 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.notes.length && !data.notesError" class="nx-index-empty">构思还没有内容（构思/）。</p>
+        <p v-if="!data.notes.length && !data.notesError" class="nx-index-empty">构思还没有内容。</p>
         <p v-if="data.notesError" class="nx-index-error">{{ data.notesError }}</p>
       </template>
 
@@ -1004,7 +1002,7 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容（资料/）。</p>
+        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容。</p>
         <p v-if="data.documentsError" class="nx-index-error">{{ data.documentsError }}</p>
 
         <div class="nx-index-section-head" data-test="dossier-section-rules">
@@ -1049,7 +1047,7 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容（约束/）。</p>
+        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容。</p>
         <p v-if="data.rulesError" class="nx-index-error">{{ data.rulesError }}</p>
       </template>
 
@@ -1099,7 +1097,7 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容（约束/）。</p>
+        <p v-if="!data.rules.length && !data.rulesError" class="nx-index-empty">约束还没有内容。</p>
         <p v-if="data.rulesError" class="nx-index-error">{{ data.rulesError }}</p>
       </template>
 
@@ -1149,7 +1147,7 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容（资料/）。</p>
+        <p v-if="!data.documents.length && !data.documentsError" class="nx-index-empty">资料还没有内容。</p>
         <p v-if="data.documentsError" class="nx-index-error">{{ data.documentsError }}</p>
       </template>
 
@@ -1199,7 +1197,7 @@ watch(() => props.board?.id, () => {
             </button>
           </li>
         </ul>
-        <p v-if="!data.scripts.length && !data.scriptsError" class="nx-index-empty">剧本还没有内容（剧本/）。</p>
+        <p v-if="!data.scripts.length && !data.scriptsError" class="nx-index-empty">剧本还没有内容。</p>
         <p v-if="data.scriptsError" class="nx-index-error">{{ data.scriptsError }}</p>
       </template>
 
@@ -1249,7 +1247,7 @@ watch(() => props.board?.id, () => {
           </li>
         </ul>
         <p v-if="!recordSet.records.length && !recordSet.error" class="nx-index-empty">
-          {{ recordCarrier?.title }}还没有记录（{{ recordCarrier?.dir }}/{{ recordCarrier?.file }}）。
+          {{ recordCarrier?.title }}还没有记录。
         </p>
         <p v-if="recordSet.error" class="nx-index-error">{{ recordSet.error }}</p>
       </template>

@@ -95,9 +95,9 @@ function statusText(status) {
 
 <template>
   <div class="proposals-section" data-test="proposals-section">
-    <p class="wizard-note">
-      这里列 .pinax/proposals/ 里的模型改稿。点一条会关闭设置，并在正文栏打开审阅面
-      （当前正文与提案新文对照，采纳／弃用在那边）；采纳前正文一个字都不动。
+    <p class="wizard-note"
+       title="提案存在项目的 .pinax/proposals/；采纳前的正文一个字都不动">
+      这里列模型改稿。点一条，在正文栏打开审阅面采纳或弃用。
     </p>
 
     <p v-if="loading" class="proposals-state" role="status">正在读取提案…</p>
@@ -106,8 +106,8 @@ function statusText(status) {
       <button type="button" class="control-secondary proposals-retry" @click="reload()">重试</button>
     </div>
     <template v-else>
-      <p v-if="!data?.proposals?.length" class="proposals-state proposals-empty">
-        还没有提案。模型改稿或运行时写下的提案会落在这里。
+      <p v-if="!data?.proposals?.length" class="proposals-state proposals-empty" title="模型改稿或运行时写下的提案会落在这里">
+        还没有提案。
       </p>
       <div v-else class="proposals-list" aria-label="提案列表">
         <button

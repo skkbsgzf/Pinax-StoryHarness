@@ -134,7 +134,7 @@ function optionLabel(option) {
       {{ setting.title }}
     </p>
     <template v-else>
-      <p class="wizard-note">{{ carrierTitle || '该载体' }} 的项目级配置，存在当前项目的 .pinax/settings.json。</p>
+      <p class="wizard-note" :title="`值存在当前项目的 .pinax/settings.json（carriers.${carrierId ?? ''}）`">{{ carrierTitle || '该载体' }} 的项目级配置，只在当前项目生效。</p>
       <div class="prefs-row">
         <span class="prefs-row-label">{{ setting.title }}</span>
         <input
