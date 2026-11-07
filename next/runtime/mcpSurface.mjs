@@ -25,6 +25,7 @@ export const TOOL_CAPABILITY_HINTS = Object.freeze({
   pinax_project_init: 'kernel.project.access',
   pinax_project_import: 'kernel.project.access',
   pinax_project_context: 'kernel.project.context',
+  pinax_project_catalog: 'kernel.project.catalog',
   pinax_chapter_list: 'text.chapters',
   pinax_chapter_read: 'text.chapters',
   pinax_chapter_write: 'text.chapters',

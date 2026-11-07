@@ -33,7 +33,7 @@ const SKILLS_TARGET = join(repoRoot, 'next', '.build', 'skills')
 /**
  * 批次65b（框架计划 J2）：随包载体不再从 carriers/index.mjs 静态 import 实现数组——
  * 门禁拿的是「开发轨装载实况」（next/carriers/），装机轨另由 n4 从 .build/next/carriers/ 装一遍对表。
- * 下面的清单计数（r 系）与工具计数（44 把、21 面、46 聚合面）一律不变：同实现换装载方式。
+ * 下面的清单计数（r 系）与工具计数（44 把、22 面、47 聚合面）一律不变：同实现换装载方式。
  */
 const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 
@@ -120,8 +120,8 @@ try {
   const listed = await link.listTools()
   kernelSurfaceNames = listed.map((tool) => tool.name)
   await link.close()
-  // createMcpSurface 是「纯内核那一份」，19 把内核工具；技能读取是运行时自有工具，由 d2 核。
-  check('d 产物自足可执行：import 产物后 in-process 列出内核 19 工具', listed.length === 19, `toolCount=${listed.length}`)
+  // createMcpSurface 是「纯内核那一份」，20 把内核工具（服务端 0.6.0 起 +pinax_project_catalog）；技能读取是运行时自有工具，由 d2 核。
+  check('d 产物自足可执行：import 产物后 in-process 列出内核 20 工具', listed.length === 20, `toolCount=${listed.length}`)
 
   // d2：真实运行时面（内核 19 ＋ pinax_skill_read ＋ pinax_service_log_list）。批次37 起技能目录随产物走；
   // 批次49 起服务日志读取也是原生工具（没有服务时如实回空数组）。空框架（没有载体）时，
@@ -132,10 +132,10 @@ try {
   const names = runtime.listTools().map((tool) => tool.name)
   const skillRejected = runtime.surfaceInfo().skills?.rejected?.map((item) => item.code) ?? []
   await runtime.stop()
-  check('d2 运行时面：内核 19 ＋ pinax_skill_read ＋ pinax_service_log_list（21）', names.length === 21 && names.includes('pinax_skill_read') && names.includes('pinax_service_log_list'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
+  check('d2 运行时面：内核 20 ＋ pinax_skill_read ＋ pinax_service_log_list（22）', names.length === 22 && names.includes('pinax_skill_read') && names.includes('pinax_service_log_list'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
   check('内核版本对外可见：KERNEL_INFO.contractVersion=1', mod.KERNEL_INFO?.contractVersion === '1', mod.NEXT_VERSION ?? '')
 } catch (error) {
-  check('d 产物自足可执行：import 产物后 in-process 列出 21 工具（内核 19 ＋ 技能读取＋服务日志读取）', false, String(error?.message || error).slice(0, 120))
+  check('d 产物自足可执行：import 产物后 in-process 列出 22 工具（内核 20 ＋ 技能读取＋服务日志读取）', false, String(error?.message || error).slice(0, 120))
 }
 
 console.log(`ℹ 原生模块：bundle 文本引用 better-sqlite3 ＝ ${/better-sqlite3/.test(bundle) ? '是' : '否'}；换档脚本在 win32 直接 return，Electron ABI 档要在出包后单独核`)

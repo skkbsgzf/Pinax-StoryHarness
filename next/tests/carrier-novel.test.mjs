@@ -63,12 +63,12 @@ test('真清单过内核校验：小说只认领 正文/，认领的都是内核
   assert.deepEqual(NOVEL_CARRIER.contributes.panes.map((pane) => pane.id), ['novel.shelf', 'novel.editor'])
 })
 
-test('工具面聚合：启用小说后面是 25 个工具，两个只读名归属载体，声明无实现的绝不虚列', async () => {
+test('工具面聚合：启用小说后面是 26 个工具，两个只读名归属载体，声明无实现的绝不虚列', async () => {
   const { workspace, registry, runtime } = await novelProject('carrier-surface')
   try {
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 27, '19 内核 ＋ 技能读取一把 ＋ 服务日志读取一把 ＋ 载体自有六把（正文 save／delete／rename 与提案三把）；两个认领名不虚增面')
+    assert.equal(started.value.toolCount, 28, '20 内核 ＋ 技能读取一把 ＋ 服务日志读取一把 ＋ 载体自有六把（正文 save／delete／rename 与提案三把）；两个认领名不虚增面')
     assert.equal(started.value.aggregatedSurface, true)
     assert.deepEqual(runtime.surfaceInfo().carrierToolNames.sort(), [...NOVEL_TOOL_NAMES].sort())
 
@@ -85,7 +85,7 @@ test('工具面聚合：启用小说后面是 25 个工具，两个只读名归�
 
     const report = toolOwnershipReport(registry)
     assert.equal(report.claimed.length, 5, '小说 2 把只读 ＋ 大纲 1 把只读 ＋ 世界书 2 把只读（认领面按已安装的清单算，不看启用开关）')
-    assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须往下走')
+    assert.equal(report.unclaimed.length, 15, 'M2 起未认领清单必须往下走')
     assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search', 'pinax_material_list', 'pinax_material_read', 'pinax_material_save', 'pinax_material_remove', 'pinax_comic_list', 'pinax_comic_read', 'pinax_comic_save', 'pinax_comic_remove', 'pinax_video_list', 'pinax_video_read', 'pinax_video_save', 'pinax_video_remove', 'pinax_experience_list', 'pinax_experience_read', 'pinax_experience_save', 'pinax_experience_remove', 'pinax_online_list', 'pinax_online_read', 'pinax_online_save', 'pinax_online_remove'], '十二载体自有名字：正文写口＋删／改两把＋提案三把（小说，批次46A）、大纲写半边、构思这对、世界书写口、剧本三条（批次26）、约束这对、资料三把＋检索、M4/M5 五块记录载体各四把（断言同步）')
     assert.deepEqual(report.withoutImplementation, [], '小说声明的名字都得有实现')
   } finally {
@@ -346,7 +346,7 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
   })
   try {
     await runtime.start()
-    assert.equal(runtime.listTools().length, 27, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 小说自有 6（停用后回落内核：只剩内核＋技能读取）')
+    assert.equal(runtime.listTools().length, 28, '20 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 小说自有 6（停用后回落内核：只剩内核＋技能读取）')
     assert.ok(opened.value.view.enabled.includes(NOVEL_CARRIER_ID))
 
     const disabled = await setCarrierEnabled({ root, registry, pluginId: NOVEL_CARRIER_ID, enabled: false, expectedRevision: opened.value.document.carriers.revision })
@@ -358,7 +358,7 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
     const runtimeAfter = createAgentRuntime({ registry, fileService: reopened.value.fileService, view: reopened.value.view })
     await runtimeAfter.start()
     const names = runtimeAfter.listTools().map((tool) => tool.name)
-    assert.equal(names.length, 21, '载体工具从面上下掉，内核 19 工具＋技能读取＋服务日志读取一个不少')
+    assert.equal(names.length, 22, '载体工具从面上下掉，内核 20 工具＋技能读取＋服务日志读取一个不少')
     assert.equal(names.includes('pinax_chapter_save'), false)
     assert.equal(runtimeAfter.ownerOf('pinax_chapter_list'), 'kernel', '停用＝回落内核，不拿停用者的 scope 卡人')
 
@@ -372,12 +372,12 @@ test('停用载体后工具面回落内核：面少一个名字，同名工具�
   }
 })
 
-test('没有项目（view 为空）时面就是内核 19 工具＋技能读取——空框架轨道不被真载体污染', async () => {
+test('没有项目（view 为空）时面就是内核 20 工具＋技能读取——空框架轨道不被真载体污染', async () => {
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry.install(plugin.manifest, plugin.impl, plugin.meta)
   const runtime = createAgentRuntime({ registry })
   const started = await runtime.start()
-  assert.equal(started.value.toolCount, 21)
+  assert.equal(started.value.toolCount, 22)
   assert.equal(started.value.aggregatedSurface, false)
   assert.deepEqual(runtime.surfaceInfo().carrierToolNames, [])
   await runtime.stop()

@@ -69,7 +69,9 @@ export const KERNEL_WRITE_CLASS = Object.freeze({
   pinax_project_init: Object.freeze({ structural: true }),
   pinax_project_import: Object.freeze({ structural: true }),
   // 派生轨：status 是「按同一套规则盘点输入集」，sync 才会 HTTP 打本机服务。
-  pinax_project_index: Object.freeze({ derived: true, writeAction: 'sync' })
+  pinax_project_index: Object.freeze({ derived: true, writeAction: 'sync' }),
+  // 同派生轨（服务端 0.6.0 起）：SQLite Catalog 是可重建投影，status 读盘点、显式 sync 才落库。
+  pinax_project_catalog: Object.freeze({ derived: true, writeAction: 'sync' })
 })
 
 /**

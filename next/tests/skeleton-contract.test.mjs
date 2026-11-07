@@ -28,11 +28,11 @@ const repoRoot = resolve(here, '..', '..')
  */
 test('Next 的固化骨架与服务端 KIND_TEMPLATES 完全一致', async () => {
   const source = await readFile(join(repoRoot, 'server', 'services', 'localMirrorService.js'), 'utf-8')
-  const block = /export const KIND_TEMPLATES = \{([\s\S]*?)\n\}/.exec(source)
+  const block = /export const KIND_TEMPLATES = Object\.freeze\(\{([\s\S]*?)\n\}\)/.exec(source)
   assert.ok(block, '服务端 KIND_TEMPLATES 结构变了，Next 骨架对照要同步改')
   const parsed = {}
   for (const line of block[1].split('\n')) {
-    const match = /^\s*(\w+):\s*\[([^\]]*)\],?\s*$/.exec(line)
+    const match = /^\s*(\w+):\s*(?:Object\.freeze\()\[([^\]]*)\]\),?\s*$/.exec(line)
     if (!match) continue
     parsed[match[1]] = match[2].split(',').map((item) => item.trim().replace(/^'|'$/g, '')).filter(Boolean)
   }

@@ -31,7 +31,7 @@ async function session(label = 'runtime') {
   return { workspace, root, registry, opened, runtime }
 }
 
-test('运行时是内置一级公民：起得来、列出 21 工具、全程不开端口', async () => {
+test('运行时是内置一级公民：起得来、列出 22 工具、全程不开端口', async () => {
   const { workspace, runtime, registry } = await session()
   try {
     assert.equal(RUNTIME_CONTRACT.builtIn, true)
@@ -40,13 +40,13 @@ test('运行时是内置一级公民：起得来、列出 21 工具、全程不�
 
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 21)
+    assert.equal(started.value.toolCount, 22)
     assert.equal(started.value.portsOpened, 0)
     assert.equal(await probePort(39551), false, 'Next 运行时不该在任何端口上监听')
     assert.equal(registry.ownerOfTool('pinax_chapter_read'), null, 'M1 阶段工具仍由内核持有')
 
     const dock = runtime.dockViewModel()
-    assert.equal(dock.tools.length, 21, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1')
+    assert.equal(dock.tools.length, 22, '20 内核 ＋ 技能读取 1 ＋ 服务日志读取 1')
     assert.equal(dock.tools.every((tool) => tool.owner === 'kernel'), true)
   } finally {
     await runtime.stop()
@@ -82,7 +82,7 @@ test('M1 没接模型运行器时如实报错，不编一段回答冒充模型',
     assert.equal(answer.ok, false)
     assert.equal(answer.error.code, 'PINAX_DEPENDENCY_UNMET')
     assert.match(answer.error.message, /未接模型运行器/)
-    assert.equal(answer.error.details.toolCount, 21)
+    assert.equal(answer.error.details.toolCount, 22)
   } finally {
     await runtime.stop()
     await workspace.cleanup()
@@ -122,18 +122,18 @@ test('注入 runner 后「问一句话」走通，提案只进 .pinax/proposals/
  * 随框架发布的是十二块载体：认领面仍是 5 个内核名字（小说 2 ＋ 大纲 1 ＋ 世界书 2），
  * M4/M5 五块（素材／漫画／视频／体验／联机）只带自有名字，不认领内核工具。
  */
-test('工具归属核对：空注册表＝内核全量；装内置载体后认领 5、未认领 14，且认领的都有实现', () => {
+test('工具归属核对：空注册表＝内核全量；装内置载体后认领 5、未认领 15，且认领的都有实现', () => {
   const bare = toolOwnershipReport(createRegistry({ kinds: Object.keys(PROJECT_KINDS) }))
-  assert.deepEqual(bare.unclaimed, kernelToolNames(), '不装插件时 19 个名字全由内核服务')
+  assert.deepEqual(bare.unclaimed, kernelToolNames(), '不装插件时 20 个名字全由内核服务')
   assert.equal(bare.declaredCount, 0)
   assert.equal(bare.unmappedHints.length, 0, '每个内核工具都要有归属提示，否则 M2 没法搬')
 
   const registry = createRegistry({ kinds: Object.keys(PROJECT_KINDS) })
   for (const plugin of BUILT_IN_CARRIER_PLUGINS) registry.install(plugin.manifest, plugin.impl, plugin.meta)
   const report = toolOwnershipReport(registry)
-  assert.equal(report.kernelCount, 19, '内核名单仍是 19：技能读取归运行时原生工具，不进内核清单')
+  assert.equal(report.kernelCount, 20, '内核名单仍是 20：技能读取归运行时原生工具，不进内核清单')
   assert.deepEqual([...report.claimed].sort(), ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_outline_read', 'pinax_worldbook_list', 'pinax_worldbook_read'])
-  assert.equal(report.unclaimed.length, 14, 'M2 起未认领清单必须逐批缩小')
+  assert.equal(report.unclaimed.length, 15, 'M2 起未认领清单必须逐批缩小')
   assert.deepEqual(report.declaredOutsideKernel, ['pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search', 'pinax_material_list', 'pinax_material_read', 'pinax_material_save', 'pinax_material_remove', 'pinax_comic_list', 'pinax_comic_read', 'pinax_comic_save', 'pinax_comic_remove', 'pinax_video_list', 'pinax_video_read', 'pinax_video_save', 'pinax_video_remove', 'pinax_experience_list', 'pinax_experience_read', 'pinax_experience_save', 'pinax_experience_remove', 'pinax_online_list', 'pinax_online_read', 'pinax_online_save', 'pinax_online_remove'], '十二载体自有名字：正文写口＋删／改名（批次46A）＋提案三把（小说）、大纲写半边、构思这对、世界书写口、剧本三条（批次26）、约束这对、资料三把＋检索、M4/M5 五块记录载体各四把（断言同步）')
   assert.deepEqual(report.withoutImplementation, [], '声明了却没实现的工具会被面剔掉，这里必须为空')
 })

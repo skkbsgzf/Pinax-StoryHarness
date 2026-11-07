@@ -43,11 +43,12 @@ const WRITE_FAMILY = [
   'pinax_rule_write',
   'pinax_project_init',
   'pinax_project_import',
-  'pinax_project_index'
+  'pinax_project_index',
+  'pinax_project_catalog'
 ]
 
 test('写族名单从内核 annotations 现取，分类表逐条点名且没有多余项', () => {
-  assert.deepEqual([...KERNEL_WRITE_TOOL_NAMES].sort(), [...WRITE_FAMILY].sort(), '内核声明会写盘的就这七把；改动了要在这里留名')
+  assert.deepEqual([...KERNEL_WRITE_TOOL_NAMES].sort(), [...WRITE_FAMILY].sort(), '内核声明会写盘的就这八把；改动了要在这里留名')
   const gaps = guardClassificationGaps()
   assert.deepEqual(gaps.unclassified, [], '新出现的内核写工具必须先定性，否则闸不认它、面里却留着它')
   assert.deepEqual(gaps.staleEntries, [], '分类表里不许留着已经不再是写族的条目')
@@ -199,7 +200,7 @@ test('真运行时里闸是生效的：内核写族被拒，带修订号的载�
   const started = await runtime.start()
   assert.equal(started.ok, true)
   try {
-    assert.equal(started.value.toolCount, 37, '闸不改面的形状：内核 19 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 六载体自有 16（小说 6：正文写口＋删／改两把＋提案三把；大纲 1；构思 2；世界书 1；设定与资料 6；断言同步）')
+    assert.equal(started.value.toolCount, 38, '闸不改面的形状：内核 20 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 六载体自有 16（小说 6：正文写口＋删／改两把＋提案三把；大纲 1；构思 2；世界书 1；设定与资料 6；断言同步）')
     const guard = runtime.surfaceInfo().writeGuard
     assert.deepEqual([...guard.tools].sort(), [...WRITE_FAMILY].sort(), '右栏要能读出此刻受约束的是哪几把')
     assert.equal(guard.projectRoot, opened.value.fileService.root)

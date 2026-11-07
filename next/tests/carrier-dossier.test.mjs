@@ -106,12 +106,12 @@ test('工具面：合并体启用后六把工具进面、归属它；内核认�
   try {
     assert.equal(opened.value.view.projectKind, 'generic', '合并体可以是泛型项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...DOSSIER_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 27, '19 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 合并体自有 6')
+    assert.equal(runtime.listTools().length, 28, '20 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 合并体自有 6')
     for (const name of DOSSIER_TOOL_NAMES) assert.equal(runtime.ownerOf(name), DOSSIER_CARRIER_ID, name)
 
     const report = toolOwnershipReport(registry)
-    assert.deepEqual(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 合并体 2；资料三把不在内核 19 里')
-    assert.equal(report.unclaimed.length, 14)
+    assert.deepEqual(report.claimed.length, 5, 'claimed 按内核名字算：小说 3 ＋ 合并体 2；资料三把不在内核 20 里')
+    assert.equal(report.unclaimed.length, 15)
     assert.deepEqual(report.declaredOutsideKernel.filter((name) => /^pinax_(document|reference)_/u.test(name)).sort(), [
       'pinax_document_list',
       'pinax_document_read',
