@@ -127,3 +127,14 @@
 
 - **ComfyUI 从未在 Pinax 窗内渲染**：ComfyUI 0.39 核心 `server.py:204 create_origin_only_middleware` 对 `Sec-Fetch-Site: cross-site` 一律空体 403；渲染层嵌 iframe 的导航天然是 cross-site。宿主侧放行技术上可行（主进程对已声明回环 app 窗的 subFrame 导航改写该头），但会使 ComfyUI 原生「运行」按钮在 Pinax 内可用＝**CF2TF 红线1「禁止第二个提交方直连 ComfyUI」**——提请作者裁定，未动。
 - Toonflow :3010 服务当前未运行（环境，非代码）。
+
+### §8-4 另案收口（作者 2026-11-07 裁定：豁免红线1——仅限本链路）
+
+ComfyUI 从未在窗内渲染的根因＝ComfyUI 0.39 `server.py` 的 `origin_only_middleware` 对 iframe 导航的 `Sec-Fetch-Site: cross-site` 一律空体 403。作者裁定放行原生界面后落地：
+
+- **新模块 `next/shell/appOriginHeaders.mjs`**（纯函数＋Electron 接线）：`collectAppOrigins`（清单顶层 panes＋contributes.panes 两形状、清单 app.url＋工程覆盖 url 两来源，只收本机回环）＋`rewriteAppOriginHeaders`（命中名单且 cross-site 才把这一个头改成 same-origin，其余头原样）＋`installAppOriginHeaderRewrite`（挂 defaultSession webRequest，filter 只圈回环；名单算不出来按不放行走并记 stderr）。三件闸：名单制／回环制／单头制。诊断口 `PINAX_DEBUG_APP_ORIGIN=1` 打判定流水（生产零输出）。
+- **主进程接线**：`shell/main.mjs` createWindow 后对 `window_.webContents.session` 安装；来源＝`registry.list()`（归一清单）＋`readCarrierOverridesSync(session.projectRoot)`。
+- **测试**：`next/tests/app-origin-headers.test.mjs` ＋4（名单去重与两来源／非回环与 file: 与内网全拒／单头改写其余原样／未声明与 same-origin 与空名单一律不动）。
+- **真窗验证**：截图 `147-comfyui-native-live.png`——ComfyUI 原生界面（工作流画布＋「运行」钮＋显存读数）在 Pinax 内完整渲染；诊断流水：首航 `rewritten=true`，子资源改写后天然 same-origin。剩余 404 为 ComfyUI 可选 userdata 端点常态探测，无害。
+- 调试坑存档：①`npm run build:next` 不存在（真名 `next:build:main`／`next:build:shell`／`next:build:renderer`），选择选择性构建会踩 A2 旧患（emptyOutDir 抹 renderer）；②归一清单 `panes` 在顶层不在 `contributes` 下——collectAppOrigins 首版因此空名单，已兼容两形状。
+- 豁免边界重申：本链路只对「清单声明＋工程覆盖」的本机回环 origin 生效；CF2TF 自身 queue gate 纪律不变（其 SPEC §1.1 的提交通路归底座条款未触碰）。

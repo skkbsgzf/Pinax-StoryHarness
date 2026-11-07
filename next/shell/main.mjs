@@ -25,6 +25,7 @@ import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/kn
 import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
 import { buildSettingsSchema, createFileCarrierOverridesStore, readCarrierOverridesSync } from '../carrierOverridesStore.mjs'
+import { installAppOriginHeaderRewrite } from './appOriginHeaders.mjs'
 import { createSkillsService } from '../skills/loadSkills.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
@@ -867,6 +868,16 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   }
 
   window_ = createWindow(preloadPath || join(currentDir, 'preload.mjs'), uiZoom, currentScheme)
+  // 〔批次76-R3 另案·作者 2026-11-07 裁定〕声明过的本机回环 app 档窗放行原生界面（ComfyUI 的
+  // origin_only_middleware 对 iframe 导航的 cross-site 标记一律 403）。名单制＋回环制＋单头制
+  // 三件闸在 appOriginHeaders.mjs；红线1 的豁免仅限这一条链路，CF2TF 自身纪律不变。
+  installAppOriginHeaderRewrite({
+    session: window_.webContents.session,
+    getSources: () => ({
+      manifests: session?.registry?.list?.() ?? [],
+      overrides: readCarrierOverridesSync(session?.projectRoot || null).overrides ?? {}
+    })
+  })
   // 收口包⑤：启动触发点——首帧浮层已按常量给过，这里再按实际状态对齐一次（幂等）。
   updateTitleBarOverlay({ theme: currentScheme, zoom: currentUiZoom })
   window_.on('closed', () => { window_ = null })
