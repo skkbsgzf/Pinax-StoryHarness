@@ -1,0 +1,16 @@
+{
+  "name": "@pinax/core-compat-tests",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Historical Core test compatibility shims; not a distribution package",
+  "files": [
+    "src",
+    "README.md",
+    "package.json"
+  ],
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "sideEffects": false
+}

@@ -1,6 +1,27 @@
 # Pinax 当前架构与代码边界
 
+2026-11-06 集中交付补充：此前11-05的“未验证”说明为当轮证据。最新代码已通过完整门禁（30文件/290用例）及书稿导入、章节导入、选区引用、备份恢复4条隔离浏览器旅程；真实模型恢复质量仍未验收。提交与细项见 docs/LOG.md。
+
+2026-11-06 Core当前接线：主Pinax和Pinix消费独立`@pinax/core`0.16.0（`e56a0bc`），固定tarball/provenance在各自`vendor/core/`。不依赖兄弟仓库；Next本轮不改。媒体、资料归档/解析及体验/跑团批次均已实际接线；SQLite的本地Worker/HTTP/MCP读与显式同步已接，正式文件写入适配和设备验收仍另列。
+
 核对日期：2026-10-16。实现基线为 main 的 `cb6ee525`，发布记录见 [2026-10-15 回执](../agent-runs/release-20261015.md)。本文描述代码职责；运行检查和模型质量证据见[验证状态](../src/test-status.md)。
+
+
+2026-11-06 数据层接线：[本地项目 SQLite 派生目录](./project-catalog.md)已接Worker、本地HTTP和MCP，显式sync后可跨正文/设定/构思/资料字面检索。项目上下文附目录就绪状态，不暗中同步。文件仍是事实源，浏览器正式保存和RAG链路不变。
+
+共享 Core 的日常开发与跨端更新见 [Core 开发与更新](./core-development.md)。
+
+## 2026-11-06 分工公共基线
+
+Web、Pinix、Next锁定独立`@pinax/core`0.12.0；来源commit及完整性见vendor/core/provenance。`packages/core/src`仅为历史测试路径转发，实际业务不再双份维护。权限/修改工具schema/条目属性来自Core子路径；运行器打包复制固定包合同并将实际交付字节纳入extension哈希，不依赖Host的node_modules。
+
+`assistantEditTransaction`只注入编辑器文档与人物卡投影，修改准备、原文定位、依赖、采纳/拒绝/撤销在Core中计算，Host仍负责实际授权与持久化后发布。审阅工作集和结束审阅决定也来自Core。Web助手沿原日志格式使用Core的journal协调器；章节适配器写入失败/抛错恢复内存、修订、侧车和列表/章节引用，保留作者尚未保存的输入。
+
+公共事务命令携带projectId/operationId与实体预期修订，Core负责版本和幂等决定；Host负责键布局、锁、实际持久化。日志是逆向补偿与回读确认，不宣称跨存储ACID。异步flush只有明确成功才发布durable，否则PERSISTENCE_PENDING，沿同操作恢复。上下文编译/来源读取/记忆排序、正文内核/编排/文档结构以及书籍/大纲/速记仓储已入Core，Web与Pinix对应原路径转发并注入存储。两端条目更新使用同一编辑工厂，Web/Next共用无损世界书文件合同。三端章节真实调用均已接，Next文件服务队列内校验删除修订。原生Pi会话装配与Next工具循环/策略/审计均来自Core子路径；这是0.10时的两种运行方式；0.13已统一实际执行入口，见下文。传输、SDK、文件原子IO与原生镜像flush留Host适配，其他载体及跨端任务/持久化接线仍需收口，不能作为组员任务转移后宣布前置完成。
+
+0.11补充：Next各载体文件工具和记录型媒体工具、会话状态与JSONL折叠/追加恢复来自Core；Node文件、路径、项目事件和知识服务继续注入。文件工具格式保留原样，不把构思文件等同全局速记、不把媒体JSON记录等同二进制资产迁移。Web/Pinix的写作版本/崩溃恢复及冻结任务/依赖校验共享；地理索引函数留Host注入。Pinix设备写回确认绑定保存发起时的编辑与章节，晚到回执不清新恢复稿。Next在途回答绑定原store，会话保存携带原项目根且主进程只接已知项目根；切换后新请求不会误用新项目。该批次当时尚余运行协议与媒体；其中运行/二进制接缝由0.13接续，漫画/分镜业务由0.14继续。
+
+0.12补充：世界书状态/动作、创建/更新/删除、条目管理与结构化/资料迁移在`@pinax/core/worldbook/worldbookState`；Host原路径绑定Pinia、键布局、归档/地图/文件端口。纯Node消费验证了无Pinia的库CRUD与importKey幂等条目。Web具备localmirror适配，Pinix明确关闭该能力并继续快照存储。`memory/*`包含候选、历史outbox、事实/知情账本及时序/查询/审计/备份；Dexie构造/升级仍在Host，历史和事实统一使用现有v4装载器。Core数据库端口保留table/where/transaction查询形状，不宣称已提供SQLite账本适配。其中运行/二进制接缝由0.13接续，漫画/分镜等业务由0.14继续；总体迁移尚未完成。
 
 ## 1. 运行结构
 
@@ -22,6 +43,14 @@ Pinax 是 Vue 3 工作区、浏览器本地数据和 Express 服务的组合。�
 服务器部署需要前端 `dist`、后端生产依赖和编译后的运行包；只更新前端无法更新正在运行的工具。构建、启动和回滚见[运行包发布](./agent-runtime-deployment.md)。
 
 模型配置统一在 SettingsPopup 的 models 分区。`useSettingsPopup.open('ai'/'media')` 保留旧调用别名并定位文本/图片；工作区快速选择通过 `ModelPickerMenu` 复用对应 store，`modelConfigEvents` 在同页同步增删改与默认选择。重新生成不重置当前权限。助手发送前复制模型和权限，`prepared.modelConfig/modelSettings` 只在内存及请求链中使用，不进入消息或任务日志；正文委托将模型快照传入原推演 executor。Express 的 AsyncLocalStorage 将本次配置传给 complete/stream/capability，运行器 `requestScopedRuntimeConfig` 复制 cfg 后运行，不调用全局 applyModelPatch、不持久化密钥。公网拒绝请求自定义文本配置；旧运行器缺少 requestModels 能力时，自定义模型请求明确拒绝，避免静默用错模型。
+
+0.14媒体接线：23个漫画/分镜/生成/导出/配置模块进入Core，旧服务路径转发纯函数或实例化仓储/服务。漫画页schema5、素材媒体ID及分镜文档schema1不变，不迁作者数据。Core负责草稿字段合并、防旧稿覆盖、阶段/候选来源、生成结果归属和保存重试；Host提供字符串存储、IDB/Blob、页面变更事件、书籍/地点查询和模型/供应商请求。视频HTTP/下载与原生地址解析留Host。Pinix复用主项目规则并补显示/保存入口，stage图保持原身份和谱系，不伪造普通take；备份保留图片模型选择键。Node/npm消费与真实浏览器均验证了版本/恢复、失败保留、迟到结果和导出；没有以脚本供应商冒充真实模型质量。
+
+0.15资料接线：`sourceArchiveRepository`管理来源/分块/创建工作区、共享引用、并发去重、清理、容量与备份规则；章节、编码、报告、选段、EPUB阅读顺序独立共享。Host浏览器store保留原DB名/v1/schema，读取以单快照、跨表写入以单事务确认，结束后关闭连接；内存fallback只在没有IDB能力时使用，真实数据库失败会拒绝。Core单owner写队列不是跨标签页锁，也不是所有数据库已迁SQLite的声明。分块FNV哈希只作桶，比较原文后复用；不重写旧ID/哈希，不自动修复历史丢失的原文。SDK/worker在Host，DOCX按浏览器/Node的参数差异适配；资料解析不会自动成为正式设定或世界事实，归档仍是提取原文与定位，非新增原文件二进制保存。
+
+0.13历史Next分支适配（本轮不继续该分支）：`@pinax/core`来源`fc5fb44`。Next的主进程工具链调用共享`carrierNativeSession → nativeAssistantSession → Pi AgentHarness`，不再进入旧8步循环；60秒整轮超时默认关闭，工具面不再截为6把。取消传至HTTP，提案/审计绑定原fileService，UI分支历史冻结后传入。Pi逐轮日志落原项目`.pinax/pi-sessions/`，UI会话与分支继续原JSONL合同。任务面未披露容量时关闭无依据的主动容量压缩；供应商溢出恢复沿用共享Pi路径。懒加载Pi模块随包内联，构建门禁会实际执行产物，保留原裸导入和包体预算。
+
+媒体与素材规则在`media/mediaAssetStore`及`media/narrativeAssets`，Host原路径实例化工厂；IDB/Blob解码/FileReader留浏览器。Web/Pinix均保留现有`pinax-media/assets`及ZIP合同；Pinix历史无作品字段的兼容迁移有显式Host入口。Next `fileBinaryStore`调用原文件服务的二进制口，经过plugin归属/scope/CAS/原子落盘及删除快照；字节不转UTF-8。运行时提供绑定项目的二进制Store；不声称Comfy元数据引用已变成自动下载。媒体schema、作者作品和用户服务未迁移或重启。
 
 ## 2. 工作区、路由与视图
 
@@ -153,3 +182,31 @@ Pinax 是 Vue 3 工作区、浏览器本地数据和 Express 服务的组合。�
 - 结构预算、循环依赖和构建体积用实际命令确认，不把历史文件行数写成当前测量。
 
 具体文件见[代码地图](../src/code-map.md)，标准门禁与最近实测见[验证状态](../src/test-status.md)，未完成的菜单设计等见[已知问题](../src/known-issues.md)。
+
+### 正文写作指导的资料依据（2026-10-24）
+
+`narrativeVoicePolicy.buildNarrativeVoiceContract({ surface: 'authoring' })` 是助手正文工具和独立推演共用的行文指导；运行时仍采用本书原文、背景和作者本次要求。这次融入的是写作教学资料所提炼的方法，不是新增作品资料检索。指导覆盖动作与物件、观察与判断、人物信息的交代时机、对白主语和衔接、细节取舍；中文示例为本项目自写，仅说明方法，不是故事事实或应复用的样文。
+
+资料与取舍：Teddy Wayne 的 [Tips for Writing Dialogue](https://centerforfiction.org/writing-tools/tips-for-writing-dialogue/) 提醒用人物词汇和节奏体现声音，避免对白只承担信息说明；本项目落实为接话目的、说话人辨认及必要的叙述交代，不照搬“每句都要有潜台词”。Patricia Park 的 [Scenes & Summary](https://centerforfiction.org/writing-tools/scenes-summary/) 说明逐项展开日常动作可能使场景臃肿，概述与场景需要配合；落实为按当前作用选择细节、允许直接交代和过渡概述，不规定句长、细节数或强制冲突。物理动作、中文搭配与证据推断示例来自本项目失败样例的分析，不冒充外部资料的原话。
+
+方法直接进入现有正文调用，不新增自动审稿、改写调用或生成限时。代码检查证明接线与旧流程兼容，不能证明文学质量稳定；真实样例需另评语言、动作、背景和承接，不能用禁词命中率替代阅读。
+
+### 2026-10-23 写作执行方式
+
+作者 turn 的 planning 与 intent 分开：明确要求/局部改写默认 direct，已选方向走 reuse，开放任务或助手显式请求走 plan；体验页规划语义保持。rewrite-unit 明确作为文字编辑并提供完整替换原文；助手没有选定方法时按操作补续写/润色方法。方向与资料仍由既有冻结 session、目标及修订校验管理，不新建计划存储。正文工具只返回一份 proposalChanges，候选和最终任务交付仍用原事务。完整候选可在运行中查看，采用仍等待任务及本地收尾；已结束的纯写稿无需额外模型总结。
+
+## 2026-11-06 体验/跑团 Core 0.16 接线
+
+原`src/stores/gameStore.js`仅组合Host端口并把`createExperienceRuntime`的状态工厂与动作绑定到Pinia。领域运行时不依赖Pinia，也不复制状态；原服务路径消费固定Core子路径。会话写手和卸载flush仍在Host，普通状态变更、生成提交及恢复语义由共享运行时负责。
+
+完整回合协调器仍是正文、快照、状态提取、回执与最终保存的唯一事务入口。失败/取消恢复、旧请求owner校验、分支可见性和显式重试保留。检定先耐久保存再叙述；归档使用冻结scope/receipt，成功确认前保留outbox。历史端口和活动任务按各Host工厂隔离；锁与RNG经能力注入，不在Core访问navigator或crypto。
+
+主Pinax保留原模型/Pi可选通道、提示快照与请求记录；Pinix保留自身叙事通道，不为共享运行时新增Web专用Pi依赖。Pinix移除继承旧版的硬编码输出长度，并使用共享跑团场景上下文。未改提示词文风、作者正文或现有UI。运行验证与证据边界见STATUS/LOG，SQLite正式文件写入适配与设备验收另列。
+
+## 2026-11-06 Node 正式文件 Host
+
+[文件 Store 与操作接口](./project-file-stores.md)提供六类Core Store和大纲边的Node文件参考实现。项目正文/设定/大纲复用localMirror事务；全局笔记/素材使用显式指定的集合文件和Core日志协调器，不映射项目构思或来源归档。BookStore只在Host已创建绑定的目录操作，移除仅取消登记。
+
+镜像meta.json保留文档ID/修订/侧车及未知字段，正文仍来自Markdown。MCP章节标题/顺序和SQLite稳定ID投影复用该绑定；元数据变化也会触发派生目录过期。正式文件操作入口是local-only的POST /api/localmirror/core-operation，携带文件快照和稳定operationId，不改MCP提案权限。
+
+现有浏览器保存模式未自动切换，Pinix/Next与Core包本轮未改。Windows/移动、真实模型及独立进程并发写入仍未验收；默认存储切换、原生适配和性能优化由平台/界面分工继续。

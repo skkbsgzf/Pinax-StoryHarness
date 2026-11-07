@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { loadDocumentMetadata } from '../services/projectDocumentMetadata.js'
 import {
   PROJECT_SPEC,
   createLocalMirrorService
@@ -26,6 +27,56 @@ function readManifest(root) {
     return JSON.parse(fs.readFileSync(path.join(root, MARKER), 'utf-8'))
   } catch {
     return null
+  }
+}
+
+function realPathOf(target) {
+  try {
+    return fs.realpathSync(target)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 落点校验（写入前必过）：目标父目录的 realpath 必须落在项目 realpath 之内。
+ * 只做词法 path.join 时，项目内一个指向项目外的符号链接目录就能把写入带出项目根，
+ * 与「绝不写到项目外」的承诺相反；这里用 realpath 把符号链接解掉再判包含性。
+ */
+export function assertInsideProject(resolved, target) {
+  const root = resolved?.realRoot || resolved?.root
+  if (!root) throw failure('ERR_PROJECT_REQUIRED', '缺少项目根，无法校验落点。')
+  const parent = path.dirname(target)
+  const realParent = realPathOf(parent)
+  if (!realParent) throw failure('ERR_TARGET_OUTSIDE', `目标目录不存在或不可解析：${parent}`)
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`
+  if (realParent !== root && !realParent.toLowerCase().startsWith(prefix.toLowerCase())) {
+    throw failure('ERR_TARGET_OUTSIDE', `目标越出项目根（经符号链接）：${target}`)
+  }
+  try {
+    if (fs.lstatSync(target).isSymbolicLink()) {
+      throw failure('ERR_TARGET_SYMLINK', `目标是符号链接，拒绝写入：${target}`)
+    }
+  } catch (error) {
+    if (error?.code === 'ERR_TARGET_SYMLINK') throw error
+    // 目标还不存在（新建），忽略。
+  }
+  return target
+}
+
+/**
+ * 读工具不得触发镜像事务回滚：既有 mirror service 在读世界书/约束时会
+ * recoverMirrorTransaction()，残留事务日志下它会 rmSync 掉整个项目目录再回滚备份。
+ * MCP 的读工具对外声明 readOnlyHint:true，这里先探测事务日志，命中就类型化拒绝，
+ * 把回滚决定权交回应用（作者可以在应用里完成或撤销那次同步）。
+ */
+export function assertNoPendingMirrorTransaction(root) {
+  const journal = `${root}.pinax-sync.json`
+  if (fs.existsSync(journal)) {
+    throw failure(
+      'ERR_MIRROR_TRANSACTION_PENDING',
+      `项目存在未完成的镜像事务（${journal}）；请先在 Pinax 应用内完成或撤销那次同步。MCP 读工具不会替你回滚——回滚会删除项目目录。`
+    )
   }
 }
 
@@ -71,7 +122,7 @@ export function resolveProject({ projectPath, projectId } = {}) {
     if (manifest.spec && manifest.spec !== PROJECT_SPEC) {
       throw failure('ERR_SPEC_MISMATCH', `项目范式 ${manifest.spec} 与当前支持的 ${PROJECT_SPEC} 不匹配。`)
     }
-    return { root, manifest, entry: registryEntry(root) }
+    return { root, realRoot: realPathOf(root) || root, manifest, entry: registryEntry(root) }
   }
 
   const entry = service.listProjects().find((item) => item.projectId === requestedId || item.bookId === requestedId)
@@ -84,34 +135,48 @@ export function resolveProject({ projectPath, projectId } = {}) {
   }
   const manifest = readManifest(root)
   if (!manifest) throw failure('ERR_NOT_LOCAL_PROJECT', `项目缺少 .pinax/project.json：${root}`)
-  return { root, manifest, entry }
+  return { root, realRoot: realPathOf(root) || root, manifest, entry }
 }
 
 function chapterFiles(root) {
   const dir = path.join(root, '正文')
-  if (!fs.existsSync(dir)) return []
-  return fs.readdirSync(dir)
+  if (!fs.existsSync(dir)) return { files: [], total: 0, truncated: false }
+  const all = fs.readdirSync(dir)
     .filter((name) => /\.(?:md|txt)$/iu.test(name))
     .sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }))
-    .slice(0, 500)
-    .map((name) => path.join(dir, name))
+  const binding = loadDocumentMetadata(root)?.chapterFiles
+  if (binding) {
+    const positions = new Map(Object.keys(binding).map((name, index) => [name, index]))
+    all.sort((a, b) => (positions.get(a) ?? Number.MAX_SAFE_INTEGER) - (positions.get(b) ?? Number.MAX_SAFE_INTEGER))
+  }
+  const files = all.slice(0, 500)
+  return { files: files.map((name) => path.join(dir, name)), total: all.length, truncated: all.length > files.length }
 }
 
-function chapterTitle(name, index) {
+function chapterTitle(name, index, root) {
+  const title = root ? loadDocumentMetadata(root)?.chapterFiles?.[name]?.record?.title : undefined
+  if (typeof title === 'string') return title
   return name.replace(/\.(?:md|txt)$/iu, '').replace(/^\d+-/, '').trim() || `章节 ${index + 1}`
 }
 
 export function listChapters(root) {
-  return chapterFiles(root).map((file, index) => {
+  const { files } = chapterFiles(root)
+  return files.map((file, index) => {
     let bytes = 0
     try { bytes = fs.statSync(file).size } catch { /* 读不到就给 0，不阻断列表 */ }
     return {
       index,
-      title: chapterTitle(path.basename(file), index),
+      title: chapterTitle(path.basename(file), index, root),
       file: `正文/${path.basename(file)}`,
       bytes
     }
   })
+}
+
+/** 章节总量与是否被 500 上限截断（如实透出，别让读者以为只有 500 章）。 */
+export function chapterStats(root) {
+  const { total, truncated } = chapterFiles(root)
+  return { total, truncated }
 }
 
 function readText(file) {
@@ -121,7 +186,7 @@ function readText(file) {
 }
 
 export function readChapter(root, { index, title, offset = 0, maxChars = 20000 } = {}) {
-  const files = chapterFiles(root)
+  const { files } = chapterFiles(root)
   if (!files.length) throw failure('ERR_NO_CHAPTERS', '项目「正文/」下没有可读章节。')
 
   const numericIndex = index === undefined || index === null || index === '' ? null : Number(index)
@@ -130,11 +195,11 @@ export function readChapter(root, { index, title, offset = 0, maxChars = 20000 }
     target = numericIndex
   } else if (typeof title === 'string' && title.trim()) {
     const wanted = title.trim()
-    target = files.findIndex((file, i) => chapterTitle(path.basename(file), i) === wanted)
-    if (target < 0) target = files.findIndex((file, i) => chapterTitle(path.basename(file), i).includes(wanted))
+    target = files.findIndex((file, i) => chapterTitle(path.basename(file), i, root) === wanted)
+    if (target < 0) target = files.findIndex((file, i) => chapterTitle(path.basename(file), i, root).includes(wanted))
   }
   if (target < 0 || target >= files.length) {
-    const available = files.slice(0, 20).map((file, i) => chapterTitle(path.basename(file), i))
+    const available = files.slice(0, 20).map((file, i) => chapterTitle(path.basename(file), i, root))
     throw failure('ERR_CHAPTER_NOT_FOUND', `未找到章节。可用章节（前 20）：${available.join(' / ')}`)
   }
 
@@ -144,7 +209,7 @@ export function readChapter(root, { index, title, offset = 0, maxChars = 20000 }
   const slice = content.slice(start, start + limit)
   return {
     index: target,
-    title: chapterTitle(path.basename(files[target]), target),
+    title: chapterTitle(path.basename(files[target]), target, root),
     file: `正文/${path.basename(files[target])}`,
     chars: content.length,
     offset: start,
@@ -155,6 +220,7 @@ export function readChapter(root, { index, title, offset = 0, maxChars = 20000 }
 }
 
 export function readWorldbook(root) {
+  assertNoPendingMirrorTransaction(root)
   const dir = path.join(root, '世界书')
   if (!fs.existsSync(dir)) return { entries: [], warnings: ['项目没有「世界书」目录'] }
   return service.readWorldbookFolder(dir)
@@ -228,6 +294,7 @@ export function readOutline(root, { maxNodes = 300 } = {}) {
 }
 
 export function buildProjectContext(root, { manifest, entry }) {
+  assertNoPendingMirrorTransaction(root)
   const chapters = listChapters(root)
   const outline = readOutline(root)
   const worldbook = listWorldbook(root, { limit: 200 })

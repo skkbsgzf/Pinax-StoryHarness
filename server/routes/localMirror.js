@@ -16,6 +16,8 @@
 import express from 'express'
 import { createLocalMirrorService } from '../services/localMirrorService.js'
 import { startFolderPick, getFolderPickResult } from '../services/nativeFolderPicker.js'
+import { runProjectCatalog } from '../services/projectCatalogService.js'
+import { runFileProjectCommand } from '../services/fileProjectCommands.js'
 
 export function createLocalMirrorRouter({ service = createLocalMirrorService() } = {}) {
   const router = express.Router()
@@ -27,8 +29,49 @@ export function createLocalMirrorRouter({ service = createLocalMirrorService() }
     return true
   }
 
-  router.get('/capabilities', (_req, res) => res.json({ ok: true, localFiles: !Boolean(String(process.env.PINAX_PUBLIC_ORIGINS || '').trim()), protocolVersion: 2 }))
+  router.get('/capabilities', (_req, res) => res.json({ ok: true, localFiles: !String(process.env.PINAX_PUBLIC_ORIGINS || '').trim(), protocolVersion: 2 }))
   router.use((_req, res, next) => { if (localOnly(res)) next() })
+
+  // Explicit derived-catalog operations. Source files and mirror saves retain
+  // their existing owners; no request starts background indexing implicitly.
+  router.post('/catalog', async (req, res) => {
+    const controller = new AbortController()
+    const abort = () => controller.abort()
+    const closed = () => { if (!res.writableEnded) abort() }
+    req.once('aborted', abort)
+    res.once('close', closed)
+    try {
+      const { projectPath, projectId, ...request } = req.body || {}
+      let root = projectPath, expectedProjectId
+      if (!root && typeof projectId === 'string' && projectId.trim()) {
+        const entry = service.listProjects().find(item => item.projectId === projectId || item.bookId === projectId)
+        if (!entry) return res.status(404).json({ error: 'ERR_NOT_LOCAL_PROJECT', message: '没有绑定的本地项目文件夹' })
+        root = entry.rootPath
+        expectedProjectId = entry.projectId
+      }
+      const result = await runProjectCatalog(root, request, { expectedProjectId, signal: controller.signal })
+      return res.json({ ok: true, ...result })
+    } catch (error) {
+      if (controller.signal.aborted || res.destroyed) return
+      const status = ['CATALOG_STALE', 'CATALOG_REVISION_MISMATCH', 'CATALOG_NOT_INITIALIZED', 'CATALOG_PROJECT_MISMATCH', 'CATALOG_MIRROR_PENDING'].includes(error.code) ? 409
+        : ['CATALOG_INPUT', 'CATALOG_QUERY', 'CATALOG_PATH', 'CATALOG_PROJECT_REQUIRED'].includes(error.code) ? 400
+          : error.code === 'CATALOG_LOCAL_ONLY' ? 403 : 500
+      return res.status(status).json({ error: error.code || 'CATALOG_ERROR', message: error.message, details: error.details })
+    } finally {
+      req.removeListener('aborted', abort)
+      res.removeListener('close', closed)
+    }
+  })
+
+  router.post('/core-operation', async (req, res) => {
+    try {
+      const result = await runFileProjectCommand(req.body, { service })
+      return res.status(result.ok ? 200 : 409).json(result)
+    } catch (error) {
+      const status = error.code === 'ERR_LOCAL_ONLY' ? 403 : error.code === 'ERR_INVALID_INPUT' ? 400 : 409
+      return res.status(status).json({ ok: false, error: { code: error.code || 'IO_FAILED', message: error.message } })
+    }
+  })
 
   router.get('/sync-state', (req, res) => {
     try { res.json({ ok: true, ...service.readSyncState(String(req.query.bookId || '')) }) }

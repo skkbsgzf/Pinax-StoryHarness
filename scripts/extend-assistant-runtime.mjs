@@ -2,10 +2,23 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 const root = path.resolve(import.meta.dirname, '..')
-export const assistantRuntimeFiles = ['runtime-extensions/assistantSession.js', 'runtime-extensions/assistantContinuation.js', 'shared/assistantEntryDetails.js', 'shared/assistantWritingMethods.js', 'runtime-extensions/assistantMethodTool.js', 'runtime-extensions/assistantManuscriptTool.js', 'runtime-extensions/assistantNarrativeExchange.js', 'runtime-extensions/requestModelTransport.js', 'runtime-extensions/assistantKnowledgeTool.js', 'runtime-extensions/assistantProposalTool.js', 'runtime-extensions/assistantNarrativeTool.js', 'runtime-extensions/assistantObservability.js', 'runtime-extensions/assistantTask.js', 'runtime-extensions/assistantWorkspaceTool.js', 'shared/assistantEditProposal.js', 'shared/assistantPermission.js', 'shared/requestModelConfig.js', 'shared/assistantUserInput.js', 'runtime-extensions/assistantSteering.js']
+export const assistantRuntimeFiles = ['runtime-extensions/assistantCompactionTransport.js', 'shared/assistantErrors.js', 'runtime-extensions/assistantSession.js', 'runtime-extensions/assistantContinuation.js', 'shared/assistantEntryDetails.js', 'shared/assistantWritingMethods.js', 'runtime-extensions/assistantMethodTool.js', 'runtime-extensions/assistantManuscriptTool.js', 'runtime-extensions/assistantNarrativeExchange.js', 'runtime-extensions/requestModelTransport.js', 'runtime-extensions/assistantKnowledgeTool.js', 'runtime-extensions/assistantProposalTool.js', 'runtime-extensions/assistantNarrativeTool.js', 'runtime-extensions/assistantObservability.js', 'runtime-extensions/assistantTask.js', 'runtime-extensions/assistantWorkspaceTool.js', 'shared/assistantEditProposal.js', 'shared/assistantPermission.js', 'shared/requestModelConfig.js', 'shared/assistantUserInput.js', 'runtime-extensions/assistantSteering.js']
+export function copyAssistantRuntimeFiles(target) {
+  for (const file of assistantRuntimeFiles) fs.copyFileSync(path.join(root, file), path.join(target, path.basename(file)))
+  // Runtime delivery carries the pinned Core contracts, not a second hand-maintained copy.
+  const coreRoot = path.join(root, 'node_modules/@pinax/core/src/agent')
+  for (const name of ['assistantEntryDetails', 'assistantEditProposal', 'assistantPermission', 'assistantWritingMethods', 'requestModelConfig', 'assistantUserInput', 'assistantErrors']) {
+    fs.copyFileSync(path.join(coreRoot, `${name}.js`), path.join(target, `${name}.js`))
+  }
+  fs.copyFileSync(path.join(coreRoot, 'nativeAssistantSession.js'), path.join(target, 'nativeAssistantSessionCore.js'))
+  const proposalFile = path.join(target, 'assistantEditProposal.js')
+  const proposalSource = fs.readFileSync(proposalFile, 'utf8')
+  if (!proposalSource.includes('{ idFactory } = {}')) throw new Error('Pinned Core identity adapter anchor changed')
+  fs.writeFileSync(proposalFile, proposalSource.replace('{ idFactory } = {}', '{ idFactory = () => `assistant-${globalThis.crypto.randomUUID()}` } = {}'))
+}
 export function extendAssistantRuntime(directory) {
   const target = path.join(directory, 'dist/pinax')
-  for (const file of assistantRuntimeFiles) fs.copyFileSync(path.join(root, file), path.join(target, path.basename(file)))
+  copyAssistantRuntimeFiles(target)
   const patch = (name, edits) => {
     let source = fs.readFileSync(path.join(target, name), 'utf8')
     for (const [before, after] of edits) {
@@ -68,6 +81,8 @@ export function extendAssistantRuntime(directory) {
     ['assistantUserInput: true,', 'assistantSteering: true, assistantUserInput: true,']
   ])
   patch('../llm.js', [
+    ['contextWindow: 128_000,', 'contextWindow: t.contextWindow ?? 128_000,'],
+    ['maxTokens: 16_384,', 'maxTokens: t.maxOutputTokens ?? 16_384,'],
     ['import { createModels,', 'import { withRequestModelTransport } from "./pinax/requestModelTransport.js";\nimport { createModels,'],
     ['return withSystemFolding(models, profile);', 'return withRequestModelTransport(withSystemFolding(models, profile), t);'],
     ['return withSystemFolding(models, profile);', 'return withRequestModelTransport(withSystemFolding(models, profile), t);']
@@ -188,5 +203,5 @@ export async function runCompleteStream(cfg, request, onDelta, signal, onEvent) 
     '                    res.write("data: [DONE]\\n\\n");',
     '                    res.write("data: " + JSON.stringify({ type: "complete", result }) + "\\n\\n");\n                    res.write("data: [DONE]\\n\\n");'
   ]])
-  return createHash('sha256').update(fs.readFileSync(import.meta.filename)).update(assistantRuntimeFiles.map(file => fs.readFileSync(path.join(root, file))).reduce((all, buffer) => Buffer.concat([all, buffer]), Buffer.alloc(0))).digest('hex')
+  return createHash('sha256').update(fs.readFileSync(path.join(target, 'nativeAssistantSessionCore.js'))).update(fs.readFileSync(import.meta.filename)).update(assistantRuntimeFiles.map(file => fs.readFileSync(path.join(target, path.basename(file)))).reduce((all, buffer) => Buffer.concat([all, buffer]), Buffer.alloc(0))).digest('hex')
 }
