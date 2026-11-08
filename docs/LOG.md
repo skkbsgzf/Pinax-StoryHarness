@@ -1,5 +1,13 @@
 # 开发日志
 
+## 2026-11-09 · W1–W2 wikihub：pedia/v1 枢纽格式＋自闭环 wiki 视图（Next 线，本地）
+
+- 作者裁定：以自有 NovelPedia 的 **pedia/v1 统一数据规范为枢纽格式（hub）**，实现三载体双向转换＋wiki 自闭环视图（NovelPedia 逻辑结构×Pinax Next 视觉）。参照仓库 ref-Novelpedia 只读。
+- **W1 数据层（c3e4a6b5）**：`next/wikihub/pediaSchema.mjs` vendored pedia/v1（四层/11 槽/34→11 category_map/信封校验/稳定 id，纯 JS SHA-1，注明来源 commit）；`convert.mjs` 三载体双向纯函数转换器——worldbook↔hub worldview 全字段映射（cat/type/目录三级槽位归并、relations 的 id→名解析、stance/weight 等入 how、无损快照走 `next.*` 内部枢纽）、novel/script→hub 锚点（一章/一集=plot.events，结构映射非 LLM 抽取）、`@《…》`↔relations 互转；roundtrip 铁保证（有快照无损还原）＋12 条对照测试。
+- **W2 视图层（fb4e32c1）**：`render.mjs`（1326 行）hub→单文件自闭环 HTML——左索引树（details 折叠+搜索）、阅读中栏（Markdown 渲染+`@《…》`蓝链）、右上 Infobox、hash 路由零 fetch、断网双击即用；视觉走 Pinax Next 令牌（五档字号/圆角档/`--font-interface`，测试帧死禁裸 px）；安全（全转义+内嵌 JSON 防逃逸+外链只渲染文本）。`build.mjs` 生成管线（世界书/→hub→`.pinax/wikihub/index.html`+hub.json，含 CLI）。9 条合同测试。
+- **pane 挂载受阻（执行方按工单停下，证据充分）**：①custom/app panes 被 `carrier-v3-rollout.test.mjs:115/:119` 精确集断言钉死，新增 pane 会让 verify:next 变红且该测试不在白名单；②`pinax-plugin://` 通道只供插件目录文件（`.pinax/wikihub/` 越界 403）且 CSP `script-src 'self'` 拦内联脚本——适配即破坏单文件自闭环；③external-app 通道只认 http 回环（需起服务，与断网可用冲突）；④无项目打开自动生成的扩展点。**数据层与渲染器已可用（CLI 可对任意项目生成 wiki 页），挂载方案等作者裁定**（候选：扩精确集断言＋为静态生成页开 pane 通道（shell 契约变更）/hub 数据喂 68-R2 原生三栏版式（更大 shell 工作）/先作导出物双击使用）。
+- 执行：两批 Qoder CLI qoduck 一次过（11/17 分钟，零修复轮）；工作流 dwfrun-a973410b；调度方 salvage：两笔范围核对＋禁区终检零触碰（shell 一字未动与受阻报告自洽）。
+
 ## 2026-11-08 · 收尾三批：T21 四载体＋T1 预存红修复＋T11b 会话对表（Next 线，本地）
 
 - **T21 四载体收口（10b8803e）**：video/online 切 `fileRecordTools`；script/dossier 切 core `fileScriptTools`/`fileDossierTools`（core 0.16 与旧内联实现逐字同源，宿主只留端口注入，第二份拷贝消灭）；`jsonRecords.mjs` 源码引用归零（本体按工单保留待核删）。新增对照测试 14 条。载体特有语义归宿主：video 渲染/原件归档（无入口，已知缺口）、online 只记不连、dossier 的 kb_search 边界。
