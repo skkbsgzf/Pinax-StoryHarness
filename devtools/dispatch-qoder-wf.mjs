@@ -37,7 +37,7 @@ const child = spawn(QODER, [
   cwd: REPO,
   stdio: ['pipe', 'pipe', 'pipe'],
   shell: true,
-  timeout: 5_400_000
+  timeout: 10_800_000
 })
 
 const logFd = openSync(LOG, 'w')
