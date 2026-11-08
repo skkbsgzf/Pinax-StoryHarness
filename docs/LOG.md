@@ -1,5 +1,13 @@
 # 开发日志
 
+## 2026-11-08 · T4 novel 载体接 @pinax/core 样板批（Next 线，本地）
+
+- 章节读/存的内部实现切到 core 0.16.0：`pinax_chapter_read` 走 `createChapterService().read`，`pinax_chapter_save` 走 create（expectedRevision 0）/save（applyChapterPatch 语义：revision 递增、content-only 清结构化侧车、STALE 判定）——保存语义从此只在 core 一处决定。工具名、入参、回执形状、`PINAX_*` 错误码、三道闸（归属/作用域/并发）全部不变。
+- 新增 `next/carriers/novel/chapterStore.mjs`：fileService→ChapterStore 薄适配器；CORE 错误码在 `toHostResult` 一处翻译不外泄；盘上无文件按第 0 版建档（与 fileService.write 同名口径一致，否则该报 STALE 的保存会被前置读改报 INVALID_INPUT）。新增 `next/tests/carrier-novel-core.test.mjs` core 语义对照。
+- 列表与改名（卷序/标题/前缀）是载体语义，core 端口不重造——留宿主实现，属已知缺口而非遗漏；错误翻译表与适配器模式即为 T5–T10 的复制范式。
+- 执行：Qoder CLI qoduck（实现 8min；修复轮 3min 逐行核对后未改码）＋Qwen3.8-Flash（2min，量化定位 T1 根因在禁区后未改码）——两轮"修复"都正确拒绝越界，workflow 门禁的 `&&` 链无法表达已知红是流程缺陷（记 T20）。调度方 salvage：diff 禁区零触碰复核＋分段门禁。
+- 门禁：内核 835 测 834 过（1 败＝T1 预存红，工单范围外）；UI 251/251；lint 0；验收 44/44；build:next＋打包断言全过。工作流 dwfrun-052265ce（qoduck 实现＋双修复轮）。
+
 ## 2026-11-08 · 仓库收拢与上游 87cfe39 合入（Next 线，本地）
 
 - 上游 main 16 提交（@pinax/core 0.16.0 固定包＋core:dev/update 工具链＋fileProjectStores/projectCatalog＋b67331a MCP 安全修复）合入 feat/pinax-electron-next：2d9114d（冲突仅 4 文档＋package.json 双方脚本并集）＋9746a21（服务端 MCP 0.5.0→0.6.0 工具面合同同步：内核 19→20，hints 补 pinax_project_catalog、写族闸按 pinax_project_index 同款派生轨收编、骨架正则跟 KIND_TEMPLATES Object.freeze 形状、15 文件计数断言对齐）。
