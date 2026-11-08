@@ -1,5 +1,13 @@
 # 开发日志
 
+## 2026-11-08 · 收尾三批：T21 四载体＋T1 预存红修复＋T11b 会话对表（Next 线，本地）
+
+- **T21 四载体收口（10b8803e）**：video/online 切 `fileRecordTools`；script/dossier 切 core `fileScriptTools`/`fileDossierTools`（core 0.16 与旧内联实现逐字同源，宿主只留端口注入，第二份拷贝消灭）；`jsonRecords.mjs` 源码引用归零（本体按工单保留待核删）。新增对照测试 14 条。载体特有语义归宿主：video 渲染/原件归档（无入口，已知缺口）、online 只记不连、dossier 的 kb_search 边界。
+- **T1 预存红真实转绿（153edd6a）**：审计发现 comic AGENT.md 3340 字（被单份 1200 上限截断——约 2140 字根本进不了信封），瘦到 1037＝「把丢掉的信息找回来」而非纯减法；十二文件合计 8202→7837（余量 163），**预算线 8000 未动**（未触最后手段）。kernel 回执 `allGreen=true, knownRed=[]`，`carrier-v3-rollout` 6/6 通过。KNOWN_RED 名单同批退役（机制保留、名单清空）。注意：总余量仅 163 字，再往任何 AGENT.md 加实质内容会重新触发总量闸。
+- **T11b 会话对表（85645dfa）**：`next/sessionStore.mjs` 切 core `adapters/fileSessionStore`（注入 fs/join/fail/ok/emitProjectEvent）；对照后发现**落盘层规则本就同源**——漂移的是「持有副本」这一事实，本批纠正持有而非行为；分支/指针 core 已带、宿主零分叉。kernel 876/876（+3）。**真实漂移一处**：`next/shell/agentSessions.mjs` 的 `persist()` 异步失败降级口径与 core 0.11 不同（该文件在 shell 禁区）——记后续批；主入口 Pi 装配对表亦留后续。
+- 执行：三批全由 Qoder CLI qoduck 一次过（5/0/3 分钟，零修复轮）；工作流 dwfrun-e214c6eb；调度方 salvage：三笔提交范围核对＋KNOWN_RED 退役后复跑门禁。
+- 至此 **11 载体全部接 @pinax/core 单一真源**；门禁 kernel 段全绿无豁免。
+
 ## 2026-11-08 · T6–T10 五域接 @pinax/core 战役（Next 线，本地）
 
 - **notes／material／comic／experience／worldbook 五域记录语义全部切 core**（五连提交 fef5203a→0fa2a134→c864b269→29242f4f→3de18c11，每域独立 commit、独立过 gate v2 五段＋范围守卫＋推送核实）。加上此前 T4 novel、T5 outline，**七载体已接 core**。

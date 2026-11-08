@@ -5,9 +5,10 @@ import { execSync } from 'node:child_process'
 
 process.chdir('D:/Pinax-next')
 
-const KNOWN_RED = Object.freeze([
-  { file: 'carrier-v3-rollout.test.mjs', name: '须知真的会进上下文信封', ticket: 'T1：世界书 AGENT.md 8000 字记账（瘦世界书 AGENT.md 或调预算线，裁定后修掉并删除本条）' }
-])
+// known-red 名单：门禁放行的已知失败（按用例名子串匹配）。空＝当前无豁免。
+// 用法：出现新的已知债时在此登记 { file, name, ticket }，修掉后立刻删除——别让豁免变永久。
+// 历史：T1（世界书 AGENT.md 8000 字记账）曾在此挂账，2026-11-08 T1 批瘦身后真实转绿，条目退役。
+const KNOWN_RED = Object.freeze([])
 
 function run(cmd, timeout) {
   try {
