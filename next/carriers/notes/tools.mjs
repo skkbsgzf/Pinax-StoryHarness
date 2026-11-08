@@ -1,5 +1,7 @@
+import { createNoteService } from '@pinax/core/usecases/noteService'
 import { fail, ok } from '../../kernel/errors.mjs'
 import { NOTES_CARRIER, NOTES_CARRIER_ID } from './manifest.mjs'
+import { compareNoteNames, createNotesStore, toHostResult } from './noteStore.mjs'
 
 /**
  * 构思载体的工具实现（协议 v1.1-A：从小说载体整块迁出，语义一字不改）。
@@ -7,16 +9,19 @@ import { NOTES_CARRIER, NOTES_CARRIER_ID } from './manifest.mjs'
  * 单篇超长按 NOTE_LIST_TEXT_CHARS 截断并在条目上标注（保存是覆盖式，截断时别整篇回写）。
  * pinax_notes_save 是它的写入口：新建传 expectedRevision 0，改稿必须带回 list 给的修订号，
  * 不符即 PINAX_STALE_REVISION，不覆盖、不合并；写 构思/ 走文件服务三道闸（归属＋file:构思:rw＋并发）。
+ *
+ * T6：笔记记录语义已切到 @pinax/core（domain/note ＋ usecases/noteService）；
+ * 目录枚举与清单投影（排序、序号、截断）仍是宿主语义，落盘与修订并发仍在文件服务。
  */
 const NOTES_DIR = NOTES_CARRIER.dataDirs.notes
 const MAX_TEXT_CHARS = 200_000
 /** 列表随篇带回正文的上限（与 pinax_chapter_read 的默认 maxChars 同一档）；超出截断并在条目上标注。 */
 const NOTE_LIST_TEXT_CHARS = 20_000
-const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
 
 export function createNotesTools(context = {}) {
   const pluginId = context.pluginId ?? NOTES_CARRIER_ID
   const fileService = context.fileService ?? null
+  let domain = null
 
   function needService() {
     return fileService
@@ -24,8 +29,19 @@ export function createNotesTools(context = {}) {
       : fail('INVALID_INPUT', `载体 ${pluginId} 的工具需要已打开项目的文件服务；空框架下请回落内核工具`, { pluginId })
   }
 
-  /** 构思目录＝速记序列：与章节同一个列法。速记是随手记的短文件，正文随条目一起带回，
-   *  省一次单独的读取；单篇超长按 NOTE_LIST_TEXT_CHARS 截断并在条目上标注。 */
+  function notesDomain() {
+    if (!domain) {
+      const store = createNotesStore({ pluginId, fileService, dir: NOTES_DIR })
+      domain = { store, service: createNoteService({ store }) }
+    }
+    return domain
+  }
+
+  /**
+   * 构思目录＝速记序列：按文件名排序逐篇读（Core 定标题/正文/字数的记录形状），
+   * 正文随条目一起带回，单篇超长按 NOTE_LIST_TEXT_CHARS 截断并标注。
+   * 读不动的那篇保留旧口径：正文留空、修订号仍按盘上报（清单不因一篇坏文件整列失败）。
+   */
   async function listNotes() {
     const missing = needService()
     if (missing) return missing
@@ -34,20 +50,22 @@ export function createNotesTools(context = {}) {
     const names = listed.value.entries
       .filter((entry) => entry.kind === 'file' && /\.md$/iu.test(entry.name))
       .map((entry) => entry.name)
-      .sort((a, b) => collator.compare(a, b))
+      .sort(compareNoteNames)
+    const { service } = notesDomain()
     const notes = []
     for (const name of names) {
       const relativePath = `${NOTES_DIR}/${name}`
-      const read = await fileService.read({ pluginId, dir: NOTES_DIR, file: name })
+      const read = await service.read(name)
+      const text = read.ok ? read.value.content : ''
       notes.push({
         index: notes.length,
-        title: name.replace(/\.md$/iu, ''),
+        title: read.ok ? read.value.title : name.replace(/\.md$/iu, ''),
         file: relativePath,
         name,
         revision: read.ok ? read.value.revision : await fileService.revisionOf(relativePath),
-        text: read.ok ? read.value.text.slice(0, NOTE_LIST_TEXT_CHARS) : '',
-        totalChars: read.ok ? read.value.text.length : 0,
-        truncated: read.ok ? read.value.text.length > NOTE_LIST_TEXT_CHARS : false
+        text: text.slice(0, NOTE_LIST_TEXT_CHARS),
+        totalChars: text.length,
+        truncated: text.length > NOTE_LIST_TEXT_CHARS
       })
     }
     return ok({ notes, total: notes.length })
@@ -105,14 +123,20 @@ export function createNotesTools(context = {}) {
         const relative = toDirRelative(NOTES_DIR, target)
         if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '构思速记文件名必须以 .md 结尾', { file: target })
 
-        const written = await fileService.write({ pluginId, dir: NOTES_DIR, file: relative, text: args.text, expectedRevision: args.expectedRevision })
-        if (!written.ok) return written
+        const { store, service } = notesDomain()
+        const saved = args.expectedRevision === 0
+          ? await service.create({ id: relative, title: relative.split('/').pop().replace(/\.md$/iu, ''), content: args.text })
+          : await store.save(relative, { content: args.text }, { expectedRevision: args.expectedRevision })
+        const host = toHostResult(saved)
+        if (!host.ok) return host
+
+        const receipt = host.value?.fileReceipt ?? null
         return ok({
-          file: written.value.relativePath,
-          revision: written.value.revision,
+          file: receipt?.relativePath ?? `${NOTES_DIR}/${relative}`,
+          revision: Number.isSafeInteger(receipt?.revision) ? receipt.revision : host.value?.revision,
           created: args.expectedRevision === 0,
-          sha256: written.value.sha256,
-          bytes: written.value.bytes
+          sha256: receipt?.sha256 ?? null,
+          bytes: receipt?.bytes ?? null
         })
       }
     }
