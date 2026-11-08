@@ -1,5 +1,13 @@
 # 开发日志
 
+## 2026-11-08 · 仓库收拢与上游 87cfe39 合入（Next 线，本地）
+
+- 上游 main 16 提交（@pinax/core 0.16.0 固定包＋core:dev/update 工具链＋fileProjectStores/projectCatalog＋b67331a MCP 安全修复）合入 feat/pinax-electron-next：2d9114d（冲突仅 4 文档＋package.json 双方脚本并集）＋9746a21（服务端 MCP 0.5.0→0.6.0 工具面合同同步：内核 19→20，hints 补 pinax_project_catalog、写族闸按 pinax_project_index 同款派生轨收编、骨架正则跟 KIND_TEMPLATES Object.freeze 形状、15 文件计数断言对齐）。
+- 仓库收拢为唯一开发仓 D:\Pinax-next：Pinax-main／Pinax-pr 迁 D:\_pinax-retired；收拢前工作树全量（68-R4/R5 半成品：139 已跟踪 ±2.9 万行＋259 新文件）钉分支 wip/pinax-main-snapshot-20261108（4e9cf7b）已推 fork；fork main 快进至 87cfe39 恢复「上游快照」惯例。
+- 活管线工具入仓 devtools/（391c3e1）：commit-worktree 白名单扩 devtools/、工作树改指本仓根，任意目录可跑；批次产物（msg/log）仍在 D:\Pinax-e2e（非 git 区）。core 源码（D:\Pinax-core）维持上游独立仓克隆不并入——core README 明文不用 monorepo/submodule，三端靠固定 tarball 消费同一内核。
+- 门禁（本机 Node v24.14.0）：内核 834 过/1 败（carrier-v3-rollout 须知 8000 字记账——71fb4a3 上预先存在，记 T1 工单）；vitest UI 251/251；lint:next 0；验收 44/44；build:next＋打包断言全过；上游 smoke:project-catalog／smoke:file-stores exit 0。tag next-core-base-0.16（9746a21）＝core 迁移零点。
+- 工单清单 D:\Pinax-next\todo.md（T1–T19）：P0＝T1 预存红／T2 管线验证（本条即其实跑）/T3 CI 并集裁剪；P1＝T4 起逐域接 core（novel 样板先行）。
+
 ## 2026-10-20 · 漫画镜头与参考接线、宣传片 v19（main，本地）
 
 - 作者指出宣传片后三格重复，并授权完善漫画生成逻辑。用隔离虚构作品在当前页面真实复现：手部特写变肖像，无人空镜夹带人物/信封。首轮仅重排提示后仍不符合，不能把提示改动和 HTTP 200 当作修复成功。
