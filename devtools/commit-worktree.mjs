@@ -25,6 +25,9 @@ try { run('git add -A .gitattributes eslint.config.js package.json') } catch {}
 const tree = run('git write-tree').trim()
 const commit = run(`git commit-tree ${tree} -p feat/pinax-electron-next -F ${MSG_FILE}`).trim()
 run('git update-ref refs/heads/feat/pinax-electron-next ' + commit)
+// 临时索引提交后 real index 已落后 HEAD：不同步的话，下一次手动 git commit 会把旧索引
+// 整个提交上去＝幻影回滚（2026-11-08 T4 后真实发生过）。这里用干净环境跑一次 git reset 对齐。
+execSync('git reset -q', { cwd: 'D:/Pinax-next', encoding: 'utf8' })
 console.log('commit =', commit)
 const files = run('git diff --name-status ' + commit + '~1 ' + commit)
 console.log(files)
