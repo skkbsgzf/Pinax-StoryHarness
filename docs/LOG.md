@@ -1,5 +1,13 @@
 # 开发日志
 
+## 2026-11-08 · T5 outline 载体接 @pinax/core（Next 线，本地）
+
+- 大纲保存语义切 core：`planOutlineMove`（core 0.6 招牌——父存在/自环/后代环检测）进写路径，声明了 `parentId` 的文档按 core 规则拒写（`OUTLINE_CYCLE`→`PINAX_INVALID_INPUT`）；边语义（自环/端点存在/id 与 kind+端点去重）走 `createSyncOutlineEdgeService`。**读宽容/写严格**：现有含悬空边/坏节点的文档照常读出，保存时才校验；**作者原文不洗**——合法文档原样落盘，不注入 core 默认字段。
+- 新增 `next/carriers/outline/outlineStore.mjs`（适配器：OutlineNodeStore 六方法＋OutlineEdgeStore 三方法只读端口视图＋`toHostResult` 全表翻译 11 个 CORE 码，未登记落 INVALID_INPUT 不外泄）＋`next/tests/carrier-outline-core.test.mjs`（6 条对照：环/边/落盘口径）。
+- **未接**（limitations，不硬凑）：`outlineNodeService` 逐节点用例——宿主是整份文档覆盖，节点级 revision 无落点；文档修订仍归 fileService。legacy 边图层级（from→to）是宿主显示投影语义，core 的 parentId 树模型不替它发明环规则（边界已用测试钉住）。
+- 执行：Qoder CLI qoduck（9min/48 轮，一次过）；gate v2 首跑五段全绿（acceptance 44/44、kernel 841 测 840 过+T1 known-red 放行、UI 17 文件 251 用例、lint 0、bundle 含 build 全过）——**T20 的 known-red 机制首次实战生效，零修复轮**。调度方 salvage：禁区零触碰＋适配器抽查。
+- T5 范式补丁给 T6–T10：读宽容/写严格、原文不洗、端口对不齐的诚实记账（本批 2 条 limitations 是模范）。
+
 ## 2026-11-08 · T4 novel 载体接 @pinax/core 样板批（Next 线，本地）
 
 - 章节读/存的内部实现切到 core 0.16.0：`pinax_chapter_read` 走 `createChapterService().read`，`pinax_chapter_save` 走 create（expectedRevision 0）/save（applyChapterPatch 语义：revision 递增、content-only 清结构化侧车、STALE 判定）——保存语义从此只在 core 一处决定。工具名、入参、回执形状、`PINAX_*` 错误码、三道闸（归属/作用域/并发）全部不变。

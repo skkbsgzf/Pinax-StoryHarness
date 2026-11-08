@@ -1,15 +1,17 @@
 import { fail, ok } from '../../kernel/errors.mjs'
 import { OUTLINE_CARRIER, OUTLINE_CARRIER_ID } from './manifest.mjs'
+import { createOutlineDocumentStore } from './outlineStore.mjs'
 
 /**
- * 大纲载体的工具实现（协议 v1.1-A：从小说载体整块迁出，语义一字不改）。
+ * 大纲载体的工具实现（协议 v1.1-A，T5 起节点/边语义切 @pinax/core）。
  * 读盘一律走内核文件服务——归属闸、file:大纲:rw 作用域闸、修订并发都在那边。
  *
  * pinax_outline_read：优先读「大纲/outline.json」的节点与连线；只有 大纲.md 时返回原文与警告，
  *   绝不把散文编成节点树；两样都没有就如实回 INVALID_INPUT（新建项目的常态，界面据此给「新建大纲」）。
  * pinax_outline_save：整份覆盖「大纲/outline.json」——nodes 是全量（改名/增删后整份写回），
  *   不收增量、不做合并；首次建档传 expectedRevision 0，改稿必须带回 read 给的修订号。
- *   大纲的层级语义住在 edges（from→to）里，保存原样落盘。
+ *   落盘前先过 outlineStore 的 Core 校验（节点 id/重复、parentId 父存在与环、边自环/端点/去重）；
+ *   大纲的层级语义仍住在 edges（from→to）里，作者原文原样落盘。
  */
 const OUTLINE_DIR = OUTLINE_CARRIER.dataDirs.outline
 
@@ -21,6 +23,11 @@ export function createOutlineTools(context = {}) {
     return fileService
       ? null
       : fail('INVALID_INPUT', `载体 ${pluginId} 的工具需要已打开项目的文件服务；空框架下请回落内核工具`, { pluginId })
+  }
+
+  // 文件服务缺席时（空框架列工具）不建适配器：注册期不许抛。
+  function outlineStore() {
+    return createOutlineDocumentStore({ pluginId, fileService, dir: OUTLINE_DIR })
   }
 
   return [
@@ -43,24 +50,20 @@ export function createOutlineTools(context = {}) {
         if (!Number.isSafeInteger(maxNodes) || maxNodes < 1 || maxNodes > 1000) {
           return fail('INVALID_INPUT', 'maxNodes 须是 1–1000 的整数', { got: args.maxNodes })
         }
-        const structured = await fileService.read({ pluginId, dir: OUTLINE_DIR, file: 'outline.json' })
+        const store = outlineStore()
+        const structured = await store.read()
         if (structured.ok) {
-          let parsed
-          try {
-            parsed = JSON.parse(structured.value.text)
-          } catch (error) {
-            return fail('IO_FAILED', `「${OUTLINE_DIR}/outline.json」不是合法 JSON：${String(error?.message || error)}`, { path: structured.value.relativePath })
-          }
-          const nodes = Array.isArray(parsed?.nodes) ? parsed.nodes : []
-          const edges = Array.isArray(parsed?.edges) ? parsed.edges : []
+          const parsed = store.parse(structured.value.text, structured.value.relativePath)
+          if (!parsed.ok) return parsed
+          const nodes = parsed.value.nodes
           return ok({
             source: structured.value.relativePath,
             nodes: nodes.slice(0, maxNodes),
-            edges,
+            edges: parsed.value.edges,
             nodeTotal: nodes.length,
             truncated: nodes.length > maxNodes,
             revision: structured.value.revision,
-            warning: Array.isArray(parsed?.nodes) ? null : 'outline.json 里没有 nodes 数组，按空大纲返回'
+            warning: parsed.value.warning
           })
         }
         const asText = await fileService.read({ pluginId, dir: OUTLINE_DIR, file: '大纲.md' })
@@ -124,7 +127,10 @@ export function createOutlineTools(context = {}) {
           return fail('INVALID_INPUT', 'expectedRevision 必填：改稿带回 pinax_outline_read 给的修订号，首次建档传 0')
         }
         const document = { nodes: args.nodes, edges: args.edges ?? [] }
-        const written = await fileService.write({ pluginId, dir: OUTLINE_DIR, file: 'outline.json', text: JSON.stringify(document, null, 2), expectedRevision: args.expectedRevision })
+        const store = outlineStore()
+        const validated = store.validate(document)
+        if (!validated.ok) return validated
+        const written = await store.write(document, { expectedRevision: args.expectedRevision })
         if (!written.ok) return written
         return ok({
           file: written.value.relativePath,
