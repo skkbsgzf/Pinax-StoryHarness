@@ -1,5 +1,16 @@
 # 开发日志
 
+## 2026-11-08 · T6–T10 五域接 @pinax/core 战役（Next 线，本地）
+
+- **notes／material／comic／experience／worldbook 五域记录语义全部切 core**（五连提交 fef5203a→0fa2a134→c864b269→29242f4f→3de18c11，每域独立 commit、独立过 gate v2 五段＋范围守卫＋推送核实）。加上此前 T4 novel、T5 outline，**七载体已接 core**。
+- **关键发现（T7）**：记录型载体的 core 入口是 `usecases/fileRecordTools`（core 0.11 从 Next 记录载体**原样抽出**的文件规则）——注入宿主 `fail/ok` 后错误边界天然闭合，回执天生 `PINAX_*`，不需要 T4/T5 那种翻译表。`domain/material`＋`materialService` 是 Web localStorage 的扁平资料表模型，与记录载体是**模型分叉**，不硬接（诚实记账）。
+- **T8**：comic 四把工具切 `fileRecordTools`；显示选择归一切 `media/comicPanelDisplay`（take/stage 白名单，其余归 null）；`composition/dialogue` 与未知字段一个字节不改；生成链路（production/adaptation/script/shotExporter）宿主无入口不硬接；comfy.* 外部桥未触碰。
+- **T9**：域错位正确裁定——载体＝记录存取，core 0.16＝完整跑团运行时（回合事务/骰点/主持）；只切记录文献语义（`fileRecordTools`），运行时全部不接；`meta.runtimeState`（骰子池等）原样往返，用测试钉死防后来者顺手接归一器。
+- **T10**：worldbook 607 行内联实现→38 行依赖注入委托（core `fileWorldbookTools`＋`worldbookFileContract` 经 shared 单行再导出——parse/serialize 单一真源以函数引用相等钉住）；**AGENT.md 零改动**（T1 当事文件）；`worldbookFileSyncController` 双写协调器不接（Next 单持久源，接 debounce 反而改变「保存即落盘」语义）。
+- **limitations 总账**：`jsonRecords.mjs` 仍服务 video/online（script/dossier 载体同待接——`fileRecordTools` 化已是纯机械活）；逐节点 revision（outline）、comic 页级仓库模型、experience 运行时接线＝宿主模型与 core 模型错位，记账待 core 侧演进或后续批次；core 媒体二进制端口未接（工单排除）。
+- **门禁**：每域 gate v2 五段全绿后才提交（acceptance 44/44、kernel 全绿+T1 known-red 放行、UI 251、lint 0、bundle 含 build）；新增 core 对照测试 ~21 条，kernel 总数 841→约 856。**插曲**：首轮五域被调度方范围守卫的 status 解析 bug（先 trim 后 slice，`next/`→`ext/`）错杀回滚，修正（porcelain 第 4 字符起取＋派发前解析自检＋越界附原始 status 审计）后重派全过——教训入册：解析 porcelain 输出绝不能先 trim。
+- 执行：五域全由 Qoder CLI qoduck 一次过（0–7 分钟/域，零修复轮）；工作流 dwfrun-4547138c。
+
 ## 2026-11-08 · T5 outline 载体接 @pinax/core（Next 线，本地）
 
 - 大纲保存语义切 core：`planOutlineMove`（core 0.6 招牌——父存在/自环/后代环检测）进写路径，声明了 `parentId` 的文档按 core 规则拒写（`OUTLINE_CYCLE`→`PINAX_INVALID_INPUT`）；边语义（自环/端点存在/id 与 kind+端点去重）走 `createSyncOutlineEdgeService`。**读宽容/写严格**：现有含悬空边/坏节点的文档照常读出，保存时才校验；**作者原文不洗**——合法文档原样落盘，不注入 core 默认字段。
