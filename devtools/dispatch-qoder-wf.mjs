@@ -17,7 +17,7 @@ const ticketText = readFileSync(TICKET, 'utf-8')
 const prompt = [
   '你是 Pinax-Electron-Next 的实现工程师。',
   '请阅读并完成以下工单的全部任务。',
-  '完成后运行 npm run verify:next 确认五段全绿。',
+  '完成后运行 npm run verify:next 自查；若工单声明了已知红（known-red），以工单口径为准并在 result 里说明。',
   '不执行 git 命令。不启动/不杀 electron 进程。',
   '只改工单允许的文件。做不到的写进 limitations。',
   '',

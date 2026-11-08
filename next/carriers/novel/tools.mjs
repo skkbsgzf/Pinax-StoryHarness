@@ -1,6 +1,4 @@
-import { createChapterService } from '@pinax/core/usecases/chapterService'
 import { fail, ok } from '../../kernel/errors.mjs'
-import { createNovelChapterStore, toHostResult } from './chapterStore.mjs'
 import { NOVEL_CARRIER_ID } from './manifest.mjs'
 
 /**
@@ -18,12 +16,6 @@ import { NOVEL_CARRIER_ID } from './manifest.mjs'
  * 由 pinax_proposal_list / pinax_proposal_read / pinax_proposal_discard 三把读/读/弃承接（内核没有同名工具）。
  * 采纳不另开写口：作者按下的那一下仍走 pinax_chapter_save——带上当前修订号，成功后把这份提案的
  * status 写成 adopted（pinax_chapter_save 的可选 proposal 参数，元数据由文件服务原子写回）。
- *
- * T4（Core 接线）：读／存／删三把的内部改走 `@pinax/core` 的 createChapterService ＋ ChapterStore；
- * 保存语义（revision 递增、content-only 清结构化侧车、STALE 判定）只由 Core 的 applyChapterPatch 决定。
- * 工具名、入参、回执形状、PINAX_* 错误码与三道闸（归属／作用域／并发）全部不变——
- * 文件服务仍是唯一写盘出口，Core 只是它上面那层「章节该是什么语义」。
- * 列表与重命名不在 Core 的端口里（卷序／标题／前缀规则是载体语义），继续由本文件实现。
  */
 export const NOVEL_DIRS = Object.freeze({ manuscript: '正文' })
 
@@ -38,43 +30,6 @@ export function createNovelTools(context = {}) {
     return fileService
       ? null
       : fail('INVALID_INPUT', `载体 ${pluginId} 的工具需要已打开项目的文件服务；空框架下请回落内核工具`, { pluginId })
-  }
-
-  // Core 章节用例惰性建：空框架下 tools({fileService:null}) 只被用来列工具名，不能在这里抛。
-  const bookId = String(context.projectId ?? fileService?.root ?? pluginId)
-  let chapterService = null
-  function chapters() {
-    if (!chapterService) {
-      chapterService = createChapterService({
-        store: createNovelChapterStore({ pluginId, fileService, dir: NOVEL_DIRS.manuscript, listFiles: listManuscript })
-      })
-    }
-    return chapterService
-  }
-
-  /** 读一章：Core 记录里的 fileReceipt 就是文件服务原始回执，sha256／bytes 不另读一次。 */
-  async function readChapter(relative) {
-    const read = await chapters().read(bookId, relative)
-    if (!read.ok) return toHostResult(read)
-    const receipt = read.value.fileReceipt ?? {}
-    return ok({ text: read.value.content, revision: read.value.revision, sha256: receipt.sha256, bytes: receipt.bytes })
-  }
-
-  /** 存一章：新建走 create（expectedRevision 0 的语义不变），改稿走 save（patch 只带 content）。 */
-  async function saveChapter(relative, text, expectedRevision) {
-    const service = chapters()
-    const saved = expectedRevision === 0
-      ? await service.create(bookId, { id: relative, title: chapterTitle(relative), content: text })
-      : await service.save(bookId, relative, { content: text, expectedRevision })
-    const host = toHostResult(saved)
-    if (!host.ok) return host
-    const receipt = host.value.fileReceipt ?? {}
-    return ok({
-      relativePath: typeof receipt.relativePath === 'string' ? receipt.relativePath : `${NOVEL_DIRS.manuscript}/${relative}`,
-      revision: host.value.revision,
-      sha256: receipt.sha256,
-      bytes: receipt.bytes
-    })
   }
 
   /**
@@ -184,12 +139,11 @@ export function createNovelTools(context = {}) {
         }
         // 卷下的章在磁盘上是 正文/<卷>/<章>.md：读的 file 必须是相对 正文/ 的整段路径，
         // 不能拿基名（工单B 之前只列顶层，基名与相对路径恰好相同，所以没暴露）。
-        const relative = toDirRelative(NOVEL_DIRS.manuscript, located.value.file)
-        const read = await readChapter(relative)
+        const read = await fileService.read({ pluginId, dir: NOVEL_DIRS.manuscript, file: toDirRelative(NOVEL_DIRS.manuscript, located.value.file) })
         if (!read.ok) return read
         const text = read.value.text.slice(offset, offset + maxChars)
         return ok({
-          chapter: { index: located.value.index, title: located.value.title, file: `${NOVEL_DIRS.manuscript}/${relative}` },
+          chapter: { index: located.value.index, title: located.value.title, file: read.value.relativePath },
           matchedBy: located.value.matchedBy,
           text,
           offset,
@@ -235,7 +189,7 @@ export function createNovelTools(context = {}) {
         const relative = toDirRelative(NOVEL_DIRS.manuscript, target)
         if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '正文章节文件名必须以 .md 结尾', { file: target })
 
-        const written = await saveChapter(relative, args.text, args.expectedRevision)
+        const written = await fileService.write({ pluginId, dir: NOVEL_DIRS.manuscript, file: relative, text: args.text, expectedRevision: args.expectedRevision })
         if (!written.ok) return written
         const result = {
           file: written.value.relativePath,
@@ -272,15 +226,9 @@ export function createNovelTools(context = {}) {
         if (typeof args.file !== 'string' || !args.file.trim()) return fail('INVALID_INPUT', 'file 必填：要删除的章相对路径')
         const relative = toDirRelative(NOVEL_DIRS.manuscript, args.file.trim())
         if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '要删除的必须是 .md 章节', { file: args.file })
-        // 端口 remove 要 expectedRevision：删除工具没有这个参数，就用刚读到的当前修订号——
-        // 行为与批次46A 一致（删除本身不做并发闸），但适配器对直接调用者仍守 ChapterStore 合同。
-        const service = chapters()
-        const current = await service.read(bookId, relative)
-        if (!current.ok) return toHostResult(current)
-        const deleted = await service.remove(bookId, relative, { expectedRevision: current.value.revision })
-        if (!deleted.ok) return toHostResult(deleted)
-        const projectPath = `${NOVEL_DIRS.manuscript}/${relative}`
-        return ok({ file: projectPath, title: chapterTitle(projectPath), deleted: true })
+        const deleted = await fileService.deleteFile({ pluginId, dir: NOVEL_DIRS.manuscript, file: relative })
+        if (!deleted.ok) return deleted
+        return ok({ file: deleted.value.relativePath, title: chapterTitle(deleted.value.relativePath), deleted: true })
       }
     },
     {

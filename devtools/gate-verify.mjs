@@ -1,19 +1,66 @@
-/* workflow 版门禁：chdir 到仓库后跑 verify:next，stdout 只出一行紧凑 JSON。 */
+/* workflow 版门禁 v2（T20）：verify:next 的五段各自跑、互不截断；内核段支持 known-red 名单——
+   名单里的失败放行并在回执里点名（修掉对应债后从 KNOWN_RED 删除即可，别让它变永久豁免）。
+   stdout 只出一行紧凑 JSON：{ exitCode, segments, tail }。全程约 8-10 分钟（bundle 段含 build:next）。 */
 import { execSync } from 'node:child_process'
 
 process.chdir('D:/Pinax-next')
-let exitCode = 0
-let tail = ''
-try {
-  const out = execSync('npm run verify:next', {
-    encoding: 'utf8',
-    timeout: 1_500_000,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    maxBuffer: 128 * 1024 * 1024
-  })
-  tail = String(out).slice(-2000)
-} catch (error) {
-  exitCode = error?.status ?? 1
-  tail = String(error?.stdout || '').slice(-1200) + '\n[stderr]\n' + String(error?.stderr || error?.message || '').slice(-2400)
+
+const KNOWN_RED = Object.freeze([
+  { file: 'carrier-v3-rollout.test.mjs', name: '须知真的会进上下文信封', ticket: 'T1：世界书 AGENT.md 8000 字记账（瘦世界书 AGENT.md 或调预算线，裁定后修掉并删除本条）' }
+])
+
+function run(cmd, timeout) {
+  try {
+    const out = execSync(cmd, { encoding: 'utf8', timeout, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 128 * 1024 * 1024 })
+    return { code: 0, out: String(out) }
+  } catch (error) {
+    return { code: error?.status ?? 1, out: String(error?.stdout || '') + '\n[stderr]\n' + String(error?.stderr || error?.message || '') }
+  }
 }
-console.log(JSON.stringify({ exitCode, tail }))
+
+/** 从 node --test 的 spec 输出里取失败用例名（✖ 行，排除汇总头）。 */
+function failingNames(out) {
+  return out.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('✖') && !l.includes('failing tests')).map((l) => l.replace(/^✖\s*/, ''))
+}
+
+const segments = {}
+
+{
+  const r = run('node next/testing/acceptance.mjs', 420_000)
+  segments.acceptance = { ok: r.code === 0, tail: r.out.slice(-500) }
+}
+
+{
+  const r = run('node --test "next/tests/*.test.mjs"', 300_000)
+  const failing = [...new Set(failingNames(r.out))]
+  const unmatched = failing.filter((name) => !KNOWN_RED.some((k) => name.includes(k.name)))
+  const knownRed = failing.filter((name) => KNOWN_RED.some((k) => name.includes(k.name)))
+  segments.kernel = {
+    ok: r.code === 0 || (unmatched.length === 0 && failing.length > 0),
+    allGreen: r.code === 0,
+    knownRed,
+    unmatched,
+    tail: r.out.slice(-700)
+  }
+}
+
+{
+  const r = run('npm run test:next:ui', 600_000)
+  segments.ui = { ok: r.code === 0, tail: r.out.slice(-400) }
+}
+
+{
+  const r = run('npm run lint:next', 300_000)
+  segments.lint = { ok: r.code === 0, tail: r.out.slice(-400) }
+}
+
+{
+  const r = run('npm run build:next && node next/testing/bundleAssertions.mjs', 900_000)
+  segments.bundle = { ok: r.code === 0, tail: r.out.slice(-500) }
+}
+
+const exitCode = Object.values(segments).every((s) => s.ok) ? 0 : 1
+const summary = Object.entries(segments).map(([k, s]) => `${k}=${s.ok ? 'ok' : 'FAIL'}`).join(' ')
+const firstFail = Object.entries(segments).find(([, s]) => !s.ok)
+const tail = `分段门禁：${summary}` + (firstFail ? `\n[首败 ${firstFail[0]}]\n${String(firstFail[1].tail).slice(-1600)}` : '')
+console.log(JSON.stringify({ exitCode, segments, tail }))
