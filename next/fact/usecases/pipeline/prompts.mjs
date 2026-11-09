@@ -210,6 +210,42 @@ export function buildMineSettingPrompt(input = {}) {
 - 只输出 JSON 数组。`
 }
 
+/* ---------- 挖掘组 C：命名实体候选（内容驱动，保存钩子用） ---------- */
+
+export const MINE_ENTITY_SYSTEM_PROMPT = [
+  '你是小说编辑助手。从给定片段里识别具名实体（人物/地点/组织/物品/设定名），',
+  '只收原文真的写出来的名字，不编造、不做关系推理。只输出 JSON。'
+].join('')
+
+/**
+ * 命名实体候选提示词（保存钩子的内容管线用；与设定挖掘的区别是「只点名，不下定义」）。
+ * @param {Object} input
+ * @param {number} [input.chapterNo]
+ * @param {{index:number, text:string, chars:number}} input.segment
+ * @param {string[]} [input.knownNames] hub 里已有的名字（供去重，不要回报它们）
+ */
+export function buildMineEntityPrompt(input = {}) {
+  const segment = input.segment ?? {}
+  const index = Number.isInteger(segment.index) ? segment.index : 1
+  return `下面是小说原文的一个片段（第 ${input.chapterNo ?? '?'} 章 · 段 ${index}）：
+
+${str(segment.text)}
+
+【任务】找出本片段中出现的具名实体，严格按以下 JSON 输出：
+{
+  "entities": [
+    {"name": "原文里出现的名字（规范写法）", "kind": "人物|地点|组织|物品|设定"}
+  ]
+}
+
+要求：
+- 只点名，不下定义，不做关系推理，不输出 id/status/provenance。
+- 只收原文真实出现的专有名字；通用名词（老人、医院、武器等）不收。
+- 同一实体只出现一次；不同叫法分开列即可，不要合并。
+- 已知名（供去重，不要回报）：${joinList(input.knownNames)}
+- 只输出 JSON。`
+}
+
 /* ---------- 分组导出（供 usecase 统一取用） ---------- */
 
 export const EXTRACTION_PROMPTS = Object.freeze({
@@ -225,5 +261,9 @@ export const MINING_PROMPTS = Object.freeze({
   setting: Object.freeze({
     system: MINE_SETTING_SYSTEM_PROMPT,
     buildUser: buildMineSettingPrompt
+  }),
+  entity: Object.freeze({
+    system: MINE_ENTITY_SYSTEM_PROMPT,
+    buildUser: buildMineEntityPrompt
   })
 })

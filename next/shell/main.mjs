@@ -796,6 +796,11 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     factHooks: createFactHookService({
       getRoot: () => session?.projectRoot ?? null,
       getFileService: () => session?.runtime?.contextSources?.()?.fileService ?? null,
+      // F2：触发面＝写工具清单（kernel/carrier 落点表），新增写口自动接上，不必改 fact 代码。
+      // 结构动作（建骨架/整目录导入）与派生轨（索引 sync）不算「改某块内容」，不进钩子面。
+      writeTools: Object.entries({ ...KERNEL_WRITE_CLASS, ...CARRIER_WRITE_CLASS })
+        .filter(([, klass]) => !klass.structural && !klass.derived)
+        .map(([name]) => name),
       log: (entry) => serviceLogPool.append(entry)
     }),
     // 技能库设置面（批次77 任务5）：四条 skills:* 通道都转给这一份服务。

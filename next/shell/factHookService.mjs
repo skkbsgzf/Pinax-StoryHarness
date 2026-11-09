@@ -6,13 +6,14 @@ import { worldbookToHub } from '../wikihub/convert.mjs'
 import { diffValidate, readOnlyQuery, suggestCompletion } from '../fact/usecases/hookEngine.js'
 import {
   DRAFT_EXTRACTOR,
+  WRITE_HOOK_REGISTRY,
   buildDraftEntriesProposal,
   buildSuggestionProposal,
-  detectMissingEntities,
+  createWriteHookRegistry,
   draftEntryForEntity,
-  saveHookKindOf,
-  textOfSaveArgs
+  filterMissingEntities
 } from '../fact/usecases/hookWiring.js'
+import { mineNamedEntities } from '../fact/usecases/pipeline/mine.js'
 import { proposalFileName } from '../runtime/proposalStore.mjs'
 
 /**
@@ -24,9 +25,12 @@ import { proposalFileName } from '../runtime/proposalStore.mjs'
  * 的同款做法——主进程建服务，通道只转调用。
  *
  * 三个 hook（与 fact/usecases/hookEngine.js 的 routes 同口径）：
- *   保存 → diffValidate（hub 快照 before/after ＋ 保存正文预检）＋ 缺失实体草案；
+ *   保存 → diffValidate（hub 快照 before/after ＋ 保存正文预检）＋ 内容管线的实体草案；
  *   续写 → suggestCompletion（只产出提案，不改正文）；
  *   润色 → readOnlyQuery（零写入）。
+ *
+ * F2 口径：实体识别走内容管线（保存文字 → 切段 → 候选），**不再扫 @《…》**；
+ * 触发面由写工具注册表决定（host 注入 writeTools，表外加一行即接，新增写口自动覆盖）。
  *
  * 旁路铁律：钩子失败绝不让已经成功的保存／续写翻成失败；错误如实进服务通知池（warn）。
  * 开关：项目级 `.pinax/fact-hooks.json`，`{ "enabled": false }` 整体关，`hooks.onSave/onContinue/onPolish`
@@ -77,7 +81,10 @@ export function normalizeFactHookSwitch(raw) {
 /**
  * @param {Object} deps
  * @param {() => string|null} [deps.getRoot] 当前项目根（与 session.projectRoot 同源）
- * @param {() => object|null} [deps.getFileService] 当前项目文件服务（writeProposal）
+ * @param {() => object|null} [deps.getFileService] 当前项目文件服务（writeProposal／提案查重）
+ * @param {string[]} [deps.writeTools] 宿主侧写工具清单（kernel/carrier 落点表）；表外加一行即接
+ * @param {Object|null} [deps.llmPort] 可选的模型口：注入后实体识别多一路 LLM 候选，失败隔离
+ * @param {(input: object) => Promise<object>} [deps.mineEntities] 内容管线入口替换（测试注入）
  * @param {(path: string) => Promise<string>} [deps.readSwitchFile] 开关文件读取口（测试注入）
  * @param {(root: string) => Promise<{entries:Object[], book:string, note:string|null}>} [deps.snapshotHub]
  *        世界书 → hub 条目快照（默认现读「世界书/」转换，不写盘）
@@ -87,12 +94,17 @@ export function normalizeFactHookSwitch(raw) {
 export function createFactHookService({
   getRoot = () => null,
   getFileService = () => null,
+  writeTools = Object.keys(WRITE_HOOK_REGISTRY),
+  llmPort = null,
+  mineEntities = null,
   readSwitchFile = (path) => readFile(path, 'utf8'),
   snapshotHub = null,
   log = null,
   now = () => new Date()
 } = {}) {
   const readSnapshot = typeof snapshotHub === 'function' ? snapshotHub : defaultSnapshotHub
+  const hooks = createWriteHookRegistry({ writeTools })
+  const mine = typeof mineEntities === 'function' ? mineEntities : mineNamedEntities
 
   function note(level, message, data = {}) {
     if (typeof log !== 'function') return
@@ -143,13 +155,57 @@ export function createFactHookService({
   }
 
   /**
-   * 包住一次工具调用：只在保存类工具上做旁路，其他工具原样透传。
+   * 既有 proposed 草案里的实体名（去重用）：只读提案目录，跳过已弃用的提案。
+   * 读不到／读坏都当「没有草案」——最多多造一份草案，不影响旁路结论。
+   */
+  async function pendingDraftNames() {
+    const fileService = typeof getFileService === 'function' ? getFileService() : null
+    if (typeof fileService?.listProposals !== 'function' || typeof fileService?.readProposal !== 'function') {
+      return { names: [], note: null }
+    }
+    try {
+      const listed = await fileService.listProposals()
+      if (!listed?.ok) return { names: [], note: `提案目录读不到，去重降级：${errorText(listed?.error?.message ?? '未知原因')}` }
+      const names = []
+      for (const item of Array.isArray(listed.value?.proposals) ? listed.value.proposals : []) {
+        if (str(item?.status) === 'discarded') continue
+        const read = await fileService.readProposal({ name: item.name })
+        if (!read?.ok) continue
+        if (str(read.value?.proposal?.kind) !== 'fact-draft-entries') continue
+        for (const entry of Array.isArray(read.value.proposal.entries) ? read.value.proposal.entries : []) {
+          const name = str(entry?.name).trim()
+          if (name && !names.includes(name)) names.push(name)
+        }
+      }
+      return { names, note: null }
+    } catch (error) {
+      return { names: [], note: `提案去重自身出错，按无既有草案处理：${errorText(error)}` }
+    }
+  }
+
+  /** 保存内容 → 内容管线 → 候选实体名（模型层可选，失败只记 warn）。 */
+  async function mineCandidates(draftText, tool) {
+    try {
+      const mined = await mine({ text: draftText, ...(llmPort ? { llm: llmPort } : {}) })
+      for (const failure of Array.isArray(mined?.failures) ? mined.failures.slice(0, 5) : []) {
+        note('warn', `fact 实体识别有一段失败（保存不受影响）：${str(failure?.message) || str(failure?.code)}`, { tool })
+      }
+      return Array.isArray(mined?.candidates) ? mined.candidates.map((item) => str(item?.name).trim()).filter(Boolean) : []
+    } catch (error) {
+      note('warn', `fact 实体识别自身出错（保存不受影响）：${errorText(error)}`, { tool })
+      return []
+    }
+  }
+
+  /**
+   * 包住一次工具调用：只在写类工具上做旁路，其他工具原样透传。
+   * 写类工具由注册表判定（宿主注入清单 ＋ 表内配置），与正文里有没有 @《…》 无关。
    * call 必须由调用方给（通道侧就是 session.runtime.callTool），服务不直接碰运行时。
    */
   async function runToolCall({ tool, args = {}, call } = {}) {
     if (typeof call !== 'function') throw new TypeError('factHooks.runToolCall 需要 call()')
-    const kind = saveHookKindOf(tool)
-    if (!kind) return call()
+    const hook = hooks.resolve(tool)
+    if (!hook) return call()
     const root = typeof getRoot === 'function' ? getRoot() : null
     if (!root) return call()
 
@@ -162,18 +218,18 @@ export function createFactHookService({
     if (!result?.ok) return result
 
     try {
-      await observeSave({ root, kind, tool, args: isPlainObject(args) ? args : {}, result, before })
+      await observeSave({ root, hook, tool, args: isPlainObject(args) ? args : {}, result, before })
     } catch (error) {
       note('warn', `fact 保存钩子自身出错（已保存的数据不受影响）：${errorText(error)}`, { tool })
     }
     return result
   }
 
-  async function observeSave({ root, kind, tool, args, before }) {
+  async function observeSave({ root, hook, tool, args, before }) {
     if (before.note) note('warn', before.note, { tool })
-    const draftText = textOfSaveArgs(tool, args)
-    // 世界书保存会改派生源：快照必须重新现读；章节/大纲不动世界书，沿用保存前那份即为准。
-    const after = kind === 'worldbook' ? await snapshotSafely(root) : before
+    const draftText = hooks.textOf(tool, args)
+    // 世界书保存会改派生源：快照必须重新现读；其余写口不动世界书，沿用保存前那份即为准。
+    const after = hook.refreshHub ? await snapshotSafely(root) : before
     const entries = after.entries
     const draft = draftText ? { name: `${tool} 保存`, text: draftText } : null
 
@@ -181,7 +237,17 @@ export function createFactHookService({
       { before: before.entries, after: entries, ...(draft ? { draft } : {}) },
       {}
     )
-    const missing = draftText ? detectMissingEntities({ text: draftText, entries }) : []
+
+    let missing = []
+    let skipped = { hub: [], proposed: [] }
+    if (draftText) {
+      const candidates = await mineCandidates(draftText, tool)
+      const pending = candidates.length ? await pendingDraftNames() : { names: [], note: null }
+      if (pending.note) note('warn', pending.note, { tool })
+      const filtered = filterMissingEntities({ candidates, entries, proposed: pending.names })
+      missing = filtered.missing
+      skipped = filtered.skipped
+    }
 
     let proposal = null
     if (missing.length) {
@@ -189,40 +255,47 @@ export function createFactHookService({
         .map((name) => draftEntryForEntity(name, {
           domain: firstText(after.book, before.book),
           book: firstText(after.book, before.book),
-          extractor: DRAFT_EXTRACTOR
+          extractor: DRAFT_EXTRACTOR,
+          source: tool
         }))
         .filter(Boolean)
       const written = await writeProposal(buildDraftEntriesProposal({
         tool,
         entries: drafts,
         missing,
+        skipped,
         at: now()
       }))
       if (written?.ok) proposal = written.value?.path ?? null
-      else note('warn', `缺失实体草案没落盘（${missing.length} 个）：${errorText(written?.error ?? '未知原因')}`, { tool })
+      else note('warn', `实体草案没落盘（${missing.length} 个）：${errorText(written?.error ?? '未知原因')}`, { tool })
     }
 
+    const skipText = skipped.hub.length || skipped.proposed.length
+      ? `（跳过：hub 已有 ${skipped.hub.length}，既有草案 ${skipped.proposed.length}）`
+      : ''
     const issues = Array.isArray(validation.issues) ? validation.issues : []
     const warnings = Array.isArray(validation.warnings) ? validation.warnings : []
-    if (issues.length || warnings.length || missing.length) {
+    if (issues.length || warnings.length || missing.length || skipped.proposed.length) {
       const errors = issues.filter((issue) => issue.severity === 'error').length
-      note('warn', `fact 校验（${kind} 保存后）：${issues.length} 条条目级问题（${errors} 条硬伤），${warnings.length} 条预检提示，${missing.length} 个引用缺条目`, {
+      note('warn', `fact 校验（${hook.kind} 保存后）：${issues.length} 条条目级问题（${errors} 条硬伤），${warnings.length} 条预检提示，${missing.length} 个内容实体缺条目${skipText}`, {
         tool,
         file: str(args.file) || null,
         summary: validation.summary ?? null,
         issues: issues.slice(0, 20),
         warnings: warnings.slice(0, 20),
         missing,
+        skipped,
         proposal
       })
     } else if (proposal) {
-      note('info', `fact 保存钩子：${missing.length} 个正文引用在 hub 里没有条目，已写草案提案`, {
+      note('info', `fact 保存钩子：${missing.length} 个内容实体在 hub 里没有条目，已写草案提案${skipText}`, {
         tool,
         missing,
+        skipped,
         proposal
       })
     }
-    return { issues: issues.length, warnings: warnings.length, missing: missing.length, proposal }
+    return { issues: issues.length, warnings: warnings.length, missing: missing.length, skipped, proposal }
   }
 
   /**
