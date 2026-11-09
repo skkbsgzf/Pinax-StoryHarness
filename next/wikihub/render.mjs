@@ -1,4 +1,9 @@
 import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from './pediaSchema.mjs'
+import {
+  HUB_VIEW_LAYER_LABELS,
+  HUB_VIEW_LAYER_ORDER,
+  HUB_VIEW_SLOT_LABELS
+} from './viewModel.mjs'
 
 /**
  * wikihub 离线视图渲染器（pedia/v1 hub → 单文件 HTML）。
@@ -14,35 +19,18 @@ import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from './pediaSchema
  *      目标一定在本次快照里（没收录的如实标「未收录」，不造一个空页）；
  *   3) 不执行数据的 HTML：正文是 markdown 的一个受限子集，先转义再组装，原始 HTML 不生效。
  *
- * 本文件不 import Node 内置模块（只 import 纯函数规范 pediaSchema），可以在浏览器侧复用；
- * 落盘那一半在 ./build.mjs。
+ * 本文件不 import Node 内置模块（只 import 纯函数规范 pediaSchema 与视图模型），可以在浏览器侧复用；
+ * 落盘那一半在 ./build.mjs。层／槽位中文名以 viewModel.mjs 为单一来源（W3 起三栏原生界面同用一份）。
  */
 
 export const WIKIHUB_HTML_VERSION = 'wikihub-html/v1'
 
-export const WIKIHUB_LAYER_ORDER = Object.freeze(['worldview', 'character', 'style', 'plot'])
+export const WIKIHUB_LAYER_ORDER = HUB_VIEW_LAYER_ORDER
 
-export const WIKIHUB_LAYER_LABELS = Object.freeze({
-  worldview: '世界观',
-  character: '人物',
-  style: '文风',
-  plot: '剧情'
-})
+export const WIKIHUB_LAYER_LABELS = HUB_VIEW_LAYER_LABELS
 
 /** 11 个标准槽位的人话（NovelPedia 的槽位名照抄，读者不用再记英文）。 */
-export const WIKIHUB_SLOT_LABELS = Object.freeze({
-  power_levels: '力量等级',
-  abilities: '技能与能力',
-  rules: '规则与机制',
-  locations: '地点',
-  items: '物品',
-  orgs: '组织与势力',
-  roles: '身份与角色',
-  creatures: '种族与生物',
-  concepts: '概念与现象',
-  events: '历史事件',
-  other: '其他'
-})
+export const WIKIHUB_SLOT_LABELS = HUB_VIEW_SLOT_LABELS
 
 const SPAN_FIELDS = Object.freeze(['first_chapter', 'last_chapter', 'first_scene', 'last_scene', 'scene_count', 'chapter_count'])
 

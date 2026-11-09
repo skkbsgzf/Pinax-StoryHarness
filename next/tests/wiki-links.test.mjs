@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildEntryTokenMap, computeBacklinks, entryLinkTokensOf, ownEntryTokens, wikiLinkRanges } from '../shell/wikiLinks.mjs'
+import { buildEntryTokenMap, computeBacklinks, entryLinkTokensOf, mergeTokenMaps, ownEntryTokens, wikiLinkRanges } from '../shell/wikiLinks.mjs'
 
 test('wikiLinkRanges：最长优先、互不重叠、按出现顺序', () => {
   const names = ['真相层·十二维、阶数与主角', '真相层·十二维', '十二时辰']
@@ -82,4 +82,31 @@ test('ownEntryTokens：当前条目自己的词不进链（链到自己等于没
   const own = ownEntryTokens({ name: '人物·柯秒', aliases: ['柯秒'], tags: ['主角'] })
   assert.deepEqual([...own].sort(), ['人物·柯秒', '柯秒', '主角'].sort())
   assert.equal(own.has('编年·雨夜'), false)
+})
+
+/**
+ * 批次 W3：三栏工作区的正文蓝链改走 hub 链接表，资料／约束词表并回同一张表。
+ * 合并纪律与单表一致：一个词只有**恰好指向同一个目标**时才留下；同名不同物整词剔除并记账。
+ */
+test('mergeTokenMaps：同词同目标两份表合一；同词不同目标整词剔除并进冲突', () => {
+  const entry = { kind: 'entry', name: '人物·柯秒', path: '世界书/人物·柯秒.md' }
+  const document = { kind: 'document', name: '柯秒', path: '资料/柯秒.md' }
+  const hub = new Map([['柯秒', entry]])
+  const docs = new Map([['柯秒', document], ['文风', { kind: 'rule', name: '文风', path: '约束/文风.md' }]])
+
+  const merged = mergeTokenMaps(hub, docs)
+  assert.equal(merged.map.has('柯秒'), false, '条目与资料同名：这个词指向谁都不成立')
+  assert.deepEqual(merged.conflicts.map((conflict) => conflict.token), ['柯秒'])
+  assert.equal(merged.map.get('文风').kind, 'rule', '不冲突的词照常进表')
+
+  const same = mergeTokenMaps(hub, new Map([['柯秒', { ...entry }]]))
+  assert.equal(same.map.get('柯秒').path, '世界书/人物·柯秒.md', '同一目标出现两次仍只留一条')
+  assert.deepEqual(same.conflicts, [])
+})
+
+test('mergeTokenMaps：非 Map 入参与空表一律跳过，不崩也不错表', () => {
+  const hub = new Map([['柯秒', { kind: 'entry', name: '人物·柯秒', path: 'a.md' }]])
+  const merged = mergeTokenMaps(hub, null, undefined, 'nope', [])
+  assert.deepEqual([...merged.map.keys()], ['柯秒'])
+  assert.deepEqual(mergeTokenMaps().map.size, 0)
 })

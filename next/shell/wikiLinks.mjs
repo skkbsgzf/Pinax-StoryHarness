@@ -79,6 +79,36 @@ export function ownEntryTokens(entry) {
   return new Set(entryLinkTokensOf(entry))
 }
 
+/** 目标身份：同一张词表里同名不同物的词必须判得出来（条目／资料／约束各自 kind 与 path 不同）。 */
+function tokenTargetIdentity(target) {
+  if (!target || typeof target !== 'object') return ''
+  return [target.kind ?? '', target.path ?? '', target.name ?? target.item?.path ?? ''].join('\u0000')
+}
+
+/**
+ * 合并多张 token → target 词表（批次 W3：hub 链接表 ＋ 资料／约束词表）。
+ * 纪律与 buildEntryTokenMap 一致：一个词只有**恰好指向同一个目标**时才留下；
+ * 词出现在两张表里但目标是不同东西（同类名不同 path，或条目与资料同名），整词剔除并记冲突。
+ * 返回 { map, conflicts }；冲突逐条带 token 与全部候选目标，调用方可以如实显示「未链接」。
+ */
+export function mergeTokenMaps(...maps) {
+  const owners = new Map()
+  for (const map of maps) {
+    if (!(map instanceof Map)) continue
+    for (const [token, target] of map) {
+      if (!owners.has(token)) owners.set(token, new Map())
+      owners.get(token).set(tokenTargetIdentity(target), target)
+    }
+  }
+  const merged = new Map()
+  const conflicts = []
+  for (const [token, targets] of owners) {
+    if (targets.size === 1) merged.set(token, [...targets.values()][0])
+    else conflicts.push({ token, owners: [...targets.values()] })
+  }
+  return { map: merged, conflicts }
+}
+
 /**
  * 跨载体知识库（批次60）：蓝链的目标不再只是世界书——资料与约束同属一个知识库。
  * 这里把三棵既有树归一成一张清单（kind／name／path／原始 item），词表仍交给

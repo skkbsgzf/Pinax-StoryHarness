@@ -223,7 +223,9 @@ export function normalizeWorldbookEntry(raw) {
     links: arrayOfStrings(source.links),
     cat: catList,
     catDir,
-    keys: arrayOfStrings(source.keys),
+    // 运行时读回形状（pinax_worldbook_list/read）的条目别名常落在 aliases 上；契约条目落 keys。
+    // 两处都收：hub 的 aliases（=keys 去掉名字）与正文蓝链都不能因为换了一条读回路径就丢别名。
+    keys: uniqueStrings([...arrayOfStrings(source.keys), ...arrayOfStrings(source.aliases)]),
     keysSecondary: arrayOfStrings(source.keysSecondary),
     summary: typeof source.summary === 'string' ? source.summary : '',
     sourceRefs: arrayOfStrings(source.sourceRefs),

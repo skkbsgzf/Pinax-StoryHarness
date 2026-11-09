@@ -1,7 +1,8 @@
 <script setup>
 import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
-import { buildEntryTokenMap, buildKnowledgeCatalog, computeBacklinks, linkifyEntryNames, ownEntryTokens } from './wikiLinks.mjs'
+import { hubLinkTargets } from '../wikihub/viewModel.mjs'
+import { buildEntryTokenMap, buildKnowledgeCatalog, computeBacklinks, linkifyEntryNames, mergeTokenMaps, ownEntryTokens } from './wikiLinks.mjs'
 
 /**
  * 条目详情面（批次44 · 从 CarrierPaneHost 里拆出来的独立面板）。
@@ -38,7 +39,13 @@ const props = defineProps({
    * 正文容器挂 `.nx-wiki-article`（h2 底线／导语／引用块／蓝链胶囊的版式在布局层照这个类生效）；
    * 关系列表让位给右侧信息卡（同一份 data.entry.relations，不摆两遍）。
    */
-  wiki: { type: Boolean, default: false }
+  wiki: { type: Boolean, default: false },
+  /**
+   * 〔批次 W3〕三栏工作区的 hub 视图模型（worldbook 三栏由 EntriesBoard 传入）：
+   * 有它时正文蓝链改走 hub 链接表（条目名＋短名＋全部别名，冲突词不染蓝），
+   * 资料／约束仍并回同一张表；独立详情面不传，行为与旧版一字不差。
+   */
+  hub: { type: Object, default: null }
 })
 const emit = defineEmits(['chip-action'])
 /** 跨载体跳转（批次60）：宿主在 AppNext 里给的一枚路由；没有时退回只开条目。 */
@@ -66,7 +73,19 @@ const linkTargets = computed(() => buildKnowledgeCatalog({
   kind: target.kind,
   item: target.item
 })))
-const entryTokenMap = computed(() => buildEntryTokenMap(linkTargets.value))
+
+/**
+ * 词表来源（批次 W3）：三栏工作区里条目词走 hub 链接表——与左树／信息卡同一份
+ * 「名称＋别名」词表，同名多归属的词在两处一致地不染蓝；资料／约束词表照旧并入。
+ * 没有 hub（独立详情面）时还是原来的整库词表，行为不动。
+ */
+const entryTokenMap = computed(() => {
+  if (props.hub?.linkTable) {
+    const extras = linkTargets.value.filter((target) => target.kind !== 'entry')
+    return mergeTokenMaps(hubLinkTargets(props.hub), buildEntryTokenMap(extras)).map
+  }
+  return buildEntryTokenMap(linkTargets.value)
+})
 const entryLinkTokens = computed(() => {
   const own = ownEntryTokens(props.data.entry)
   return [...entryTokenMap.value.keys()].filter((token) => !own.has(token))
