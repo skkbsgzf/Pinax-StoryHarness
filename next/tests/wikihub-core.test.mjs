@@ -11,6 +11,7 @@ import {
   validatePediaEntry
 } from '../wikihub/pediaSchema.mjs'
 import {
+  NAME_PREFIX_RULES,
   NOVEL_STRUCTURE_LOSSES,
   PEDIA_EXPORT_LOSSES,
   SCRIPT_STRUCTURE_LOSSES,
@@ -21,6 +22,7 @@ import {
   refsToRelations,
   relationsToRefs,
   scriptToHubAnchors,
+  slotForNamePrefix,
   worldbookToHub
 } from '../wikihub/convert.mjs'
 
@@ -281,6 +283,77 @@ test('世界书 → hub：槽位走 category_map／type／目录桥，关系 id�
   const stray = worldbookToHub([{ ...kemiao, relations: [{ to: 'k-999', type: 'rival' }] }])
   assert.ok(stray.warnings.some((warning) => warning.code === 'RELATION_TARGET_UNRESOLVED'))
   assert.equal(stray.entries[0].relations[0].to, 'k-999', '未知目标保留原值，不编一个名字')
+})
+
+test('批次 W4：名称前缀规则只救落 other 的条目（表驱动、命中即停、全表随结果返回）', () => {
+  const runtime = (name, overrides = {}) => ({
+    id: `wb-${name}`,
+    name,
+    type: 'general',
+    cat: '',
+    tags: [],
+    keys: [],
+    summary: '',
+    relations: [],
+    content: '',
+    contract: true,
+    ...overrides
+  })
+  const hub = worldbookToHub([
+    runtime('剧作·插叙结构'),
+    runtime('设定·序列体系'),
+    runtime('设定·界与十二时辰'),
+    runtime('设定·主干与分支'),
+    runtime('真相层·大世界与三组织'),
+    runtime('真相层·北界灵'),
+    runtime('真相层·十二维、阶数与主角'),
+    runtime('设定·钟楼'),
+    // 优先级：已有 cat／type 命中的条目，前缀不抢位。
+    runtime('设定·槐巷', { cat: '地点' }),
+    runtime('真相层·停摆的表', { type: 'event' }),
+    runtime('普通条目')
+  ], { book: '大梦' })
+  assert.equal(hub.valid, true, JSON.stringify(hub.issues))
+  const byName = Object.fromEntries(hub.entries.map((entry) => [entry.name, entry]))
+  const via = Object.fromEntries(hub.mappings.map((item) => [item.name, item.via]))
+
+  // 剧作· → 软层 style 的 Next 扩展槽位 creative_rules；软层要带 fingerprint。
+  assert.deepEqual([byName['剧作·插叙结构'].layer, byName['剧作·插叙结构'].slot], ['style', 'creative_rules'])
+  assert.match(via['剧作·插叙结构'], /^prefix:剧作·/u)
+  assert.equal(byName['剧作·插叙结构'].fingerprint.vec, null, 'style 软层的向量如实为 null')
+  assert.equal(byName['剧作·插叙结构'].rank, null)
+
+  // 设定·：两条专名规则先于通用规则命中。
+  assert.equal(byName['设定·序列体系'].slot, 'power_levels')
+  assert.equal(via['设定·序列体系'], 'prefix:设定·序列体系')
+  assert.equal(byName['设定·界与十二时辰'].slot, 'locations')
+  assert.equal(byName['设定·主干与分支'].slot, 'concepts')
+  assert.equal(byName['设定·钟楼'].slot, 'concepts', '通用 设定· 前缀兜底')
+  assert.equal(via['设定·钟楼'], 'prefix:设定·')
+
+  // 真相层·：含「三组织/三派/三流」→ orgs，含「界灵」→ creatures，其余 concepts。
+  assert.equal(byName['真相层·大世界与三组织'].slot, 'orgs')
+  assert.equal(via['真相层·大世界与三组织'], 'prefix:真相层·+三组织')
+  assert.equal(byName['真相层·北界灵'].slot, 'creatures')
+  assert.equal(via['真相层·北界灵'], 'prefix:真相层·+界灵')
+  assert.equal(byName['真相层·十二维、阶数与主角'].slot, 'concepts')
+  assert.equal(via['真相层·十二维、阶数与主角'], 'prefix:真相层·')
+
+  // 已有 cat／type 命中优先；什么都没有的仍落 other。
+  assert.equal(byName['设定·槐巷'].slot, 'locations', 'cat 命中优先于前缀')
+  assert.equal(via['设定·槐巷'], 'cat:地点')
+  assert.equal(byName['真相层·停摆的表'].slot, 'events', 'type 命中优先于前缀')
+  assert.equal(via['真相层·停摆的表'], 'type:event')
+  assert.equal(byName['普通条目'].slot, 'other')
+
+  // 全表随结果返回，与导出常量同构（表序即匹配优先级）。
+  const expectedTable = NAME_PREFIX_RULES.map((rule) => ({ ...rule, ...(rule.includes ? { includes: [...rule.includes] } : {}) }))
+  assert.deepEqual(hub.prefixRules, expectedTable)
+  assert.deepEqual(NAME_PREFIX_RULES.map((rule) => rule.slot), [
+    'creative_rules', 'power_levels', 'locations', 'concepts', 'orgs', 'creatures', 'concepts', 'concepts'
+  ])
+  assert.equal(slotForNamePrefix('设定·序列体系').slot, 'power_levels')
+  assert.equal(slotForNamePrefix('没有前缀'), null)
 })
 
 test('世界书 → hub：裸 md 与运行时读回形状都接，缺 frontmatter 如实记损失', () => {

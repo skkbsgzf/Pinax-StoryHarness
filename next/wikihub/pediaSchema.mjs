@@ -72,6 +72,13 @@ export const WORLDVIEW_SLOTS = Object.freeze({
 export const WORLDVIEW_SLOT_NAMES = Object.freeze(Object.keys(WORLDVIEW_SLOTS))
 export const OTHER_SLOT = 'other'
 
+/*
+ * 〔Next 扩展〕style 层（软层）的 `creative_rules` 不是上面 11 个世界观槽位之一：
+ * pedia/v1 只为 worldview 定义 slot 词表，软层没有槽位字段。Next 把「剧作·」开头的
+ * 创作规则条目收进 style 层并给 slot=`creative_rules`，只是本仓的视图分组约定
+ * （视图层显示为「创作规则」）；它不参与 worldview 槽位校验，也不进 category_map。
+ */
+
 /** settings_graph.category → 标准槽位（规范原文的 34→11 归并表，逐条搬运）。 */
 export const CATEGORY_MAP = Object.freeze({
   力量体系: 'power_levels',

@@ -89,15 +89,17 @@ test('视图模型：layer → domain → 槽位三级分组，每级计数，�
   assert.equal(worldview.domains[0].key, '大梦')
   assert.equal(worldview.domains[0].count, 5)
   const groups = worldview.domains[0].groups
-  // 槽位序＝WORLDVIEW_SLOT_NAMES 的声明序（roles 在 events 前、other 永远最后）。
+  // 槽位序＝WORLDVIEW_SLOT_NAMES 的声明序（roles 在 concepts 前、concepts 在 events 前、other 永远最后）。
+  // 〔批次 W4〕「设定·钟楼」由名称前缀规则救出 other，落 concepts 组。
   assert.deepEqual(groups.map((group) => [group.key, group.label, group.count]), [
     ['roles', '身份与角色', 2],
-    ['events', '历史事件', 2],
-    ['other', '其他', 1]
+    ['concepts', '概念与现象', 1],
+    ['events', '历史事件', 2]
   ])
   // 组内默认按中文名排：地(di) 在 人(ren) 前。
   assert.deepEqual(groups[0].entries.map((entry) => entry.name), ['地点·槐巷', '人物·柯秒'])
-  assert.deepEqual(groups[1].entries.map((entry) => entry.name), ['编年·停摆的表', '编年·雨夜'])
+  assert.deepEqual(groups[1].entries.map((entry) => entry.name), ['设定·钟楼'])
+  assert.deepEqual(groups[2].entries.map((entry) => entry.name), ['编年·停摆的表', '编年·雨夜'])
 
   // 11 个槽位名一个不少、顺序与 schema 一致：左树与 render.mjs 共用这一份词表。
   assert.deepEqual(Object.keys(HUB_VIEW_SLOT_LABELS), [...WORLDVIEW_SLOT_NAMES])
@@ -116,6 +118,46 @@ test('视图模型：layer → domain → 槽位三级分组，每级计数，�
     links: 10,
     conflicts: 0
   })
+})
+
+test('批次 W4：剧作· 前缀进 style 层，组名「创作规则」（软层不污染 11 槽位词表）', () => {
+  const runtime = (name, chars) => ({
+    id: `wb-${name}`,
+    name,
+    type: 'general',
+    cat: '',
+    tags: [],
+    aliases: [],
+    chars,
+    summary: '',
+    path: `世界书/剧作/${name}.md`,
+    revision: 1,
+    contract: true
+  })
+  const converted = worldbookToHub([
+    runtime('剧作·插叙结构', 8),
+    runtime('剧作·术语与声线', 9)
+  ], { book: '大梦' })
+  assert.equal(converted.valid, true, JSON.stringify(converted.issues))
+  const model = buildHubViewModel(converted, { book: '大梦' })
+
+  const style = model.layers.find((layer) => layer.layer === 'style')
+  assert.ok(style, 'style 层有条目就要在场')
+  assert.equal(style.label, '文风')
+  assert.equal(style.count, 2)
+  assert.deepEqual(style.domains[0].groups.map((group) => [group.key, group.label, group.count]), [
+    ['creative_rules', '创作规则', 2]
+  ])
+  // 信息卡「分类」读的是组名，不是软层里空着的 worldview 槽位名。
+  const entry = model.entries.find((item) => item.name === '剧作·插叙结构')
+  assert.equal(entry.groupKey, 'creative_rules')
+  assert.equal(entry.groupLabel, '创作规则')
+  assert.equal(entry.slotLabel, '创作规则')
+  assert.deepEqual(hubGroupOptions(model).filter((option) => option.value), [
+    { value: 'creative_rules', label: '创作规则' }
+  ])
+  // 软层扩展不进 11 槽位词表（HUB_VIEW_SLOT_LABELS 必须与 schema 一一对应）。
+  assert.deepEqual(Object.keys(HUB_VIEW_SLOT_LABELS), [...WORLDVIEW_SLOT_NAMES])
 })
 
 test('视图模型：有序槽位按 rank 排，缺 rank 的排到最后（名字只做并列时的次序）', () => {
@@ -218,8 +260,8 @@ test('筛选与下拉：槽位／层精确匹配，文本打名称／别名／�
   assert.deepEqual(hubGroupOptions(model), [
     { value: '', label: '全部槽位' },
     { value: 'roles', label: '身份与角色' },
-    { value: 'events', label: '历史事件' },
-    { value: 'other', label: '其他' }
+    { value: 'concepts', label: '概念与现象' },
+    { value: 'events', label: '历史事件' }
   ])
   assert.deepEqual(filterHubEntries(model.entries, { group: 'events' }).map((entry) => entry.name), ['编年·停摆的表', '编年·雨夜'])
   assert.deepEqual(filterHubEntries(model.entries, { text: '柯秒' }).map((entry) => entry.name), ['人物·柯秒'], '别名命中也算')

@@ -43,6 +43,15 @@ export const HUB_VIEW_SLOT_LABELS = Object.freeze({
 })
 
 /**
+ * 软层（style/character/plot）的组名（批次 W4）：pedia 的槽位词表只属于 worldview，
+ * 这里不往 HUB_VIEW_SLOT_LABELS 里塞软层槽位（那张表必须与 11 槽位一一对应）。
+ * `剧作·` 前缀条目落 style 层、slot=`creative_rules`，显示为「创作规则」。
+ */
+export const HUB_VIEW_SOFT_GROUP_LABELS = Object.freeze({
+  creative_rules: '创作规则'
+})
+
+/**
  * 人物／剧情两层的锚点占位组：这两层的条目一半来自小说／剧本结构（章节序、剧集序），
  * 在 Next 里没有「从世界书栏直接打开章节／剧集」的既有通路，所以这里只登记锚点、不接点击。
  * 接不上这件事写进 hint，也写进执行记录的 limitations——不做假按钮。
@@ -124,6 +133,11 @@ export function hubSlotLabel(slot) {
   return HUB_VIEW_SLOT_LABELS[slot] ?? str(slot)
 }
 
+/** 软层槽位的人话（目前只有 style/creative_rules）；未知返回空串，交给层名兜底。 */
+export function hubSoftGroupLabel(slot) {
+  return HUB_VIEW_SOFT_GROUP_LABELS[slot] ?? ''
+}
+
 function normalizeRelations(value) {
   if (!Array.isArray(value)) return []
   return value
@@ -148,6 +162,7 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
     : (isPlainObject(raw) && (typeof raw.content === 'string' || typeof raw.kind === 'string' || Array.isArray(raw.keys)) ? raw : {})
   const layer = firstText(raw.layer, 'worldview')
   let slot = firstText(raw.slot)
+  const softGroupLabel = layer === 'worldview' ? '' : hubSoftGroupLabel(slot)
   const name = firstText(raw.name, snapshot.name, raw.title, raw.id, `未命名条目 ${index + 1}`)
   let id = firstText(raw.id)
   if (!id) {
@@ -158,7 +173,8 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
     if (slot) warnings.push({ code: 'UNKNOWN_SLOT', message: `条目「${name}」的槽位「${slot}」不认识，按其他显示` })
     slot = OTHER_SLOT
   }
-  if (layer !== 'worldview') slot = ''
+  // 软层通常没有槽位；只有视图认识的软层组（style/creative_rules）才保留，其余清空。
+  if (layer !== 'worldview' && !softGroupLabel) slot = ''
   const domain = firstText(raw.domain, fallbackDomain)
   const aliases = uniqueTexts([...(Array.isArray(raw.aliases) ? raw.aliases : []), ...arrayOfTexts(snapshot.keys)])
     .filter((alias) => alias !== name)
@@ -176,8 +192,8 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
   const relations = normalizeRelations(Array.isArray(raw.relations) ? raw.relations : snapshot.relations)
   const contract = snapshot.contract !== undefined ? snapshot.contract === true : raw.contract === true
   const span = isPlainObject(raw.span) ? raw.span : null
-  const groupKey = layer === 'worldview' ? slot : layer
-  const groupLabel = layer === 'worldview' ? hubSlotLabel(slot) : hubLayerLabel(layer)
+  const groupKey = layer === 'worldview' ? slot : (slot || layer)
+  const groupLabel = layer === 'worldview' ? hubSlotLabel(slot) : (softGroupLabel || hubLayerLabel(layer))
   const search = [
     name,
     ...aliases,
@@ -216,7 +232,7 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
     layerLabel: hubLayerLabel(layer),
     domain,
     slot,
-    slotLabel: layer === 'worldview' ? hubSlotLabel(slot) : '',
+    slotLabel: layer === 'worldview' ? hubSlotLabel(slot) : softGroupLabel,
     groupKey,
     groupLabel,
     rank,
@@ -382,7 +398,22 @@ function buildDomains(layerEntries, layer) {
         groups.push({ key: slot, kind: 'slot', label: hubSlotLabel(slot), labelKind: 'slot', count: slotEntries.length, entries: slotEntries })
       }
     } else {
-      groups = [{ key: layer, kind: 'layer', label: hubLayerLabel(layer), labelKind: 'layer', count: list.length, entries: list }]
+      // 软层默认一层一组；style 的剧作条目带 creative_rules 扩展槽位，按组拆开，
+      // 其余条目仍归层名组（没有槽位的软层行为不变）。
+      const byGroup = new Map()
+      for (const entry of list) {
+        const key = entry.groupKey || layer
+        if (!byGroup.has(key)) byGroup.set(key, [])
+        byGroup.get(key).push(entry)
+      }
+      groups = [...byGroup.entries()].map(([key, groupEntries]) => ({
+        key,
+        kind: key === layer ? 'layer' : 'slot',
+        label: groupEntries[0].groupLabel,
+        labelKind: key === layer ? 'layer' : 'slot',
+        count: groupEntries.length,
+        entries: groupEntries
+      }))
     }
     domains.push({ key, label: key || '未标域', count: list.length, groups })
   }

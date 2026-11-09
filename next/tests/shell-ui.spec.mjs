@@ -5240,10 +5240,11 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
 
     // 列表视图：每组一个小节头（〔批次 W3〕组头＝hub 槽位中文名＋条目数），组内是条目行。
     // 批次44：这些组头与条目行搬进了核心区的看板区，窄栏只剩类别导航树。
+    // 〔批次 W4〕「设定·钟楼」走名称前缀规则落 concepts 组（组序仍按 11 槽位声明序）。
     const sections = wrapper.findAll('[data-test="entries-board"] [data-test="entry-category"]')
-    expect(sections.map((node) => node.text())).toEqual(['身份与角色 · 2', '历史事件 · 2', '其他 · 1'])
+    expect(sections.map((node) => node.text())).toEqual(['身份与角色 · 2', '概念与现象 · 1', '历史事件 · 2'])
     const lists = wrapper.findAll('[data-test="entries-board"] .nx-tree')
-    expect(lists.map((list) => list.findAll('.nx-tree-item').length)).toEqual([2, 2, 1])
+    expect(lists.map((list) => list.findAll('.nx-tree-item').length)).toEqual([2, 1, 2])
     expect(wrapper.find('[data-test="entries-board"]').text()).not.toContain('未分类')
 
     // 表格视图：多一列「类别」，值仍是条目落在的世界书目录（表格列口径不随数据源换 hub 而改）；
@@ -5253,9 +5254,9 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     const table = wrapper.find('[data-test="entries-table"]')
     expect(table.findAll('th').map((th) => th.text())).toEqual(['名称', '类别', '类型', '关键词', '字数', '摘要'])
     const groupRows = table.findAll('[data-test="entries-table-group"]')
-    expect(groupRows.map((row) => row.text())).toEqual(['身份与角色 · 2 条', '历史事件 · 2 条', '其他 · 1 条'])
-    // 表格按 hub 分组序列条目（角色组在前：地点·槐巷、人物·柯秒；组头行不是数据行）。
-    expect(table.findAll('tbody tr.nx-entries-row').map((row) => row.findAll('td')[1].text())).toEqual(['人物', '人物', '编年', '编年', '设定'])
+    expect(groupRows.map((row) => row.text())).toEqual(['身份与角色 · 2 条', '概念与现象 · 1 条', '历史事件 · 2 条'])
+    // 表格按 hub 分组序列条目（角色组在前：地点·槐巷、人物·柯秒；然后是概念组的设定·钟楼；组头行不是数据行）。
+    expect(table.findAll('tbody tr.nx-entries-row').map((row) => row.findAll('td')[1].text())).toEqual(['人物', '人物', '设定', '编年', '编年'])
 
     // 批次59：新建入口原先长在左树区头；web 模板没有左树，这一批随左栏退场（批次60 在看板区重建）。
     // 批次36：表格再切是图谱（节点都在），图谱再切才回列表。
@@ -5268,8 +5269,8 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
 
     // 筛选下拉换成 hub 槽位（与看板共用 entriesFilterCat 一格）。
     const filter = wrapper.find('[data-test="entries-filter-category"]')
-    expect(filter.findAll('option').map((option) => option.text())).toEqual(['全部槽位', '身份与角色', '历史事件', '其他'])
-    await filter.setValue('other')
+    expect(filter.findAll('option').map((option) => option.text())).toEqual(['全部槽位', '身份与角色', '概念与现象', '历史事件'])
+    await filter.setValue('concepts')
     await flushPromises()
     expect(wrapper.findAll('[data-test="entries-board"] .nx-tree-item')).toHaveLength(1)
     await filter.setValue('')
@@ -5292,26 +5293,26 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     const names = () => wrapper.findAll('[data-test="entries-table"] tbody tr.nx-entries-row').map((row) => row.findAll('td')[0].text())
     const header = wrapper.find('[data-test="entries-sort-chars"]')
     expect(header.text()).toBe('字数', '默认不排序，列头没有指示符')
-    // 〔批次 W3〕默认序＝hub 分组序（角色→事件→其他）＋组内中文名序。
-    expect(names()).toEqual(['地点·槐巷', '人物·柯秒', '编年·停摆的表', '编年·雨夜', '设定·钟楼'])
+    // 〔批次 W3〕默认序＝hub 分组序（角色→概念→事件）＋组内中文名序。
+    expect(names()).toEqual(['地点·槐巷', '人物·柯秒', '设定·钟楼', '编年·停摆的表', '编年·雨夜'])
 
-    // 升序：组头仍是 角色/事件/其他，组内按字数 18,20／10,12／16 摆。
+    // 升序：组头仍是 角色/概念/事件，组内按字数 18,20／16／10,12 摆。
     await header.trigger('click')
     await flushPromises()
     expect(header.text()).toBe('字数▲')
-    expect(names()).toEqual(['人物·柯秒', '地点·槐巷', '编年·停摆的表', '编年·雨夜', '设定·钟楼'])
+    expect(names()).toEqual(['人物·柯秒', '地点·槐巷', '设定·钟楼', '编年·停摆的表', '编年·雨夜'])
 
     // 降序：组内倒过来，组头顺序不动。
     await header.trigger('click')
     await flushPromises()
     expect(header.text()).toBe('字数▼')
-    expect(names()).toEqual(['地点·槐巷', '人物·柯秒', '编年·雨夜', '编年·停摆的表', '设定·钟楼'])
+    expect(names()).toEqual(['地点·槐巷', '人物·柯秒', '设定·钟楼', '编年·雨夜', '编年·停摆的表'])
 
     // 第三下回默认：指示符消失，顺序回到 hub 分组序。
     await header.trigger('click')
     await flushPromises()
     expect(header.text()).toBe('字数')
-    expect(names()).toEqual(['地点·槐巷', '人物·柯秒', '编年·停摆的表', '编年·雨夜', '设定·钟楼'])
+    expect(names()).toEqual(['地点·槐巷', '人物·柯秒', '设定·钟楼', '编年·停摆的表', '编年·雨夜'])
     wrapper.unmount()
   })
 
@@ -5351,11 +5352,11 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     expect(dataRows().every((row) => row.findAll('td')[1].text() === '编年')).toBe(true)
     expect(groupLabels()).toEqual(['历史事件 · 2 条'])
 
-    // 叠加：槽位事件 ＋ 文本雨夜＝1 行；换成其他后一条都不剩。
+    // 叠加：槽位事件 ＋ 文本雨夜＝1 行；换成概念后一条都不剩。
     await wrapper.find('[data-test="entries-filter-input"]').setValue('雨夜')
     await flushPromises()
     expect(dataRows()).toHaveLength(1)
-    await wrapper.find('[data-test="entries-filter-category"]').setValue('other')
+    await wrapper.find('[data-test="entries-filter-category"]').setValue('concepts')
     await flushPromises()
     expect(dataRows()).toHaveLength(0)
     wrapper.unmount()
@@ -5391,7 +5392,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     // 图例：三个类别各一枚色样（〔批次 W3〕出现序随 hub 分组序变）；未落图的边如实计数。
     const legend = wrapper.find('[data-test="entries-graph-legend"]')
     expect(legend.exists()).toBe(true)
-    expect(legend.findAll('.nx-entry-graph-legend-item').map((item) => item.text())).toEqual(['人物', '编年', '设定'])
+    expect(legend.findAll('.nx-entry-graph-legend-item').map((item) => item.text())).toEqual(['人物', '设定', '编年'])
     expect(wrapper.find('[data-test="entries-graph-unmatched"]').text()).toBe('1 条关系边未落图（目标不存在）')
 
     // hover 高亮邻边：停摆的表只连钟楼一条，其余压暗（柯秒没有关系边，悬停不高亮任何一条）。

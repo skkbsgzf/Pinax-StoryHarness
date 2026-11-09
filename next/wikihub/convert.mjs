@@ -73,6 +73,46 @@ export const WORLDBOOK_DIR_TO_PEDIA_CATEGORY = Object.freeze({
 /** 这些 type 本来就不是世界观设定，映射进 worldview 是口径妥协，转换时如实警告。 */
 export const WORLDBOOK_NON_WORLDVIEW_TYPES = Object.freeze(['style', 'source'])
 
+/**
+ * 名称前缀规则（批次 W4 · Next 扩展）：dameng《大梦》的条目名自带「前缀·短名」结构，
+ * 但这些前缀不在 pedia 的 category_map 里，光靠 cat→type→目录 会整批掉进 other。
+ *
+ * 优先级（命中即停）：
+ *   1) 已有 cat／type／一级目录命中标准槽位的条目，前缀不抢位；
+ *   2) 三级都只落到 other 时，才按本表救（表序即匹配优先级，具体规则在通用规则之前）。
+ * 规则表随 worldbookToHub 的结果原样返回（prefixRules），调用方不用猜本版跑的是哪张表。
+ */
+export const NAME_PREFIX_RULES = Object.freeze([
+  // 剧作· 是软层（文风/创作规则）：pedia 的 11 槽位词表是世界观层的，style 层没有槽位词汇；
+  // 这里用 creative_rules 当 Next 扩展槽位，视图层给「创作规则」组名（见 viewModel）。
+  Object.freeze({ id: 'play-creative', prefix: '剧作·', layer: 'style', slot: 'creative_rules' }),
+  Object.freeze({ id: 'setting-power-levels', prefix: '设定·序列体系', slot: 'power_levels' }),
+  Object.freeze({ id: 'setting-locations', prefix: '设定·界与十二时辰', slot: 'locations' }),
+  Object.freeze({ id: 'setting-concepts', prefix: '设定·主干与分支', slot: 'concepts' }),
+  Object.freeze({ id: 'truth-orgs', prefix: '真相层·', includes: Object.freeze(['三组织', '三派', '三流']), slot: 'orgs' }),
+  Object.freeze({ id: 'truth-creatures', prefix: '真相层·', includes: Object.freeze(['界灵']), slot: 'creatures' }),
+  Object.freeze({ id: 'truth-concepts', prefix: '真相层·', slot: 'concepts' }),
+  Object.freeze({ id: 'setting-concepts-generic', prefix: '设定·', slot: 'concepts' })
+])
+
+/** 名称前缀 → 槽位（命中即停）；不命中返回 null。layer 缺省＝worldview。 */
+export function slotForNamePrefix(name) {
+  const text = str(name).trim()
+  if (!text) return null
+  for (const rule of NAME_PREFIX_RULES) {
+    if (!text.startsWith(rule.prefix)) continue
+    const matched = rule.includes?.find((needle) => text.includes(needle))
+    if (rule.includes && !matched) continue
+    return {
+      layer: rule.layer ?? 'worldview',
+      slot: rule.slot,
+      rule: rule.id,
+      via: `prefix:${rule.prefix}${matched ? `+${matched}` : ''}`
+    }
+  }
+  return null
+}
+
 /** 槽位 → 世界书建档口径（无快照可还原时用）。 */
 export const PEDIA_SLOT_TO_WORLDBOOK = Object.freeze({
   power_levels: Object.freeze({ type: 'rule', cat: '设定' }),
@@ -291,7 +331,8 @@ function resolveRelationTarget(raw, index) {
 }
 
 /**
- * 槽位判定：frontmatter 分类（走 category_map）优先，其次 type，再次一级目录。
+ * 槽位判定：frontmatter 分类（走 category_map）优先，其次 type，再次一级目录，
+ * 三级都落 other 时才轮到名称前缀规则（前缀只救掉进 other 的条目）。
  * 落到 other 的来源不算「命中」，继续看下一层——否则 type=general 会把所有顶层条目吞成 other，
  * 目录里的地理/编年信息就白丢了。
  */
@@ -299,25 +340,27 @@ function resolveSlot(entry) {
   // hub → 世界书时写在 extra 里的槽位钉子：type=rule/设定 分不清 power_levels 与 concepts，
   // 靠它把槽位（及 rank）原样带回来。
   const pinned = entry.extra?.pediaSlot
-  if (typeof pinned === 'string' && WORLDVIEW_SLOTS[pinned]) return { slot: pinned, via: 'extra:pediaSlot' }
+  if (typeof pinned === 'string' && WORLDVIEW_SLOTS[pinned]) return { layer: 'worldview', slot: pinned, via: 'extra:pediaSlot' }
   for (const category of entry.cat) {
     const slot = slotForCategory(category)
-    if (slot !== OTHER_SLOT) return { slot, via: `cat:${category}` }
+    if (slot !== OTHER_SLOT) return { layer: 'worldview', slot, via: `cat:${category}` }
   }
   let fallback = null
   const typeCategory = WORLDBOOK_TYPE_TO_PEDIA_CATEGORY[entry.type] ?? WORLDBOOK_TYPE_TO_PEDIA_CATEGORY[entry.kind]
   if (typeCategory) {
     const slot = slotForCategory(typeCategory)
-    if (slot !== OTHER_SLOT) return { slot, via: `type:${entry.type}` }
+    if (slot !== OTHER_SLOT) return { layer: 'worldview', slot, via: `type:${entry.type}` }
     fallback = { slot: OTHER_SLOT, via: `type:${entry.type}` }
   }
   const dirCategory = WORLDBOOK_DIR_TO_PEDIA_CATEGORY[entry.catDir]
   if (dirCategory) {
     const slot = slotForCategory(dirCategory)
-    if (slot !== OTHER_SLOT) return { slot, via: `dir:${entry.catDir}` }
+    if (slot !== OTHER_SLOT) return { layer: 'worldview', slot, via: `dir:${entry.catDir}` }
     fallback = fallback ?? { slot: OTHER_SLOT, via: `dir:${entry.catDir}` }
   }
-  return fallback ?? { slot: OTHER_SLOT, via: 'unmapped' }
+  const prefix = slotForNamePrefix(entry.name)
+  if (prefix) return prefix
+  return fallback ? { layer: 'worldview', ...fallback } : { layer: 'worldview', slot: OTHER_SLOT, via: 'unmapped' }
 }
 
 function rankOf(entry) {
@@ -409,6 +452,13 @@ function worldbookSnapshot(entry, { stripContent }) {
   }
 }
 
+function prefixRuleTable() {
+  return NAME_PREFIX_RULES.map((rule) => ({
+    ...rule,
+    ...(rule.includes ? { includes: [...rule.includes] } : {})
+  }))
+}
+
 /**
  * 世界书 → hub worldview 条目。
  *
@@ -420,8 +470,9 @@ function worldbookSnapshot(entry, { stripContent }) {
  *   extractor     provenance.extractor 覆盖
  *   stripContent  true 表示剥离正文（开源导出预演）
  *
- * 返回 { ok, schema, valid, entries, index, mappings, exportLosses, losses, warnings, validationWarnings, issues }。
+ * 返回 { ok, schema, valid, entries, index, mappings, prefixRules, exportLosses, losses, warnings, validationWarnings, issues }。
  * losses 为空 = 无损（正文/frontmatter 都在 next.worldbook 快照里）；exportLosses 是纯 pedia 导出会丢的。
+ * prefixRules 是槽位前缀规则的完整表（命中即停；命中的条目在 mappings[].via 里留 prefix: 记号）。
  */
 export function worldbookToHub(input, options = {}) {
   const losses = []
@@ -429,7 +480,7 @@ export function worldbookToHub(input, options = {}) {
   const issues = []
   const collected = collectWorldbookEntries(input)
   if (collected.error) {
-    return { ok: false, schema: PEDIA_SCHEMA, valid: false, entries: [], index: { nameToId: {} }, mappings: [], exportLosses: [...PEDIA_EXPORT_LOSSES], losses, warnings, validationWarnings: [], issues: [collected.error] }
+    return { ok: false, schema: PEDIA_SCHEMA, valid: false, entries: [], index: { nameToId: {} }, mappings: [], prefixRules: prefixRuleTable(), exportLosses: [...PEDIA_EXPORT_LOSSES], losses, warnings, validationWarnings: [], issues: [collected.error] }
   }
 
   const entries = collected.entries.map(normalizeWorldbookEntry)
@@ -458,18 +509,19 @@ export function worldbookToHub(input, options = {}) {
 
     const slotInfo = resolveSlot(entry)
     const slot = slotInfo.slot
+    const layer = slotInfo.layer
     const aliases = uniqueStrings(entry.keys.filter((key) => key !== entry.name))
     const relations = buildHubRelations(entry, nameIndex, warnings)
-    const id = stableEntryId({ layer: 'worldview', domain, slot, name: entry.name })
+    const id = stableEntryId({ layer, domain, slot, name: entry.name })
 
     const hubEntry = {
       schema: PEDIA_SCHEMA,
       id,
-      layer: 'worldview',
+      layer,
       name: entry.name,
       domain,
       slot,
-      rank: isOrderedSlot(slot) ? rankOf(entry) : null,
+      rank: layer === 'worldview' && isOrderedSlot(slot) ? rankOf(entry) : null,
       definition: deriveDefinition(entry, warnings),
       stats: { chars: entry.chars, keys: entry.keys.length, relations: relations.length },
       provenance: {
@@ -494,6 +546,14 @@ export function worldbookToHub(input, options = {}) {
         worldbook: worldbookSnapshot(entry, { stripContent })
       }
     }
+    // style 是软层：pedia 只要求 provenance + fingerprint；正文格式指标这里如实给结构读数，
+    // 向量为 null（相似度检索暂不可用，和小说/剧本锚点的软层损失同一口径）。
+    if (layer === 'style') {
+      hubEntry.fingerprint = {
+        vec: null,
+        metrics: { chars: entry.chars, keys: entry.keys.length, relations: relations.length }
+      }
+    }
     if (aliases.length) hubEntry.aliases = aliases
     // relations 为空的字段不落，保持信封干净（规范里它是 optional）。
     if (relations.length) hubEntry.relations = relations
@@ -502,7 +562,7 @@ export function worldbookToHub(input, options = {}) {
     }
 
     hubEntries.push(hubEntry)
-    mappings.push({ id: entry.id, name: entry.name, type: entry.type, cat: entry.catDir, slot, via: slotInfo.via })
+    mappings.push({ id: entry.id, name: entry.name, type: entry.type, cat: entry.catDir, layer, slot, via: slotInfo.via })
   }
 
   const checked = hubEntries.map((entry) => ({ id: entry.id, name: entry.name, ...validatePediaEntry(entry) }))
@@ -522,6 +582,7 @@ export function worldbookToHub(input, options = {}) {
     entries: hubEntries,
     index: { nameToId },
     mappings,
+    prefixRules: prefixRuleTable(),
     exportLosses: PEDIA_EXPORT_LOSSES.map((item) => ({ ...item })),
     losses,
     warnings,

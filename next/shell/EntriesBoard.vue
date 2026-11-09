@@ -238,9 +238,11 @@ function openEntry(entry) {
   void props.data.openEntry?.(entry.item ?? entry)
 }
 
-/** 行的悬停提示：路径 · 版本 · 字数 · 是否建档（批次33 的 IDE 化口径，行上只留名字＋层级 dot）。 */
+/** 行的悬停提示：全名（长名单行会被截断，悬浮看全）· 路径 · 版本 · 字数 · 是否建档。 */
 function rowHint(entry) {
   const parts = []
+  const name = String(entry?.name ?? '').trim()
+  if (name) parts.push(name)
   const file = String(entry?.path ?? '').trim()
   if (file) parts.push(file)
   if (Number.isFinite(Number(entry?.revision))) parts.push(`第 ${entry.revision} 版`)
@@ -627,6 +629,13 @@ const infoboxTier = computed(() => {
   font-weight: 500;
   color: var(--archive-ink-soft);
 }
+/* 组头（槽位/组名＋计数）：比层头轻一档的度量，语义与计数不动（批次 W4 只收行高）。 */
+.nx-entry-category {
+  margin: 6px 0 2px;
+  font-size: var(--nx-fs-2xs);
+  font-weight: 500;
+  color: var(--archive-ink-soft);
+}
 .nx-hub-count {
   color: var(--text-muted);
   font-weight: 400;
@@ -763,8 +772,8 @@ const infoboxTier = computed(() => {
   font-variant-numeric: tabular-nums;
 }
 
-/* 行尾历史钮（照索引窗那一枚）：默认不占视觉，hover 这一行或键盘聚焦到它才显形。
-   opacity 只管看得见与否——按钮始终在文档流里、始终可 Tab 到（无鼠标可达）。 */
+/* 条目行（批次 W4）：一行一条、无卡片底、行高紧凑；当前条目用令牌色高亮。
+   行本身就是按钮（选它＝看它），历史钮只做页内动作。 */
 .nx-tree-line {
   display: flex;
   align-items: center;
@@ -774,10 +783,53 @@ const infoboxTier = computed(() => {
 .nx-tree-line > .nx-tree-item {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: var(--nx-radius-xs);
+  background: transparent;
+  color: var(--archive-ink-soft);
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
+  line-height: 1.35;
 }
+.nx-tree-line > .nx-tree-item:hover {
+  background: var(--nav-hover);
+  color: var(--archive-ink);
+}
+.nx-tree-line > .nx-tree-item.is-active {
+  background: var(--nav-selected);
+  color: var(--archive-ink);
+  font-weight: 500;
+}
+.nx-tree-line > .nx-tree-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+/* 长名单行截断；全名在 title 里（rowHint 第一段就是条目名）。 */
+.nx-tree-line > .nx-tree-item .workspace-nav-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 行尾历史钮（照索引窗那一枚）：默认不占视觉，hover 这一行或键盘聚焦到它才显形。
+   紧凑行高不再沿用 .nx-row 的 42px 行高——命中区 24×24，仍在文档流里、仍可 Tab。 */
 .nx-entries-history {
+  flex: none;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: var(--nx-radius-xs);
+  color: var(--text-muted);
   opacity: 0;
   transition: opacity 120ms ease;
+}
+.nx-entries-history:hover {
+  color: var(--archive-ink);
 }
 .nx-tree-line:hover .nx-entries-history,
 .nx-tree-line:focus-within .nx-entries-history,
