@@ -4,6 +4,15 @@ import { buildFactPack } from '../factPack.js'
 import { createAliasIndex } from '../../domain/aliases.js'
 import { spendAi } from './sessionState.js'
 
+/**
+ * 游玩 / 推演提议用的 system prompt（双叙述纪律的「游玩侧」常量）。
+ * 这是主持问答 / 候选提议体：提议剧情走向、输出候选 JSON，面向推演会话，
+ * 不是小说叙述体。成书渲染走 render/prose.js 的 RENDER_PROSE_SYSTEM_PROMPT，
+ * 两者绝不共用、绝不拼接（fact-render.test.mjs 断言两常量互不等）。
+ */
+export const DEDUCE_DRAMA_SYSTEM_PROMPT = '你是剧情推演提议器。基于事实包提出候选剧情走向，输出 JSON：{"proposals":[{"text":"一句话走向","refs":["涉及的已有实体名"]}}}。refs 只能引用事实包里存在的实体。'
+
+
 /** 种子化 PRNG（mulberry32）——2d6 可复现（重掷＝换 seed）。 */
 export function mulberry32(seed) {
   let a = seed >>> 0
@@ -92,7 +101,7 @@ export async function dramaCandidates({ entries, state, pov, llmPort, seedPrompt
   if (spend === 0) return []
   try {
     const answer = await llmPort.complete({
-      system: '你是剧情推演提议器。基于事实包提出候选剧情走向，输出 JSON：{"proposals":[{"text":"一句话走向","refs":["涉及的已有实体名"]}}}。refs 只能引用事实包里存在的实体。最多 ' + limit + ' 条。' + (seedPrompt ? `\n锚定：${seedPrompt}` : '') + `\n事实包简报：${brief}`,
+      system: DEDUCE_DRAMA_SYSTEM_PROMPT + '最多 ' + limit + ' 条。' + (seedPrompt ? `\n锚定：${seedPrompt}` : '') + `\n事实包简报：${brief}`,
       maxTokens: 400
     })
     const match = /\{[\s\S]*\}/.exec(String(answer?.text ?? ''))
