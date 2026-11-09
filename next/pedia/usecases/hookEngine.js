@@ -182,6 +182,7 @@ export async function diffValidate(input = {}, options = {}) {
   const before = await load(source.before)
   const after = await load(source.after)
   const issues = []
+  const warnings = []
   const notes = []
 
   const beforeById = new Map(before.map((entry) => [str(entry.id), entry]))
@@ -251,6 +252,9 @@ export async function diffValidate(input = {}, options = {}) {
   if (source.draft) {
     const precheck = precheckDraft({ draft: source.draft, entries: after.length ? after : before })
     issues.push(...precheck.issues)
+    // 预检的 warnings（如 REFERENCE_UNRESOLVED）不是硬伤，但宿主上报时不能凭空丢掉——
+    // 它们是「正文引用了 hub 里没有的名字」这条链唯一的证据。
+    warnings.push(...(Array.isArray(precheck.warnings) ? precheck.warnings : []))
   } else {
     notes.push('未提供 draft：只做条目级 diff，不做视角/时间轴预检')
   }
@@ -264,6 +268,7 @@ export async function diffValidate(input = {}, options = {}) {
     schema: PEDIA_SCHEMA,
     summary,
     issues,
+    warnings,
     notes
   }
 }

@@ -337,8 +337,14 @@ export function shellView(session) {
  *   skillsService —— next/skills/loadSkills.mjs 的 createSkillsService：{ list, toggle, body, importFrom }。
  *                       四条 skills:* 通道都只转发给它（判定与落盘口径全在装载层那一份，这里不留第二套）。
  *                       不注入时如实报缺——不注入的是**接线**，不是功能：渲染层拿不到 fs，也不该拿。
+ * deps 扩展（P4 S3 hook 接线）：
+ *   pediaHooks —— next/shell/pediaHookService.mjs 的 createPediaHookService：
+ *                       { runToolCall({tool,args,call}), afterComplete({action,result}) }。
+ *                       保存类工具（章节/大纲/世界书）成功后做 diffValidate＋缺失实体草案；
+ *                       续写产出补全建议提案、润色只读查询。钩子是旁路：失败不影响主动作。
+ *                       不注入时两个动作照旧——接线不在这一层，fs／hub 转换器也进不了渲染层依赖图。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, pediaHooks = null }) {
   // 批次62 任务2：这条通道认的 id 集不再是「MENU_TEMPLATE 的拍平结果」这一份死集合，
   // 而是 MENU_TEMPLATE ∪ registry.commands()，每次现算（载体可被启用／停用）。
   // 见下方 acceptedMenuIds —— 全文件只有那一处口径。
@@ -633,8 +639,17 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return skillsService ? skillsService.body(input.name) : skillsUnwired()
       case IPC_CHANNELS.skillsImport:
         return skillsService ? skillsService.importFrom(input.sourceDir) : skillsUnwired()
-      case IPC_CHANNELS.runtimeToolCall:
-        return session.runtime ? session.runtime.callTool(input.tool, input.args ?? {}) : fail('INVALID_INPUT', '运行时尚未就绪')
+      case IPC_CHANNELS.runtimeToolCall: {
+        if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')
+        const tool = input.tool
+        const args = input.args ?? {}
+        // P4 S3：保存类工具走钩子包一层（保存前 hub 快照 → 原调用 → 成功后 diff 校验＋缺失实体草案）。
+        // 非保存工具原样透传；pediaHooks 未注入时与旧行为逐字相同。
+        if (pediaHooks?.runToolCall) {
+          return pediaHooks.runToolCall({ tool, args, call: () => session.runtime.callTool(tool, args) })
+        }
+        return session.runtime.callTool(tool, args)
+      }
       case IPC_CHANNELS.runtimePropose:
         return session.runtime ? session.runtime.propose({ name: input.name, text: input.text }) : fail('INVALID_INPUT', '运行时尚未就绪')
       // 协议 v3 的 services 面：状态只读，重启走主进程（渲染层不碰子进程）。
@@ -680,7 +695,7 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
       case IPC_CHANNELS.runtimeComplete: {
         if (!writingComplete?.run) return fail('INVALID_INPUT', '写作动作未接入（主进程未创建 writingComplete）：这条通道现在只报缺，不写任何字')
         if (!session.projectRoot) return fail('INVALID_INPUT', '写作动作需要先打开一个项目：它按当前项目的稿子来写')
-        return writingComplete.run({
+        const result = await writingComplete.run({
           action: input.action,
           text: input.text,
           selection: input.selection,
@@ -688,6 +703,19 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
           // 预览口按项目根核对：主进程留存的那一份属于哪个项目，就在这里钉进请求。
           root: session.projectRoot
         })
+        if (!result?.ok || !pediaHooks?.afterComplete) return result
+        // P4 S3：续写→suggestCompletion（给建议提案）、润色→readOnlyQuery（零写入）。
+        // 钩子错了也把写作结果原样还给作者，错误只挂在回执旁注上——旁路不许反过来吃掉主路。
+        try {
+          const hook = await pediaHooks.afterComplete({ action: input.action, result })
+          if (!hook) return result
+          return { ...result, value: { ...(result.value ?? {}), pediaHook: hook } }
+        } catch (error) {
+          return {
+            ...result,
+            value: { ...(result.value ?? {}), pediaHook: { error: String(error?.message || error) } }
+          }
+        }
       }
       // 批次46A：提示词预览（只读）。最近一次写作请求的完整 system＋user 留在主进程，
       // 渲染层只读展示；换成另一个项目后旧预览不跨项目给。
