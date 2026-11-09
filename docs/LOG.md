@@ -1,5 +1,15 @@
 # 开发日志
 
+## 2026-11-10 · M1-a/M1-b 推演循环引擎与会话存储（本地）——M1-c 移交
+
+- 推演式创作 ADR 定稿（`D:\Pinax-e2e\wikihub-arch\deduce-adr-final.md`，八裁定＋POV 补充：事件带 runId/pov、知情矩阵=第一视角、换角色重演＝叠加微调 hypothesis 轨、端点固定路径自由、多 POV 交替章节归 M3）。
+- **M1-a 引擎（da2015e）**：`next/fact/usecases/deduce/` 五件——opening 冻结快照（**拒草稿开局** WORLD_NOT_ADOPTED／POV_NOT_FOUND／worldHash）；turn 有界推进（局面卡 who/where/tension/hook 四字段）；candidates 三层（**L-必然▮** rules·events 确定性推导 adopted／**L-命运⚙** 2d6 seedable 剧情检定＋骰点 trace／**L-戏剧✦** LlmPort 提议 proposed＋事实包简报入 prompt，预算 1–8、失败隔离、**一致性筛**：引用未知实体候选层确定性拒＝端点固定路径自由）；settle（beat 条目 runId·pov·source·decidedBy fate|author＋hypothesis open 轨＝叠加微调钩子＋导演 veto/reroll/inject）；sessionState（预算容器＋事件日志 replay 源＋fronts M4 接口占位）。骰子自实现 mulberry32（不 import @pinax/core，保整目录平移纯度）。种子化 50 拍仿真零事务错误。
+- **M1-b 会话存储（14d4f9f）**：sessionStore 事件溯源形态——SESSION_EVENT_TYPES 15 种枚举收敛、sequence 唯一索引、checkpoint 五 purpose＋stateHash 篡改可检出、**branchSession 读档即分支**（lineage 链多级可溯＋父进度保留＋atSeq 裁父段）、replay 任意时点重建；memorySessionStore（持久层留 Host）。与引擎联跑 20 拍事件全落流。
+- **调度方式变更（作者指令）**：Qoder 平台故障（qoduck 不可用＋auto 挂＋flash 500，error_code 500 input_tokens 0）→ M1-a 首轮 qoduck/flash 双败 → **作者裁定切 CodeBuddy hy4 → 发现 CodeBuddy CLI 本机不存在（IDE 残缺安装）→ 作者裁定调度方直接实现 M1 三批**。执行流中断纪律全程有效（回滚无污染、门控正确跳过）。
+- 门禁：kernel 1022/1022（M1-a +9／M1-b +4）；gate v2 分段 acceptance/kernel/ui/bundle ok，lint 两处未用变量（brief 漏接 prompt／局面卡多余 rules）已修（ab1abac）复净。
+- **M1-c 场景卡 UI 移交下一执行方**：工单已附调度方侦察简报（页签系统＝workspace entries form:'page'＋viewRegistry；载体 pane 数据驱动；host 常驻面板 AppNext 直接挂载——建议走最浅路径避开守卫⑪–⑬页签契约区）。
+- 待办：真实模型质量验收（诡秘之主前几章 wiki 化＋推演续写＝M1 试验场景）；Kit 17 卡契约迁移；推演编排深度接线（BeatPlan 吃事实包）。
+
 ## 2026-11-09 · F1+F2：品牌统一 fact.data／hook 绑 tool 化（本地）——F 系收官
 
 - **F1（8b1ce0b2）**：pedia→fact 纯改名重构（53 文件 ±499/492 行，行为零变化）：`next/pedia/`→`next/fact/`（26 文件原样迁移）、schema `'fact.data/v2'`、全仓 import 与标识符同步（FACT_SCHEMA/validateFactEntry/FACT_STORE_*/runFactGate 等）、`factHookService.mjs`、日志 source `fact-hooks`、开关档 `.pinax/fact-hooks.json`（迁移器认旧档只读回落）。**保留 pedia 字样处**：NovelPedia 来源溯源（FACT_SOURCE/prompt 头/migrator 输入侧旧标识/`extra.pediaSlot` 兼容键）。改名一致性抽查：wikihub/skills/shell 残留 `next/pedia` 引用 0。kernel 1004/1004。
