@@ -1,5 +1,12 @@
 # 开发日志
 
+## 2026-11-09 · P3 技能数据契约（本地）
+
+- `next/pedia/usecases/skillContract.js`（4b3b2aef）：defineSkillContract 定义即拒（SkillContractError 带 field）／validateSkillContract 非抛错口／validateProduces 四关（schema→状态机可达→层槽白名单→asStatus·mode 一致）／assembleRequires 只读裁剪（深拷贝、dropped 记账、缺投影 warnings）。
+- 契约形状＝**集中注册表** `next/skills/contracts.mjs`（嵌套结构 frontmatter 表达不了；第三方包不写契约 contract:null 照装，向后兼容）。五卡挂契约：chapter-rewrite（plot+character，span current±1，produces 正文增量 draft＋新设定 proposed）、continuity-check（三层全量＋知情矩阵，produces nonEntry violation-list 包装 precheck）、outline-restructure（事件图→plot proposed＋relation-edges）、scene-expand（场景投影→scene-skeleton＋proposed）、worldbook-refactor（worldview 全槽→重组 proposed）。
+- loadSkills 装载校验：坏契约拒装记账；supports contract:null 向后兼容。prompt 正文未重写（只加契约段——按契约重写 prompt 留后续批）。node:test 979/979（+11）；qoduck 7min/46 轮一次过。
+- 17 张 kit 指令卡的契约迁移属 kit 侧后续。剩余：P4 hook 接线（shell 创作动作）→P5 作品化门禁。
+
 ## 2026-11-09 · P2b 存量迁移器（本地）
 
 - `next/pedia/usecases/migrateLegacy.js` 四路径（df458434）：worldStore→worldview（category/group/injection.group/cat→category_map 11 槽，Host 字段 `next.worldbook` 无损快照）；大纲 nodes/edges→plot 事件图（causes→causal、foreshadows→setup＋hypothesis 轨 setup/payoffSuggestion、alternative/parallel→relation，自环/缺端点 dropped）；账本 v4→双时间轴事实＋character.knowledge[]；章节→场景骨架（segment 100–300 字，`pipelinePending:true` 留管线精抽，quote_hash 只存哈希原文不落）。迁入一律 proposed＋mode=author；**operationId 幂等重跑 diff=0**、dryRun 零写入（spy store 断言）；losses 九类如实记账（category-unmapped/edge-dropped/payoff-suggestion-only/alternative-degraded/ledger 区间近似等）。
