@@ -1,5 +1,12 @@
 # 开发日志
 
+## 2026-11-09 · F1+F2：品牌统一 fact.data／hook 绑 tool 化（本地）——F 系收官
+
+- **F1（8b1ce0b2）**：pedia→fact 纯改名重构（53 文件 ±499/492 行，行为零变化）：`next/pedia/`→`next/fact/`（26 文件原样迁移）、schema `'fact.data/v2'`、全仓 import 与标识符同步（FACT_SCHEMA/validateFactEntry/FACT_STORE_*/runFactGate 等）、`factHookService.mjs`、日志 source `fact-hooks`、开关档 `.pinax/fact-hooks.json`（迁移器认旧档只读回落）。**保留 pedia 字样处**：NovelPedia 来源溯源（FACT_SOURCE/prompt 头/migrator 输入侧旧标识/`extra.pediaSlot` 兼容键）。改名一致性抽查：wikihub/skills/shell 残留 `next/pedia` 引用 0。kernel 1004/1004。
+- **F2（a17857af）**：fact 更新绑定 tool 调用链（作者纠偏落地）——`WRITE_HOOK_REGISTRY` 写工具注册表＋`DEFAULT_WRITE_HOOK`（表外写口自动默认钩子）；宿主注入自 KERNEL/CARRIER_WRITE_CLASS 非 structural/derived 全量写口（**未来新增写工具自动覆盖，fact 代码零改动**）；实体识别改内容驱动（`mineNamedEntities`：segment→确定性规则＋可选 LlmPort 注入，`stripBlueLinkSignals` 识别前剥 `@《…》`——测试断言纯符号文本候选为空、散文实体照常识别）；草案按实体名去重（跳过计数进通知文案）。kernel 1009/1009。
+- 过程账：F 系两轮被范围守卫拦（第一轮=守卫三重缺陷＋模板带病克隆；第二轮=工单漏项 skills/、F2 缺前置门控）——均已修复入册（元教训：克隆模板先核谱系；改名批次白名单按合法波及配；serial 依赖批必须有前置门控）。W5（fa3da49）已先行落地。
+- **fact 引擎全栈收官**：fact.data/v2 格式＋next/fact/ 域＋管线＋迁移器＋技能契约＋hook 接线（tool-bound）＋门禁，wiki 前端图谱嵌正文右上角。验收场景＝《诡秘之主》前几章 wiki 化＋推演续写实测（待开发收尾后进行）。
+
 ## 2026-11-09 · P5 作品化质量门禁（本地）——P 系收官
 
 - `next/pedia/usecases/gate.js`（8651d5bd）：四类断言＋归一化报告＋round-trip 端口＋`runPediaGate` 汇总出口。**可判定项**（assertions，error 进 conflicts 拦、warning 不拦）：角色言行 vs anchors／rules 槽位结构化约束冲突／双时间轴批量 overlap／知情一致性全量（precheck 推广）。**不可判定项**（undecidable，诚实边界）：rules 只有自由文本 definition 无 `constraint:{key,value}` 的条目——门禁不拿文本猜语义，现有真实数据基本都落这里（后续让规则条目带结构化约束字段即可逐步转可判定）。
