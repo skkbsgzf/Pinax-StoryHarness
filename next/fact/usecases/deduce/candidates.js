@@ -92,7 +92,7 @@ export async function dramaCandidates({ entries, state, pov, llmPort, seedPrompt
   if (spend === 0) return []
   try {
     const answer = await llmPort.complete({
-      system: '你是剧情推演提议器。基于事实包提出候选剧情走向，输出 JSON：{"proposals":[{"text":"一句话走向","refs":["涉及的已有实体名"]}}}。refs 只能引用事实包里存在的实体。最多 ' + limit + ' 条。' + (seedPrompt ? `\n锚定：${seedPrompt}` : ''),
+      system: '你是剧情推演提议器。基于事实包提出候选剧情走向，输出 JSON：{"proposals":[{"text":"一句话走向","refs":["涉及的已有实体名"]}}}。refs 只能引用事实包里存在的实体。最多 ' + limit + ' 条。' + (seedPrompt ? `\n锚定：${seedPrompt}` : '') + `\n事实包简报：${brief}`,
       maxTokens: 400
     })
     const match = /\{[\s\S]*\}/.exec(String(answer?.text ?? ''))

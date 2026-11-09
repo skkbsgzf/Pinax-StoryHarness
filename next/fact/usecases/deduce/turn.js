@@ -16,7 +16,6 @@ export async function presentTurn({ state, entries, pov, llmPort, seed, seedProm
 function buildSceneCard({ entries, pov, candidates, seed }) {
   const characters = (Array.isArray(entries) ? entries : []).filter((e) => e?.layer === 'character').map((e) => e.name)
   const locations = (Array.isArray(entries) ? entries : []).filter((e) => e?.layer === 'worldview' && e.slot === 'locations').map((e) => e.name)
-  const rules = (Array.isArray(entries) ? entries : []).filter((e) => e?.layer === 'worldview' && e.slot === 'rules').map((e) => e.name)
   const fate = candidates.find((c) => c.source === '命运')
   const hook = candidates.find((c) => c.source === '戏剧') ?? candidates.find((c) => c.source === '必然')
   return {
