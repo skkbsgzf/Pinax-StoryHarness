@@ -2833,7 +2833,7 @@ onBeforeUnmount(() => {
              数据取基座世界书面条目（与列表／图谱同源，不新增工具调用）；回执并入既有 serviceSnapshot。 -->
         <DeducePanel
           v-if="deduceOpen"
-          :entries="data.entries"
+          :entries="indexData?.entries?.length ? indexData.entries : data.entries"
           :world-name="project?.name ?? ''"
           @close="closeDeduce"
           @receipt="onDeduceReceipt"
