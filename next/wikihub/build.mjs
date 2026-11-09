@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseWorldbookEntryFile } from '@pinax/core/domain/worldbookFileContract'
-import { PEDIA_SCHEMA } from './pediaSchema.mjs'
+import { PEDIA_SCHEMA } from '../pedia/domain/pediaSchema.js'
 import { worldbookToHub } from './convert.mjs'
 import { WIKIHUB_HTML_VERSION, renderHubHtml } from './render.mjs'
 

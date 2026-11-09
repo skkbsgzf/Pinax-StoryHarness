@@ -12,7 +12,7 @@
  * 本文件纯函数、无磁盘依赖；入口在 convert.mjs（世界书 style 类条目改投）与 migrate.mjs（v1 迁移）。
  */
 
-import { sha1Hex } from '../pediaSchema.mjs'
+import { sha1Hex } from '../../pedia/domain/stableId.js'
 
 export const NOVEL_STYLE_PACK_ID = 'novel-style'
 export const NOVEL_STYLE_PACK_VERSION = 'novel-style/v1'

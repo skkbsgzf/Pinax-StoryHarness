@@ -1,4 +1,4 @@
-import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from './pediaSchema.mjs'
+import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from '../pedia/domain/pediaSchema.js'
 import {
   HUB_VIEW_LAYER_LABELS,
   HUB_VIEW_LAYER_ORDER,

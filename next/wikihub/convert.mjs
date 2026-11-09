@@ -13,19 +13,19 @@ import {
   slotForCategory,
   stableEntryId,
   validatePediaEntry
-} from './pediaSchema.mjs'
+} from '../pedia/domain/pediaSchema.js'
 import {
   NOVEL_STYLE_PACK_ID,
   createNovelStylePack,
   styleEntryFromWorldbook,
   stylePackSlot
 } from './packs/novel-style.mjs'
-import { segmentText } from './segment.mjs'
+import { segmentText } from '../pedia/domain/segment.js'
 
 /**
  * wikihub 三载体双向转换器（W1 起，pedia/v2 语义）。
  *
- * 枢纽格式 = pedia/v2（见 ./pediaSchema.mjs，ADR 定稿）。本文件只做「载体语义 ↔ 枢纽条目」的翻译，
+ * 枢纽格式 = pedia/v2（真源在 ../pedia/domain/pediaSchema.js，ADR 定稿）。本文件只做「载体语义 ↔ 枢纽条目」的翻译，
  * 不碰磁盘、不接工具面、不定义 hub 的存储位置（落盘与入口是 W2 的事）。
  *
  * 三条转换线：

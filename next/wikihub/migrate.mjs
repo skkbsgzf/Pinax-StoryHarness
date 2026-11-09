@@ -20,9 +20,10 @@ import {
   createRhythmSpec,
   sha1Hex,
   validatePediaEntry
-} from './pediaSchema.mjs'
+} from '../pedia/domain/pediaSchema.js'
+import { validityFromSpan } from '../pedia/domain/validity.js'
 import { createNovelStylePack, styleEntryFromWorldbook } from './packs/novel-style.mjs'
-import { segmentText } from './segment.mjs'
+import { segmentText } from '../pedia/domain/segment.js'
 
 export const PEDIA_MIGRATION_VERSION = 'pedia/v1→v2'
 
@@ -36,17 +37,6 @@ function str(value) {
 
 function isEmptySpan(span) {
   return !isPlainObject(span)
-}
-
-function validityFromSpan(span) {
-  if (!isPlainObject(span)) return { from: null, to: null }
-  if (Number.isInteger(span.first_chapter) || Number.isInteger(span.last_chapter)) {
-    return { from: Number.isInteger(span.first_chapter) ? span.first_chapter : null, to: Number.isInteger(span.last_chapter) ? span.last_chapter : null }
-  }
-  if (Number.isInteger(span.first_scene) || Number.isInteger(span.last_scene)) {
-    return { from: Number.isInteger(span.first_scene) ? span.first_scene : null, to: Number.isInteger(span.last_scene) ? span.last_scene : null }
-  }
-  return { from: null, to: null }
 }
 
 function inferMode(entry) {

@@ -1,4 +1,4 @@
-import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from './pediaSchema.mjs'
+import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from '../pedia/domain/pediaSchema.js'
 
 /**
  * wikihub 三栏视图模型（批次 W3 · 纯函数，浏览器侧可用）。
