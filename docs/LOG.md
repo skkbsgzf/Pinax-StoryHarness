@@ -1,5 +1,17 @@
 # 开发日志
 
+## 2026-11-09 · P5 作品化质量门禁（本地）——P 系收官
+
+- `next/pedia/usecases/gate.js`（8651d5bd）：四类断言＋归一化报告＋round-trip 端口＋`runPediaGate` 汇总出口。**可判定项**（assertions，error 进 conflicts 拦、warning 不拦）：角色言行 vs anchors／rules 槽位结构化约束冲突／双时间轴批量 overlap／知情一致性全量（precheck 推广）。**不可判定项**（undecidable，诚实边界）：rules 只有自由文本 definition 无 `constraint:{key,value}` 的条目——门禁不拿文本猜语义，现有真实数据基本都落这里（后续让规则条目带结构化约束字段即可逐步转可判定）。
+- round-trip 保真：只比结构语义不比行文——实体集（条目名∪refs∪关系目标）／关系对／人物锚点逐行；载体分工 worldview 走世界书全字段、plot 走 `@《…》` 回读、人物无载体 JSON 身份往返＋`character-carrier-unavailable` 记 losses；gate 层静态边界不能 import wikihub——roundTrip 走端口注入，不注入时 `skipped:true` 如实报告，不假装测过。
+- 归一化回归：克莱恩基线随迁（克莱恩=周明瑞并组 1 组；跨条目同词声明「愚者」别名「克莱恩」仍并组但 conflicts 报双主张，`normalization.ok=false` 不静默选边）；category_map 48 键逐条断言全中。node:test 1003/1003（+9）；qoduck 8min/36 轮一次过。
+
+## 2026-11-09 · P 系战役总账（P0–P5 七批，2026-11-09 一日完成）
+
+- **pedia 数据内核在 fork 内全线成型**：P0 格式（f83c3f0b）→P1 域骨架 next/pedia/ 四层（8a6f421d）→P2a 管线（c4f7e567）→P2b 迁移器（df458434）→P3 技能契约（4b3b2aef）→P4 hook 接线（c222ef17）→P5 门禁（8651d5bd）。kernel 930→1003；qoduck 七连一次过（8/12/10/9/7/10/8 分钟，零修复轮）。
+- 架构定型：next/pedia/＝Core-shape 域（禁宿主依赖，未来整目录平移 core/src/pedia/）；wikihub＝视图/转换层反向依赖 pedia；hooks 接进保存/续写/润色（旁路观察者＋总开关）；五张编剧 skill 带数据契约；gate 出口留给 CI/创作流程。
+- 作者裁定已全编码进 ADR（pedia-v2-adr-final.md）：文风解耦能力包／三大创作质量语义／hook 绑定／段级粒度。剩余：真实模型质量验收（作者体验）／Kit 侧 17 卡契约迁移／T12 平移 core 谈判。
+
 ## 2026-11-09 · P4 hook 接线创作动作（本地）
 
 - hookEngine 三入口接进 shell 真实链路（c222ef17）：章节/大纲/世界书保存→diffValidate（hub 快照 before/after＋draft 预检，**旁路观察者不阻塞保存**，issues/warnings 走 serviceLogPool source=`pedia-hooks`）；`@《…》` 缺条目→自动补 proposed＋pipelinePending 草案（汇 `.pinax/proposals/`，绝不改作者条目）；续写→suggestCompletion（factPack 建议落提案）；润色→readOnlyQuery 零写入。
