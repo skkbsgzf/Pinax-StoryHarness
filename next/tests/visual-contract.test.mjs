@@ -1807,7 +1807,7 @@ test('〔批次 M1-c〕推演面板＝AppNext 直接挂载的中栏覆盖层：�
   // ① 直接挂载的四个钉子：导入、v-if 显隐、world 书面条目同源、回执／关闭落点。
   assert.match(app, /import DeducePanel from '\.\/DeducePanel\.vue'/u, 'AppNext 没直接 import DeducePanel')
   assert.match(app, /<DeducePanel[\s\S]{0,160}v-if="deduceOpen"/u, '推演面板不是 AppNext 直挂的 v-if 覆盖层（别改回页签注册）')
-  assert.match(app, /:entries="data\.entries"/u, '推演面板取基座世界书面条目，不新增工具调用')
+  assert.match(app, /:entries="indexData\?\.entries\?\.length \? indexData\.entries : data\.entries"/u, '推演面板条目＝索引页实例优先、基座回落（d54aed3 修复接线：基座 data 不加载世界书文档）')
   assert.match(app, /@close="closeDeduce"/u, '关闭没接回 deduceOpen')
   assert.match(app, /@receipt="onDeduceReceipt"/u, '回执没接回宿主')
   assert.match(app, /const deduceOpen = ref\(false\)/u, '显隐状态不是 AppNext 自己那枚 ref')
