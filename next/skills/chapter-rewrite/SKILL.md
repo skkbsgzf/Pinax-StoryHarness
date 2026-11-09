@@ -22,3 +22,11 @@ domain: prose
 - 不越过提案直接声称「已改好正文」。
 - 不删改其他章节，不顺手重排结构。
 - 不复用旧稿里没过审的句子来凑字数。
+
+## 数据契约
+
+契约登记在 `next/skills/contracts.mjs`（`SKILL_CONTRACTS['chapter-rewrite']`），装配方按它裁剪事实包：
+
+- requires：plot 层（当前章事件，跨度 `current + before:1 + after:1`）＋ character 层（全场角色锚点，`knowledgeOf: cast`）。
+- produces：`plot` 正文增量（`mode: author`，落 `draft`）；触发新设定时另出 `worldview` 条目（`mode: author`，落 `proposed`，不直写 adopted）。
+- 文风约束不在 pedia 三层里（ADR S1 已把 style 解耦到能力包）：由装配方从文风能力包另行补给，不塞进事实包。

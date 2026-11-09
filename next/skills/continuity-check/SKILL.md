@@ -22,3 +22,10 @@ domain: acceptance
 - 不改任何文件，不生成提案。
 - 不把「读起来不顺」算成连续性问题——那是文风，另说。
 - 没有依据的怀疑不报；宁可少报，不编证据。
+
+## 数据契约
+
+契约登记在 `next/skills/contracts.mjs`（`SKILL_CONTRACTS['continuity-check']`）：
+
+- requires：worldview／character／plot 三层全覆盖——双时间轴用条目 `validity` 与查询时点相交判定，知情矩阵取全场角色（`knowledgeOf: cast`），有效性区间随投影返回。
+- produces：非条目产物 `violation-list`（output: checklist）。它包装 `pedia/usecases/precheck.js` 的结果，不落 pedia store；契约里用 `nonEntry` 声明，避免被当成条目误落库。

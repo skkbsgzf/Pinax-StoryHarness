@@ -22,3 +22,11 @@ domain: prose
 - 不改正文，不新建或删除章节文件。
 - 不删除有子节点的父节点；确需删除时先说清子节点的去向。
 - 不凭空补节点摘要——摘要只能来自既有内容或作者原话。
+
+## 数据契约
+
+契约登记在 `next/skills/contracts.mjs`（`SKILL_CONTRACTS['outline-restructure']`）：
+
+- requires：plot 层（剧情事件图，fact／hypothesis 双轨随投影给出）。
+- produces：`plot` 条目提案（`mode: author`，落 `proposed`）＋ 非条目产物 `relation-edges`（output: proposal）。
+- 限制：`structureTemplates` 目前不在事实包投影里，需要按模板重排时由装配方另行补给。

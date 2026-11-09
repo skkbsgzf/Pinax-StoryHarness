@@ -22,3 +22,10 @@ domain: worldbook
 - 不改既有条目的既定事实（年代、身份、因果），只动组织方式。
 - 不合并两个来源不同、作者没说清归属的条目——先问。
 - 不把正文段落整段搬进世界书。
+
+## 数据契约
+
+契约登记在 `next/skills/contracts.mjs`（`SKILL_CONTRACTS['worldbook-refactor']`）：
+
+- requires：worldview 层全槽位投影（不写 slots＝完全不限槽位；有序槽位按 rank 给出 ordered）。
+- produces：`worldview` 条目提案（`mode: author`，落 `proposed`）；拆分／合并／补边都以提案形式出现，作者采纳才进 store。

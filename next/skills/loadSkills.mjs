@@ -2,6 +2,8 @@ import { readFile, readdir, writeFile, mkdir, rename, cp } from 'node:fs/promise
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { SKILL_CONTRACTS } from './contracts.mjs'
+import { validateSkillContract } from '../pedia/usecases/skillContract.js'
 
 /**
  * 技能包加载器（M2.5-B · 任务一）。
@@ -211,7 +213,7 @@ export function parseSkillMarkdown(markdown, { dir = '', nameHint = '' } = {}) {
  *   rejected      ＝ 装不上的每一条约 { dir, code, message, origin }（守卫⑪：原因必须看得见）；
  *   layers        ＝ 扫了哪两层目录、各自在不在（`exists:false` 是常态：没导入过就没有 .pinax/skills/）。
  */
-export async function loadSkills({ dir = null, availableTools = [], projectRoot = null, disabled = null } = {}) {
+export async function loadSkills({ dir = null, availableTools = [], projectRoot = null, disabled = null, contracts = SKILL_CONTRACTS } = {}) {
   // 不传 dir 就按「开发轨／装机轨」解析（批次37）：打包后模块目录是 next/.build/，
   // 技能跟着拷到 .build/skills/；源码轨则直接是 next/skills/。
   const skillsDir = dir ?? await resolveSkillsDir()
@@ -227,7 +229,7 @@ export async function loadSkills({ dir = null, availableTools = [], projectRoot 
   const collected = []
   const layers = []
   for (const layer of layerSpecs) {
-    const read = await readSkillLayer(layer.dir, { onSurface, origin: layer.origin })
+    const read = await readSkillLayer(layer.dir, { onSurface, origin: layer.origin, contracts })
     layers.push({ ...layer, exists: read.exists })
     collected.push(...read.skills)
     rejected.push(...read.rejected)
@@ -264,7 +266,7 @@ export async function loadSkills({ dir = null, availableTools = [], projectRoot 
  * 扫一层技能目录。目录不存在是常态（没导入过就没有 `.pinax/skills/`），ENOENT 如实标 exists:false、不记成拒装；
  * 其它读不动的错误照旧进 rejected——「扫不到」与「扫到但装不上」是两件事，不能混成一堆噪音。
  */
-async function readSkillLayer(skillsDir, { onSurface, origin }) {
+async function readSkillLayer(skillsDir, { onSurface, origin, contracts = SKILL_CONTRACTS }) {
   const skills = []
   const rejected = []
   let entries = []
@@ -301,7 +303,33 @@ async function readSkillLayer(skillsDir, { onSurface, origin }) {
       })
       continue
     }
-    skills.push({ ...parsed.value, origin })
+    // 数据契约（ADR P3）：登记过的技能在装载时校验一次——层／槽位词表、跨字段约束、produces 白名单。
+    // 没登记的技能（作者导入的第三方包）不为「没写契约」拒装：缺省 contract:null，装载数不因本批变化。
+    const registered = contracts && typeof contracts === 'object' ? contracts[name] : null
+    let contract = null
+    if (registered) {
+      const checked = validateSkillContract(registered)
+      if (!checked.ok) {
+        rejected.push({
+          dir: name,
+          origin,
+          code: 'SKILL_CONTRACT_INVALID',
+          message: `技能 ${name} 的数据契约不合法：${checked.errors.map((error) => `${error.field ? `${error.field} ` : ''}${error.message}`).join('；')}`
+        })
+        continue
+      }
+      if (checked.value.skill && checked.value.skill !== name) {
+        rejected.push({
+          dir: name,
+          origin,
+          code: 'SKILL_CONTRACT_NAME_MISMATCH',
+          message: `技能 ${name} 的数据契约登记在「${checked.value.skill}」名下：名字对不上就不装`
+        })
+        continue
+      }
+      contract = checked.value
+    }
+    skills.push({ ...parsed.value, origin, contract })
   }
   return { skills, rejected, exists: true }
 }
