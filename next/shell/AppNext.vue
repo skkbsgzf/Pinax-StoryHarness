@@ -23,6 +23,7 @@ import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vu
 import CommandPalette from './CommandPalette.vue'
 import StatusBar from './StatusBar.vue'
 import CollapseOrb from './CollapseOrb.vue'
+import DeducePanel from './DeducePanel.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
@@ -436,6 +437,17 @@ const referenceCatalog = computed(() => {
  *  节的动作经事件上交：通道调用与 refresh 留在外壳（同 RuntimeDock 持桥发问的分工）。 */
 const settingsOpen = ref(false)
 const activeSection = ref('prefs')
+/**
+ * M1-c 推演面板：AppNext 直接挂载的一枚中栏覆盖层（v-if 控制显隐）。
+ * 不注册新页签／槽位／视图／IPC 通道——避开守卫⑪⑫⑬的页态契约面，也不给 bundle 添宿主依赖。
+ */
+const deduceOpen = ref(false)
+function toggleDeduce() {
+  deduceOpen.value = !deduceOpen.value
+}
+function closeDeduce() {
+  deduceOpen.value = false
+}
 
 /**
  * 服务与通知（批次49）：公共池的唯一读数口。
@@ -467,6 +479,26 @@ const serviceStatus = computed(() => {
 })
 
 provide('pinaxServiceSnapshot', serviceSnapshot)
+
+/**
+ * M1-c 推演回执：走既有的「服务与通知」状态面（serviceLogPool 的渲染层镜像，设置页 ServicesSection 读它）。
+ * 不建新通知 UI、不新增 IPC 通道——条目形状与 serviceLogPool.normalizeEntry 一致，并入同一份 entries。
+ * 下游快照刷新（IPC 推送）会覆盖这份本地增量；推演面板自己也持本局回执清单，二者不争真相。
+ */
+function onDeduceReceipt({ level, message, data } = {}) {
+  const safeLevel = level === 'warn' || level === 'error' || level === 'confirm' ? level : 'info'
+  const entry = {
+    at: new Date().toISOString(),
+    source: { kind: 'service', id: 'deduce', carrierId: '' },
+    level: safeLevel,
+    message: String(message ?? ''),
+    data: data && typeof data === 'object' && !Array.isArray(data) ? { ...data } : {}
+  }
+  serviceSnapshot.value = {
+    ...serviceSnapshot.value,
+    entries: [...(serviceSnapshot.value.entries ?? []), entry].slice(-60)
+  }
+}
 
 /**
  * 状态栏（批次63 任务1）的四要素读数。
@@ -2605,6 +2637,13 @@ onBeforeUnmount(() => {
             </template>
           </ul>
         </div>
+        <!-- M1-c 推演入口：挂在菜单栏内（.nx-menubar 已是 no-drag 区，真窗可点）；一枚开关，不开第二套页态。 -->
+        <button
+          type="button"
+          class="control-quiet nx-deduce-toggle"
+          data-test="deduce-toggle"
+          @click="toggleDeduce"
+        >推演</button>
       </nav>
 
       <span
@@ -2789,6 +2828,15 @@ onBeforeUnmount(() => {
           @close="closeWindow"
           @open-services="openSection('services')"
           @open-proposals="openSection('proposals')"
+        />
+        <!-- M1-c 推演面板：中栏覆盖层，AppNext 直接挂载（不注册页签／槽位／新通道）。
+             数据取基座世界书面条目（与列表／图谱同源，不新增工具调用）；回执并入既有 serviceSnapshot。 -->
+        <DeducePanel
+          v-if="deduceOpen"
+          :entries="data.entries"
+          :world-name="project?.name ?? ''"
+          @close="closeDeduce"
+          @receipt="onDeduceReceipt"
         />
       </div>
 

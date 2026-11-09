@@ -1791,3 +1791,113 @@ test('〔批次68-R6 门禁㉑〕正文编辑入口是「点入即改」：chapt
   // 分页兼容：编辑态下分页条整块让位（v-if 谓词在），回到阅读态由 watch 现补当前页。
   assert.match(carrier, /v-if="!chapterEditing && textPagesReading && chapterPageCount > 1" class="chapter-pager"/u, '编辑态没让位分页条（「进入编辑自动整章展开」的版面前提）')
 })
+
+/**
+ * 〔批次 M1-c〕推演面板的挂载点合同（工单交付物 1 + 6 的字面量同步）。
+ *
+ * 侦察结论：页态窗口由 workspace.entries／PaneWindow／PaneTabStrip／viewRegistry 数据驱动，
+ * 新开页签会撞守卫⑪⑫⑬；宿主常驻面板（RuntimeDock／SettingsModal）本就由 AppNext 直接挂载。
+ * M1-c 取最浅路径：`<DeducePanel>` 由 AppNext 直接挂在 .col-center 内，一枚标题栏开关 (v-if) 控制显隐，
+ * 不注册页签／槽位／视图／IPC 通道；回执并入既有 serviceSnapshot，不建第二套通知 UI。
+ * 这条把「直接挂载 + 不越界」钉成机器判据：改回页签注册或另起桥通道即红。
+ */
+test('〔批次 M1-c〕推演面板＝AppNext 直接挂载的中栏覆盖层：开关／回执／不新增页态与通道', async () => {
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+
+  // ① 直接挂载的四个钉子：导入、v-if 显隐、world 书面条目同源、回执／关闭落点。
+  assert.match(app, /import DeducePanel from '\.\/DeducePanel\.vue'/u, 'AppNext 没直接 import DeducePanel')
+  assert.match(app, /<DeducePanel[\s\S]{0,160}v-if="deduceOpen"/u, '推演面板不是 AppNext 直挂的 v-if 覆盖层（别改回页签注册）')
+  assert.match(app, /:entries="data\.entries"/u, '推演面板取基座世界书面条目，不新增工具调用')
+  assert.match(app, /@close="closeDeduce"/u, '关闭没接回 deduceOpen')
+  assert.match(app, /@receipt="onDeduceReceipt"/u, '回执没接回宿主')
+  assert.match(app, /const deduceOpen = ref\(false\)/u, '显隐状态不是 AppNext 自己那枚 ref')
+  assert.match(app, /function toggleDeduce\(\)/u, '缺 toggleDeduce')
+  assert.match(app, /function closeDeduce\(\)/u, '缺 closeDeduce')
+
+  // ② 它挂在中栏 .col-center 内、在 CollapseOrb 之后，绝不塞进窗口层／页签条／槽位宿主。
+  const colStart = app.indexOf('class="col-center"')
+  const colEnd = app.indexOf('class="col-dock"', colStart)
+  assert.ok(colStart >= 0 && colEnd > colStart, '找不到 .col-center 与 .col-dock 边界')
+  const col = app.slice(colStart, colEnd)
+  assert.ok(col.indexOf('deduceOpen') > col.indexOf('<CollapseOrb'), '推演层没挂在 .col-center 内、CollapseOrb 之后')
+
+  // ③ 标题栏开关在 .nx-menubar（no-drag 区，真窗可点），且只用共享控件词汇 control-quiet。
+  const menubarStart = app.indexOf('class="nx-menubar"')
+  const menubar = app.slice(menubarStart, app.indexOf('</nav>', menubarStart))
+  assert.match(menubar, /data-test="deduce-toggle"/u, '标题栏没有「推演」开关')
+  assert.match(menubar, /class="control-quiet nx-deduce-toggle"/u, '开关没用共享控件词汇 control-quiet')
+  assert.match(menubar, /@click="toggleDeduce"/u, '开关没接 toggleDeduce')
+
+  // ④ 回执只并入既有 serviceSnapshot（服务与通知那份镜像），不建新通道、不碰桥。
+  const receiptFn = (app.match(/function onDeduceReceipt\([\s\S]*?\n\}/u) ?? [])[0] ?? ''
+  assert.ok(receiptFn, 'AppNext 未定义 onDeduceReceipt')
+  assert.match(receiptFn, /serviceSnapshot\.value/u, '回执没并入既有 serviceSnapshot')
+  assert.match(receiptFn, /entries:/u, '回执没落到 entries（另起了一套状态）')
+  assert.equal(receiptFn.includes('bridge.request'), false, '推演回执不许新起一次桥调用')
+  assert.equal(receiptFn.includes('IPC_CHANNELS'), false, '推演回执不许新添 IPC 通道')
+
+  // ⑤ 老硬约束不回潮：中栏不走 CenterSlotHost、AppNext 不留 scoped 样式／localStorage／硬编码坐标。
+  const clean = stripComments(app).replace(/<!--[\s\S]*?-->/gu, '')
+  assert.equal(clean.includes('CenterSlotHost'), false, '中栏不允许回潮成旧单槽宿主')
+  assert.equal(clean.includes('WorkbenchModal'), false, '推演面板不是设置弹窗，不许挂 WorkbenchModal')
+  assert.equal(clean.includes('<style scoped>'), false, 'AppNext 不许为推演层加 scoped 样式块')
+  assert.doesNotMatch(clean, /\.localStorage/u, '推演显隐不碰 localStorage')
+  assert.doesNotMatch(clean, /(?:left|top|right)\s*:\s*['"]?\d+px/u, 'AppNext 不许写硬编码坐标')
+})
+
+/**
+ * 〔批次 M1-c〕场景卡／徽章／双模式／第一视角两面板／留档的字面量同步（工单交付物 2/3/4 + 6）。
+ *
+ * 分工：deduce-panel.spec.mjs 在 jsdom 里验「跑起来那一面」，deduce-view.test.mjs 用 node:test 验纯封装；
+ * 这条只钉「屏上写了什么、挂了什么钩子」——把新组件的字面量合同收进 visual-contract，
+ * 免得以后改文案／撤钩子时没人拦。词表本体（三徽章／四字段／2d6）住在 fact 纯模块，一并核对在位。
+ */
+test('〔批次 M1-c〕推演场景卡字面量：四字段／三徽章／双模式／第一视角两面板／留档钩子齐', async () => {
+  const panel = await readFile(join(shellDir, 'DeducePanel.vue'), 'utf-8')
+  const template = stripComments(panel.slice(panel.indexOf('<template'), panel.lastIndexOf('</template>') + 11))
+    .replace(/<!--[\s\S]*?-->/gu, '')
+
+  // ① 局面卡：四字段由 view.fields 统一渲染（who/where/tension/hook 本体在 fact 封装里核）。
+  assert.match(template, /data-test="deduce-scene-card"/u, '局面卡容器没挂 data-test')
+  assert.match(template, /v-for="field in view\.fields"/u, '四字段没走 view.fields 统一渲染')
+  assert.match(template, /:data-field="field\.key"/u, '字段没带 data-field 机器标识')
+
+  // ② 徽章词表 + 候选列表：2–4 条、三来源图例、命运骰 2d6、候选带 data-source。
+  assert.match(template, /data-test="deduce-badge-legend"/u, '徽章图例缺位')
+  assert.match(template, /v-for="item in CANDIDATE_BADGES"/u, '图例没绑 fact 的徽章词表')
+  assert.match(template, /候选 2[–-]4 条/u, '候选 2–4 条的声明没上屏')
+  assert.match(template, /2d6/u, '命运骰 2d6 的声明没上屏')
+  assert.match(template, /data-test="deduce-candidates"/u, '候选列表缺位')
+  assert.match(template, /:data-source="option\.source"/u, '候选没带来源机器标识')
+
+  // ③ 玩家／导演双模式：切换钮、玩家「选择」、导演否决／重掷／注入表单。
+  assert.match(template, /data-test="deduce-mode-player"/u, '缺玩家模式切换钮')
+  assert.match(template, /data-test="deduce-mode-director"/u, '缺导演模式切换钮')
+  assert.match(template, /deduce-pick-\$\{option\.source\}/u, '玩家「选择」钮没按来源挂 data-test')
+  assert.match(template, /data-test="deduce-reroll"/u, '导演重掷钮缺位')
+  assert.match(template, /data-test="deduce-inject"/u, '导演注入表单缺位')
+  assert.match(template, /class="control-quiet nx-deduce-veto"/u, '导演否决钮没用共享控件词汇')
+
+  // ④ 第一视角两面板 + 回执 + 留档：已知情报／人物关系蓝链、本局回执、收束／中断快照。
+  for (const hook of ['deduce-known', 'deduce-relations', 'deduce-receipts', 'deduce-archived', 'deduce-reopen', 'deduce-finish', 'deduce-interrupt']) {
+    assert.match(template, new RegExp(`data-test="${hook}"`, 'u'), `缺 ${hook} 落点`)
+  }
+  assert.match(template, /class="workspace-nav-item nx-deduce-link"/u, '已知情报／关系蓝链没用共享导航行词汇')
+
+  // ⑤ 新组件不破既有字面量合同：空态用「暂无」不撞四个词根、不上批次号／工程词、字号圆角走 token。
+  assert.doesNotMatch(template, /还没有|没有内容|请从|请先/u, '空态撞了「还没有／请从」词根（门禁⑱会红）')
+  assert.doesNotMatch(template, /批次\s*\d+|清单声明|工程覆盖|承载位|写族闸/u, '实现行话上了屏（门禁⑮会红）')
+  const style = stripComments(panel.slice(panel.indexOf('<style'), panel.lastIndexOf('</style>') + 8))
+  assert.doesNotMatch(style, /(?:font-size|border-radius)\s*:\s*\d+(?:\.\d+)?px/u, '字号／圆角写了裸 px（刻度门禁会红）')
+  assert.doesNotMatch(style, /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\s*\(/u, '样式里写了硬编码颜色')
+
+  // ⑥ 词表本体在 fact 纯模块：三徽章字形 + 局面卡四字段 key（薄封装不许把词表埋回 SFC）。
+  const view = await readFile(join(repoRoot, 'next', 'fact', 'usecases', 'deduce', 'deduceView.js'), 'utf-8')
+  for (const glyph of ['▮', '⚙', '✦']) {
+    assert.ok(view.includes(glyph), `fact 词表缺徽章字形 ${glyph}`)
+  }
+  for (const key of ['who', 'where', 'tension', 'hook']) {
+    assert.match(view, new RegExp(`key: '${key}'`, 'u'), `fact 词表缺局面卡字段 ${key}`)
+  }
+  assert.match(view, /2d6 /u, 'fact 词表缺命运骰 2d6 trace 文案')
+})
