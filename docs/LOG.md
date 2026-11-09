@@ -1,5 +1,11 @@
 # 开发日志
 
+## 2026-11-09 · W4 归类修正＋左树清单式；T11c persist 口径对齐（Next 线，本地）
+
+- **W4（66b5cba9）**：`convert.mjs` 新增表驱动 `NAME_PREFIX_RULES`（8 条，只救落 other 的条目，cat/type/目录命中的不抢位；`mappings[].via` 留 `prefix:` 记号）——剧作·→style 层 `creative_rules`（pedia soft 层的 Next 扩展，组名「创作规则」）、设定·序列体系→power_levels、设定·界与十二时辰→locations、真相层·＋三组织/三派/三流→orgs、真相层·＋界灵→creatures、其余设定·/真相层·→concepts。dameng 13 条实测 **other=0**、losses 空。`EntriesBoard.vue` 左树改清单式（去边框卡片、一行一条、令牌字号、当前项 `--nav-selected` 高亮）。node:test 912/912。截屏复验通过（`D:\Pinax-e2e\w3-wikihub-shots\png\w3-wikihub-full.png`）。口径按调度方推荐案执行（作者未及答），可逆。
+- **T11c（4db3e2af）**：`next/shell/agentSessions.mjs` 的 `persist()` 对齐 core `agent/fileSessionState`——异步/同步 `{ok:false}` 回执当降级（degraded＋notify），不再假装成功（真实链路：ipcContract 分发器失败返回信封不抛，此前渲染层一直显示"已持久化"）。未直接 import core（渲染层依赖薄边界），语义逐行对齐＋对表测试。
+- 待作者看：中栏标题与正文 H1 重复（视图标题＋md 自带标题）；人物层两个 0 计数锚点占位组带说明文字常驻——按 68-R3 沉默层原则或可隐藏空组。
+
 ## 2026-11-09 · W3 方案 B：世界书三栏维基版式数据源切 hub（Next 线，本地）
 
 - 作者否决 W2 iframe 挂载，裁定方案 B：hub 数据喂 68-R2 原生三栏版式。新增 `next/wikihub/viewModel.mjs`（hub→分组树/链接表/Infobox 字段/被引统计，词表单一来源，render.mjs 反向取用）；`EntriesBoard.vue` 先 `worldbookToHub` 再 `buildHubViewModel`，左树层/域/槽位/条目四级带计数＋人物/剧情占位组；`EntryDetailPanel.vue` 有 hub 时蓝链词表＝hubLinkTargets＋资料/约束词表（`wikiLinks.mergeTokenMaps` 同名不同物剔除）；convert.mjs 补 aliases 并入 keys。68-R2 视觉资产全保留。kernel 909 过、UI 251、visual-contract 全绿（6f4612ed，qoduck 26min/184 轮一次过）。
