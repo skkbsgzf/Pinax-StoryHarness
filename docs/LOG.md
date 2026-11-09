@@ -1,5 +1,12 @@
 # 开发日志
 
+## 2026-11-10 · M1-c 场景卡 UI（本地）——M1 全系收官
+
+- **M1-c（e291391e，CodeBuddy hy4 一次过 8min/140 轮）**：`DeducePanel.vue`（648 行）推演面板——setup 阶段（冻结范围/主视角选择＋拒草稿开局）／playing 阶段（局面卡 who·where·tension·hook＋候选来源徽章 ▮必然 ⚙命运(骰点 trace) ✦戏剧＋选择按钮＋玩家/导演切换＋收束/中断）＋第一视角两面板（已知情报 knowledgeOf 裁剪／人物关系）＋本局回执。挂载＝AppNext 中栏覆盖层（标题栏「推演」钮切换，不注册页签/槽位/新通道——避开守卫⑪–⑬）；渲染层直接 import 纯 fact 模块（bundle f/f2/l 判据全过，未拖 fs/wikihub/runtime）。回执并入既有 serviceSnapshot。
+- **调度方补刀（d54aed3）**：面板 entries 接线修复——App 层 base data 从未加载世界书文档（0 条），改优先取索引页实例 entries。dameng-px 实测：0 条→**12 条冻结成功**，第 1 拍真实出卡（命运骰 5 受阻→hypothesis 轨、必然候选编年史）。
+- 门禁：kernel 1032/1032（+10）、vitest 18 文件 260（+7，CodeBuddy 环境本轮 vitest 正常收集——Node 24 caveat 未复现）、lint 0、验收 44/44、打包过。范围守卫通过（6 文件全在 next/shell∥fact∥tests）。
+- **M1 全系收官**：M1-a 引擎＋M1-b 会话存储＋M1-c UI＝50 拍仿真＋20 拍联跑＋真窗第一视角推演全通。验收场景（诡秘之主前几章 wiki 化＋推演续写）就绪，待真实模型接入体验。
+
 ## 2026-11-10 · M1-a/M1-b 推演循环引擎与会话存储（本地）——M1-c 移交
 
 - 推演式创作 ADR 定稿（`D:\Pinax-e2e\wikihub-arch\deduce-adr-final.md`，八裁定＋POV 补充：事件带 runId/pov、知情矩阵=第一视角、换角色重演＝叠加微调 hypothesis 轨、端点固定路径自由、多 POV 交替章节归 M3）。
