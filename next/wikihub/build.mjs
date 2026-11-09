@@ -8,7 +8,7 @@ import { worldbookToHub } from './convert.mjs'
 import { WIKIHUB_HTML_VERSION, renderHubHtml } from './render.mjs'
 
 /**
- * wikihub 离线视图的生成管线（世界书 → pedia/v1 hub → 单文件 HTML）。
+ * wikihub 离线视图的生成管线（世界书 → pedia/v2 hub → 单文件 HTML）。
  *
  * 一条链：读「世界书/」（顶层 md ＋ 一级类别目录里的 md）→ W1 的 worldbookToHub 转 hub
  * → renderHubHtml 出 HTML → 写 `.pinax/wikihub/index.html` 与 `hub.json`。
@@ -152,6 +152,7 @@ export async function buildWikihub(options = {}) {
   const hub = worldbookToHub({ entries: read.entries }, {
     book,
     domain,
+    genre: firstText(options.genre) || undefined,
     stripContent: options.stripContent === true
   })
   if (!hub.ok) {
@@ -192,6 +193,8 @@ export async function buildWikihub(options = {}) {
     entries: hub.entries,
     index: hub.index,
     mappings: hub.mappings,
+    // S1：文风能力包随 hub 落盘（pedia/v2 无 style 层），视图侧从 hub.json 直接取。
+    stylePack: hub.stylePack,
     losses: hub.losses,
     warnings: hub.warnings,
     validationWarnings: hub.validationWarnings,
@@ -211,6 +214,8 @@ export async function buildWikihub(options = {}) {
     domain,
     generatedAt,
     entries: hub.entries.length,
+    stylePack: hub.stylePack,
+    styleEntries: Array.isArray(hub.stylePack?.entries) ? hub.stylePack.entries.length : 0,
     files: read.files,
     skippedDirs: read.skippedDirs,
     readErrors: read.readErrors,
@@ -265,6 +270,7 @@ if (isMainModule()) {
     domain: firstText(args.domain) || undefined,
     title: firstText(args.title) || undefined,
     generatedAt: firstText(args['generated-at']) || undefined,
+    genre: firstText(args.genre) || undefined,
     stripContent: args['strip-content'] === true || args['strip-content'] === 'true'
   })
   if (!result.ok) {
@@ -279,6 +285,7 @@ if (isMainModule()) {
       hubFile: result.hubFile,
       book: result.book,
       entries: result.entries,
+      styleEntries: result.styleEntries,
       files: result.files,
       skippedDirs: result.skippedDirs,
       readErrors: result.readErrors,

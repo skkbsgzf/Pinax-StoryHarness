@@ -1,11 +1,31 @@
 import { parseWorldbookEntryFile, serializeWorldbookEntryFile } from '@pinax/core/domain/worldbookFileContract'
 import { parseRefs } from '../shell/agentReferences.mjs'
-import { OTHER_SLOT, PEDIA_SCHEMA, WORLDVIEW_SLOTS, isOrderedSlot, sha1Hex, slotForCategory, stableEntryId, validatePediaEntry } from './pediaSchema.mjs'
+import {
+  DEFAULT_ENTRY_STATUS,
+  ENTRY_STATUSES,
+  OTHER_SLOT,
+  PEDIA_SCHEMA,
+  PROVENANCE_MODES,
+  WORLDVIEW_SLOTS,
+  createRhythmSpec,
+  isOrderedSlot,
+  sha1Hex,
+  slotForCategory,
+  stableEntryId,
+  validatePediaEntry
+} from './pediaSchema.mjs'
+import {
+  NOVEL_STYLE_PACK_ID,
+  createNovelStylePack,
+  styleEntryFromWorldbook,
+  stylePackSlot
+} from './packs/novel-style.mjs'
+import { segmentText } from './segment.mjs'
 
 /**
- * wikihub 三载体双向转换器（批次 W1 · 数据层，纯函数）。
+ * wikihub 三载体双向转换器（W1 起，pedia/v2 语义）。
  *
- * 枢纽格式 = pedia/v1（见 ./pediaSchema.mjs）。本文件只做「载体语义 ↔ 枢纽条目」的翻译，
+ * 枢纽格式 = pedia/v2（见 ./pediaSchema.mjs，ADR 定稿）。本文件只做「载体语义 ↔ 枢纽条目」的翻译，
  * 不碰磁盘、不接工具面、不定义 hub 的存储位置（落盘与入口是 W2 的事）。
  *
  * 三条转换线：
@@ -24,10 +44,10 @@ import { OTHER_SLOT, PEDIA_SCHEMA, WORLDVIEW_SLOTS, isOrderedSlot, sha1Hex, slot
  *     provenance.source 与 next 扩展里；小说结构映射用「列表序 +1」当章号。
  */
 
-/** 三条转换线的 provenance.extractor 标识。 */
-export const WIKIHUB_WORLDBOOK_EXTRACTOR = 'pinax-next/worldbook@1'
-export const WIKIHUB_NOVEL_EXTRACTOR = 'pinax-next/novel-structure@1'
-export const WIKIHUB_SCRIPT_EXTRACTOR = 'pinax-next/script-structure@1'
+/** 三条转换线的 provenance.extractor 标识（v2 转换口径）。 */
+export const WIKIHUB_WORLDBOOK_EXTRACTOR = 'pinax-next/worldbook@2'
+export const WIKIHUB_NOVEL_EXTRACTOR = 'pinax-next/novel-structure@2'
+export const WIKIHUB_SCRIPT_EXTRACTOR = 'pinax-next/script-structure@2'
 
 const MAX_DEFINITION_CHARS = 600
 const MAX_SUMMARY_CHARS = 500
@@ -71,7 +91,7 @@ export const WORLDBOOK_DIR_TO_PEDIA_CATEGORY = Object.freeze({
 })
 
 /** 这些 type 本来就不是世界观设定，映射进 worldview 是口径妥协，转换时如实警告。 */
-export const WORLDBOOK_NON_WORLDVIEW_TYPES = Object.freeze(['style', 'source'])
+export const WORLDBOOK_NON_WORLDVIEW_TYPES = Object.freeze(['source'])
 
 /**
  * 名称前缀规则（批次 W4 · Next 扩展）：dameng《大梦》的条目名自带「前缀·短名」结构，
@@ -83,8 +103,8 @@ export const WORLDBOOK_NON_WORLDVIEW_TYPES = Object.freeze(['style', 'source'])
  * 规则表随 worldbookToHub 的结果原样返回（prefixRules），调用方不用猜本版跑的是哪张表。
  */
 export const NAME_PREFIX_RULES = Object.freeze([
-  // 剧作· 是软层（文风/创作规则）：pedia 的 11 槽位词表是世界观层的，style 层没有槽位词汇；
-  // 这里用 creative_rules 当 Next 扩展槽位，视图层给「创作规则」组名（见 viewModel）。
+  // S1 解耦：剧作· 不再进 hub 的 style 层，改投文风能力包（packs/novel-style），
+  // creative_rules 只是能力包内的分组键（见 viewModel/render 的 stylePack 展示）。
   Object.freeze({ id: 'play-creative', prefix: '剧作·', layer: 'style', slot: 'creative_rules' }),
   Object.freeze({ id: 'setting-power-levels', prefix: '设定·序列体系', slot: 'power_levels' }),
   Object.freeze({ id: 'setting-locations', prefix: '设定·界与十二时辰', slot: 'locations' }),
@@ -470,9 +490,12 @@ function prefixRuleTable() {
  *   extractor     provenance.extractor 覆盖
  *   stripContent  true 表示剥离正文（开源导出预演）
  *
- * 返回 { ok, schema, valid, entries, index, mappings, prefixRules, exportLosses, losses, warnings, validationWarnings, issues }。
+ * 返回 { ok, schema, valid, entries, index, mappings, stylePack, prefixRules, exportLosses, losses, warnings, validationWarnings, issues }。
  * losses 为空 = 无损（正文/frontmatter 都在 next.worldbook 快照里）；exportLosses 是纯 pedia 导出会丢的。
  * prefixRules 是槽位前缀规则的完整表（命中即停；命中的条目在 mappings[].via 里留 prefix: 记号）。
+ *
+ * S1：文风类条目（type=style／剧作· 前缀）不进 hub 主条目集，改投文风能力包 stylePack
+ * （packs/novel-style.mjs，仅小说体裁生效）；mappings 里仍逐条留痕，不静默吞。
  */
 export function worldbookToHub(input, options = {}) {
   const losses = []
@@ -480,7 +503,7 @@ export function worldbookToHub(input, options = {}) {
   const issues = []
   const collected = collectWorldbookEntries(input)
   if (collected.error) {
-    return { ok: false, schema: PEDIA_SCHEMA, valid: false, entries: [], index: { nameToId: {} }, mappings: [], prefixRules: prefixRuleTable(), exportLosses: [...PEDIA_EXPORT_LOSSES], losses, warnings, validationWarnings: [], issues: [collected.error] }
+    return { ok: false, schema: PEDIA_SCHEMA, valid: false, entries: [], index: { nameToId: {} }, mappings: [], stylePack: null, prefixRules: prefixRuleTable(), exportLosses: [...PEDIA_EXPORT_LOSSES], losses, warnings, validationWarnings: [], issues: [collected.error] }
   }
 
   const entries = collected.entries.map(normalizeWorldbookEntry)
@@ -489,8 +512,20 @@ export function worldbookToHub(input, options = {}) {
   const extractor = firstString(options.extractor, WIKIHUB_WORLDBOOK_EXTRACTOR)
   const stripContent = options.stripContent === true
   const nameIndex = buildWorldbookNameIndex(entries, options.idToName)
+  // D4：世界书条目＝作者自写，mode 默认 author；调用方显式给别的值时按词表校验。
+  const requestedMode = firstString(options.mode)
+  if (requestedMode && !PROVENANCE_MODES.includes(requestedMode)) {
+    warnings.push({ code: 'MODE_INVALID', message: `mode=${requestedMode} 不在 ${PROVENANCE_MODES.join('|')} 里，按 author 处理` })
+  }
+  const mode = PROVENANCE_MODES.includes(requestedMode) ? requestedMode : 'author'
+  const requestedStatus = firstString(options.status)
+  if (requestedStatus && !ENTRY_STATUSES.includes(requestedStatus)) {
+    warnings.push({ code: 'STATUS_INVALID', message: `status=${requestedStatus} 不在 ${ENTRY_STATUSES.join('|')} 里，按 ${DEFAULT_ENTRY_STATUS} 处理` })
+  }
+  const status = ENTRY_STATUSES.includes(requestedStatus) ? requestedStatus : DEFAULT_ENTRY_STATUS
 
   const hubEntries = []
+  const styleEntries = []
   const mappings = []
   for (const entry of entries) {
     if (!entry.name) {
@@ -508,6 +543,25 @@ export function worldbookToHub(input, options = {}) {
     }
 
     const slotInfo = resolveSlot(entry)
+    // S1 文风解耦：不再落 hub 的 style 层，改投能力包；mapping 保留来源与命中路径。
+    const styleSlot = stylePackSlot(entry, slotInfo)
+    if (styleSlot) {
+      const packEntry = styleEntryFromWorldbook(entry, { slot: styleSlot })
+      styleEntries.push(packEntry)
+      warnings.push({ code: 'STYLE_ENTRY_TO_PACK', id: entry.id, message: `条目「${entry.name}」是文风类（slot=${styleSlot}），改投文风能力包，不进 pedia 主条目集` })
+      mappings.push({
+        id: entry.id,
+        name: entry.name,
+        type: entry.type,
+        cat: entry.catDir,
+        layer: 'style',
+        slot: styleSlot,
+        via: slotInfo.layer === 'style' ? slotInfo.via : `type:${entry.type}`,
+        pack: NOVEL_STYLE_PACK_ID
+      })
+      continue
+    }
+
     const slot = slotInfo.slot
     const layer = slotInfo.layer
     const aliases = uniqueStrings(entry.keys.filter((key) => key !== entry.name))
@@ -522,9 +576,12 @@ export function worldbookToHub(input, options = {}) {
       domain,
       slot,
       rank: layer === 'worldview' && isOrderedSlot(slot) ? rankOf(entry) : null,
+      status,
+      validity: { from: null, to: null },
       definition: deriveDefinition(entry, warnings),
       stats: { chars: entry.chars, keys: entry.keys.length, relations: relations.length },
       provenance: {
+        mode,
         book,
         book_id: sha1Hex(book).slice(0, 8),
         // Next 没有章/场景数字锚点：给空数组，真实锚点在 source 里（工单允许的偏离）。
@@ -544,14 +601,6 @@ export function worldbookToHub(input, options = {}) {
       next: {
         medium: 'worldbook',
         worldbook: worldbookSnapshot(entry, { stripContent })
-      }
-    }
-    // style 是软层：pedia 只要求 provenance + fingerprint；正文格式指标这里如实给结构读数，
-    // 向量为 null（相似度检索暂不可用，和小说/剧本锚点的软层损失同一口径）。
-    if (layer === 'style') {
-      hubEntry.fingerprint = {
-        vec: null,
-        metrics: { chars: entry.chars, keys: entry.keys.length, relations: relations.length }
       }
     }
     if (aliases.length) hubEntry.aliases = aliases
@@ -575,6 +624,17 @@ export function worldbookToHub(input, options = {}) {
   const nameToId = {}
   for (const entry of hubEntries) nameToId[entry.name] = entry.id
 
+  // S1：命中文风能力包的条目一律建包（没有则 null，不摆空包）。
+  const stylePack = styleEntries.length
+    ? createNovelStylePack({
+      entries: styleEntries,
+      genre: firstString(options.genre, 'novel'),
+      ...(options.styleTargets ? { targets: options.styleTargets } : {}),
+      ...(Array.isArray(options.styleSamples) ? { samples: options.styleSamples } : {}),
+      ...(options.styleConstraints ? { constraints: options.styleConstraints } : {})
+    })
+    : null
+
   return {
     ok: true,
     schema: PEDIA_SCHEMA,
@@ -582,6 +642,7 @@ export function worldbookToHub(input, options = {}) {
     entries: hubEntries,
     index: { nameToId },
     mappings,
+    stylePack,
     prefixRules: prefixRuleTable(),
     exportLosses: PEDIA_EXPORT_LOSSES.map((item) => ({ ...item })),
     losses,
@@ -864,13 +925,20 @@ function buildRefIndex(events) {
   return index
 }
 
-function buildStructureAnchors({ medium, units, book, domain, extractor, mediumLosses, warnings, characters, plotName, eventAnchorKind }) {
+function buildStructureAnchors({ medium, units, book, domain, extractor, mediumLosses, warnings, characters, plotName, eventAnchorKind, status, rhythmSpec, structureTemplates }) {
   const isNovel = medium === 'novel'
+  const entryStatus = ENTRY_STATUSES.includes(status) ? status : DEFAULT_ENTRY_STATUS
   const events = units.map((unit) => {
     const refs = unit.text === null ? [] : uniqueStrings(parseRefs(unit.text).map((ref) => ref.title))
+    // S4：小说锚点也走同一分段口径，事件只留段元数据（index/chars），正文仍不进 hub。
+    const segments = typeof unit.text === 'string' && unit.text.length
+      ? segmentText(unit.text).map((segment) => ({ index: segment.index, chars: segment.chars }))
+      : []
     return {
       index: unit.index,
       title: unit.title,
+      // S2-2：结构映射出的事件是事实轨（来自章纲本身），不冒充假设。
+      track: 'fact',
       anchor: {
         kind: eventAnchorKind,
         path: unit.path,
@@ -879,6 +947,7 @@ function buildStructureAnchors({ medium, units, book, domain, extractor, mediumL
       },
       refs,
       chars: unit.chars,
+      ...(segments.length ? { segments } : {}),
       truncated: unit.truncated
     }
   })
@@ -889,6 +958,8 @@ function buildStructureAnchors({ medium, units, book, domain, extractor, mediumL
 
   const unitNumbers = events.map((event) => event.index)
   const cover = {
+    // D4：结构映射是「分析」口径（章纲读出来的锚点，不是作者自写条目）。
+    mode: 'analyze',
     book,
     book_id: sha1Hex(book).slice(0, 8),
     chapters: isNovel ? unitNumbers : [],
@@ -913,7 +984,12 @@ function buildStructureAnchors({ medium, units, book, domain, extractor, mediumL
     layer: 'plot',
     name: plotName,
     domain,
+    status: entryStatus,
+    validity: { from: first, to: last },
     events,
+    // S2-2：节奏规格与结构模板挂在 plot 条目上（本批只承载数据，不跑节奏分析）。
+    rhythmSpec: createRhythmSpec(rhythmSpec),
+    structureTemplates: Array.isArray(structureTemplates) ? structureTemplates.map((template) => ({ ...template })) : [],
     provenance: cover,
     fingerprint: {
       vec: null,
@@ -955,8 +1031,15 @@ function buildStructureAnchors({ medium, units, book, domain, extractor, mediumL
       name: character.name,
       domain,
       aliases: character.aliases,
+      status: entryStatus,
+      validity: { from: hitFirst, to: hitLast },
       identity: { aliases: character.aliases, source_entry_id: character.entryId || null },
+      // S2-1 字段先给空壳：塑造锚点/记忆点/知情矩阵由后续作者或分析批补齐，不在这里编造。
+      anchors: { speech: [], behavior: [], catchphrase: [] },
+      memoryPoints: [],
+      knowledge: [],
       provenance: {
+        mode: 'analyze',
         book,
         book_id: sha1Hex(book).slice(0, 8),
         chapters: isNovel ? hits : [],
@@ -1031,7 +1114,10 @@ export function novelToHubAnchors(input = {}, options = {}) {
     warnings,
     characters: normalizeCharacters(input),
     plotName: `《${book}》·章纲`,
-    eventAnchorKind: 'novel-chapter'
+    eventAnchorKind: 'novel-chapter',
+    status: options.status,
+    rhythmSpec: options.rhythmSpec,
+    structureTemplates: options.structureTemplates
   })
 }
 
@@ -1056,7 +1142,10 @@ export function scriptToHubAnchors(input = {}, options = {}) {
     warnings,
     characters: normalizeCharacters(input),
     plotName: `《${book}》·分集骨架`,
-    eventAnchorKind: 'script-file'
+    eventAnchorKind: 'script-file',
+    status: options.status,
+    rhythmSpec: options.rhythmSpec,
+    structureTemplates: options.structureTemplates
   })
 }
 

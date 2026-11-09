@@ -3,7 +3,7 @@ import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from './pediaSchema
 /**
  * wikihub 三栏视图模型（批次 W3 · 纯函数，浏览器侧可用）。
  *
- * 输入＝pedia/v1 hub 条目集（worldbookToHub 的结果或任意 { entries } / 条目数组），
+ * 输入＝pedia/v2 hub 条目集（worldbookToHub 的结果或任意 { entries } / 条目数组），
  * 输出＝世界书三栏维基版式要用的四件事：
  *   1) 左索引树：layer → domain → group（世界观＝11 个标准槽位名；软层＝层名）→ 条目，
  *      每级带条目数；人物／剧情两层的「小说／剧本锚点占位组」始终在场（惰性，见 limitations）；
@@ -12,18 +12,21 @@ import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from './pediaSchema
  *   3) 信息卡字段：槽位中文名／域／别名／序位／类型／关系数／字数／修订／来源路径；
  *   4) 正文＝条目 md 原文（hub 只补信息，不重写正文）。
  *
+ * S1（pedia/v2）：一等公民层只有 worldview／character／plot；文风不再是层，
+ * 旧 style 条目进视图时逐条记 STYLE_LAYER_DECOUPLED 并丢弃，文风内容改由能力包
+ * （hub.stylePack → model.stylePack）承载。
+ *
  * 本文件不 import 任何 Node 内置模块，也不 import render.mjs（避免环）：
  * render.mjs 反过来从这里取层／槽位中文名，单一来源。
  */
 
-export const HUB_VIEW_VERSION = 'wikihub-view/v1'
+export const HUB_VIEW_VERSION = 'wikihub-view/v2'
 
-export const HUB_VIEW_LAYER_ORDER = Object.freeze(['worldview', 'character', 'style', 'plot'])
+export const HUB_VIEW_LAYER_ORDER = Object.freeze(['worldview', 'character', 'plot'])
 
 export const HUB_VIEW_LAYER_LABELS = Object.freeze({
   worldview: '世界观',
   character: '人物',
-  style: '文风',
   plot: '剧情'
 })
 
@@ -40,15 +43,6 @@ export const HUB_VIEW_SLOT_LABELS = Object.freeze({
   concepts: '概念与现象',
   events: '历史事件',
   other: '其他'
-})
-
-/**
- * 软层（style/character/plot）的组名（批次 W4）：pedia 的槽位词表只属于 worldview，
- * 这里不往 HUB_VIEW_SLOT_LABELS 里塞软层槽位（那张表必须与 11 槽位一一对应）。
- * `剧作·` 前缀条目落 style 层、slot=`creative_rules`，显示为「创作规则」。
- */
-export const HUB_VIEW_SOFT_GROUP_LABELS = Object.freeze({
-  creative_rules: '创作规则'
 })
 
 /**
@@ -133,11 +127,6 @@ export function hubSlotLabel(slot) {
   return HUB_VIEW_SLOT_LABELS[slot] ?? str(slot)
 }
 
-/** 软层槽位的人话（目前只有 style/creative_rules）；未知返回空串，交给层名兜底。 */
-export function hubSoftGroupLabel(slot) {
-  return HUB_VIEW_SOFT_GROUP_LABELS[slot] ?? ''
-}
-
 function normalizeRelations(value) {
   if (!Array.isArray(value)) return []
   return value
@@ -162,7 +151,6 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
     : (isPlainObject(raw) && (typeof raw.content === 'string' || typeof raw.kind === 'string' || Array.isArray(raw.keys)) ? raw : {})
   const layer = firstText(raw.layer, 'worldview')
   let slot = firstText(raw.slot)
-  const softGroupLabel = layer === 'worldview' ? '' : hubSoftGroupLabel(slot)
   const name = firstText(raw.name, snapshot.name, raw.title, raw.id, `未命名条目 ${index + 1}`)
   let id = firstText(raw.id)
   if (!id) {
@@ -173,8 +161,8 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
     if (slot) warnings.push({ code: 'UNKNOWN_SLOT', message: `条目「${name}」的槽位「${slot}」不认识，按其他显示` })
     slot = OTHER_SLOT
   }
-  // 软层通常没有槽位；只有视图认识的软层组（style/creative_rules）才保留，其余清空。
-  if (layer !== 'worldview' && !softGroupLabel) slot = ''
+  // v2：槽位词表只属于 worldview；character/plot 是软层，没有槽位。
+  if (layer !== 'worldview') slot = ''
   const domain = firstText(raw.domain, fallbackDomain)
   const aliases = uniqueTexts([...(Array.isArray(raw.aliases) ? raw.aliases : []), ...arrayOfTexts(snapshot.keys)])
     .filter((alias) => alias !== name)
@@ -192,8 +180,8 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
   const relations = normalizeRelations(Array.isArray(raw.relations) ? raw.relations : snapshot.relations)
   const contract = snapshot.contract !== undefined ? snapshot.contract === true : raw.contract === true
   const span = isPlainObject(raw.span) ? raw.span : null
-  const groupKey = layer === 'worldview' ? slot : (slot || layer)
-  const groupLabel = layer === 'worldview' ? hubSlotLabel(slot) : (softGroupLabel || hubLayerLabel(layer))
+  const groupKey = layer === 'worldview' ? slot : layer
+  const groupLabel = layer === 'worldview' ? hubSlotLabel(slot) : hubLayerLabel(layer)
   const search = [
     name,
     ...aliases,
@@ -232,7 +220,7 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
     layerLabel: hubLayerLabel(layer),
     domain,
     slot,
-    slotLabel: layer === 'worldview' ? hubSlotLabel(slot) : softGroupLabel,
+    slotLabel: layer === 'worldview' ? hubSlotLabel(slot) : '',
     groupKey,
     groupLabel,
     rank,
@@ -398,22 +386,15 @@ function buildDomains(layerEntries, layer) {
         groups.push({ key: slot, kind: 'slot', label: hubSlotLabel(slot), labelKind: 'slot', count: slotEntries.length, entries: slotEntries })
       }
     } else {
-      // 软层默认一层一组；style 的剧作条目带 creative_rules 扩展槽位，按组拆开，
-      // 其余条目仍归层名组（没有槽位的软层行为不变）。
-      const byGroup = new Map()
-      for (const entry of list) {
-        const key = entry.groupKey || layer
-        if (!byGroup.has(key)) byGroup.set(key, [])
-        byGroup.get(key).push(entry)
-      }
-      groups = [...byGroup.entries()].map(([key, groupEntries]) => ({
-        key,
-        kind: key === layer ? 'layer' : 'slot',
-        label: groupEntries[0].groupLabel,
-        labelKind: key === layer ? 'layer' : 'slot',
-        count: groupEntries.length,
-        entries: groupEntries
-      }))
+      // 软层（character/plot）一层一组：v2 起没有槽位，组键就是层名。
+      groups = [{
+        key: layer,
+        kind: 'layer',
+        label: hubLayerLabel(layer),
+        labelKind: 'layer',
+        count: list.length,
+        entries: list
+      }]
     }
     domains.push({ key, label: key || '未标域', count: list.length, groups })
   }
@@ -442,8 +423,9 @@ function buildPlaceholders(layer, anchors) {
  *   domain   兜底域（条目自带 domain 优先）
  *   anchors  { chapters, scripts, characters } —— 只用来给占位组记条目数，不接线
  *
- * 返回 { version, book, domain, entries, layers, linkTable, warnings, counts }。
- * layers 里 worldview 按 11 槽位分组，character/style/plot 各一组；character/plot 另带 placeholders。
+ * 返回 { version, book, domain, entries, layers, linkTable, stylePack, warnings, counts }。
+ * layers 里 worldview 按 11 槽位分组，character/plot 各一组（另带 placeholders）；
+ * stylePack 是 pedia/v2 的文风能力包（可能为 null），不再作为视图层出现。
  */
 export function buildHubViewModel(input, options = {}) {
   const hub = Array.isArray(input) ? { entries: input } : (isPlainObject(input) ? input : {})
@@ -452,6 +434,9 @@ export function buildHubViewModel(input, options = {}) {
   const warnings = []
   const entries = []
   const seenIds = new Set()
+  const stylePack = isPlainObject(hub.stylePack)
+    ? hub.stylePack
+    : (isPlainObject(options.stylePack) ? options.stylePack : null)
 
   for (const notice of Array.isArray(options.notices) ? options.notices : []) {
     const message = typeof notice === 'string' ? notice : str(notice?.message)
@@ -462,6 +447,14 @@ export function buildHubViewModel(input, options = {}) {
   rawEntries.forEach((raw, index) => {
     if (!isPlainObject(raw)) {
       warnings.push({ code: 'ENTRY_NOT_OBJECT', message: `第 ${index + 1} 条不是对象，已跳过` })
+      return
+    }
+    // S1：pedia/v2 没有 style 层，旧数据里的文风条目按能力包口径处理，不画进三栏。
+    if (raw.layer === 'style') {
+      warnings.push({
+        code: 'STYLE_LAYER_DECOUPLED',
+        message: `条目「${str(raw.name) || raw.id || index + 1}」是旧 style 层，v2 起改由文风能力包承载，未进三栏视图`
+      })
       return
     }
     const entry = normalizeEntry(raw, index, warnings, domain)
@@ -517,6 +510,7 @@ export function buildHubViewModel(input, options = {}) {
     entries,
     layers,
     linkTable,
+    stylePack,
     warnings,
     counts: {
       entries: entries.length,
@@ -526,7 +520,8 @@ export function buildHubViewModel(input, options = {}) {
       placeholders: layers.reduce((sum, layer) => sum + layer.placeholders.length, 0),
       relations: entries.reduce((sum, entry) => sum + entry.relations.length, 0),
       links: linkTable.size,
-      conflicts: linkTable.conflicts.length
+      conflicts: linkTable.conflicts.length,
+      stylePackEntries: Array.isArray(stylePack?.entries) ? stylePack.entries.length : 0
     }
   }
 }

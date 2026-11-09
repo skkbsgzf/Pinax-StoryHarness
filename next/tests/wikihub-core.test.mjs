@@ -31,7 +31,7 @@ import {
  *   1) 世界书 → hub → 世界书 无损（worldview 硬层铁保证），且经得起「再序列化再解析」；
  *   2) 小说/剧本 → plot/character 只做结构映射，软层损失按清单如实标注（不假装无损）；
  *   3) @《…》 token ↔ hub relations 互逆。
- * 期望值全部来自 pedia/v1 的原文口径（category_map、稳定 id、信封必填），不另立标准。
+ * 期望值全部来自 pedia/v2 的定稿口径（category_map 与稳定 id 沿用 v1、信封按 v2），不另立标准。
  */
 
 const sha1 = (text) => createHash('sha1').update(text, 'utf8').digest('hex')
@@ -142,7 +142,7 @@ test('sha1 与 node:crypto 同值；稳定 id = sha1(layer|domain|slot|name)[:12
   assert.match(stableEntryId({ layer: 'character', domain: '某书', name: '柯秒' }), /^[0-9a-f]{12}$/u)
 })
 
-test('pedia/v1 校验：必填、槽位、稳定 id 漂移都拦；有序槽位缺 rank 只警告', () => {
+test('pedia/v2 校验：必填、槽位、稳定 id 漂移都拦；有序槽位缺 rank 只警告', () => {
   const id = stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'locations', name: '旧钟楼' })
   const base = {
     schema: PEDIA_SCHEMA,
@@ -151,8 +151,9 @@ test('pedia/v1 校验：必填、槽位、稳定 id 漂移都拦；有序槽位�
     name: '旧钟楼',
     domain: '停摆之城',
     slot: 'locations',
+    status: 'draft',
     definition: '城南的钟楼。',
-    provenance: { book: '停摆之城', book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'test/1', confidence: 1 }
+    provenance: { mode: 'author', book: '停摆之城', book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'test/1', confidence: 1 }
   }
   assert.equal(validatePediaEntry(base).ok, true)
 
@@ -197,6 +198,8 @@ test('世界书 → hub → 世界书无损：契约字段逐项相等，且经�
   assert.equal(entry.schema, PEDIA_SCHEMA)
   assert.equal(entry.layer, 'worldview')
   assert.equal(entry.name, '柯秒')
+  assert.equal(entry.status, 'draft', 'v2 信封：转换出来的条目默认 draft')
+  assert.equal(entry.provenance.mode, 'author', '世界书条目＝作者自写')
   assert.equal(entry.domain, '停摆之城')
   assert.equal(entry.id, stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'roles', name: '柯秒' }))
   assert.equal(entry.definition, original.summary, 'definition 取作者写的 summary，不摘正文')
@@ -277,7 +280,7 @@ test('世界书 → hub：槽位走 category_map／type／目录桥，关系 id�
   assert.deepEqual(byName['柯秒'].provenance.scenes, [])
   assert.equal(byName['柯秒'].provenance.source.kind, 'worldbook-entry')
   assert.equal(byName['柯秒'].provenance.source.path, '人物/人物·柯秒.md')
-  assert.equal(byName['柯秒'].provenance.extractor, 'pinax-next/worldbook@1')
+  assert.equal(byName['柯秒'].provenance.extractor, 'pinax-next/worldbook@2')
   assert.equal(hub.index.nameToId['柯秒'], byName['柯秒'].id)
 
   const stray = worldbookToHub([{ ...kemiao, relations: [{ to: 'k-999', type: 'rival' }] }])
@@ -317,11 +320,18 @@ test('批次 W4：名称前缀规则只救落 other 的条目（表驱动、命�
   const byName = Object.fromEntries(hub.entries.map((entry) => [entry.name, entry]))
   const via = Object.fromEntries(hub.mappings.map((item) => [item.name, item.via]))
 
-  // 剧作· → 软层 style 的 Next 扩展槽位 creative_rules；软层要带 fingerprint。
-  assert.deepEqual([byName['剧作·插叙结构'].layer, byName['剧作·插叙结构'].slot], ['style', 'creative_rules'])
+  // S1 解耦：剧作· 不进 hub 主条目集，改投文风能力包（creative_rules 只是包内分组键）。
+  assert.equal(byName['剧作·插叙结构'], undefined, 'style 条目不再作为 hub 一等公民')
   assert.match(via['剧作·插叙结构'], /^prefix:剧作·/u)
-  assert.equal(byName['剧作·插叙结构'].fingerprint.vec, null, 'style 软层的向量如实为 null')
-  assert.equal(byName['剧作·插叙结构'].rank, null)
+  const styleMapping = hub.mappings.find((item) => item.name === '剧作·插叙结构')
+  assert.deepEqual([styleMapping.layer, styleMapping.slot, styleMapping.pack], ['style', 'creative_rules', 'novel-style'])
+  assert.equal(hub.stylePack.pack, 'novel-style')
+  assert.equal(hub.stylePack.active, true, '默认小说体裁生效')
+  const packEntry = hub.stylePack.entries.find((entry) => entry.name === '剧作·插叙结构')
+  assert.ok(packEntry, '剧作条目要进能力包')
+  assert.equal(packEntry.slot, 'creative_rules')
+  assert.equal(packEntry.kind, 'creative-rule')
+  assert.ok(hub.warnings.some((warning) => warning.code === 'STYLE_ENTRY_TO_PACK'))
 
   // 设定·：两条专名规则先于通用规则命中。
   assert.equal(byName['设定·序列体系'].slot, 'power_levels')
@@ -365,7 +375,7 @@ test('世界书 → hub：裸 md 与运行时读回形状都接，缺 frontmatte
   const runtimeShape = {
     id: 'k-010',
     name: '雨中曲',
-    type: 'style',
+    type: 'source',
     keys: ['雨'],
     tags: [],
     summary: '',
@@ -379,7 +389,8 @@ test('世界书 → hub：裸 md 与运行时读回形状都接，缺 frontmatte
   }
   const result = worldbookToHub([runtimeShape])
   assert.ok(result.losses.some((loss) => loss.code === 'worldbook-frontmatter-unavailable'))
-  assert.ok(result.warnings.some((warning) => warning.code === 'TYPE_NOT_WORLDVIEW'), 'style 不是世界观设定，要警告')
+  assert.ok(result.warnings.some((warning) => warning.code === 'TYPE_NOT_WORLDVIEW'), 'source 不是世界观设定，要警告')
+  assert.equal(result.stylePack, null, '没有文风类条目时不摆空能力包')
   assert.equal(result.entries[0].slot, 'other')
   assert.equal(result.entries[0].definition, '一章都在下雨。', '没有 summary 时 definition 取正文首段并警告')
   assert.ok(result.warnings.some((warning) => warning.code === 'DEFINITION_EXCERPT'))
@@ -460,6 +471,14 @@ test('小说章结构 → plot/character 锚点：结构序、span、@ 引用与
   assert.deepEqual(kemiao.provenance.chapters, [1, 2], '按名字/别名做出现锚定（结构化匹配）')
   assert.equal(kemiao.fingerprint.vec, null)
   assert.equal(kemiao.fingerprint.metrics.appearance_count, 2)
+  assert.equal(kemiao.provenance.mode, 'analyze', '结构锚点＝分析来源')
+  assert.deepEqual(kemiao.anchors, { speech: [], behavior: [], catchphrase: [] }, 'S2-1 字段先给空壳，不编造')
+
+  // S2-2／S4：plot 信封带节奏规格与双轨标记；事件只落段元数据。
+  assert.deepEqual(result.plotEntry.rhythmSpec, { windowChars: [500, 1500, 4500], noveltyTags: ['笑', '燃', '泪', '梗'] })
+  assert.deepEqual(result.plotEntry.events.map((event) => event.track), ['fact', 'fact'])
+  assert.deepEqual(result.plotEntry.events[0].segments, [{ index: 1, chars: 17 }])
+  assert.deepEqual(result.plotEntry.validity, { from: 1, to: 2 })
 
   assert.deepEqual(result.losses.map((loss) => loss.code), NOVEL_STRUCTURE_LOSSES.map((loss) => loss.code), '软层损失按清单如实标注')
 })

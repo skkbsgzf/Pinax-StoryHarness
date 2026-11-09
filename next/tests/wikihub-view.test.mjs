@@ -42,7 +42,7 @@ function fixtureModel(options = {}) {
 function pediaEntry({ name, slot = 'power_levels', rank = null, domain = '大梦', layer = 'worldview', aliases = [], content = '', contract = true }) {
   const id = stableEntryId({ layer, domain, slot, name })
   return {
-    schema: 'pedia/v1',
+    schema: 'pedia/v2',
     id,
     layer,
     name,
@@ -73,11 +73,11 @@ function pediaEntry({ name, slot = 'power_levels', rank = null, domain = '大梦
 test('视图模型：layer → domain → 槽位三级分组，每级计数，世界观用 11 个中文槽位名', () => {
   const model = fixtureModel()
 
-  assert.equal(model.version, 'wikihub-view/v1')
+  assert.equal(model.version, 'wikihub-view/v2')
   assert.equal(model.book, '大梦')
   assert.equal(model.domain, '大梦')
-  // 层序：世界观有条目；人物／剧情无条目但有占位组，仍须在场；文风既无条目也无占位，不摆空层。
-  assert.equal(HUB_VIEW_LAYER_ORDER.join(','), 'worldview,character,style,plot')
+  // 层序：世界观有条目；人物／剧情无条目但有占位组，仍须在场；v2 已无 style 层。
+  assert.equal(HUB_VIEW_LAYER_ORDER.join(','), 'worldview,character,plot')
   assert.deepEqual(model.layers.map((layer) => [layer.layer, layer.label, layer.count]), [
     ['worldview', '世界观', 5],
     ['character', '人物', 0],
@@ -116,11 +116,12 @@ test('视图模型：layer → domain → 槽位三级分组，每级计数，�
     placeholders: 4,
     relations: 0,
     links: 10,
-    conflicts: 0
+    conflicts: 0,
+    stylePackEntries: 0
   })
 })
 
-test('批次 W4：剧作· 前缀进 style 层，组名「创作规则」（软层不污染 11 槽位词表）', () => {
+test('批次 W4／S1：剧作· 前缀条目解耦进文风能力包，不再是视图层（不污染 11 槽位词表）', () => {
   const runtime = (name, chars) => ({
     id: `wb-${name}`,
     name,
@@ -139,25 +140,30 @@ test('批次 W4：剧作· 前缀进 style 层，组名「创作规则」（软�
     runtime('剧作·术语与声线', 9)
   ], { book: '大梦' })
   assert.equal(converted.valid, true, JSON.stringify(converted.issues))
+  assert.equal(converted.entries.length, 0, '文风类条目不进 pedia 主条目集')
   const model = buildHubViewModel(converted, { book: '大梦' })
 
-  const style = model.layers.find((layer) => layer.layer === 'style')
-  assert.ok(style, 'style 层有条目就要在场')
-  assert.equal(style.label, '文风')
-  assert.equal(style.count, 2)
-  assert.deepEqual(style.domains[0].groups.map((group) => [group.key, group.label, group.count]), [
-    ['creative_rules', '创作规则', 2]
+  assert.equal(model.layers.some((layer) => layer.layer === 'style'), false, 'v2 不再有 style 层')
+  assert.equal(model.entries.length, 0)
+  assert.ok(model.stylePack, '能力包要随模型可用')
+  assert.equal(model.stylePack.pack, 'novel-style')
+  assert.equal(model.stylePack.active, true)
+  assert.deepEqual(model.stylePack.entries.map((entry) => [entry.name, entry.slot]), [
+    ['剧作·插叙结构', 'creative_rules'],
+    ['剧作·术语与声线', 'creative_rules']
   ])
-  // 信息卡「分类」读的是组名，不是软层里空着的 worldview 槽位名。
-  const entry = model.entries.find((item) => item.name === '剧作·插叙结构')
-  assert.equal(entry.groupKey, 'creative_rules')
-  assert.equal(entry.groupLabel, '创作规则')
-  assert.equal(entry.slotLabel, '创作规则')
-  assert.deepEqual(hubGroupOptions(model).filter((option) => option.value), [
-    { value: 'creative_rules', label: '创作规则' }
-  ])
-  // 软层扩展不进 11 槽位词表（HUB_VIEW_SLOT_LABELS 必须与 schema 一一对应）。
+  assert.equal(model.counts.stylePackEntries, 2)
+  assert.deepEqual(hubGroupOptions(model).filter((option) => option.value), [], '能力包不产生视图筛选组')
+  // 能力包分组不进 11 槽位词表（HUB_VIEW_SLOT_LABELS 必须与 schema 一一对应）。
   assert.deepEqual(Object.keys(HUB_VIEW_SLOT_LABELS), [...WORLDVIEW_SLOT_NAMES])
+
+  // 旧数据里的 style 层条目：丢弃并记账，不画半截。
+  const legacy = buildHubViewModel([
+    { id: 'style0000001', layer: 'style', name: '旧文风', slot: 'creative_rules', definition: 'x' },
+    pediaEntry({ name: '钟楼', slot: 'locations' })
+  ], { book: '大梦' })
+  assert.equal(legacy.entries.length, 1)
+  assert.ok(legacy.warnings.some((warning) => warning.code === 'STYLE_LAYER_DECOUPLED'))
 })
 
 test('视图模型：有序槽位按 rank 排，缺 rank 的排到最后（名字只做并列时的次序）', () => {

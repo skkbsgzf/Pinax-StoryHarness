@@ -6,7 +6,7 @@ import {
 } from './viewModel.mjs'
 
 /**
- * wikihub 离线视图渲染器（pedia/v1 hub → 单文件 HTML）。
+ * wikihub 离线视图渲染器（pedia/v2 hub → 单文件 HTML）。
  *
  * 作者口径（2026-11-09）：NovelPedia 那种「左侧索引树 ＋ 右上 Infobox ＋ 正文蓝色站内链接」
  * 最顺手——导航逻辑照搬，皮相换成 Pinax Next 的（字体走 --font-interface、字号只走
@@ -23,7 +23,7 @@ import {
  * 落盘那一半在 ./build.mjs。层／槽位中文名以 viewModel.mjs 为单一来源（W3 起三栏原生界面同用一份）。
  */
 
-export const WIKIHUB_HTML_VERSION = 'wikihub-html/v1'
+export const WIKIHUB_HTML_VERSION = 'wikihub-html/v2'
 
 export const WIKIHUB_LAYER_ORDER = HUB_VIEW_LAYER_ORDER
 
@@ -95,9 +95,11 @@ function entryAnchor(id, innerHtml, extraAttrs = '') {
 /**
  * 把 worldbookToHub 的结果（或任意 { entries } / 条目数组）整理成渲染模型。
  *
- * 返回 { version, book, domain, title, generatedAt, entries, layers, linkIndex, warnings, counts }。
+ * 返回 { version, book, domain, title, generatedAt, entries, layers, linkIndex, stylePack, warnings, counts }。
  * warnings 是「视图侧」的问题（缺 id、重 id、未知槽位、条目不是对象），与世界书侧的
  * losses 分开记——这里只影响这一页怎么画，不改数据层口径。
+ * S1：pedia/v2 没有 style 层；旧 style 条目丢弃并记 STYLE_LAYER_DECOUPLED，
+ * 文风能力包（hub.stylePack）单独挂在总览页，不进三栏。
  */
 export function prepareHubModel(input, options = {}) {
   const hub = Array.isArray(input) ? { entries: input } : (isPlainObject(input) ? input : {})
@@ -109,6 +111,9 @@ export function prepareHubModel(input, options = {}) {
   const warnings = []
   const entries = []
   const seenIds = new Set()
+  const stylePack = isPlainObject(hub.stylePack)
+    ? hub.stylePack
+    : (isPlainObject(options.stylePack) ? options.stylePack : null)
 
   // 生成侧的提示（读盘失败、未递归的目录、世界书转换警告）也写进本页，离线读者能看到缺了什么。
   for (const notice of Array.isArray(options.notices) ? options.notices : []) {
@@ -120,6 +125,13 @@ export function prepareHubModel(input, options = {}) {
   rawEntries.forEach((raw, index) => {
     if (!isPlainObject(raw)) {
       warnings.push({ code: 'ENTRY_NOT_OBJECT', message: `第 ${index + 1} 条不是对象，已跳过` })
+      return
+    }
+    if (raw.layer === 'style') {
+      warnings.push({
+        code: 'STYLE_LAYER_DECOUPLED',
+        message: `条目「${firstText(raw.name) || raw.id || index + 1}」是旧 style 层，v2 起改由文风能力包承载，未画进本页条目树`
+      })
       return
     }
     const entry = normalizeEntry(raw, index, warnings)
@@ -143,12 +155,14 @@ export function prepareHubModel(input, options = {}) {
     entries,
     layers,
     linkIndex,
+    stylePack,
     warnings,
     counts: {
       entries: entries.length,
       layers: layers.length,
       relations: entries.reduce((sum, entry) => sum + entry.relations.length, 0),
-      links: linkIndex.size
+      links: linkIndex.size,
+      stylePackEntries: Array.isArray(stylePack?.entries) ? stylePack.entries.length : 0
     }
   }
 }
@@ -156,7 +170,7 @@ export function prepareHubModel(input, options = {}) {
 function normalizeEntry(raw, index, warnings) {
   const snapshot = isPlainObject(raw.next?.worldbook) ? raw.next.worldbook : {}
   const layer = text(raw.layer).trim() || 'worldview'
-  let slot = layer === 'worldview' ? (text(raw.slot).trim() || OTHER_SLOT) : text(raw.slot).trim()
+  let slot = layer === 'worldview' ? (text(raw.slot).trim() || OTHER_SLOT) : ''
   const name = firstText(raw.name, raw.title, raw.id, `未命名条目 ${index + 1}`)
   let id = firstText(raw.id)
   if (!id) {
@@ -578,7 +592,7 @@ function renderInfobox(entry) {
     `<div class="ib-h">${escapeHtml(entry.name)}<div class="sub">${escapeHtml(subtitle)}</div></div>`,
     `<div class="ib-av" aria-hidden="true"><span class="ini">${escapeHtml(initial)}</span></div>`,
     `<table>${rows.join('')}</table>`,
-    '<div class="ib-note">由「世界书」离线快照生成 · pedia/v1</div>',
+    '<div class="ib-note">由「世界书」离线快照生成 · pedia/v2</div>',
     '</aside>'
   ].join('')
 }
@@ -665,7 +679,7 @@ function renderArticle(entry, model, ctx) {
   }
   parts.push(renderRelations(entry, ctx))
   parts.push(renderSiblings(entry, model))
-  parts.push(`<footer class="art-foot">pedia/v1 · ${escapeHtml(entry.layer)}${entry.slot ? ` · ${escapeHtml(entry.slot)}` : ''} · id ${escapeHtml(entry.id)}</footer>`)
+  parts.push(`<footer class="art-foot">pedia/v2 · ${escapeHtml(entry.layer)}${entry.slot ? ` · ${escapeHtml(entry.slot)}` : ''} · id ${escapeHtml(entry.id)}</footer>`)
   parts.push('</article>')
   return parts.join('')
 }
@@ -702,6 +716,27 @@ function renderSidebar(model) {
   return parts.join('')
 }
 
+function renderStylePack(pack) {
+  if (!pack) return []
+  const entries = Array.isArray(pack.entries) ? pack.entries : []
+  const parts = ['<section class="ov-layer" data-ov-style-pack="1">']
+  parts.push(`<h2>文风能力包<span class="sec-count">${entries.length}</span></h2>`)
+  parts.push(`<p class="ov-tip">${escapeHtml(pack.pack ?? 'novel-style')} · ${escapeHtml(pack.version ?? '')} · ${pack.active === false ? '当前体裁下不生效（仅小说体裁挂载）' : '仅小说体裁生效'}</p>`)
+  if (entries.length) {
+    parts.push('<ul class="rel-list">')
+    for (const entry of entries) {
+      const title = firstText(entry.name, entry.id, entry.slot)
+      const preview = clip(firstText(entry.summary, entry.text), 120)
+      parts.push(`<li data-style-entry="${escapeAttr(title)}"><strong>${escapeHtml(title)}</strong>${preview ? `<span class="rel-how">${escapeHtml(preview)}</span>` : ''}</li>`)
+    }
+    parts.push('</ul>')
+  } else {
+    parts.push('<p class="empty">能力包还没有条目。</p>')
+  }
+  parts.push('</section>')
+  return parts
+}
+
 function renderOverview(model) {
   const worldviews = model.entries.filter((entry) => entry.layer === 'worldview').length
   const stats = [
@@ -712,8 +747,11 @@ function renderOverview(model) {
   ]
   const parts = ['<section class="overview" id="wiki-overview">']
   parts.push(`<h1 class="art">${escapeHtml(model.book)}<span class="cat-badge">离线世界百科</span></h1>`)
-  parts.push(`<p class="subtitle">pedia/v1 快照 · ${escapeHtml(model.generatedAt)} · 断网可读</p>`)
+  parts.push(`<p class="subtitle">pedia/v2 快照 · ${escapeHtml(model.generatedAt)} · 断网可读</p>`)
   parts.push(`<div class="statgrid">${stats.map(([key, value]) => `<div class="stat"><div class="k">${escapeHtml(key)}</div><div class="v">${value}</div></div>`).join('')}</div>`)
+  if (model.counts.stylePackEntries > 0) {
+    parts.push(`<p class="ov-tip">文风能力包含 ${model.counts.stylePackEntries} 条（仅小说体裁生效，不进三栏条目树）。</p>`)
+  }
   if (model.warnings.length) {
     const items = model.warnings.slice(0, 12).map((warning) => `<li>${escapeHtml(warning.message)}</li>`).join('')
     const more = model.warnings.length > 12 ? `<p class="empty">另有 ${model.warnings.length - 12} 条提示未列出。</p>` : ''
@@ -734,6 +772,7 @@ function renderOverview(model) {
       parts.push('</section>')
     }
   }
+  parts.push(...renderStylePack(model.stylePack))
   parts.push('</section>')
   return parts.join('')
 }
