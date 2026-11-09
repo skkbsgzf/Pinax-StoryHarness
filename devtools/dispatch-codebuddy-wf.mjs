@@ -33,7 +33,7 @@ const child = spawn('codebuddy', [
   cwd: REPO,
   stdio: ['pipe', 'pipe', 'pipe'],
   shell: true,
-  timeout: 3_600_000
+  timeout: 10_800_000
 })
 
 const logFd = openSync(LOG, 'w')
