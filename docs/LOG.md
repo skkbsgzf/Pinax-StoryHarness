@@ -1,5 +1,12 @@
 # 开发日志
 
+## 2026-11-09 · P1 pedia 域骨架（fork 内 Core-shape，本地）
+
+- 作者裁定：pedia 域在个人 fork 内成型、不动 `D:\Pinax-core`；目录形状按平移 `core/src/pedia/` 设计。
+- `next/pedia/` 四层域（8a6f421d）：domain 九模块（词表/稳定 id 纯 JS SHA-1/状态机/双时间轴/schema/perspective/segment 100–300 字/别名 union-find/schema 桶）＋ports 三契约（PediaStore/VectorPort/LlmPort）＋usecases 四件（factPack 投影/hypothesis 回灌/precheck 预检/hookEngine 三 hook 永不写 store）＋memoryPediaStore（operationId 幂等＋expectedRevision 并发，注释标注平移后换 core 事务三件套）；index.js 70 导出，整目录可复制进 core。禁宿主依赖静态断言进测试。
+- wikihub 反向依赖重构：segment/pediaSchema 缩成转发壳，convert/viewModel/render/build/migrate 改 import `../pedia`——对外行为不变，双真源 grep 断言进测试。kernel 950/950（+20）；qoduck 12min/80 轮一次过。
+- 下一步：P2a 管线 JS 化（抽取/挖掘/聚类，LlmPort/VectorPort 注入）∥P2b 存量迁移器（worldStore/大纲/账本→pedia）。
+
 ## 2026-11-09 · P0 pedia/v2 schema 定稿（Next wikihub 垫床，本地）
 
 - ADR 定稿（作者 2026-11-09 裁定，`D:\Pinax-e2e\wikihub-arch\pedia-v2-adr-final.md`）：D1=A Core 新域两步走／D2=A 一次切换三判据／D3=C 章→场景双层／D4=A 条目级 mode／**S1 文风解耦**（style 移出一等公民，降为小说体裁能力包，与剧本格式/画风同属上层包装）＋S2 三大创作质量语义（人物塑造/剧情节奏/知识铺陈）＋S3 Core 核心 Tool hook 绑定创作行为（润色只调用不写数）＋S4 段级粒度 100–300 字。
