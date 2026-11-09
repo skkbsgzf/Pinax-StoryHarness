@@ -1,5 +1,12 @@
 # 开发日志
 
+## 2026-11-09 · P4 hook 接线创作动作（本地）
+
+- hookEngine 三入口接进 shell 真实链路（c222ef17）：章节/大纲/世界书保存→diffValidate（hub 快照 before/after＋draft 预检，**旁路观察者不阻塞保存**，issues/warnings 走 serviceLogPool source=`pedia-hooks`）；`@《…》` 缺条目→自动补 proposed＋pipelinePending 草案（汇 `.pinax/proposals/`，绝不改作者条目）；续写→suggestCompletion（factPack 建议落提案）；润色→readOnlyQuery 零写入。
+- 接线层：`next/pedia/usecases/hookWiring.js`（纯函数）＋`next/shell/pediaHookService.mjs`（316 行）；**进程层动刀论证**：hub 快照要读 fs＋跑 wikihub 转换器，放渲染层会拖包——沿用 skillsService/knowledgeService 注入模式（主进程建服务、通道转调用），未注入时行为与旧版逐字相同（测试钉住）。体积：外壳 2206.3/2500 kB、渲染层零增量。
+- 开关：项目级 `.pinax/pedia-hooks.json`（enabled/hooks.onSave·onContinue·onPolish，只认显式 false，坏档 warn＋默认全开）。hookEngine 补加法式 warnings（REFERENCE_UNRESOLVED 不再被宿主侧丢掉）。node:test 994/994（+15）；qoduck 10min/91 轮一次过。
+- Limitations：实体识别只认 `@《…》`（具名实体抽取归管线批）；缺失引用重复保存各生成一份草案未去重；作者可弃提案。
+
 ## 2026-11-09 · P3 技能数据契约（本地）
 
 - `next/pedia/usecases/skillContract.js`（4b3b2aef）：defineSkillContract 定义即拒（SkillContractError 带 field）／validateSkillContract 非抛错口／validateProduces 四关（schema→状态机可达→层槽白名单→asStatus·mode 一致）／assembleRequires 只读裁剪（深拷贝、dropped 记账、缺投影 warnings）。
