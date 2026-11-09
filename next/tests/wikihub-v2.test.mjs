@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {
   DEFAULT_RHYTHM_SPEC,
   ENTRY_STATUSES,
-  PEDIA_SCHEMA,
+  FACT_SCHEMA,
   STATUS_TRANSITIONS,
   canTransitionStatus,
   checkPerspective,
@@ -11,7 +11,7 @@ import {
   instantiateStructureTemplate,
   stableEntryId,
   transitionEntryStatus,
-  validatePediaEntry,
+  validateFactEntry,
   validateStatusTransition
 } from '../wikihub/pediaSchema.mjs'
 import {
@@ -33,7 +33,7 @@ import {
 } from '../wikihub/hooks.mjs'
 
 /**
- * pedia/v2 定稿字段的合同测试（S1/S2-1/S2-2/S2-3/S4 与信封、迁移、hook 契约）。
+ * fact.data/v2 定稿字段的合同测试（S1/S2-1/S2-2/S2-3/S4 与信封、迁移、hook 契约）。
  *
  * 只钉「纯函数口径」：状态机、validity、角色知情、节奏规格、视角校验、文风能力包、
  * v1→v2 迁移与 hook 接口；不接引擎、不碰磁盘。
@@ -52,7 +52,7 @@ function worldviewEntry(overrides = {}) {
     provenance: { mode: 'author', book: BOOK, book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'test/2', confidence: 1 }
   }
   const merged = { ...base, ...overrides }
-  return { schema: PEDIA_SCHEMA, id: stableEntryId({ layer: merged.layer, domain: merged.domain, slot: merged.slot ?? '', name: merged.name }), ...merged }
+  return { schema: FACT_SCHEMA, id: stableEntryId({ layer: merged.layer, domain: merged.domain, slot: merged.slot ?? '', name: merged.name }), ...merged }
 }
 
 function characterEntry(overrides = {}) {
@@ -65,7 +65,7 @@ function characterEntry(overrides = {}) {
     fingerprint: { vec: null, metrics: {} }
   }
   const merged = { ...base, ...overrides }
-  return { schema: PEDIA_SCHEMA, id: stableEntryId({ layer: merged.layer, domain: merged.domain, slot: merged.slot ?? '', name: merged.name }), ...merged }
+  return { schema: FACT_SCHEMA, id: stableEntryId({ layer: merged.layer, domain: merged.domain, slot: merged.slot ?? '', name: merged.name }), ...merged }
 }
 
 function plotEntry(overrides = {}) {
@@ -78,7 +78,7 @@ function plotEntry(overrides = {}) {
     fingerprint: { vec: null, metrics: {} }
   }
   const merged = { ...base, ...overrides }
-  return { schema: PEDIA_SCHEMA, id: stableEntryId({ layer: merged.layer, domain: merged.domain, slot: merged.slot ?? '', name: merged.name }), ...merged }
+  return { schema: FACT_SCHEMA, id: stableEntryId({ layer: merged.layer, domain: merged.domain, slot: merged.slot ?? '', name: merged.name }), ...merged }
 }
 
 /* ---------- 信封：状态机 ---------- */
@@ -119,25 +119,25 @@ test('状态机：合法转移表完整，非法转移被拒，同态幂等', ()
 
 test('信封：status 必填、provenance.mode 必填，analyze 不许留 quote 原文', () => {
   const missingStatus = worldviewEntry({ status: undefined })
-  assert.ok(validatePediaEntry(missingStatus).errors.some((error) => error.code === 'MISSING_REQUIRED' && error.field === 'status'))
+  assert.ok(validateFactEntry(missingStatus).errors.some((error) => error.code === 'MISSING_REQUIRED' && error.field === 'status'))
 
   const badMode = worldviewEntry({ provenance: { ...worldviewEntry().provenance, mode: 'guess' } })
-  assert.ok(validatePediaEntry(badMode).errors.some((error) => error.code === 'PROVENANCE_MODE'))
+  assert.ok(validateFactEntry(badMode).errors.some((error) => error.code === 'PROVENANCE_MODE'))
 
   const quoted = worldviewEntry({ provenance: { ...worldviewEntry().provenance, mode: 'analyze', quote: '原文摘录' } })
-  assert.ok(validatePediaEntry(quoted).errors.some((error) => error.code === 'PROVENANCE_QUOTE_NOT_HASHED'))
+  assert.ok(validateFactEntry(quoted).errors.some((error) => error.code === 'PROVENANCE_QUOTE_NOT_HASHED'))
   const hashed = worldviewEntry({ provenance: { ...worldviewEntry().provenance, mode: 'analyze', quote_hash: 'abc123' } })
-  assert.equal(validatePediaEntry(hashed).ok, true)
+  assert.equal(validateFactEntry(hashed).ok, true)
   const authorQuote = worldviewEntry({ provenance: { ...worldviewEntry().provenance, mode: 'author', quote: '作者自写原文' } })
-  assert.equal(validatePediaEntry(authorQuote).ok, true, 'author 模式可以留原文')
+  assert.equal(validateFactEntry(authorQuote).ok, true, 'author 模式可以留原文')
 })
 
 test('validity 双时间轴：整数或 null，from 不得大于 to', () => {
-  assert.equal(validatePediaEntry(worldviewEntry({ validity: { from: null, to: null } })).ok, true)
-  assert.equal(validatePediaEntry(worldviewEntry({ validity: { from: 3, to: 9 } })).ok, true)
-  const shape = validatePediaEntry(worldviewEntry({ validity: { from: '3', to: 9 } }))
+  assert.equal(validateFactEntry(worldviewEntry({ validity: { from: null, to: null } })).ok, true)
+  assert.equal(validateFactEntry(worldviewEntry({ validity: { from: 3, to: 9 } })).ok, true)
+  const shape = validateFactEntry(worldviewEntry({ validity: { from: '3', to: 9 } }))
   assert.ok(shape.errors.some((error) => error.code === 'VALIDITY_VALUE'))
-  const range = validatePediaEntry(worldviewEntry({ validity: { from: 9, to: 3 } }))
+  const range = validateFactEntry(worldviewEntry({ validity: { from: 9, to: 3 } }))
   assert.ok(range.errors.some((error) => error.code === 'VALIDITY_RANGE'))
 })
 
@@ -148,23 +148,23 @@ test('S2-1：anchors/memoryPoints 形状；supporting/minor 必须 goal+plotFunc
     anchors: { speech: ['说话带方言'], behavior: ['总在擦表'], catchphrase: ['时间会回答'] },
     memoryPoints: ['袖口停摆的表']
   })
-  assert.equal(validatePediaEntry(anchored).ok, true)
+  assert.equal(validateFactEntry(anchored).ok, true)
 
-  const badChannel = validatePediaEntry(characterEntry({ anchors: { humor: ['x'] } }))
+  const badChannel = validateFactEntry(characterEntry({ anchors: { humor: ['x'] } }))
   assert.ok(badChannel.errors.some((error) => error.code === 'ANCHORS_CHANNEL'))
 
-  const incompleteAuthor = validatePediaEntry(characterEntry({ castRole: { tier: 'supporting', goal: '守住钟楼' } }))
+  const incompleteAuthor = validateFactEntry(characterEntry({ castRole: { tier: 'supporting', goal: '守住钟楼' } }))
   assert.equal(incompleteAuthor.ok, true, 'author 模式先警告')
   assert.ok(incompleteAuthor.warnings.some((warning) => warning.code === 'CAST_ROLE_INCOMPLETE' && warning.field === 'castRole.plotFunction'))
 
-  const incompleteAnalyze = validatePediaEntry(characterEntry({
+  const incompleteAnalyze = validateFactEntry(characterEntry({
     provenance: { ...characterEntry().provenance, mode: 'analyze' },
     castRole: { tier: 'minor' }
   }))
   assert.equal(incompleteAnalyze.ok, false, 'analyze 模式直接拒')
   assert.ok(incompleteAnalyze.errors.some((error) => error.code === 'CAST_ROLE_INCOMPLETE'))
 
-  const complete = validatePediaEntry(characterEntry({
+  const complete = validateFactEntry(characterEntry({
     castRole: { tier: 'supporting', goal: '守住钟楼', plotFunction: '在第二幕递出停摆的表' }
   }))
   assert.equal(complete.ok, true)
@@ -182,16 +182,16 @@ test('S2-2：节奏规格默认值可覆盖；窗口必须严格递增；新意�
     events: [{ index: 1, track: 'fact', novelty: ['燃'], segments: [{ index: 1, chars: 120 }] }],
     structureTemplates: [{ id: 'three-act', kind: 'beat-sheet', beats: ['起', '承', '转', '合'] }]
   })
-  assert.equal(validatePediaEntry(ok).ok, true)
+  assert.equal(validateFactEntry(ok).ok, true)
 
   const badWindow = plotEntry({ rhythmSpec: { windowChars: [1500, 500], noveltyTags: ['笑'] } })
-  assert.ok(validatePediaEntry(badWindow).errors.some((error) => error.code === 'RHYTHM_WINDOW_ORDER'))
+  assert.ok(validateFactEntry(badWindow).errors.some((error) => error.code === 'RHYTHM_WINDOW_ORDER'))
   const badTrack = plotEntry({ events: [{ index: 1, track: 'gossip' }] })
-  assert.ok(validatePediaEntry(badTrack).errors.some((error) => error.code === 'PLOT_EVENT_TRACK'))
+  assert.ok(validateFactEntry(badTrack).errors.some((error) => error.code === 'PLOT_EVENT_TRACK'))
   const badSegment = plotEntry({ events: [{ index: 1, track: 'fact', segments: [{ index: 0, chars: 12 }] }] })
-  assert.ok(validatePediaEntry(badSegment).errors.some((error) => error.code === 'PLOT_EVENT_SEGMENT_INDEX'))
+  assert.ok(validateFactEntry(badSegment).errors.some((error) => error.code === 'PLOT_EVENT_SEGMENT_INDEX'))
   const badTemplate = plotEntry({ structureTemplates: [{ kind: 'beat-sheet' }] })
-  assert.ok(validatePediaEntry(badTemplate).errors.some((error) => error.code === 'STRUCTURE_TEMPLATE_NAME'))
+  assert.ok(validateFactEntry(badTemplate).errors.some((error) => error.code === 'STRUCTURE_TEMPLATE_NAME'))
 
   const instance = instantiateStructureTemplate({ id: 'three-act', kind: 'beat-sheet', beats: ['起', '承', '转', '合'] })
   assert.equal(instance.instanceOf, 'three-act')
@@ -205,9 +205,9 @@ test('S2-3：knowledge 记录形状；checkPerspective 拦住「未知信息」�
   const known = characterEntry({
     knowledge: [{ fromEntry: '停摆的表', atSpan: { from: 2, to: 2 }, kind: 'event' }]
   })
-  assert.equal(validatePediaEntry(known).ok, true)
+  assert.equal(validateFactEntry(known).ok, true)
   const badKind = characterEntry({ knowledge: [{ fromEntry: '停摆的表', atSpan: { from: 2, to: 2 }, kind: 'rumor' }] })
-  assert.ok(validatePediaEntry(badKind).errors.some((error) => error.code === 'KNOWLEDGE_KIND'))
+  assert.ok(validateFactEntry(badKind).errors.some((error) => error.code === 'KNOWLEDGE_KIND'))
 
   const perspectiveEntry = {
     name: '柯秒的独白',
@@ -354,11 +354,11 @@ test('迁移器：v1 世界观补信封、analyze quote 只留哈希；plot/char
     domain: BOOK,
     slot: 'locations',
     definition: '城南的钟楼。',
-    provenance: { book: BOOK, book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'novelpedia/1', confidence: 1, quote: '原文摘录' }
+    provenance: { book: BOOK, book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'novelfact/1', confidence: 1, quote: '原文摘录' }
   }
   const migrated = migrateV1Entry(v1Town)
   assert.equal(migrated.ok, true, JSON.stringify(migrated.checks.errors))
-  assert.equal(migrated.entry.schema, PEDIA_SCHEMA)
+  assert.equal(migrated.entry.schema, FACT_SCHEMA)
   assert.equal(migrated.entry.status, 'draft')
   assert.equal(migrated.entry.provenance.mode, 'analyze', '没有世界书载体的 v1 条目按分析来源')
   assert.deepEqual(migrated.entry.validity, { from: null, to: null })
@@ -377,7 +377,7 @@ test('迁移器：v1 世界观补信封、analyze quote 只留哈希；plot/char
     name: '章纲',
     domain: BOOK,
     events: [{ index: 1, title: '雨夜', text: '短句。'.repeat(40) }],
-    provenance: { book: BOOK, book_id: 'abcd1234', chapters: [1], scenes: [], extractor: 'novelpedia/1' },
+    provenance: { book: BOOK, book_id: 'abcd1234', chapters: [1], scenes: [], extractor: 'novelfact/1' },
     fingerprint: { vec: null, metrics: {} }
   }
   const plot = migrateV1Entry(v1Plot)
@@ -395,7 +395,7 @@ test('迁移器：v1 世界观补信封、analyze quote 只留哈希；plot/char
     layer: 'character',
     name: '柯秒',
     domain: BOOK,
-    provenance: { book: BOOK, book_id: 'abcd1234', chapters: [1], scenes: [], extractor: 'novelpedia/1' },
+    provenance: { book: BOOK, book_id: 'abcd1234', chapters: [1], scenes: [], extractor: 'novelfact/1' },
     fingerprint: { vec: null, metrics: {} }
   }
   const character = migrateV1Entry(v1Character)

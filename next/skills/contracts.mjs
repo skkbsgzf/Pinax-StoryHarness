@@ -6,18 +6,18 @@
  *     而 requires.spans／produces 的白名单需要嵌套对象与数组；
  *   · 装载层（loadSkills）按技能名查一次即可校验，作者导入的第三方包不写契约也照样能装（缺省 null，
  *     向后兼容），不会因为「没登记」而被拒；
- *   · 校验器在 next/pedia/usecases/skillContract.js（纯域件），这里只做登记与冻结，
+ *   · 校验器在 next/fact/usecases/skillContract.js（纯域件），这里只做登记与冻结，
  *     不在技能目录里长第二套校验逻辑。
  *
  * 写法约定：
- *   · requires.layers 只认 pedia 三层（worldview／character／plot）；style 按 ADR S1 已解耦，
+ *   · requires.layers 只认 fact 三层（worldview／character／plot）；style 按 ADR S1 已解耦，
  *     文风约束走能力包，不在层词表里——chapter-rewrite 的「文风约束」在 SKILL.md 的数据契约段注明，
  *     由装配方另行补投影；
  *   · produces 的非条目产物（违规清单／关系边／场景骨架）用 nonEntry＋output 声明，
- *     它们不进 pedia store，但仍要过契约白名单，不能被当成条目悄悄落库。
+ *     它们不进 fact store，但仍要过契约白名单，不能被当成条目悄悄落库。
  */
 
-import { defineSkillContract } from '../pedia/usecases/skillContract.js'
+import { defineSkillContract } from '../fact/usecases/skillContract.js'
 
 /** 五张卡的名字必须与 next/skills/<name>/SKILL.md 的目录名一致（装载层会再核一次）。 */
 export const SKILL_CONTRACTS = Object.freeze({
@@ -40,7 +40,7 @@ export const SKILL_CONTRACTS = Object.freeze({
 
   /**
    * 连续性核对：双时间轴＋知情矩阵＋有效性区间都要看到，产物是「一致性违规清单」——
-   * 包装 precheck 的非条目结果，不落 pedia store。
+   * 包装 precheck 的非条目结果，不落 fact store。
    */
   'continuity-check': defineSkillContract({
     skill: 'continuity-check',

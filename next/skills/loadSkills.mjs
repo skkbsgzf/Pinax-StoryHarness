@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { SKILL_CONTRACTS } from './contracts.mjs'
-import { validateSkillContract } from '../pedia/usecases/skillContract.js'
+import { validateSkillContract } from '../fact/usecases/skillContract.js'
 
 /**
  * 技能包加载器（M2.5-B · 任务一）。

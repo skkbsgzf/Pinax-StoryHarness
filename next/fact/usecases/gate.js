@@ -13,11 +13,11 @@
  *      外加 knowledge 的 fromEntry 解析、知情早于来源、重复记录。
  *
  * 两条分层纪律：
- *   - 本文件在 pedia 域内，不 import wikihub/convert（静态边界铁律）。round-trip 保真
+ *   - 本文件在 fact 域内，不 import wikihub/convert（静态边界铁律）。round-trip 保真
  *     通过 options.roundTrip 端口注入：宿主/测试用 convert 做导出→回读，把结果交回来；
  *   - 归一化（别名合并／分类归并）是纯结构报告，不猜跨条目的同义。
  *
- * 汇总出口 runPediaGate(entries) → { assertions, conflicts, undecidable, roundTrip, normalization }：
+ * 汇总出口 runFactGate(entries) → { assertions, conflicts, undecidable, roundTrip, normalization }：
  *   assertions  全部断言项（error/warning 都在，带 category/rule/decidable）；
  *   conflicts   assertions 里 severity=error 且可判定的子集（门禁真正的红）；
  *   undecidable 规则槽位里只有自由文本、无法确定性判定的条目（如实记账）。
@@ -28,9 +28,9 @@ import { createAliasIndex } from '../domain/aliases.js'
 import { intersectValidity, spansOverlap, validityBounds } from '../domain/validity.js'
 import { precheckDraft } from './precheck.js'
 
-export const PEDIA_GATE_VERSION = 'pedia-gate/v1'
+export const FACT_GATE_VERSION = 'fact-gate/v1'
 
-/** 断言类别；每类对应 runPediaGate 的一个检查器。 */
+/** 断言类别；每类对应 runFactGate 的一个检查器。 */
 export const GATE_CATEGORIES = Object.freeze({
   characterAnchors: 'character-anchors',
   worldRules: 'world-rules',
@@ -689,7 +689,7 @@ export function buildRoundTripReport(input = {}) {
 function runRoundTripPort(port, entries) {
   const skipped = (reason) => ({ ok: true, skipped: true, reason, losses: [], warnings: [], notes: [] })
   if (typeof port !== 'function') {
-    return skipped('未注入 roundTrip 端口：pedia 层不 import wikihub/convert（宿主或测试注入导出→回读）')
+    return skipped('未注入 roundTrip 端口：fact 层不 import wikihub/convert（宿主或测试注入导出→回读）')
   }
   let raw
   try {
@@ -708,7 +708,7 @@ function runRoundTripPort(port, entries) {
     return {
       ok: false,
       skipped: false,
-      error: { code: 'ROUNDTRIP_ASYNC', message: 'roundTrip 端口必须同步返回；异步导出请在宿主侧 await 后再调用 runPediaGate' },
+      error: { code: 'ROUNDTRIP_ASYNC', message: 'roundTrip 端口必须同步返回；异步导出请在宿主侧 await 后再调用 runFactGate' },
       losses: [],
       warnings: [],
       notes: []
@@ -739,12 +739,12 @@ function runRoundTripPort(port, entries) {
 /**
  * 全量门禁：四类断言 + 归一化报告 + 可选的 round-trip 端口。
  *
- * @param {Object[]} entries pedia/v2 条目
+ * @param {Object[]} entries fact.data/v2 条目
  * @param {Object} [options] { aliasIndex, roundTrip }
  *   roundTrip(entries) → { after, losses, warnings?, notes? } | 条目数组 | buildRoundTripReport 形状
  * @returns {{ ok, version, assertions, conflicts, undecidable, roundTrip, normalization, counts, warnings }}
  */
-export function runPediaGate(entries, options = {}) {
+export function runFactGate(entries, options = {}) {
   const source = Array.isArray(entries) ? entries : []
   const list = source.filter(isPlainObject)
   const warnings = []
@@ -776,7 +776,7 @@ export function runPediaGate(entries, options = {}) {
 
   return {
     ok: conflicts.length === 0 && roundTrip.ok !== false,
-    version: PEDIA_GATE_VERSION,
+    version: FACT_GATE_VERSION,
     assertions,
     conflicts,
     undecidable: worldRules.undecidable,

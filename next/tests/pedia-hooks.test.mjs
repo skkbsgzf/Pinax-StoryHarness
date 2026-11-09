@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PEDIA_SCHEMA, stableEntryId } from '../pedia/domain/pediaSchema.js'
-import { buildFactPack } from '../pedia/usecases/factPack.js'
-import { backflowHypothesis } from '../pedia/usecases/hypothesis.js'
-import { precheckDraft, extractRefs, knowledgeLedgerFrom } from '../pedia/usecases/precheck.js'
+import { FACT_SCHEMA, stableEntryId } from '../fact/domain/pediaSchema.js'
+import { buildFactPack } from '../fact/usecases/factPack.js'
+import { backflowHypothesis } from '../fact/usecases/hypothesis.js'
+import { precheckDraft, extractRefs, knowledgeLedgerFrom } from '../fact/usecases/precheck.js'
 import {
   HOOK_ENGINE_ROUTES,
   HOOK_ENGINE_VERSION,
@@ -11,11 +11,11 @@ import {
   diffValidate,
   readOnlyQuery,
   suggestCompletion
-} from '../pedia/usecases/hookEngine.js'
-import { createMemoryPediaStore } from '../pedia/adapters/memoryPediaStore.mjs'
-import { assertPediaStore, isPediaStore } from '../pedia/ports/pediaStore.js'
-import { assertVectorPort, isVectorPort } from '../pedia/ports/vectorPort.js'
-import { assertLlmPort, isLlmPort } from '../pedia/ports/llmPort.js'
+} from '../fact/usecases/hookEngine.js'
+import { createMemoryFactStore } from '../fact/adapters/memoryPediaStore.mjs'
+import { assertFactStore, isFactStore } from '../fact/ports/pediaStore.js'
+import { assertVectorPort, isVectorPort } from '../fact/ports/vectorPort.js'
+import { assertLlmPort, isLlmPort } from '../fact/ports/llmPort.js'
 
 /**
  * P1 usecases/ports/adapters 合同测试：
@@ -34,7 +34,7 @@ function entryId(layer, name, slot = '') {
 
 function worldEntry({ name, slot, definition, ...rest }) {
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: entryId('worldview', name, slot),
     layer: 'worldview',
     name,
@@ -49,7 +49,7 @@ function worldEntry({ name, slot, definition, ...rest }) {
 
 function characterEntry({ name, ...rest }) {
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: entryId('character', name),
     layer: 'character',
     name,
@@ -63,7 +63,7 @@ function characterEntry({ name, ...rest }) {
 
 function plotEntry({ name, ...rest }) {
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: entryId('plot', name),
     layer: 'plot',
     name,
@@ -237,7 +237,7 @@ test('假设回灌：proposed 事件 + 证据链；无证据拒收，解析不�
 })
 
 test('suggestCompletion：只给建议（writesData=false），从 store 读也不写', async () => {
-  const inner = createMemoryPediaStore({ entries: ENTRIES })
+  const inner = createMemoryFactStore({ entries: ENTRIES })
   const { api, calls } = spyStore(inner)
   const result = await createHookEngine({ store: api }).suggestCompletion({ query: { span: 2, character: '柯秒' } })
   assert.equal(result.kind, 'suggestCompletion')
@@ -303,7 +303,7 @@ test('diffValidate：非法状态转移/新增不合 schema 算 error，删除�
 })
 
 test('readOnlyQuery：只出事实包；store 只被 list 读一次', async () => {
-  const inner = createMemoryPediaStore({ entries: ENTRIES })
+  const inner = createMemoryFactStore({ entries: ENTRIES })
   const { api, calls } = spyStore(inner)
   const result = await createHookEngine({ store: api }).readOnlyQuery({ query: { span: 1, character: '柯秒' } })
   assert.equal(result.kind, 'readOnlyQuery')
@@ -333,7 +333,7 @@ test('hook 引擎：四动作路由到三入口，版本号稳定', () => {
 })
 
 test('内存 store：operationId 幂等、expectedRevision 乐观并发、校验拒写、删除同口径', async () => {
-  const store = createMemoryPediaStore()
+  const store = createMemoryFactStore()
   assert.equal(await store.get(rule.id), null)
 
   const first = await store.save(rule, { operationId: 'op-create' })
@@ -375,11 +375,11 @@ test('内存 store：operationId 幂等、expectedRevision 乐观并发、校验
 })
 
 test('端口形状校验：缺方法直接 TypeError；齐备则原样返回', () => {
-  const store = createMemoryPediaStore()
-  assert.equal(isPediaStore(store), true)
-  assert.equal(assertPediaStore(store), store)
-  assert.equal(isPediaStore({ get() {} }), false)
-  assert.throws(() => assertPediaStore({ get() {}, list() {} }), /PediaStore 端口缺方法/u)
+  const store = createMemoryFactStore()
+  assert.equal(isFactStore(store), true)
+  assert.equal(assertFactStore(store), store)
+  assert.equal(isFactStore({ get() {} }), false)
+  assert.throws(() => assertFactStore({ get() {}, list() {} }), /FactStore 端口缺方法/u)
 
   const vector = { embed: async () => [], search: async () => [] }
   assert.equal(isVectorPort(vector), true)

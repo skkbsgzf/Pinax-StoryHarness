@@ -4,16 +4,16 @@ import { createHash } from 'node:crypto'
 import { parseWorldbookEntryFile } from '@pinax/core/domain/worldbookFileContract'
 import {
   CATEGORY_MAP,
-  PEDIA_SCHEMA,
+  FACT_SCHEMA,
   sha1Hex,
   slotForCategory,
   stableEntryId,
-  validatePediaEntry
+  validateFactEntry
 } from '../wikihub/pediaSchema.mjs'
 import {
   NAME_PREFIX_RULES,
   NOVEL_STRUCTURE_LOSSES,
-  PEDIA_EXPORT_LOSSES,
+  FACT_EXPORT_LOSSES,
   SCRIPT_STRUCTURE_LOSSES,
   hubToNovelRefs,
   hubToScriptSkeleton,
@@ -31,7 +31,7 @@ import {
  *   1) 世界书 → hub → 世界书 无损（worldview 硬层铁保证），且经得起「再序列化再解析」；
  *   2) 小说/剧本 → plot/character 只做结构映射，软层损失按清单如实标注（不假装无损）；
  *   3) @《…》 token ↔ hub relations 互逆。
- * 期望值全部来自 pedia/v2 的定稿口径（category_map 与稳定 id 沿用 v1、信封按 v2），不另立标准。
+ * 期望值全部来自 fact.data/v2 的定稿口径（category_map 与稳定 id 沿用 v1、信封按 v2），不另立标准。
  */
 
 const sha1 = (text) => createHash('sha1').update(text, 'utf8').digest('hex')
@@ -142,10 +142,10 @@ test('sha1 与 node:crypto 同值；稳定 id = sha1(layer|domain|slot|name)[:12
   assert.match(stableEntryId({ layer: 'character', domain: '某书', name: '柯秒' }), /^[0-9a-f]{12}$/u)
 })
 
-test('pedia/v2 校验：必填、槽位、稳定 id 漂移都拦；有序槽位缺 rank 只警告', () => {
+test('fact.data/v2 校验：必填、槽位、稳定 id 漂移都拦；有序槽位缺 rank 只警告', () => {
   const id = stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'locations', name: '旧钟楼' })
   const base = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id,
     layer: 'worldview',
     name: '旧钟楼',
@@ -155,20 +155,20 @@ test('pedia/v2 校验：必填、槽位、稳定 id 漂移都拦；有序槽位�
     definition: '城南的钟楼。',
     provenance: { mode: 'author', book: '停摆之城', book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'test/1', confidence: 1 }
   }
-  assert.equal(validatePediaEntry(base).ok, true)
+  assert.equal(validateFactEntry(base).ok, true)
 
-  const missing = validatePediaEntry({ ...base, definition: '' })
+  const missing = validateFactEntry({ ...base, definition: '' })
   assert.equal(missing.ok, false)
   assert.ok(missing.errors.some((error) => error.code === 'MISSING_REQUIRED' && error.field === 'definition'))
 
-  const unknownSlot = validatePediaEntry({ ...base, slot: 'weird' })
+  const unknownSlot = validateFactEntry({ ...base, slot: 'weird' })
   assert.ok(unknownSlot.errors.some((error) => error.code === 'UNKNOWN_SLOT'))
 
-  const drift = validatePediaEntry({ ...base, id: '000000000000' })
+  const drift = validateFactEntry({ ...base, id: '000000000000' })
   assert.ok(drift.errors.some((error) => error.code === 'ID_MISMATCH'))
 
   const powerId = stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'power_levels', name: '钟表境' })
-  const ordered = validatePediaEntry({ ...base, id: powerId, slot: 'power_levels', name: '钟表境' })
+  const ordered = validateFactEntry({ ...base, id: powerId, slot: 'power_levels', name: '钟表境' })
   assert.equal(ordered.ok, true)
   assert.ok(ordered.warnings.some((warning) => warning.code === 'ORDERED_SLOT_WITHOUT_RANK'))
 })
@@ -195,7 +195,7 @@ test('世界书 → hub → 世界书无损：契约字段逐项相等，且经�
   assert.equal(hub.entries.length, 1)
 
   const entry = hub.entries[0]
-  assert.equal(entry.schema, PEDIA_SCHEMA)
+  assert.equal(entry.schema, FACT_SCHEMA)
   assert.equal(entry.layer, 'worldview')
   assert.equal(entry.name, '柯秒')
   assert.equal(entry.status, 'draft', 'v2 信封：转换出来的条目默认 draft')
@@ -216,9 +216,9 @@ test('世界书 → hub → 世界书无损：契约字段逐项相等，且经�
   assert.equal(back.draft.path, '人物/人物·柯秒.md', '路径沿用快照里的真实路径')
 
   assert.deepEqual(
-    PEDIA_EXPORT_LOSSES.map((item) => item.code),
+    FACT_EXPORT_LOSSES.map((item) => item.code),
     hub.exportLosses.map((item) => item.code),
-    '纯 pedia 导出的剥离清单要随结果返回'
+    '纯 fact 导出的剥离清单要随结果返回'
   )
 })
 
@@ -422,7 +422,7 @@ test('hub → 世界书（没有 next 快照）：损失逐条标注，type/cat 
   assert.match(back.draft.fileText, /^---\n/u)
 
   const ordered = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'power_levels', name: '钟表境' }),
     layer: 'worldview',
     name: '钟表境',

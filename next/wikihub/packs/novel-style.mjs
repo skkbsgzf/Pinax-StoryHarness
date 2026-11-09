@@ -1,8 +1,8 @@
 /**
- * 文风能力包（ADR S1：style 从 pedia/v2 一等公民层解耦）。
+ * 文风能力包（ADR S1：style 从 fact.data/v2 一等公民层解耦）。
  *
  * 定位：文风与「剧本格式」「画风」同级，是更上层的**包装能力包**——挂 data-小说，
- * 仅在小说体裁生效；不参与 Core pedia 的跨书迁移，也不占 worldview 的 11 个槽位。
+ * 仅在小说体裁生效；不参与 Core fact 的跨书迁移，也不占 worldview 的 11 个槽位。
  *
  * 包内承载 v1 style 层的 metrics/samples/生成约束：
  *   - targets：目标区间（句长/段长/对话占比等，可配置）；
@@ -12,7 +12,7 @@
  * 本文件纯函数、无磁盘依赖；入口在 convert.mjs（世界书 style 类条目改投）与 migrate.mjs（v1 迁移）。
  */
 
-import { sha1Hex } from '../../pedia/domain/stableId.js'
+import { sha1Hex } from '../../fact/domain/stableId.js'
 
 export const NOVEL_STYLE_PACK_ID = 'novel-style'
 export const NOVEL_STYLE_PACK_VERSION = 'novel-style/v1'

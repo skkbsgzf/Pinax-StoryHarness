@@ -1,5 +1,5 @@
 /**
- * pedia/v2 版本化词汇表（domain 真源，Core 平移件）。
+ * fact.data/v2 版本化词汇表（domain 真源，Core 平移件）。
  *
  * 规范唯一来源：`pedia-v2-adr-final.md`（2026-11-09 作者裁定）。
  * v1 来源：NovelPedia 的 `src/pedia_schema.json`（commit eb4f140…，允许入仓）。
@@ -10,18 +10,18 @@
 
 import { sha1Hex } from './stableId.js'
 
-export const PEDIA_SCHEMA = 'pedia/v2'
+export const FACT_SCHEMA = 'fact.data/v2'
 
-export const PEDIA_SOURCE = Object.freeze({
+export const FACT_SOURCE = Object.freeze({
   repository: 'NovelPedia (pedia/v1 vendored) + pinax pedia-v2 ADR',
   file: 'src/pedia_schema.json → pedia-v2-adr-final.md',
   commit: 'eb4f14018a61153023d32aed3679c1bb2682f336',
-  schema: PEDIA_SCHEMA,
+  schema: FACT_SCHEMA,
   updated: '2026-11-09'
 })
 
-/** 三层对齐口径；style 已解耦，不在 PEDIA_LAYERS 里（见 ADR S1）。 */
-export const PEDIA_LAYERS = Object.freeze({
+/** 三层对齐口径；style 已解耦，不在 FACT_LAYERS 里（见 ADR S1）。 */
+export const FACT_LAYERS = Object.freeze({
   worldview: Object.freeze({
     align: 'hard',
     desc: '世界观设定层：跨书可借鉴度最高，必须落 domain + slot（有序槽位才有 rank）。',

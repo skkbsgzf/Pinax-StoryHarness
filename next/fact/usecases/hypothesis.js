@@ -8,9 +8,9 @@
  *   - provenance.mode=analyze：假设是分析得来，quote 只留哈希（这里根本不带原文）。
  */
 
-import { PEDIA_SCHEMA } from '../domain/vocabulary.js'
+import { FACT_SCHEMA } from '../domain/vocabulary.js'
 import { stableEntryId } from '../domain/stableId.js'
-import { validatePediaEntry } from '../domain/schema.js'
+import { validateFactEntry } from '../domain/schema.js'
 
 function isPlainObject(value) {
   return Object.prototype.toString.call(value) === '[object Object]'
@@ -94,7 +94,7 @@ export function backflowHypothesis(input = {}) {
   const name = nameOfHypothesis(hypothesis, statement)
   const validity = isPlainObject(hypothesis.validity) ? { ...hypothesis.validity } : undefined
   const entry = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain, slot: '', name }),
     layer: 'plot',
     name,
@@ -117,14 +117,14 @@ export function backflowHypothesis(input = {}) {
       book_id: firstText(source.bookId, hypothesis.bookId),
       chapters: [],
       scenes: [],
-      extractor: firstText(source.extractor, hypothesis.extractor, 'pedia/hypothesis@1'),
+      extractor: firstText(source.extractor, hypothesis.extractor, 'fact/hypothesis@1'),
       confidence: typeof hypothesis.confidence === 'number' ? hypothesis.confidence : undefined
     },
     fingerprint: { vec: null, metrics: { evidenceCount: evidence.filter((item) => item.resolved).length } }
   }
   if (validity) entry.validity = validity
 
-  const validation = validatePediaEntry(entry)
+  const validation = validateFactEntry(entry)
   return {
     ok: validation.ok,
     entry,

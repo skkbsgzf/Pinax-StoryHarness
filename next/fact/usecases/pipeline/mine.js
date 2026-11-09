@@ -9,23 +9,23 @@
  *   - `src/stage2_mine.py`：模块失败隔离（单个人物/单章失败不阻塞其余）。
  *
  * 与参考实现的差异（ADR P2a）：
- *   - 输出 pedia/v2 条目：character 带 anchors{speech,behavior,catchphrase} 与 memoryPoints；
+ *   - 输出 fact.data/v2 条目：character 带 anchors{speech,behavior,catchphrase} 与 memoryPoints；
  *     worldview 带 definition/aliases/slot，并给已有条目的 definition 做补充；
  *   - 新条目 status=proposed；已有条目走状态机（adopted 不降级、superseded 不复活）；
  *   - analyze 模式：provenance 只记锚点与哈希口径，不存原文。
  */
 
-import { PEDIA_SCHEMA, CAST_ROLE_TIERS, slotForCategory } from '../../domain/vocabulary.js'
+import { FACT_SCHEMA, CAST_ROLE_TIERS, slotForCategory } from '../../domain/vocabulary.js'
 import { stableEntryId } from '../../domain/stableId.js'
-import { validatePediaEntry } from '../../domain/schema.js'
+import { validateFactEntry } from '../../domain/schema.js'
 import { canTransitionStatus } from '../../domain/status.js'
 import { createAliasIndex } from '../../domain/aliases.js'
 import { assertLlmPort } from '../../ports/llmPort.js'
-import { assertPediaStore } from '../../ports/pediaStore.js'
+import { assertFactStore } from '../../ports/pediaStore.js'
 import { completeWithRetries, persistEntries } from './extract.js'
 import { MINE_CHARACTER_SYSTEM_PROMPT, MINE_SETTING_SYSTEM_PROMPT, buildMineCharacterPrompt, buildMineSettingPrompt } from './prompts.mjs'
 
-const DEFAULT_EXTRACTOR = 'pedia/pipeline/mine@1'
+const DEFAULT_EXTRACTOR = 'fact/pipeline/mine@1'
 
 /** 参考实现明确拒收的通用名词（放在别的小说里同样成立，没有记录意义）。 */
 export const GENERIC_SETTING_TERMS = Object.freeze([
@@ -222,7 +222,7 @@ function normalizeCastRole(raw, warnings, name) {
 }
 
 /**
- * 人物事实 + 模型档案 → pedia/v2 character 草稿（status=proposed）。
+ * 人物事实 + 模型档案 → fact.data/v2 character 草稿（status=proposed）。
  * 锚点 speech/behavior 来自 say/do 渠道的确定性样本，catchphrase/memoryPoints 来自模型。
  */
 export function buildCharacterEntry({ name, fact, profile, domain, book, bookId, extractor, warnings = [] }) {
@@ -230,7 +230,7 @@ export function buildCharacterEntry({ name, fact, profile, domain, book, bookId,
   const record = isPlainObject(fact) ? fact : {}
   const chapters = integerUnion(record.chapters)
   const entry = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'character', domain, slot: '', name }),
     layer: 'character',
     name,
@@ -343,7 +343,7 @@ export async function mineCharacters(input = {}, options = {}) {
       extractor,
       warnings
     })
-    const validation = validatePediaEntry(entry)
+    const validation = validateFactEntry(entry)
     if (!validation.ok) {
       failures.push({ name, code: 'CHARACTER_ENTRY_INVALID', errors: validation.errors })
       continue
@@ -489,7 +489,7 @@ function buildWorldviewEntry(term, existing, context, warnings) {
     : term.definition
 
   const entry = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id,
     layer: 'worldview',
     name,
@@ -541,7 +541,7 @@ export async function mineSettings(input = {}, options = {}) {
 
   let existingEntries = Array.isArray(source.entries) ? source.entries.filter(isPlainObject) : []
   if (store && !existingEntries.length) {
-    assertPediaStore(store)
+    assertFactStore(store)
     const listed = await store.list({ domain })
     existingEntries = listed.entries.map((record) => record.entry)
   }
@@ -620,7 +620,7 @@ export async function mineSettings(input = {}, options = {}) {
     const existing = findExistingEntry(existingEntries, name)
     const entry = buildWorldviewEntry(term, existing, context, warnings)
     if (!entry) continue
-    const validation = validatePediaEntry(entry)
+    const validation = validateFactEntry(entry)
     if (!validation.ok) {
       failures.push({ name, code: 'SETTING_ENTRY_INVALID', errors: validation.errors })
       continue

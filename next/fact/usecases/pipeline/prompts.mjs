@@ -12,7 +12,7 @@
  *     SET_SYSTEM / SET_USER / SETTING_QUERY / STRENGTHEN_*（设定识别与定义）
  *
  * 改写口径（ADR P2a）：输出目标从 NovelPedia 的 scenes_meta / settings_graph
- * 改为 pedia/v2 条目草稿——抽取组喂 plot 草稿（粒度＝100–300 字段），
+ * 改为 fact.data/v2 条目草稿——抽取组喂 plot 草稿（粒度＝100–300 字段），
  * 挖掘组喂 character 草稿（anchors/memoryPoints）与 worldview 草稿（definition）。
  * 提示词只描述「要什么 JSON」，条目 id/status/provenance 由 JS 侧确定性生成。
  */
@@ -26,7 +26,7 @@ export const PROMPT_SOURCE = Object.freeze({
     character: 'src/character_agent.py → RESUME_SYSTEM / RESUME_USER',
     setting: 'src/setting_agent.py → SET_SYSTEM / SET_USER / SETTING_QUERY / STRENGTHEN_*'
   }),
-  target: 'pedia/v2 entry drafts（plot / character / worldview）',
+  target: 'fact.data/v2 entry drafts（plot / character / worldview）',
   rewritten: '2026-11-09'
 })
 
@@ -39,7 +39,7 @@ export const EXTRACT_SYSTEM_PROMPT = [
   '规则：1) 只输出 JSON，不要任何解释性文字；2) 字段缺失填空串 "" 或空数组 []，不要 null；',
   '3) who.role 只能是 主事/参与/提及 之一；4) when.timeline 只能是 顺叙/倒叙/插叙 之一；',
   '5) actinfo 按原文先后顺序排列；6) 不编造原文没有的信息。',
-  '结果会映射为 pedia/v2 plot 条目草稿（段粒度 100–300 字）：',
+  '结果会映射为 fact.data/v2 plot 条目草稿（段粒度 100–300 字）：',
   '不要输出条目 id、status、provenance、向量或任何数据库字段。'
 ].join('')
 

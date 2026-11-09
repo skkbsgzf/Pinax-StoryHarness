@@ -1,5 +1,5 @@
 /**
- * 稳定 id 与纯 JS SHA-1（pedia 域纯函数，Core 平移件）。
+ * 稳定 id 与纯 JS SHA-1（fact 域纯函数，Core 平移件）。
  *
  * 只用 Web 标准接口（TextEncoder/DataView）：同一函数在 Node 与浏览器侧同值。
  * 只用于稳定 id 与 quote_hash，不做任何安全用途。

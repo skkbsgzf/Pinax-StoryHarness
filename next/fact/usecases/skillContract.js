@@ -2,9 +2,9 @@
  * 编剧技能数据契约（ADR P3）：技能从「prompt 中心」升级为「数据格式中心」。
  *
  * 一张技能卡声明两件事：
- *   requires —— 需要哪些 pedia 投影（层／槽位／跨度／知情角色／节奏），事实包按此裁剪装配；
+ *   requires —— 需要哪些 fact 投影（层／槽位／跨度／知情角色／节奏），事实包按此裁剪装配；
  *   produces —— 产出什么条目（layer／slot／asStatus／provenance.mode），或非条目产物
- *               （nonEntry：违规清单、关系边、场景骨架这类不进 pedia store 的结果）。
+ *               （nonEntry：违规清单、关系边、场景骨架这类不进 fact store 的结果）。
  *
  * 纯域件：只依赖 ../domain 的词表、信封校验与状态机，不碰宿主（无 node 内置、无 process）。
  * 写路径永远先过 schema，再过状态机，最后过契约白名单——三关缺一不可。
@@ -12,12 +12,12 @@
 
 import {
   OTHER_SLOT,
-  PEDIA_LAYERS,
+  FACT_LAYERS,
   PROVENANCE_MODES,
   WORLDVIEW_SLOTS,
   WORLDVIEW_SLOT_NAMES
 } from '../domain/vocabulary.js'
-import { validatePediaEntry } from '../domain/schema.js'
+import { validateFactEntry } from '../domain/schema.js'
 import { validateStatusTransition } from '../domain/status.js'
 
 export const SKILL_CONTRACT_VERSION = 'skill-contract@1'
@@ -69,12 +69,12 @@ function normalizeRequires(raw, addError) {
 
   const layers = []
   if (!Array.isArray(raw.layers) || !raw.layers.length) {
-    addError('CONTRACT_LAYERS_REQUIRED', 'requires.layers', `requires.layers 必须是非空数组（可写 ${Object.keys(PEDIA_LAYERS).join(' / ')}）`)
+    addError('CONTRACT_LAYERS_REQUIRED', 'requires.layers', `requires.layers 必须是非空数组（可写 ${Object.keys(FACT_LAYERS).join(' / ')}）`)
   } else {
     for (const item of raw.layers) {
       const layer = str(item).trim()
-      if (!PEDIA_LAYERS[layer]) {
-        addError('CONTRACT_LAYER_UNKNOWN', 'requires.layers', `未知层「${layer}」（可写 ${Object.keys(PEDIA_LAYERS).join(' / ')}）`)
+      if (!FACT_LAYERS[layer]) {
+        addError('CONTRACT_LAYER_UNKNOWN', 'requires.layers', `未知层「${layer}」（可写 ${Object.keys(FACT_LAYERS).join(' / ')}）`)
         continue
       }
       if (!layers.includes(layer)) layers.push(layer)
@@ -187,8 +187,8 @@ function normalizeProduces(raw, addError) {
 
     pushUnknownFields(item, PRODUCE_ENTRY_FIELDS, field, addError)
     const layer = str(item.layer).trim()
-    if (!PEDIA_LAYERS[layer]) {
-      addError('CONTRACT_PRODUCE_LAYER', `${field}.layer`, `layer 必须是 ${Object.keys(PEDIA_LAYERS).join(' / ')}`)
+    if (!FACT_LAYERS[layer]) {
+      addError('CONTRACT_PRODUCE_LAYER', `${field}.layer`, `layer 必须是 ${Object.keys(FACT_LAYERS).join(' / ')}`)
       return
     }
     let slot = null
@@ -288,7 +288,7 @@ export function validateSkillContract(input) {
 
 /**
  * 产出条目校验：schema → 状态机 → 契约白名单。
- *   · 每条先过 pedia/v2 信封（必填／枚举／id 漂移／状态机）；
+ *   · 每条先过 fact.data/v2 信封（必填／枚举／id 漂移／状态机）；
  *   · 再按契约找「层＋槽位」白名单，找不到就拒；
  *   · 最后核 asStatus 与 provenance.mode 与契约声明一致——技能不能一边声明提案、一边直写 adopted。
  * @returns {{ ok: boolean, errors: Object[], warnings: Object[], checked: number, contract: Object|null }}
@@ -315,13 +315,13 @@ export function validateProduces(contract, entries) {
       errors.push({ code: 'INVALID_ENTRY', field, message: '条目必须是对象' })
       return
     }
-    const schema = validatePediaEntry(entry)
+    const schema = validateFactEntry(entry)
     for (const error of schema.errors) errors.push({ code: error.code, field: `${field}.${error.field}`, message: error.message })
     for (const warning of schema.warnings) warnings.push({ code: warning.code, field: `${field}.${warning.field}`, message: warning.message })
 
     const layer = str(entry.layer).trim()
     const slot = entry.slot === undefined || entry.slot === null ? '' : str(entry.slot).trim()
-    if (!PEDIA_LAYERS[layer]) return
+    if (!FACT_LAYERS[layer]) return
 
     if (layer !== 'worldview' && slot) {
       errors.push({ code: 'PRODUCES_SLOT_NOT_ALLOWED', field: `${field}.slot`, message: `只有 worldview 层有槽位；${layer} 条目不应带 slot` })
@@ -480,7 +480,7 @@ export function assembleRequires(contract, factPack) {
       slots: Object.keys(slots).length
     },
     dropped: {
-      layers: Object.keys(PEDIA_LAYERS).filter((layer) => !layers.has(layer)),
+      layers: Object.keys(FACT_LAYERS).filter((layer) => !layers.has(layer)),
       slots: Object.keys(worldSourceSlots).filter((slot) => Boolean(wantedSlots) && !wantedSlots.has(slot)),
       characters: Object.keys(charactersSource).filter((name) => !(name in characters))
     },

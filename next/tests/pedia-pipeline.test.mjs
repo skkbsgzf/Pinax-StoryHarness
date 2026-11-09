@@ -1,33 +1,33 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PEDIA_SCHEMA, stableEntryId, validatePediaEntry } from '../pedia/domain/pediaSchema.js'
-import { SEGMENT_MAX_CHARS, SEGMENT_MIN_CHARS, segmentStats } from '../pedia/domain/segment.js'
+import { FACT_SCHEMA, stableEntryId, validateFactEntry } from '../fact/domain/pediaSchema.js'
+import { SEGMENT_MAX_CHARS, SEGMENT_MIN_CHARS, segmentStats } from '../fact/domain/segment.js'
 import {
   cleanActinfo,
   extractChapter,
   parseJsonLoose
-} from '../pedia/usecases/pipeline/extract.js'
+} from '../fact/usecases/pipeline/extract.js'
 import {
   accumulateCharacterFacts,
   mineCharacters,
   mineSettings
-} from '../pedia/usecases/pipeline/mine.js'
+} from '../fact/usecases/pipeline/mine.js'
 import {
   DEFAULT_CLUSTER_THRESHOLD,
   clusterEntries,
   cosineSimilarity
-} from '../pedia/usecases/pipeline/cluster.js'
+} from '../fact/usecases/pipeline/cluster.js'
 import {
   EXTRACTION_PROMPTS,
   MINING_PROMPTS,
   PROMPT_SOURCE,
   buildExtractPrompt
-} from '../pedia/usecases/pipeline/prompts.mjs'
-import { createMemoryPediaStore } from '../pedia/adapters/memoryPediaStore.mjs'
+} from '../fact/usecases/pipeline/prompts.mjs'
+import { createMemoryFactStore } from '../fact/adapters/memoryPediaStore.mjs'
 
 /**
  * P2a 管线合同测试（零网络）：
- *   1) 提示词来源可溯源，抽取组/挖掘组都按 pedia/v2 字段族给 JSON 指令；
+ *   1) 提示词来源可溯源，抽取组/挖掘组都按 fact.data/v2 字段族给 JSON 指令；
  *   2) 容错解析 + 失败重试（≤2 次）+ 单段失败隔离；
  *   3) 段粒度 100–300 字，plot 草稿只存 quote_hash；
  *   4) 同一 bundle 重跑 operationId 幂等，不重复落库；
@@ -78,11 +78,11 @@ function longText(count = 5) {
   return Array.from({ length: count }, () => SENTENCE).join('\n')
 }
 
-test('提示词：来源可溯源，抽取组与挖掘组都要求 pedia/v2 字段族 JSON', () => {
+test('提示词：来源可溯源，抽取组与挖掘组都要求 fact.data/v2 字段族 JSON', () => {
   assert.match(PROMPT_SOURCE.root, /ref-Novelpedia/u)
   assert.match(PROMPT_SOURCE.files.extraction, /prompts\.py/u)
   assert.match(PROMPT_SOURCE.files.setting, /setting_agent\.py/u)
-  assert.equal(PROMPT_SOURCE.target.includes('pedia/v2'), true)
+  assert.equal(PROMPT_SOURCE.target.includes('fact.data/v2'), true)
 
   const prompt = buildExtractPrompt({
     segment: { index: 2, text: '钟楼的指针停了。', chars: 120 },
@@ -153,7 +153,7 @@ test('抽取：段粒度 100–300 字，坏 JSON 自动重试，plot 草稿只�
   assert.equal(result.extractions.length, 2)
 
   for (const draft of result.drafts) {
-    const validation = validatePediaEntry(draft)
+    const validation = validateFactEntry(draft)
     assert.equal(validation.ok, true)
     assert.equal(draft.layer, 'plot')
     assert.equal(draft.status, 'draft')
@@ -191,7 +191,7 @@ test('失败隔离：一段连续 3 次坏输出只记 failures，另一段照�
 })
 
 test('幂等：同一 bundle 重跑不新增条目，operationId 重放标记 duplicate', async () => {
-  const store = createMemoryPediaStore()
+  const store = createMemoryFactStore()
   const llm = fakeLlm([extractionOutput()])
   const input = { text: longText(5), llm, domain: DOMAIN, chapterNo: 9, bookId: 'book-9', store }
 
@@ -208,7 +208,7 @@ test('幂等：同一 bundle 重跑不新增条目，operationId 重放标记 du
 })
 
 const EXTRACTIONS = [{
-  schema: 'pedia-extract/v2',
+  schema: 'fact-extract/v2',
   chapterNo: 1,
   sceneId: 1,
   segment: { index: 1, chars: 240 },
@@ -258,7 +258,7 @@ test('人物挖掘：say/do 锚点 + memoryPoints + 状态机（adopted 不降�
   const kemiaoId = stableEntryId({ layer: 'character', domain: DOMAIN, slot: '', name: '柯秒' })
   const keeperId = stableEntryId({ layer: 'character', domain: DOMAIN, slot: '', name: '守夜人' })
   const authorEntry = (name, status) => ({
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'character', domain: DOMAIN, slot: '', name }),
     layer: 'character',
     name,
@@ -267,7 +267,7 @@ test('人物挖掘：say/do 锚点 + memoryPoints + 状态机（adopted 不降�
     provenance: { mode: 'author', book: DOMAIN, book_id: 'book-1', chapters: [], scenes: [], extractor: 'test/1' },
     fingerprint: { vec: null, metrics: {} }
   })
-  const store = createMemoryPediaStore([authorEntry('柯秒', 'adopted'), authorEntry('守夜人', 'superseded')])
+  const store = createMemoryFactStore([authorEntry('柯秒', 'adopted'), authorEntry('守夜人', 'superseded')])
 
   const result = await mineCharacters({
     extractions: EXTRACTIONS,
@@ -290,7 +290,7 @@ test('人物挖掘：say/do 锚点 + memoryPoints + 状态机（adopted 不降�
   assert.equal(kemiao.castRole.tier, 'supporting')
   assert.equal(kemiao.provenance.mode, 'analyze')
   assert.deepEqual(kemiao.provenance.chapters, [1])
-  assert.equal(validatePediaEntry(kemiao).ok, true)
+  assert.equal(validateFactEntry(kemiao).ok, true)
 
   assert.ok(result.warnings.some((warning) => warning.code === 'STATUS_KEPT'))
   assert.ok(result.warnings.some((warning) => warning.code === 'STATUS_TRANSITION_BLOCKED'))
@@ -334,7 +334,7 @@ function settingLlm() {
 
 test('设定挖掘：同期多次提及归并到规范名，定义用"；"补充，通用词拒收，状态走 proposed', async () => {
   const existing = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain: DOMAIN, slot: 'rules', name: '钟表法则' }),
     layer: 'worldview',
     name: '钟表法则',
@@ -350,7 +350,7 @@ test('设定挖掘：同期多次提及归并到规范名，定义用"；"补充
     { ...EXTRACTIONS[0], sceneId: 1 },
     { ...EXTRACTIONS[0], sceneId: 2 }
   ]
-  const store = createMemoryPediaStore()
+  const store = createMemoryFactStore()
   const llm = settingLlm()
   const result = await mineSettings({
     extractions,
@@ -379,7 +379,7 @@ test('设定挖掘：同期多次提及归并到规范名，定义用"；"补充
   assert.deepEqual(entry.provenance.scenes, [1, 2])
   assert.equal(entry.readerCognition.firstMention, true)
   assert.ok(entry.relations.some((relation) => relation.to === '旧钟楼'))
-  assert.equal(validatePediaEntry(entry).ok, true)
+  assert.equal(validateFactEntry(entry).ok, true)
 
   assert.equal(result.saved.length, 1)
   assert.equal(result.saved[0].ok, true)

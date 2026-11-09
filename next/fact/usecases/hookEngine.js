@@ -1,5 +1,5 @@
 /**
- * S3 hook 引擎：把 pedia 能力挂到创作动作上（Core 侧只暴露这三个入口）。
+ * S3 hook 引擎：把 fact 能力挂到创作动作上（Core 侧只暴露这三个入口）。
  *
  *   suggestCompletion  写大纲/续写时自动补全数据 —— 只产出建议，写不写由调用方拍板；
  *   diffValidate       产生变更后做 diff 校验 —— 出 issue 列表，不改数据；
@@ -14,12 +14,12 @@
 
 import { buildFactPack } from './factPack.js'
 import { precheckDraft } from './precheck.js'
-import { PEDIA_SCHEMA, RHYTHM_WINDOW_DEFAULTS } from '../domain/vocabulary.js'
+import { FACT_SCHEMA, RHYTHM_WINDOW_DEFAULTS } from '../domain/vocabulary.js'
 import { canTransitionStatus } from '../domain/status.js'
-import { validatePediaEntry } from '../domain/schema.js'
+import { validateFactEntry } from '../domain/schema.js'
 import { normalizeSpan, validateValidityShape } from '../domain/validity.js'
 
-export const HOOK_ENGINE_VERSION = 'pedia-hooks/v1'
+export const HOOK_ENGINE_VERSION = 'fact-hooks/v1'
 
 /** 创作动作 → 引擎入口（与 wikihub/hooks.mjs 的契约同口径）。 */
 export const HOOK_ENGINE_ROUTES = Object.freeze({
@@ -193,7 +193,7 @@ export async function diffValidate(input = {}, options = {}) {
     const previous = beforeById.get(id)
     if (!previous) {
       summary.added += 1
-      const validation = validatePediaEntry(entry)
+      const validation = validateFactEntry(entry)
       for (const error of validation.errors) {
         issues.push({ code: 'INVALID_ENTRY', severity: 'error', entryId: id, field: error.field, message: `新增条目 ${id} 不合 schema：${error.message}` })
       }
@@ -207,7 +207,7 @@ export async function diffValidate(input = {}, options = {}) {
     const fields = changedFields(previous, entry)
     issues.push({ code: 'ENTRY_CHANGED', severity: 'warning', entryId: id, name: str(entry.name), fields, message: `条目「${str(entry.name)}」字段变更：${fields.join(', ')}` })
 
-    const validation = validatePediaEntry(entry)
+    const validation = validateFactEntry(entry)
     for (const error of validation.errors) {
       issues.push({ code: 'INVALID_ENTRY', severity: 'error', entryId: id, field: error.field, message: `变更后不合 schema：${error.message}` })
     }
@@ -265,7 +265,7 @@ export async function diffValidate(input = {}, options = {}) {
     version: HOOK_ENGINE_VERSION,
     writesData: false,
     readOnly: true,
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     summary,
     issues,
     warnings,

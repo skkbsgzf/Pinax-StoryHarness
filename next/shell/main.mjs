@@ -26,7 +26,7 @@ import { createWritingComplete } from '../runtime/writingComplete.mjs'
 import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
 import { buildSettingsSchema, createFileCarrierOverridesStore, readCarrierOverridesSync } from '../carrierOverridesStore.mjs'
 import { installAppOriginHeaderRewrite } from './appOriginHeaders.mjs'
-import { createPediaHookService } from './pediaHookService.mjs'
+import { createFactHookService } from './factHookService.mjs'
 import { createSkillsService } from '../skills/loadSkills.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
@@ -790,10 +790,10 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     writingComplete,
     settingsStoreFor,
     carrierOverridesFor,
-    // P4 S3：pedia hook 接线（保存→diffValidate／续写→suggestCompletion／润色→readOnlyQuery）。
+    // P4 S3：fact hook 接线（保存→diffValidate／续写→suggestCompletion／润色→readOnlyQuery）。
     // 根与文件服务都是现取（换项目不用重建）；写入通知池的账进「服务与通知」，不另造 UI。
-    // 开关在项目内 `.pinax/pedia-hooks.json`（缺省全开），服务自己读。
-    pediaHooks: createPediaHookService({
+    // 开关在项目内 `.pinax/fact-hooks.json`（缺省全开），服务自己读。
+    factHooks: createFactHookService({
       getRoot: () => session?.projectRoot ?? null,
       getFileService: () => session?.runtime?.contextSources?.()?.fileService ?? null,
       log: (entry) => serviceLogPool.append(entry)

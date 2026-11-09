@@ -4,7 +4,7 @@ import {
   DEFAULT_ENTRY_STATUS,
   ENTRY_STATUSES,
   OTHER_SLOT,
-  PEDIA_SCHEMA,
+  FACT_SCHEMA,
   PROVENANCE_MODES,
   WORLDVIEW_SLOTS,
   createRhythmSpec,
@@ -12,25 +12,25 @@ import {
   sha1Hex,
   slotForCategory,
   stableEntryId,
-  validatePediaEntry
-} from '../pedia/domain/pediaSchema.js'
+  validateFactEntry
+} from '../fact/domain/pediaSchema.js'
 import {
   NOVEL_STYLE_PACK_ID,
   createNovelStylePack,
   styleEntryFromWorldbook,
   stylePackSlot
 } from './packs/novel-style.mjs'
-import { segmentText } from '../pedia/domain/segment.js'
+import { segmentText } from '../fact/domain/segment.js'
 
 /**
- * wikihub 三载体双向转换器（W1 起，pedia/v2 语义）。
+ * wikihub 三载体双向转换器（W1 起，fact.data/v2 语义）。
  *
- * 枢纽格式 = pedia/v2（真源在 ../pedia/domain/pediaSchema.js，ADR 定稿）。本文件只做「载体语义 ↔ 枢纽条目」的翻译，
+ * 枢纽格式 = fact.data/v2（真源在 ../fact/domain/pediaSchema.js，ADR 定稿）。本文件只做「载体语义 ↔ 枢纽条目」的翻译，
  * 不碰磁盘、不接工具面、不定义 hub 的存储位置（落盘与入口是 W2 的事）。
  *
  * 三条转换线：
  *   1) 世界书 ↔ worldview（hard 层）：字段全量带过去，正文/frontmatter 收在 next.worldbook
- *      快照里，所以 worldbook → hub → worldbook 无损；纯 pedia 导出时要剥掉 next（版权红线）。
+ *      快照里，所以 worldbook → hub → worldbook 无损；纯 fact 导出时要剥掉 next（版权红线）。
  *   2) 小说章结构 → plot/character 锚点：只做结构映射（章节序、关联引用、按名单做出现锚定），
  *      不做 LLM 抽取——抽事实/因果/人物弧是 NovelPedia 引擎的活，这里明确记账为损失。
  *   3) 剧本集结构 → plot/character 锚点：同上，剧集=场次。
@@ -56,10 +56,10 @@ const MAX_RELATION_LABEL_CHARS = 32
 const MAX_RELATIONS = 32
 
 /**
- * 世界书 type → pedia 分类词表（再经 category_map 归槽）。
+ * 世界书 type → fact 分类词表（再经 category_map 归槽）。
  * 这张表是 Next 侧唯一的一套 type 枚举（见 core 的 worldbookFileContract.TYPE_TO_CAT）。
  */
-export const WORLDBOOK_TYPE_TO_PEDIA_CATEGORY = Object.freeze({
+export const WORLDBOOK_TYPE_TO_FACT_CATEGORY = Object.freeze({
   character: '人物',
   person: '人物',
   location: '地点',
@@ -80,8 +80,8 @@ export const WORLDBOOK_TYPE_TO_PEDIA_CATEGORY = Object.freeze({
   general: '其他'
 })
 
-/** 世界书一级类别目录 → pedia 分类词表。 */
-export const WORLDBOOK_DIR_TO_PEDIA_CATEGORY = Object.freeze({
+/** 世界书一级类别目录 → fact 分类词表。 */
+export const WORLDBOOK_DIR_TO_FACT_CATEGORY = Object.freeze({
   人物: '人物',
   势力: '势力',
   地理: '地点',
@@ -95,7 +95,7 @@ export const WORLDBOOK_NON_WORLDVIEW_TYPES = Object.freeze(['source'])
 
 /**
  * 名称前缀规则（批次 W4 · Next 扩展）：dameng《大梦》的条目名自带「前缀·短名」结构，
- * 但这些前缀不在 pedia 的 category_map 里，光靠 cat→type→目录 会整批掉进 other。
+ * 但这些前缀不在 fact 的 category_map 里，光靠 cat→type→目录 会整批掉进 other。
  *
  * 优先级（命中即停）：
  *   1) 已有 cat／type／一级目录命中标准槽位的条目，前缀不抢位；
@@ -134,7 +134,7 @@ export function slotForNamePrefix(name) {
 }
 
 /** 槽位 → 世界书建档口径（无快照可还原时用）。 */
-export const PEDIA_SLOT_TO_WORLDBOOK = Object.freeze({
+export const FACT_SLOT_TO_WORLDBOOK = Object.freeze({
   power_levels: Object.freeze({ type: 'rule', cat: '设定' }),
   abilities: Object.freeze({ type: 'rule', cat: '设定' }),
   rules: Object.freeze({ type: 'rule', cat: '设定' }),
@@ -148,11 +148,11 @@ export const PEDIA_SLOT_TO_WORLDBOOK = Object.freeze({
   other: Object.freeze({ type: 'general', cat: '设定' })
 })
 
-/** 纯 pedia 导出会丢掉的东西（都在 next 扩展里，导出脚本必须剥离）。 */
-export const PEDIA_EXPORT_LOSSES = Object.freeze([
+/** 纯 fact 导出会丢掉的东西（都在 next 扩展里，导出脚本必须剥离）。 */
+export const FACT_EXPORT_LOSSES = Object.freeze([
   { code: 'entry-content', field: 'next.worldbook.content', message: '条目正文只在 next 扩展里，开源导出必须剥离（版权红线：只出知识不出原文）' },
   { code: 'entry-frontmatter', field: 'next.worldbook', message: 'injection/profile/extra/status/version 等 frontmatter 只在 next 扩展里' },
-  { code: 'worldbook-ids', field: 'next.worldbook.id', message: 'worldbook 自有 id 不是 pedia 稳定 id，两者靠 next 扩展互认' }
+  { code: 'worldbook-ids', field: 'next.worldbook.id', message: 'worldbook 自有 id 不是 fact 稳定 id，两者靠 next 扩展互认' }
 ])
 
 /** 小说结构映射的软层损失（测试按清单断言，不假装无损）。 */
@@ -366,13 +366,13 @@ function resolveSlot(entry) {
     if (slot !== OTHER_SLOT) return { layer: 'worldview', slot, via: `cat:${category}` }
   }
   let fallback = null
-  const typeCategory = WORLDBOOK_TYPE_TO_PEDIA_CATEGORY[entry.type] ?? WORLDBOOK_TYPE_TO_PEDIA_CATEGORY[entry.kind]
+  const typeCategory = WORLDBOOK_TYPE_TO_FACT_CATEGORY[entry.type] ?? WORLDBOOK_TYPE_TO_FACT_CATEGORY[entry.kind]
   if (typeCategory) {
     const slot = slotForCategory(typeCategory)
     if (slot !== OTHER_SLOT) return { layer: 'worldview', slot, via: `type:${entry.type}` }
     fallback = { slot: OTHER_SLOT, via: `type:${entry.type}` }
   }
-  const dirCategory = WORLDBOOK_DIR_TO_PEDIA_CATEGORY[entry.catDir]
+  const dirCategory = WORLDBOOK_DIR_TO_FACT_CATEGORY[entry.catDir]
   if (dirCategory) {
     const slot = slotForCategory(dirCategory)
     if (slot !== OTHER_SLOT) return { layer: 'worldview', slot, via: `dir:${entry.catDir}` }
@@ -485,13 +485,13 @@ function prefixRuleTable() {
  * input：数组／{entries}／单条条目对象／整份契约 md 文本。
  * options：
  *   book          书名（provenance.book，默认「世界书」）
- *   domain        pedia 域（worldview 必填；默认取 book——Next 没有题材域字段）
+ *   domain        fact 域（worldview 必填；默认取 book——Next 没有题材域字段）
  *   idToName      额外 id→名称 表（关系目标在本次输入之外时用）
  *   extractor     provenance.extractor 覆盖
  *   stripContent  true 表示剥离正文（开源导出预演）
  *
  * 返回 { ok, schema, valid, entries, index, mappings, stylePack, prefixRules, exportLosses, losses, warnings, validationWarnings, issues }。
- * losses 为空 = 无损（正文/frontmatter 都在 next.worldbook 快照里）；exportLosses 是纯 pedia 导出会丢的。
+ * losses 为空 = 无损（正文/frontmatter 都在 next.worldbook 快照里）；exportLosses 是纯 fact 导出会丢的。
  * prefixRules 是槽位前缀规则的完整表（命中即停；命中的条目在 mappings[].via 里留 prefix: 记号）。
  *
  * S1：文风类条目（type=style／剧作· 前缀）不进 hub 主条目集，改投文风能力包 stylePack
@@ -503,7 +503,7 @@ export function worldbookToHub(input, options = {}) {
   const issues = []
   const collected = collectWorldbookEntries(input)
   if (collected.error) {
-    return { ok: false, schema: PEDIA_SCHEMA, valid: false, entries: [], index: { nameToId: {} }, mappings: [], stylePack: null, prefixRules: prefixRuleTable(), exportLosses: [...PEDIA_EXPORT_LOSSES], losses, warnings, validationWarnings: [], issues: [collected.error] }
+    return { ok: false, schema: FACT_SCHEMA, valid: false, entries: [], index: { nameToId: {} }, mappings: [], stylePack: null, prefixRules: prefixRuleTable(), exportLosses: [...FACT_EXPORT_LOSSES], losses, warnings, validationWarnings: [], issues: [collected.error] }
   }
 
   const entries = collected.entries.map(normalizeWorldbookEntry)
@@ -548,7 +548,7 @@ export function worldbookToHub(input, options = {}) {
     if (styleSlot) {
       const packEntry = styleEntryFromWorldbook(entry, { slot: styleSlot })
       styleEntries.push(packEntry)
-      warnings.push({ code: 'STYLE_ENTRY_TO_PACK', id: entry.id, message: `条目「${entry.name}」是文风类（slot=${styleSlot}），改投文风能力包，不进 pedia 主条目集` })
+      warnings.push({ code: 'STYLE_ENTRY_TO_PACK', id: entry.id, message: `条目「${entry.name}」是文风类（slot=${styleSlot}），改投文风能力包，不进 fact 主条目集` })
       mappings.push({
         id: entry.id,
         name: entry.name,
@@ -569,7 +569,7 @@ export function worldbookToHub(input, options = {}) {
     const id = stableEntryId({ layer, domain, slot, name: entry.name })
 
     const hubEntry = {
-      schema: PEDIA_SCHEMA,
+      schema: FACT_SCHEMA,
       id,
       layer,
       name: entry.name,
@@ -614,11 +614,11 @@ export function worldbookToHub(input, options = {}) {
     mappings.push({ id: entry.id, name: entry.name, type: entry.type, cat: entry.catDir, layer, slot, via: slotInfo.via })
   }
 
-  const checked = hubEntries.map((entry) => ({ id: entry.id, name: entry.name, ...validatePediaEntry(entry) }))
+  const checked = hubEntries.map((entry) => ({ id: entry.id, name: entry.name, ...validateFactEntry(entry) }))
   const validationWarnings = checked.flatMap((item) => item.warnings.map((warning) => ({ id: item.id, name: item.name, ...warning })))
   const invalid = checked.filter((item) => !item.ok)
   for (const item of invalid) {
-    issues.push({ code: 'PEDIA_INVALID', id: item.id, name: item.name, errors: item.errors })
+    issues.push({ code: 'FACT_INVALID', id: item.id, name: item.name, errors: item.errors })
   }
 
   const nameToId = {}
@@ -637,14 +637,14 @@ export function worldbookToHub(input, options = {}) {
 
   return {
     ok: true,
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     valid: invalid.length === 0,
     entries: hubEntries,
     index: { nameToId },
     mappings,
     stylePack,
     prefixRules: prefixRuleTable(),
-    exportLosses: PEDIA_EXPORT_LOSSES.map((item) => ({ ...item })),
+    exportLosses: FACT_EXPORT_LOSSES.map((item) => ({ ...item })),
     losses,
     warnings,
     validationWarnings,
@@ -709,7 +709,7 @@ function deriveRelation(relation, losses) {
 
 function deriveWorldbookEntry(hubEntry, options, losses) {
   const name = firstString(hubEntry.name, hubEntry.id, '未命名条目')
-  const mapping = PEDIA_SLOT_TO_WORLDBOOK[hubEntry.slot] ?? PEDIA_SLOT_TO_WORLDBOOK[OTHER_SLOT]
+  const mapping = FACT_SLOT_TO_WORLDBOOK[hubEntry.slot] ?? FACT_SLOT_TO_WORLDBOOK[OTHER_SLOT]
   const definition = typeof hubEntry.definition === 'string' ? hubEntry.definition : ''
   const summary = definition.length > MAX_SUMMARY_CHARS ? definition.slice(0, MAX_SUMMARY_CHARS) : definition
   if (summary !== definition) {
@@ -717,7 +717,7 @@ function deriveWorldbookEntry(hubEntry, options, losses) {
   }
 
   const extra = {}
-  // worldbook 没有槽位字段：把 pedia 槽位与有序 rank 钉进 extra，下一次 worldbookToHub 能原样读回。
+  // worldbook 没有槽位字段：把 fact 槽位与有序 rank 钉进 extra，下一次 worldbookToHub 能原样读回。
   if (typeof hubEntry.slot === 'string' && hubEntry.slot !== OTHER_SLOT && WORLDVIEW_SLOTS[hubEntry.slot]) {
     extra.pediaSlot = hubEntry.slot
   }
@@ -828,7 +828,7 @@ export function hubToWorldbook(hubEntry, options = {}) {
   const losses = []
   const warnings = []
   if (!isPlainObject(hubEntry)) {
-    return { ok: false, error: { code: 'INVALID_INPUT', message: 'hubToWorldbook 需要一条 pedia 条目对象' }, losses, warnings }
+    return { ok: false, error: { code: 'INVALID_INPUT', message: 'hubToWorldbook 需要一条 fact 条目对象' }, losses, warnings }
   }
   if (hubEntry.layer !== 'worldview') {
     return { ok: false, error: { code: 'WRONG_LAYER', message: `hubToWorldbook 只接 worldview 层（收到 ${str(hubEntry.layer) || '空'}）` }, losses, warnings }
@@ -979,7 +979,7 @@ function buildStructureAnchors({ medium, units, book, domain, extractor, mediumL
 
   const refIndex = buildRefIndex(events)
   const plotEntry = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain, slot: '', name: plotName }),
     layer: 'plot',
     name: plotName,
@@ -1025,7 +1025,7 @@ function buildStructureAnchors({ medium, units, book, domain, extractor, mediumL
     const hitFirst = hits.length ? hits[0] : null
     const hitLast = hits.length ? hits[hits.length - 1] : null
     characterEntries.push({
-      schema: PEDIA_SCHEMA,
+      schema: FACT_SCHEMA,
       id: stableEntryId({ layer: 'character', domain, slot: '', name: character.name }),
       layer: 'character',
       name: character.name,
@@ -1070,14 +1070,14 @@ function buildStructureAnchors({ medium, units, book, domain, extractor, mediumL
   }
 
   const entries = [plotEntry, ...characterEntries]
-  const checked = entries.map((entry) => ({ id: entry.id, name: entry.name, ...validatePediaEntry(entry) }))
+  const checked = entries.map((entry) => ({ id: entry.id, name: entry.name, ...validateFactEntry(entry) }))
   const validationWarnings = checked.flatMap((item) => item.warnings.map((warning) => ({ id: item.id, name: item.name, ...warning })))
   const invalid = checked.filter((item) => !item.ok)
-  const issues = invalid.map((item) => ({ code: 'PEDIA_INVALID', id: item.id, name: item.name, errors: item.errors }))
+  const issues = invalid.map((item) => ({ code: 'FACT_INVALID', id: item.id, name: item.name, errors: item.errors }))
 
   return {
     ok: true,
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     valid: invalid.length === 0,
     entries,
     plotEntry,

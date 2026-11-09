@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { PEDIA_SCHEMA, stableEntryId, validatePediaEntry } from '../pedia/domain/pediaSchema.js'
+import { FACT_SCHEMA, stableEntryId, validateFactEntry } from '../fact/domain/pediaSchema.js'
 import {
   DRAFT_EXTRACTOR,
   buildDraftEntriesProposal,
@@ -13,19 +13,19 @@ import {
   draftEntryForEntity,
   isSaveHookTool,
   textOfSaveArgs
-} from '../pedia/usecases/hookWiring.js'
+} from '../fact/usecases/hookWiring.js'
 import {
   HOOKED_WRITING_ACTIONS,
-  PEDIA_HOOKS_SWITCH_FILE,
-  createPediaHookService,
-  normalizePediaHookSwitch
-} from '../shell/pediaHookService.mjs'
+  FACT_HOOKS_SWITCH_FILE,
+  createFactHookService,
+  normalizeFactHookSwitch
+} from '../shell/factHookService.mjs'
 import { WRITING_ACTIONS } from '../shell/writingActions.mjs'
 import { IPC_CHANNELS, createIpcDispatcher } from '../shell/ipcContract.mjs'
 
 /**
  * P4（S3 接线）用例：纯接线函数 + 主进程服务 + 通道三个层次各证一段。
- *   1) 保存正文里抽出来的引用，hub 有就放过、没有才出草案；草案必须过 pedia/v2 校验；
+ *   1) 保存正文里抽出来的引用，hub 有就放过、没有才出草案；草案必须过 fact.data/v2 校验；
  *   2) 保存钩子只在保存成功后跑，且自己失败不许影响已经保存的数据；
  *   3) 续写写建议提案、润色零写入；开关（整体／单钩子）能真的关掉；
  *   4) 通道层：runtimeToolCall 包保存、runtimeComplete 挂旁注，未注入钩子时行为不变。
@@ -35,7 +35,7 @@ const DOMAIN = '停摆之城'
 
 function worldEntry({ name, slot = 'rules', ...rest }) {
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain: DOMAIN, slot, name }),
     layer: 'worldview',
     name,
@@ -97,7 +97,7 @@ test('〔P4〕缺失实体：name／aliases 命中的不算缺，未知引用按
   assert.deepEqual(detectMissingEntities({ text: '没有引用', entries }), [])
 })
 
-test('〔P4〕实体草案：worldview/other/proposed/pipelinePending，且过 pedia/v2 校验', () => {
+test('〔P4〕实体草案：worldview/other/proposed/pipelinePending，且过 fact.data/v2 校验', () => {
   const draft = draftEntryForEntity('无名者', { domain: DOMAIN, book: DOMAIN })
   assert.equal(draft.layer, 'worldview')
   assert.equal(draft.slot, 'other')
@@ -106,7 +106,7 @@ test('〔P4〕实体草案：worldview/other/proposed/pipelinePending，且过 p
   assert.equal(draft.provenance.mode, 'author')
   assert.equal(draft.provenance.extractor, DRAFT_EXTRACTOR)
   assert.equal(draft.id, stableEntryId({ layer: 'worldview', domain: DOMAIN, slot: 'other', name: '无名者' }))
-  const validation = validatePediaEntry(draft)
+  const validation = validateFactEntry(draft)
   assert.equal(validation.ok, true, JSON.stringify(validation.errors))
   assert.equal(draftEntryForEntity('   '), null)
 })
@@ -114,25 +114,25 @@ test('〔P4〕实体草案：worldview/other/proposed/pipelinePending，且过 p
 test('〔P4〕提案外形：建议提案不带 content（不会被当成整章替换），草案提案带 missing', () => {
   const suggestion = buildSuggestionProposal({ action: 'continue', suggestions: [{ type: 'rhythm-gap' }], id: 'p1' })
   assert.equal(suggestion.schema, 'pinax-proposal@1')
-  assert.equal(suggestion.kind, 'pedia-suggestions')
+  assert.equal(suggestion.kind, 'fact-suggestions')
   assert.equal(suggestion.status, 'pending')
   assert.equal('content' in suggestion, false)
   assert.match(suggestion.note, /只给建议/)
 
   const draft = draftEntryForEntity('无名者', { domain: DOMAIN })
   const entriesProposal = buildDraftEntriesProposal({ tool: 'pinax_chapter_save', entries: [draft], missing: ['无名者'], id: 'p2' })
-  assert.equal(entriesProposal.kind, 'pedia-draft-entries')
+  assert.equal(entriesProposal.kind, 'fact-draft-entries')
   assert.deepEqual(entriesProposal.missing, ['无名者'])
   assert.match(entriesProposal.note, /pipelinePending/)
 })
 
 test('〔P4〕开关裁决：缺省全开，只认显式 false', () => {
-  assert.deepEqual(normalizePediaHookSwitch(null), {
+  assert.deepEqual(normalizeFactHookSwitch(null), {
     enabled: true,
     hooks: { onSave: true, onContinue: true, onPolish: true }
   })
-  assert.equal(normalizePediaHookSwitch({ enabled: 'no' }).enabled, true, '坏类型不关能力')
-  assert.deepEqual(normalizePediaHookSwitch({ enabled: false, hooks: { onSave: false } }), {
+  assert.equal(normalizeFactHookSwitch({ enabled: 'no' }).enabled, true, '坏类型不关能力')
+  assert.deepEqual(normalizeFactHookSwitch({ enabled: false, hooks: { onSave: false } }), {
     enabled: false,
     hooks: { onSave: false, onContinue: true, onPolish: true }
   })
@@ -142,7 +142,7 @@ test('〔P4〕保存钩子：成功后跑 diff＋草案提案；引用都有条�
   const entries = [worldEntry({ name: '旧楼' })]
   const writes = []
   const logs = []
-  const service = createPediaHookService({
+  const service = createFactHookService({
     getRoot: () => 'D:/书',
     getFileService: () => fakeFileService(writes),
     readSwitchFile: switches(null),
@@ -163,14 +163,14 @@ test('〔P4〕保存钩子：成功后跑 diff＋草案提案；引用都有条�
   assert.deepEqual(result, { ok: true, value: { file: '正文/第001章.md', revision: 2 } }, '钩子不改保存回执')
   assert.equal(writes.length, 1)
   const proposal = writes[0].proposal
-  assert.equal(proposal.kind, 'pedia-draft-entries')
+  assert.equal(proposal.kind, 'fact-draft-entries')
   assert.equal(proposal.entries.length, 1)
   assert.equal(proposal.entries[0].name, '无名者')
-  assert.equal(validatePediaEntry(proposal.entries[0]).ok, true)
+  assert.equal(validateFactEntry(proposal.entries[0]).ok, true)
   const warn = logs.find((entry) => entry.level === 'warn')
   assert.ok(warn, '预检的 REFERENCE_UNRESOLVED／缺条目要进通知池')
-  assert.equal(warn.source.id, 'pedia-hooks')
-  assert.match(warn.message, /pedia 校验/)
+  assert.equal(warn.source.id, 'fact-hooks')
+  assert.match(warn.message, /fact 校验/)
 
   const knownOnly = await service.runToolCall({
     tool: 'pinax_chapter_save',
@@ -185,7 +185,7 @@ test('〔P4〕保存钩子不在失败时跑，钩子自身出错也不影响保
   const writes = []
   const logs = []
   let snapshots = 0
-  const service = createPediaHookService({
+  const service = createFactHookService({
     getRoot: () => 'D:/书',
     getFileService: () => fakeFileService(writes),
     readSwitchFile: switches(null),
@@ -217,7 +217,7 @@ test('〔P4〕保存钩子不在失败时跑，钩子自身出错也不影响保
 
 test('〔P4〕世界书保存重新取快照；章节保存不为未变的派生源多读一遍', async () => {
   let snapshots = 0
-  const service = createPediaHookService({
+  const service = createFactHookService({
     getRoot: () => 'D:/书',
     getFileService: () => fakeFileService([]),
     readSwitchFile: switches(null),
@@ -244,7 +244,7 @@ test('〔P4〕世界书保存重新取快照；章节保存不为未变的派生
 
 test('〔P4〕开关：整体关闭与单钩子关闭都真的不跑', async () => {
   const writes = []
-  const off = createPediaHookService({
+  const off = createFactHookService({
     getRoot: () => 'D:/书',
     getFileService: () => fakeFileService(writes),
     readSwitchFile: switches(JSON.stringify({ enabled: false, hooks: { onSave: false } })),
@@ -264,7 +264,7 @@ test('〔P4〕开关：整体关闭与单钩子关闭都真的不跑', async () 
   assert.equal(writes.length, 0, '整体关了就不许写提案')
   assert.equal(await off.afterComplete({ action: 'continue' }), null)
 
-  const onlySaveOff = createPediaHookService({
+  const onlySaveOff = createFactHookService({
     getRoot: () => 'D:/书',
     getFileService: () => fakeFileService(writes),
     readSwitchFile: switches(JSON.stringify({ hooks: { onSave: false } })),
@@ -281,7 +281,7 @@ test('〔P4〕开关：整体关闭与单钩子关闭都真的不跑', async () 
 test('〔P4〕续写写建议提案、润色零写入，其他动作不接', async () => {
   const writes = []
   const entries = [worldEntry({ name: '旧楼' })]
-  const service = createPediaHookService({
+  const service = createFactHookService({
     getRoot: () => 'D:/书',
     getFileService: () => fakeFileService(writes),
     readSwitchFile: switches(null),
@@ -292,7 +292,7 @@ test('〔P4〕续写写建议提案、润色零写入，其他动作不接', asy
   assert.equal(continued.kind, 'suggestCompletion')
   assert.equal(continued.wroteProposal, true)
   assert.equal(writes.length, 1)
-  assert.equal(writes[0].proposal.kind, 'pedia-suggestions')
+  assert.equal(writes[0].proposal.kind, 'fact-suggestions')
   assert.equal('content' in writes[0].proposal, false)
 
   const polished = await service.afterComplete({ action: 'polish', result: { ok: true, value: { text: '润色后' } } })
@@ -321,7 +321,7 @@ test('〔P4〕通道层：runtimeToolCall 包保存、runtimeComplete 挂旁注�
       }
     }
   }
-  const pediaHooks = createPediaHookService({
+  const factHooks = createFactHookService({
     getRoot: () => session.projectRoot,
     getFileService: () => fakeFileService(writes),
     readSwitchFile: switches(null),
@@ -329,7 +329,7 @@ test('〔P4〕通道层：runtimeToolCall 包保存、runtimeComplete 挂旁注�
   })
   const dispatcher = createIpcDispatcher({
     session,
-    pediaHooks,
+    factHooks,
     writingComplete: {
       async run({ action }) {
         return { ok: true, value: { action, text: '续写结果' } }
@@ -348,7 +348,7 @@ test('〔P4〕通道层：runtimeToolCall 包保存、runtimeComplete 挂旁注�
   const completed = await dispatcher.dispatch(IPC_CHANNELS.runtimeComplete, { action: 'continue', text: '上文' })
   assert.equal(completed.ok, true)
   assert.equal(completed.value.text, '续写结果')
-  assert.equal(completed.value.pediaHook.kind, 'suggestCompletion')
+  assert.equal(completed.value.factHook.kind, 'suggestCompletion')
 
   const unwired = createIpcDispatcher({
     session,
@@ -365,7 +365,7 @@ test('〔P4〕通道层：钩子抛错只挂旁注，写作结果照常返回', 
   const dispatcher = createIpcDispatcher({
     session,
     writingComplete: { async run() { return { ok: true, value: { text: '照常写' } } } },
-    pediaHooks: {
+    factHooks: {
       async afterComplete() {
         throw new Error('钩子炸了')
       }
@@ -374,16 +374,16 @@ test('〔P4〕通道层：钩子抛错只挂旁注，写作结果照常返回', 
   const result = await dispatcher.dispatch(IPC_CHANNELS.runtimeComplete, { action: 'continue', text: '上文' })
   assert.equal(result.ok, true)
   assert.equal(result.value.text, '照常写')
-  assert.equal(result.value.pediaHook.error, '钩子炸了')
+  assert.equal(result.value.factHook.error, '钩子炸了')
 })
 
 test('〔P4〕真链路快照：世界书目录现读成 hub 条目（不落 .pinax/wikihub）', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'pedia-hook-'))
+  const root = await mkdtemp(join(tmpdir(), 'fact-hook-'))
   try {
     await mkdir(join(root, '世界书', '设定'), { recursive: true })
     await writeFile(join(root, '世界书', '设定', '旧楼.md'), '旧楼是钟楼。', 'utf8')
     const writes = []
-    const service = createPediaHookService({
+    const service = createFactHookService({
       getRoot: () => root,
       getFileService: () => fakeFileService(writes)
       // snapshotHub／readSwitchFile 都不注入：走默认「读世界书 → 转 hub」，开关文件缺失按全开。
@@ -405,5 +405,5 @@ test('〔P4〕真链路快照：世界书目录现读成 hub 条目（不落 .pi
 })
 
 test('〔P4〕开关文件路径固定在项目 .pinax 下（对作者可见、随项目走）', () => {
-  assert.equal(PEDIA_HOOKS_SWITCH_FILE, '.pinax/pedia-hooks.json')
+  assert.equal(FACT_HOOKS_SWITCH_FILE, '.pinax/fact-hooks.json')
 })

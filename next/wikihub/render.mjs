@@ -1,4 +1,4 @@
-import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from '../pedia/domain/pediaSchema.js'
+import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from '../fact/domain/pediaSchema.js'
 import {
   HUB_VIEW_LAYER_LABELS,
   HUB_VIEW_LAYER_ORDER,
@@ -6,7 +6,7 @@ import {
 } from './viewModel.mjs'
 
 /**
- * wikihub 离线视图渲染器（pedia/v2 hub → 单文件 HTML）。
+ * wikihub 离线视图渲染器（fact.data/v2 hub → 单文件 HTML）。
  *
  * 作者口径（2026-11-09）：NovelPedia 那种「左侧索引树 ＋ 右上 Infobox ＋ 正文蓝色站内链接」
  * 最顺手——导航逻辑照搬，皮相换成 Pinax Next 的（字体走 --font-interface、字号只走
@@ -98,7 +98,7 @@ function entryAnchor(id, innerHtml, extraAttrs = '') {
  * 返回 { version, book, domain, title, generatedAt, entries, layers, linkIndex, stylePack, warnings, counts }。
  * warnings 是「视图侧」的问题（缺 id、重 id、未知槽位、条目不是对象），与世界书侧的
  * losses 分开记——这里只影响这一页怎么画，不改数据层口径。
- * S1：pedia/v2 没有 style 层；旧 style 条目丢弃并记 STYLE_LAYER_DECOUPLED，
+ * S1：fact.data/v2 没有 style 层；旧 style 条目丢弃并记 STYLE_LAYER_DECOUPLED，
  * 文风能力包（hub.stylePack）单独挂在总览页，不进三栏。
  */
 export function prepareHubModel(input, options = {}) {
@@ -175,7 +175,7 @@ function normalizeEntry(raw, index, warnings) {
   let id = firstText(raw.id)
   if (!id) {
     id = `entry-${index + 1}`
-    warnings.push({ code: 'MISSING_ID', message: `条目「${name}」没有 pedia id，本页用占位 id ${id}` })
+    warnings.push({ code: 'MISSING_ID', message: `条目「${name}」没有 fact id，本页用占位 id ${id}` })
   }
   if (layer === 'worldview' && !WORLDVIEW_SLOTS[slot]) {
     warnings.push({ code: 'UNKNOWN_SLOT', message: `条目「${name}」的槽位「${slot}」不认识，按 other 显示` })
@@ -592,7 +592,7 @@ function renderInfobox(entry) {
     `<div class="ib-h">${escapeHtml(entry.name)}<div class="sub">${escapeHtml(subtitle)}</div></div>`,
     `<div class="ib-av" aria-hidden="true"><span class="ini">${escapeHtml(initial)}</span></div>`,
     `<table>${rows.join('')}</table>`,
-    '<div class="ib-note">由「世界书」离线快照生成 · pedia/v2</div>',
+    '<div class="ib-note">由「世界书」离线快照生成 · fact.data/v2</div>',
     '</aside>'
   ].join('')
 }
@@ -679,7 +679,7 @@ function renderArticle(entry, model, ctx) {
   }
   parts.push(renderRelations(entry, ctx))
   parts.push(renderSiblings(entry, model))
-  parts.push(`<footer class="art-foot">pedia/v2 · ${escapeHtml(entry.layer)}${entry.slot ? ` · ${escapeHtml(entry.slot)}` : ''} · id ${escapeHtml(entry.id)}</footer>`)
+  parts.push(`<footer class="art-foot">fact.data/v2 · ${escapeHtml(entry.layer)}${entry.slot ? ` · ${escapeHtml(entry.slot)}` : ''} · id ${escapeHtml(entry.id)}</footer>`)
   parts.push('</article>')
   return parts.join('')
 }
@@ -747,7 +747,7 @@ function renderOverview(model) {
   ]
   const parts = ['<section class="overview" id="wiki-overview">']
   parts.push(`<h1 class="art">${escapeHtml(model.book)}<span class="cat-badge">离线世界百科</span></h1>`)
-  parts.push(`<p class="subtitle">pedia/v2 快照 · ${escapeHtml(model.generatedAt)} · 断网可读</p>`)
+  parts.push(`<p class="subtitle">fact.data/v2 快照 · ${escapeHtml(model.generatedAt)} · 断网可读</p>`)
   parts.push(`<div class="statgrid">${stats.map(([key, value]) => `<div class="stat"><div class="k">${escapeHtml(key)}</div><div class="v">${value}</div></div>`).join('')}</div>`)
   if (model.counts.stylePackEntries > 0) {
     parts.push(`<p class="ov-tip">文风能力包含 ${model.counts.stylePackEntries} 条（仅小说体裁生效，不进三栏条目树）。</p>`)

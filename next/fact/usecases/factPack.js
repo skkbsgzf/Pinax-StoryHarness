@@ -56,7 +56,7 @@ function projectEntry(entry, span) {
 }
 
 /**
- * @param {Object[]} entries pedia/v2 条目
+ * @param {Object[]} entries fact.data/v2 条目
  * @param {Object} [query] { span, character, slots, layer, domain, includeInactive }
  * @param {Object} [options] { aliasIndex }
  */

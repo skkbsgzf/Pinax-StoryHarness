@@ -3,12 +3,12 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseWorldbookEntryFile } from '@pinax/core/domain/worldbookFileContract'
-import { PEDIA_SCHEMA } from '../pedia/domain/pediaSchema.js'
+import { FACT_SCHEMA } from '../fact/domain/pediaSchema.js'
 import { worldbookToHub } from './convert.mjs'
 import { WIKIHUB_HTML_VERSION, renderHubHtml } from './render.mjs'
 
 /**
- * wikihub 离线视图的生成管线（世界书 → pedia/v2 hub → 单文件 HTML）。
+ * wikihub 离线视图的生成管线（世界书 → fact.data/v2 hub → 单文件 HTML）。
  *
  * 一条链：读「世界书/」（顶层 md ＋ 一级类别目录里的 md）→ W1 的 worldbookToHub 转 hub
  * → renderHubHtml 出 HTML → 写 `.pinax/wikihub/index.html` 与 `hub.json`。
@@ -158,7 +158,7 @@ export async function buildWikihub(options = {}) {
   if (!hub.ok) {
     return {
       ok: false,
-      error: hub.issues[0] ?? { code: 'WIKIHUB_CONVERT_FAILED', message: '世界书转 pedia hub 失败' },
+      error: hub.issues[0] ?? { code: 'WIKIHUB_CONVERT_FAILED', message: '世界书转 fact hub 失败' },
       projectRoot,
       read
     }
@@ -183,7 +183,7 @@ export async function buildWikihub(options = {}) {
   const hubFile = join(outDir, WIKIHUB_HUB_FILE)
   const hubDocument = {
     version: WIKIHUB_HTML_VERSION,
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     generatedAt,
     book,
     domain,
@@ -193,7 +193,7 @@ export async function buildWikihub(options = {}) {
     entries: hub.entries,
     index: hub.index,
     mappings: hub.mappings,
-    // S1：文风能力包随 hub 落盘（pedia/v2 无 style 层），视图侧从 hub.json 直接取。
+    // S1：文风能力包随 hub 落盘（fact.data/v2 无 style 层），视图侧从 hub.json 直接取。
     stylePack: hub.stylePack,
     losses: hub.losses,
     warnings: hub.warnings,

@@ -22,7 +22,7 @@ import {
 } from './entriesView.mjs'
 
 /**
- * 世界书看板区（批次68-R2 · 三栏维基版式；批次 W3 · 数据源切 pedia/v1 hub）。
+ * 世界书看板区（批次68-R2 · 三栏维基版式；批次 W3 · 数据源切 fact.data/v1 hub）。
  *
  * 版式口径（工单死口径，参照 NovelPedia demo）：树 : 阅读 : 条目信息卡 起排
  * `260px : 1fr : min(46%, 430px)`；窄窗口时信息卡折到阅读列下方（@media）。
@@ -122,7 +122,7 @@ const bookName = computed(() => {
 })
 
 /**
- * hub 视图模型（批次 W3）：世界书清单 →（W1 转换器）pedia/v1 条目 → 层／域／槽位分组＋链接表。
+ * hub 视图模型（批次 W3）：世界书清单 →（W1 转换器）fact.data/v1 条目 → 层／域／槽位分组＋链接表。
  * 先过 worldbookToHub：清单工具给的是运行时读回形状（没有 slot），槽位只能由转换器按
  * 分类／类型推导——直接喂清单会全落在「其他」，等于没有分组。
  * 人物／剧情占位组只登记小说／剧本锚点数（data.chapters／data.scripts 已载入时如实计数），
@@ -151,7 +151,7 @@ const groupOptions = computed(() => hubGroupOptions(hubModel.value))
 
 /**
  * 新建条目（批次60 · 工单任务一）：类别下拉＋标题输入，落盘仍走既有 createEntry
- * （世界书/<类别>/<名称>.md）。这里的类别是**世界书目录**，不是 pedia 槽位——
+ * （世界书/<类别>/<名称>.md）。这里的类别是**世界书目录**，不是 fact 槽位——
  * 槽位由转换器按分类／类型推导，作者不用在新建时先懂槽位表。
  */
 const newTitle = ref('')

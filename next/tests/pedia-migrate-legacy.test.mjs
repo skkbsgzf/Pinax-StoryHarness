@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { PEDIA_SCHEMA, validatePediaEntry } from '../pedia/domain/pediaSchema.js'
-import { createMemoryPediaStore } from '../pedia/adapters/memoryPediaStore.mjs'
+import { FACT_SCHEMA, validateFactEntry } from '../fact/domain/pediaSchema.js'
+import { createMemoryFactStore } from '../fact/adapters/memoryPediaStore.mjs'
 import {
   MIGRATED_STATUS,
   migrateChapters,
@@ -9,12 +9,12 @@ import {
   migrateLedger,
   migrateOutline,
   migrateWorldStore
-} from '../pedia/usecases/migrateLegacy.js'
+} from '../fact/usecases/migrateLegacy.js'
 
 /**
  * P2b 存量迁移器合同测试：
  *   1) 四条路径各自 fixture 与映射口径（worldStore/outline/ledger/chapters）；
- *   2) 迁入条目一律 proposed + provenance.mode=author，且过 pedia/v2 信封校验；
+ *   2) 迁入条目一律 proposed + provenance.mode=author，且过 fact.data/v2 信封校验；
  *   3) operationId 幂等：同一 fixture 重跑 saved 全 duplicate、库内 diff=0；
  *   4) dryRun=true 出完整报告但一次写都不发生；
  *   5) 语义有损的地方进 losses[]（不是静默降级）。
@@ -194,9 +194,9 @@ test('路径 1：worldStore 条目 → worldview（分类归槽、keys→aliases
   assert.ok(report.warnings.some((warning) => warning.code === 'RANK_ON_UNORDERED_SLOT'))
 
   for (const entry of report.entries) {
-    assert.equal(entry.schema, PEDIA_SCHEMA)
+    assert.equal(entry.schema, FACT_SCHEMA)
     assert.equal(entry.status, MIGRATED_STATUS)
-    assert.equal(validatePediaEntry(entry).ok, true)
+    assert.equal(validateFactEntry(entry).ok, true)
   }
 })
 
@@ -233,7 +233,7 @@ test('路径 2：大纲 nodes/edges → plot 事件图（causal/setup/alternativ
   assert.ok(lossCodes.includes('outline-alternative-degraded'))
   assert.equal(report.losses.filter((loss) => loss.code === 'outline-edge-dropped').length, 1)
 
-  for (const entry of report.entries) assert.equal(validatePediaEntry(entry).ok, true)
+  for (const entry of report.entries) assert.equal(validateFactEntry(entry).ok, true)
 })
 
 test('路径 3：账本 v4 → 双时间轴 + 知情矩阵（character.knowledge[]）', () => {
@@ -264,7 +264,7 @@ test('路径 3：账本 v4 → 双时间轴 + 知情矩阵（character.knowledge
 
   for (const entry of report.entries) {
     assert.equal(entry.status, MIGRATED_STATUS)
-    assert.equal(validatePediaEntry(entry).ok, true)
+    assert.equal(validateFactEntry(entry).ok, true)
   }
 })
 
@@ -288,13 +288,13 @@ test('路径 4：章节正文 → 100–300 字场景骨架（pipelinePending，
 
   assert.ok(report.warnings.some((warning) => warning.code === 'CHAPTER_EMPTY' && warning.chapterNo === 3))
   assert.ok(report.warnings.some((warning) => warning.code === 'PIPELINE_PENDING'))
-  assert.equal(report.losses.filter((loss) => loss.code === 'chapter-prose-outside-pedia').length, 2)
+  assert.equal(report.losses.filter((loss) => loss.code === 'chapter-prose-outside-fact').length, 2)
 
-  for (const entry of report.entries) assert.equal(validatePediaEntry(entry).ok, true)
+  for (const entry of report.entries) assert.equal(validateFactEntry(entry).ok, true)
 })
 
 test('编排器：四路径全迁、proposed 落位、条目过信封校验并写入注入 store', async () => {
-  const store = createMemoryPediaStore()
+  const store = createMemoryFactStore()
   const report = await migrateLegacy(fullInput(), { ...OPTIONS, store })
 
   assert.equal(report.ok, true)
@@ -308,8 +308,8 @@ test('编排器：四路径全迁、proposed 落位、条目过信封校验并�
 
   for (const entry of report.entries) {
     assert.equal(entry.status, MIGRATED_STATUS)
-    assert.equal(entry.schema, PEDIA_SCHEMA)
-    assert.equal(validatePediaEntry(entry).ok, true)
+    assert.equal(entry.schema, FACT_SCHEMA)
+    assert.equal(validateFactEntry(entry).ok, true)
   }
 
   const stored = await store.list()
@@ -353,7 +353,7 @@ test('dryRun=true：完整报告但不发生任何写入（store 一次都没被
 })
 
 test('幂等重跑：同一 fixture 第二次 saved 全 duplicate，库内 diff=0', async () => {
-  const store = createMemoryPediaStore()
+  const store = createMemoryFactStore()
   const first = await migrateLegacy(fullInput(), { ...OPTIONS, store })
   const statsAfterFirst = store.stats()
   const listingAfterFirst = await store.list()

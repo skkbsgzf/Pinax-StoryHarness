@@ -1,7 +1,7 @@
 /**
- * P2b 存量迁移器（usecases 层）：Pinax 现有数据 → pedia/v2。
+ * P2b 存量迁移器（usecases 层）：Pinax 现有数据 → fact.data/v2。
  *
- * ADR D2/D2b：存量数据单向迁入 pedia，迁完 Host store 降级为投影缓存。
+ * ADR D2/D2b：存量数据单向迁入 fact，迁完 Host store 降级为投影缓存。
  * 本文件只做「库层」四件事，全部注入式输入（不读真实盘、不依赖宿主模块）：
  *
  *   1) worldStore 条目 → worldview（category/group 走 category_map 归 11 槽位）；
@@ -17,22 +17,22 @@
  *   - dryRun=true 只出完整报告，不碰 store；
  *   - 语义有损的部分进 losses[] 如实记账，不静默降级。
  *
- * 不读写磁盘、不接工具面：PediaStore 从端口注入（Core 平移后只换 import 路径）。
+ * 不读写磁盘、不接工具面：FactStore 从端口注入（Core 平移后只换 import 路径）。
  */
 
 import {
   CATEGORY_MAP,
   KNOWLEDGE_KINDS,
   OTHER_SLOT,
-  PEDIA_SCHEMA,
+  FACT_SCHEMA,
   isOrderedSlot,
   slotForCategory
 } from '../domain/vocabulary.js'
 import { sha1Hex, stableEntryId } from '../domain/stableId.js'
-import { validatePediaEntry } from '../domain/schema.js'
+import { validateFactEntry } from '../domain/schema.js'
 import { validityFromSpan } from '../domain/validity.js'
 import { charCount, segmentStats, segmentText } from '../domain/segment.js'
-import { assertPediaStore } from '../ports/pediaStore.js'
+import { assertFactStore } from '../ports/pediaStore.js'
 import { persistEntries } from './pipeline/extract.js'
 
 export const LEGACY_MIGRATE_VERSION = 'legacy-migrate@1'
@@ -147,7 +147,7 @@ function resolveBook(options, input, domain) {
 function finalize(path, entries, losses, warnings, issues) {
   const valid = []
   for (const entry of entries) {
-    const result = validatePediaEntry(entry)
+    const result = validateFactEntry(entry)
     if (!result.ok) {
       issues.push({ code: 'ENTRY_INVALID', path, id: entry.id, name: entry.name, errors: result.errors })
       continue
@@ -305,7 +305,7 @@ function buildWorldbookEntry(raw, name, context) {
   const relations = normalizeWorldStoreRelations(raw, name, knownNames, warnings)
 
   const entry = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain, slot, name }),
     layer: 'worldview',
     name,
@@ -397,7 +397,7 @@ function buildOutlineNodeEntry(node, name, context) {
   const chapterRefs = integerList(node.raw.chapterRefs)
   const explorationRefs = refNames(node.raw.explorationRefs)
   const entry = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain, slot: '', name }),
     layer: 'plot',
     name,
@@ -519,7 +519,7 @@ export function migrateOutline(input, options = {}) {
         edgeId,
         kind,
         reason: !fromId || !toId ? 'endpoint-missing' : 'self-loop',
-        message: `大纲边「${edgeId}」${!fromId || !toId ? '缺端点' : '是自环'}，pedia 事件图不保留`
+        message: `大纲边「${edgeId}」${!fromId || !toId ? '缺端点' : '是自环'}，fact 事件图不保留`
       })
       continue
     }
@@ -553,7 +553,7 @@ export function migrateOutline(input, options = {}) {
         path: 'outline',
         edgeId,
         kind,
-        message: `大纲边 kind「${kind}」没有既定 pedia 语义，按普通关系保留`
+        message: `大纲边 kind「${kind}」没有既定 fact 语义，按普通关系保留`
       })
     }
 
@@ -586,7 +586,7 @@ export function migrateOutline(input, options = {}) {
         code: 'outline-payoff-suggestion-only',
         path: 'outline',
         edgeId,
-        message: `大纲边「${edgeId}」的伏笔以 hypothesis 轨事件迁入，回收（payoff）只能作建议字段，pedia 没有一等的 payoff 语义`
+        message: `大纲边「${edgeId}」的伏笔以 hypothesis 轨事件迁入，回收（payoff）只能作建议字段，fact 没有一等的 payoff 语义`
       })
     }
     if (kind === 'alternative') {
@@ -594,7 +594,7 @@ export function migrateOutline(input, options = {}) {
         code: 'outline-alternative-degraded',
         path: 'outline',
         edgeId,
-        message: `大纲边「${edgeId}」是 alternative（未选分支），pedia 只有普通 relation，分支语义降级`
+        message: `大纲边「${edgeId}」是 alternative（未选分支），fact 只有普通 relation，分支语义降级`
       })
     }
   }
@@ -620,8 +620,8 @@ function collectLedgerKnowledge(input) {
 }
 
 /**
- * validity 映射顺序：pedia 形 {from,to} → validFrom/validTo → 故事时间区间（era ordinal 近似）。
- * 故事时间轴（timelineId/era/ordinal）与 pedia 章/场序不是同一把尺，按 ordinal 近似并记账。
+ * validity 映射顺序：fact 形 {from,to} → validFrom/validTo → 故事时间区间（era ordinal 近似）。
+ * 故事时间轴（timelineId/era/ordinal）与 fact 章/场序不是同一把尺，按 ordinal 近似并记账。
  */
 function ledgerValidity(raw, losses) {
   const direct = validityOrNull(raw.validity)
@@ -641,7 +641,7 @@ function ledgerValidity(raw, losses) {
       losses.push({
         code: 'ledger-story-interval-ordinal-approx',
         path: 'ledger',
-        message: '故事时间区间按 era ordinal 近似映射到 pedia validity；跨纪元 ordinal 不可直接比较'
+        message: '故事时间区间按 era ordinal 近似映射到 fact validity；跨纪元 ordinal 不可直接比较'
       })
       return { from, to }
     }
@@ -664,7 +664,7 @@ function buildLedgerFactEntry(item, name, context) {
   const { domain, book, losses } = context
   const { raw, subject, predicate, object } = item
   const entry = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain, slot: '', name }),
     layer: 'plot',
     name,
@@ -718,7 +718,7 @@ function buildKnowledgeRecord(record, warnings) {
 function buildCharacterKnowledgeEntry(character, records, context) {
   const { domain, book } = context
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'character', domain, slot: '', name: character }),
     layer: 'character',
     name: character,
@@ -758,7 +758,7 @@ export function migrateLedger(input, options = {}) {
     const predicate = firstText(raw.predicate, raw.action, raw.relation)
     const object = firstText(raw.object, raw.value, raw.objectLabel, raw.claim)
     if (!subject) {
-      issues.push({ code: 'LEDGER_ENTRY_WITHOUT_SUBJECT', path: 'ledger', id: str(raw.id), message: '账本事实缺主语，无法生成 pedia 条目' })
+      issues.push({ code: 'LEDGER_ENTRY_WITHOUT_SUBJECT', path: 'ledger', id: str(raw.id), message: '账本事实缺主语，无法生成 fact 条目' })
       continue
     }
     facts.push({
@@ -878,7 +878,7 @@ export function migrateChapters(input, options = {}) {
     }
 
     const entry = {
-      schema: PEDIA_SCHEMA,
+      schema: FACT_SCHEMA,
       id: stableEntryId({ layer: 'plot', domain, slot: '', name }),
       layer: 'plot',
       name,
@@ -924,10 +924,10 @@ export function migrateChapters(input, options = {}) {
     entries.push(entry)
     pendingChapters.push(item.no)
     losses.push({
-      code: 'chapter-prose-outside-pedia',
+      code: 'chapter-prose-outside-fact',
       path: 'chapters',
       chapterNo: item.no,
-      message: `第 ${item.no} 章只迁场景骨架：正文留在原稿，pedia 不出原文（quote_hash 记账）`
+      message: `第 ${item.no} 章只迁场景骨架：正文留在原稿，fact 不出原文（quote_hash 记账）`
     })
   }
 
@@ -965,7 +965,7 @@ function requestedPaths(source, options) {
  * input：{ worldStore?, outline?, ledger?, chapters? }（四条路径各自注入口径）
  * options：
  *   domain/book        迁入条目的域与书名（缺省取 input 的 domain/book，再兜底）
- *   store              PediaStore（dryRun=true 时完全不碰）
+ *   store              FactStore（dryRun=true 时完全不碰）
  *   dryRun             true = 只出报告，不写库（默认 false）
  *   paths              只跑指定路径（默认：input 里出现的路径）
  *   operationPrefix    落库 operationId 前缀（默认 migrate:<domain>）
@@ -1015,7 +1015,7 @@ export async function migrateLegacy(input = {}, options = {}) {
 
   let saved = []
   if (!dryRun && opts.store) {
-    assertPediaStore(opts.store)
+    assertFactStore(opts.store)
     const persistence = await persistEntries(opts.store, entries, {
       operationPrefix: firstText(opts.operationPrefix, `migrate:${domain}`)
     })

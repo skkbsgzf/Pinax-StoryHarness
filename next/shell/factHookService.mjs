@@ -3,7 +3,7 @@ import { basename, join } from 'node:path'
 
 import { readWorldbookEntries } from '../wikihub/build.mjs'
 import { worldbookToHub } from '../wikihub/convert.mjs'
-import { diffValidate, readOnlyQuery, suggestCompletion } from '../pedia/usecases/hookEngine.js'
+import { diffValidate, readOnlyQuery, suggestCompletion } from '../fact/usecases/hookEngine.js'
 import {
   DRAFT_EXTRACTOR,
   buildDraftEntriesProposal,
@@ -12,7 +12,7 @@ import {
   draftEntryForEntity,
   saveHookKindOf,
   textOfSaveArgs
-} from '../pedia/usecases/hookWiring.js'
+} from '../fact/usecases/hookWiring.js'
 import { proposalFileName } from '../runtime/proposalStore.mjs'
 
 /**
@@ -20,22 +20,25 @@ import { proposalFileName } from '../runtime/proposalStore.mjs'
  *
  * 为什么不在 ipcContract / 渲染层接：hub 快照要读「世界书/」（node:fs），提案要落
  * `.pinax/proposals/`（fileService）。ipcContract 在渲染层的依赖图上，把 fs／转换器拖进去
- * 等于让 renderer bundle 背整包 pedia＋wikihub；所以这里沿用 skillsService／knowledgeService
+ * 等于让 renderer bundle 背整包 fact＋wikihub；所以这里沿用 skillsService／knowledgeService
  * 的同款做法——主进程建服务，通道只转调用。
  *
- * 三个 hook（与 pedia/usecases/hookEngine.js 的 routes 同口径）：
+ * 三个 hook（与 fact/usecases/hookEngine.js 的 routes 同口径）：
  *   保存 → diffValidate（hub 快照 before/after ＋ 保存正文预检）＋ 缺失实体草案；
  *   续写 → suggestCompletion（只产出提案，不改正文）；
  *   润色 → readOnlyQuery（零写入）。
  *
  * 旁路铁律：钩子失败绝不让已经成功的保存／续写翻成失败；错误如实进服务通知池（warn）。
- * 开关：项目级 `.pinax/pedia-hooks.json`，`{ "enabled": false }` 整体关，`hooks.onSave/onContinue/onPolish`
+ * 开关：项目级 `.pinax/fact-hooks.json`，`{ "enabled": false }` 整体关，`hooks.onSave/onContinue/onPolish`
  * 单关；文件缺失或读不懂都按默认全开处理（只认显式 false，避免半截文件意外关掉能力）。
+ * 旧档名 `.pinax/pedia-hooks.json` 仍被识别（新档缺失时只读回落，不改写）。
  */
 
-export const PEDIA_HOOKS_SWITCH_FILE = '.pinax/pedia-hooks.json'
+export const FACT_HOOKS_SWITCH_FILE = '.pinax/fact-hooks.json'
 
-export const PEDIA_HOOK_NAMES = Object.freeze(['onSave', 'onContinue', 'onPolish'])
+export const LEGACY_FACT_HOOKS_SWITCH_FILE = '.pinax/pedia-hooks.json'
+
+export const FACT_HOOK_NAMES = Object.freeze(['onSave', 'onContinue', 'onPolish'])
 
 /** 与 writingActions 的闭集对齐：只有这两类动作各接一个 hook（测试会核对 id 仍存在）。 */
 export const HOOKED_WRITING_ACTIONS = Object.freeze(['continue', 'polish'])
@@ -62,12 +65,12 @@ function errorText(error) {
 }
 
 /** 只认显式 false：缺字段、坏类型都按「开着」处理。 */
-export function normalizePediaHookSwitch(raw) {
+export function normalizeFactHookSwitch(raw) {
   const source = isPlainObject(raw) ? raw : {}
   const hooks = isPlainObject(source.hooks) ? source.hooks : {}
   return {
     enabled: source.enabled !== false,
-    hooks: Object.fromEntries(PEDIA_HOOK_NAMES.map((name) => [name, hooks[name] !== false]))
+    hooks: Object.fromEntries(FACT_HOOK_NAMES.map((name) => [name, hooks[name] !== false]))
   }
 }
 
@@ -81,7 +84,7 @@ export function normalizePediaHookSwitch(raw) {
  * @param {(entry: object) => void} [deps.log] 服务通知池写入口
  * @param {() => Date} [deps.now]
  */
-export function createPediaHookService({
+export function createFactHookService({
   getRoot = () => null,
   getFileService = () => null,
   readSwitchFile = (path) => readFile(path, 'utf8'),
@@ -94,24 +97,27 @@ export function createPediaHookService({
   function note(level, message, data = {}) {
     if (typeof log !== 'function') return
     try {
-      log({ source: { kind: 'service', id: 'pedia-hooks', carrierId: null }, level, message, data })
+      log({ source: { kind: 'service', id: 'fact-hooks', carrierId: null }, level, message, data })
     } catch {
       // 记账失败不改变旁路的结论。
     }
   }
 
   async function readSwitch(root) {
-    if (!root) return { ...normalizePediaHookSwitch(null), note: '没有项目根，钩子不跑' }
-    try {
-      const text = await readSwitchFile(join(String(root), PEDIA_HOOKS_SWITCH_FILE))
-      return { ...normalizePediaHookSwitch(JSON.parse(text)), note: null }
-    } catch (error) {
-      if (error?.code === 'ENOENT') return { ...normalizePediaHookSwitch(null), note: null }
-      return {
-        ...normalizePediaHookSwitch(null),
-        note: `钩子开关文件读不懂，按默认全开处理：${errorText(error)}`
+    if (!root) return { ...normalizeFactHookSwitch(null), note: '没有项目根，钩子不跑' }
+    for (const relative of [FACT_HOOKS_SWITCH_FILE, LEGACY_FACT_HOOKS_SWITCH_FILE]) {
+      try {
+        const text = await readSwitchFile(join(String(root), relative))
+        return { ...normalizeFactHookSwitch(JSON.parse(text)), note: null }
+      } catch (error) {
+        if (error?.code === 'ENOENT') continue
+        return {
+          ...normalizeFactHookSwitch(null),
+          note: `钩子开关文件读不懂，按默认全开处理：${errorText(error)}`
+        }
       }
     }
+    return { ...normalizeFactHookSwitch(null), note: null }
   }
 
   async function snapshotSafely(root) {
@@ -131,7 +137,7 @@ export function createPediaHookService({
       return { ok: false, error: { code: 'UNWIRED', message: '项目文件服务未就绪' } }
     }
     const at = now()
-    const name = proposalFileName({ tool: 'pedia_hook', at })
+    const name = proposalFileName({ tool: 'fact_hook', at })
     const id = name.replace(/\.json$/iu, '')
     return fileService.writeProposal({ name, text: JSON.stringify({ ...document, id }, null, 2) })
   }
@@ -141,7 +147,7 @@ export function createPediaHookService({
    * call 必须由调用方给（通道侧就是 session.runtime.callTool），服务不直接碰运行时。
    */
   async function runToolCall({ tool, args = {}, call } = {}) {
-    if (typeof call !== 'function') throw new TypeError('pediaHooks.runToolCall 需要 call()')
+    if (typeof call !== 'function') throw new TypeError('factHooks.runToolCall 需要 call()')
     const kind = saveHookKindOf(tool)
     if (!kind) return call()
     const root = typeof getRoot === 'function' ? getRoot() : null
@@ -158,7 +164,7 @@ export function createPediaHookService({
     try {
       await observeSave({ root, kind, tool, args: isPlainObject(args) ? args : {}, result, before })
     } catch (error) {
-      note('warn', `pedia 保存钩子自身出错（已保存的数据不受影响）：${errorText(error)}`, { tool })
+      note('warn', `fact 保存钩子自身出错（已保存的数据不受影响）：${errorText(error)}`, { tool })
     }
     return result
   }
@@ -200,7 +206,7 @@ export function createPediaHookService({
     const warnings = Array.isArray(validation.warnings) ? validation.warnings : []
     if (issues.length || warnings.length || missing.length) {
       const errors = issues.filter((issue) => issue.severity === 'error').length
-      note('warn', `pedia 校验（${kind} 保存后）：${issues.length} 条条目级问题（${errors} 条硬伤），${warnings.length} 条预检提示，${missing.length} 个引用缺条目`, {
+      note('warn', `fact 校验（${kind} 保存后）：${issues.length} 条条目级问题（${errors} 条硬伤），${warnings.length} 条预检提示，${missing.length} 个引用缺条目`, {
         tool,
         file: str(args.file) || null,
         summary: validation.summary ?? null,
@@ -210,7 +216,7 @@ export function createPediaHookService({
         proposal
       })
     } else if (proposal) {
-      note('info', `pedia 保存钩子：${missing.length} 个正文引用在 hub 里没有条目，已写草案提案`, {
+      note('info', `fact 保存钩子：${missing.length} 个正文引用在 hub 里没有条目，已写草案提案`, {
         tool,
         missing,
         proposal
@@ -221,7 +227,7 @@ export function createPediaHookService({
 
   /**
    * 写作动作收尾：续写补全建议 / 润色只读查询。只在这些动作成功后才跑，
-   * 失败与空结果原样返回，钩子结果作为回执上的旁注（pediaHook）。
+   * 失败与空结果原样返回，钩子结果作为回执上的旁注（factHook）。
    */
   async function afterComplete({ action } = {}) {
     const actionId = str(action)
@@ -275,7 +281,7 @@ export function createPediaHookService({
         wroteProposal: true
       }
     } catch (error) {
-      note('warn', `pedia 写作钩子自身出错（写作结果不受影响）：${errorText(error)}`, { action: actionId })
+      note('warn', `fact 写作钩子自身出错（写作结果不受影响）：${errorText(error)}`, { action: actionId })
       return { kind: actionId === 'polish' ? 'readOnlyQuery' : 'suggestCompletion', error: errorText(error) }
     }
   }

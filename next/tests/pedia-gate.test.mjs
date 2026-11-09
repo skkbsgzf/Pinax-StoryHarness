@@ -3,24 +3,24 @@ import assert from 'node:assert/strict'
 import {
   CATEGORY_MAP,
   OTHER_SLOT,
-  PEDIA_SCHEMA,
+  FACT_SCHEMA,
   WORLDVIEW_SLOTS,
   slotForCategory,
   stableEntryId
-} from '../pedia/domain/pediaSchema.js'
-import { createAliasIndex } from '../pedia/domain/aliases.js'
-import { segmentText } from '../pedia/domain/segment.js'
+} from '../fact/domain/pediaSchema.js'
+import { createAliasIndex } from '../fact/domain/aliases.js'
+import { segmentText } from '../fact/domain/segment.js'
 import {
   buildRoundTripReport,
   checkCharacterAnchors,
   checkKnowledge,
   checkTimeline,
   checkWorldRules,
-  runPediaGate
-} from '../pedia/usecases/gate.js'
-import { extractRefs } from '../pedia/usecases/precheck.js'
-import { extractChapter } from '../pedia/usecases/pipeline/extract.js'
-import { mineCharacters } from '../pedia/usecases/pipeline/mine.js'
+  runFactGate
+} from '../fact/usecases/gate.js'
+import { extractRefs } from '../fact/usecases/precheck.js'
+import { extractChapter } from '../fact/usecases/pipeline/extract.js'
+import { mineCharacters } from '../fact/usecases/pipeline/mine.js'
 import { hubToNovelRefs, hubToWorldbook, worldbookToHub } from '../wikihub/convert.mjs'
 
 /**
@@ -40,7 +40,7 @@ function worldviewEntry(overrides = {}) {
   const domain = overrides.domain ?? DOMAIN
   const slot = overrides.slot ?? 'locations'
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain, slot, name }),
     layer: 'worldview',
     name,
@@ -57,7 +57,7 @@ function characterEntry(overrides = {}) {
   const name = overrides.name ?? '柯秒'
   const domain = overrides.domain ?? DOMAIN
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'character', domain, slot: '', name }),
     layer: 'character',
     name,
@@ -73,7 +73,7 @@ function plotEntry(overrides = {}) {
   const name = overrides.name ?? '停摆'
   const domain = overrides.domain ?? DOMAIN
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain, slot: '', name }),
     layer: 'plot',
     name,
@@ -274,9 +274,9 @@ test('汇总出口：conflicts 只收可判定 error，undecidable 单列，空�
   const ruleB = worldviewEntry({ name: '记忆恢复', slot: 'rules', constraint: { key: 'memory', value: 'running' } })
   const freeText = worldviewEntry({ name: '无人能离开钟楼', slot: 'rules' })
 
-  const gate = runPediaGate([ruleA, ruleB, freeText, null, 'not-an-entry'])
+  const gate = runFactGate([ruleA, ruleB, freeText, null, 'not-an-entry'])
   assert.equal(gate.ok, false)
-  assert.equal(gate.version, 'pedia-gate/v1')
+  assert.equal(gate.version, 'fact-gate/v1')
   assert.ok(gate.conflicts.some((item) => item.rule === 'RULE_RULE_CONFLICT'))
   assert.ok(gate.conflicts.every((item) => item.severity === 'error' && item.decidable === true))
   assert.equal(gate.assertions.length, gate.conflicts.length + gate.counts.warnings)
@@ -288,7 +288,7 @@ test('汇总出口：conflicts 只收可判定 error，undecidable 单列，空�
   assert.match(gate.roundTrip.reason, /roundTrip/u)
   assert.deepEqual(gate.normalization.alias.conflicts, [])
 
-  const empty = runPediaGate([])
+  const empty = runFactGate([])
   assert.equal(empty.ok, true)
   assert.ok(empty.warnings.some((item) => item.code === 'EMPTY_ENTRY_SET'))
 })
@@ -296,7 +296,7 @@ test('汇总出口：conflicts 只收可判定 error，undecidable 单列，空�
 test('归一化基线（克莱恩＝周明瑞）：同条目别名并组；跨条目同词声明并组但冲突留痕', () => {
   const klein = characterEntry({ name: '克莱恩', aliases: ['周明瑞'] })
 
-  const single = runPediaGate([klein])
+  const single = runFactGate([klein])
   assert.equal(single.normalization.ok, true)
   assert.equal(single.normalization.alias.mergedGroups, 1)
   const group = single.normalization.alias.groups.find((item) => item.canonical === '克莱恩')
@@ -305,7 +305,7 @@ test('归一化基线（克莱恩＝周明瑞）：同条目别名并组；跨�
   assert.equal(createAliasIndex([klein]).resolve('周明瑞'), '克莱恩')
 
   const fool = characterEntry({ name: '愚者', aliases: ['克莱恩'] })
-  const conflicted = runPediaGate([klein, fool])
+  const conflicted = runFactGate([klein, fool])
   assert.equal(conflicted.normalization.ok, false)
   const conflict = conflicted.normalization.alias.conflicts.find((item) => item.term === '克莱恩')
   assert.ok(conflict, '同名被两类条目声明时必须报出来')
@@ -375,7 +375,7 @@ test('归一化回归：category_map 全表逐条断言（34 类归并＋同义�
   assert.equal(slotForCategory('不存在的分类'), OTHER_SLOT)
   assert.equal(slotForCategory(''), OTHER_SLOT)
 
-  const report = runPediaGate([
+  const report = runFactGate([
     worldviewEntry({ name: '钟表法则', slot: 'rules' }),
     worldviewEntry({ name: '旧钟楼', slot: 'locations' }),
     worldviewEntry({ name: '无主之物', slot: 'other' })
@@ -449,7 +449,7 @@ function characterProfileLlm() {
 }
 
 /**
- * round-trip 端口（宿主侧适配器；pedia 层自己不 import wikihub）：
+ * round-trip 端口（宿主侧适配器；fact 层自己不 import wikihub）：
  *   worldview → hubToWorldbook → worldbookToHub（世界书载体，字段全量）；
  *   plot      → hubToNovelRefs（小说骨架，@《…》引用行）→ extractRefs 回读；
  *   人物      → convert 没有人物载体，按 JSON 往返校验锚点，并如实记一条损失。
@@ -535,7 +535,7 @@ test('round-trip 保真：原文→分段→抽取→hub 条目→convert 反向
   assert.deepEqual(worldbook.losses, [])
 
   const hubEntries = [...extraction.drafts, ...mined.entries, ...worldbook.entries]
-  const report = runPediaGate(hubEntries, { roundTrip: convertRoundTrip })
+  const report = runFactGate(hubEntries, { roundTrip: convertRoundTrip })
 
   assert.equal(report.conflicts.length, 0, '结构齐全时门禁无硬冲突')
   assert.equal(report.roundTrip.skipped, false)

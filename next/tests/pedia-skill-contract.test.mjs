@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { PEDIA_SCHEMA, stableEntryId } from '../pedia/domain/pediaSchema.js'
-import { buildFactPack } from '../pedia/usecases/factPack.js'
+import { FACT_SCHEMA, stableEntryId } from '../fact/domain/pediaSchema.js'
+import { buildFactPack } from '../fact/usecases/factPack.js'
 import {
   NON_ENTRY_OUTPUTS,
   PRODUCE_STATUSES,
@@ -14,7 +14,7 @@ import {
   defineSkillContract,
   validateProduces,
   validateSkillContract
-} from '../pedia/usecases/skillContract.js'
+} from '../fact/usecases/skillContract.js'
 import { SKILL_CONTRACTS } from '../skills/contracts.mjs'
 import { DEFAULT_SKILLS_DIR, loadSkills } from '../skills/loadSkills.mjs'
 
@@ -30,7 +30,7 @@ const DOMAIN = '契约之城'
 
 function worldview({ name = '旧钟楼', slot = 'locations', status = 'proposed', mode = 'author', definition = '城南的钟楼。' } = {}) {
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain: DOMAIN, slot, name }),
     layer: 'worldview',
     name,
@@ -44,7 +44,7 @@ function worldview({ name = '旧钟楼', slot = 'locations', status = 'proposed'
 
 function plot({ name = '停摆', status = 'draft', mode = 'author', events = [] } = {}) {
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain: DOMAIN, slot: '', name }),
     layer: 'plot',
     name,
@@ -58,7 +58,7 @@ function plot({ name = '停摆', status = 'draft', mode = 'author', events = [] 
 
 function character({ name = '柯秒', status = 'proposed', mode = 'author' } = {}) {
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'character', domain: DOMAIN, slot: '', name }),
     layer: 'character',
     name,
@@ -73,7 +73,7 @@ const CONTRACT_NAMES = ['chapter-rewrite', 'continuity-check', 'outline-restruct
 
 /* ───────────── 1. 五张卡逐项校验 ───────────── */
 
-test('〔P3·五卡〕五份契约都合法，层／槽位／produces 白名单在 pedia 词表内', () => {
+test('〔P3·五卡〕五份契约都合法，层／槽位／produces 白名单在 fact 词表内', () => {
   assert.deepEqual(Object.keys(SKILL_CONTRACTS).sort(), CONTRACT_NAMES.slice().sort())
   for (const name of CONTRACT_NAMES) {
     const contract = SKILL_CONTRACTS[name]

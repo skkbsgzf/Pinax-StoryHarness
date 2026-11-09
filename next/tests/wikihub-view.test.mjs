@@ -23,7 +23,7 @@ import {
  *      人物／剧情两层的「小说／剧本锚点占位组」在场且是惰性的（wired=false）；
  *   2) 链接表：名称／短名／别名唯一归属才进表，同名多归属整词剔除并逐条记账；
  *   3) 信息卡字段：缺的不摆，未建档如实写「未建档」。
- * 期望值全部走 W1 的 worldbookToHub（数据源切 hub 的真实链路），不手搓 pedia 信封。
+ * 期望值全部走 W1 的 worldbookToHub（数据源切 hub 的真实链路），不手搓 fact 信封。
  */
 
 const RUNTIME_ENTRIES = [
@@ -40,10 +40,10 @@ function fixtureModel(options = {}) {
   return buildHubViewModel(converted, { book: '大梦', ...options })
 }
 
-function pediaEntry({ name, slot = 'power_levels', rank = null, domain = '大梦', layer = 'worldview', aliases = [], content = '', contract = true }) {
+function factEntry({ name, slot = 'power_levels', rank = null, domain = '大梦', layer = 'worldview', aliases = [], content = '', contract = true }) {
   const id = stableEntryId({ layer, domain, slot, name })
   return {
-    schema: 'pedia/v2',
+    schema: 'fact.data/v2',
     id,
     layer,
     name,
@@ -141,7 +141,7 @@ test('批次 W4／S1：剧作· 前缀条目解耦进文风能力包，不再是
     runtime('剧作·术语与声线', 9)
   ], { book: '大梦' })
   assert.equal(converted.valid, true, JSON.stringify(converted.issues))
-  assert.equal(converted.entries.length, 0, '文风类条目不进 pedia 主条目集')
+  assert.equal(converted.entries.length, 0, '文风类条目不进 fact 主条目集')
   const model = buildHubViewModel(converted, { book: '大梦' })
 
   assert.equal(model.layers.some((layer) => layer.layer === 'style'), false, 'v2 不再有 style 层')
@@ -161,7 +161,7 @@ test('批次 W4／S1：剧作· 前缀条目解耦进文风能力包，不再是
   // 旧数据里的 style 层条目：丢弃并记账，不画半截。
   const legacy = buildHubViewModel([
     { id: 'style0000001', layer: 'style', name: '旧文风', slot: 'creative_rules', definition: 'x' },
-    pediaEntry({ name: '钟楼', slot: 'locations' })
+    factEntry({ name: '钟楼', slot: 'locations' })
   ], { book: '大梦' })
   assert.equal(legacy.entries.length, 1)
   assert.ok(legacy.warnings.some((warning) => warning.code === 'STYLE_LAYER_DECOUPLED'))
@@ -169,10 +169,10 @@ test('批次 W4／S1：剧作· 前缀条目解耦进文风能力包，不再是
 
 test('视图模型：有序槽位按 rank 排，缺 rank 的排到最后（名字只做并列时的次序）', () => {
   const model = buildHubViewModel([
-    pediaEntry({ name: '筑基', rank: 3 }),
-    pediaEntry({ name: '炼气', rank: 1 }),
-    pediaEntry({ name: '金丹', rank: 2 }),
-    pediaEntry({ name: '未定阶', rank: null })
+    factEntry({ name: '筑基', rank: 3 }),
+    factEntry({ name: '炼气', rank: 1 }),
+    factEntry({ name: '金丹', rank: 2 }),
+    factEntry({ name: '未定阶', rank: null })
   ], { book: '大梦' })
   const groups = model.layers[0].domains[0].groups
   assert.equal(groups[0].key, 'power_levels')
@@ -204,10 +204,10 @@ test('占位组：人物／剧情各两枚锚点组，计数来自 anchors，明
 
 test('链接表：名称／短名／别名唯一归属才进表，同名多归属整词剔除并逐条记账', () => {
   const model = buildHubViewModel([
-    pediaEntry({ name: '人物·柯秒', aliases: ['柯秒', '秒子'] }),
-    pediaEntry({ name: '地点·槐巷', aliases: ['槐巷'] }),
-    pediaEntry({ name: '人物·阿青', aliases: ['青云'] }),
-    pediaEntry({ name: '地点·青云', slot: 'locations' })
+    factEntry({ name: '人物·柯秒', aliases: ['柯秒', '秒子'] }),
+    factEntry({ name: '地点·槐巷', aliases: ['槐巷'] }),
+    factEntry({ name: '人物·阿青', aliases: ['青云'] }),
+    factEntry({ name: '地点·青云', slot: 'locations' })
   ], { book: '大梦' })
 
   const table = model.linkTable
@@ -243,7 +243,7 @@ test('链接表：纯函数也可单独用——短名取自「·」后那一段
 })
 
 test('信息卡字段：缺的不摆，来源区分「未建档」与路径', () => {
-  const withSource = pediaEntry({ name: '钟楼', slot: 'locations', content: '钟楼在巷尾。' })
+  const withSource = factEntry({ name: '钟楼', slot: 'locations', content: '钟楼在巷尾。' })
   const fields = hubInfoboxFields(buildHubViewModel([withSource], { book: '大梦' }).entries[0])
   assert.deepEqual(fields.map((field) => [field.key, field.value]), [
     ['category', '地点'],
@@ -256,7 +256,7 @@ test('信息卡字段：缺的不摆，来源区分「未建档」与路径', ()
   assert.equal(fields.some((field) => field.key === 'aliases'), false, '没有别名就不摆那一行')
   assert.equal(fields.some((field) => field.key === 'rank'), false, '非有序槽位没有序位')
 
-  const bare = pediaEntry({ name: '碎句', slot: 'other', contract: false })
+  const bare = factEntry({ name: '碎句', slot: 'other', contract: false })
   const bareFields = hubInfoboxFields(buildHubViewModel([bare], { book: '大梦' }).entries[0])
   assert.equal(bareFields.find((field) => field.key === 'source').value, '未建档')
   assert.equal(bareFields.some((field) => field.key === 'rank'), false)
@@ -288,19 +288,19 @@ test('运行时读回形状：keys 里的别名进链接表，目录仍留在兼
 })
 
 test('重复 id：后一条不进视图并记账，不在树上摆两行同 id', () => {
-  const first = pediaEntry({ name: '钟楼', slot: 'locations' })
+  const first = factEntry({ name: '钟楼', slot: 'locations' })
   const model = buildHubViewModel([first, { ...first, name: '钟楼（重复）' }], { book: '大梦' })
   assert.equal(model.entries.length, 1)
   assert.ok(model.warnings.some((warning) => warning.code === 'DUPLICATE_ID'))
 })
 
 test('层级 dot 的统计口径：relations 提到或正文包含都算「被引用」', () => {
-  const described = pediaEntry({ name: '钟楼', slot: 'locations' })
+  const described = factEntry({ name: '钟楼', slot: 'locations' })
   const referrer = {
-    ...pediaEntry({ name: '停摆的表', slot: 'items' }),
+    ...factEntry({ name: '停摆的表', slot: 'items' }),
     relations: [{ to: '钟楼', type: '位于' }]
   }
-  const mentioner = pediaEntry({ name: '雨夜', slot: 'events', content: '那夜他爬上了钟楼。' })
+  const mentioner = factEntry({ name: '雨夜', slot: 'events', content: '那夜他爬上了钟楼。' })
   const model = buildHubViewModel([described, referrer, mentioner], { book: '大梦' })
   const counts = hubInboundCounts(model.entries)
   const byName = new Map(model.entries.map((entry) => [entry.name, counts.get(entry.id)]))

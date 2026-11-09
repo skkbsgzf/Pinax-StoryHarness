@@ -1,9 +1,10 @@
 /**
- * pedia/v1 → pedia/v2 条目迁移器（ADR D2 切换判据之一：迁移器 diff=0 的前置工具）。
+ * pedia/v1 → fact.data/v2 条目迁移器（ADR D2 切换判据之一：迁移器 diff=0 的前置工具）。
  *
  * 纯函数：不读磁盘、不改入参、不依赖 Node 内置模块。
  * 迁移规则（对应工单第 7 条）：
- *   1) schema 升到 pedia/v2；
+ *   0) 输入侧接受旧标识 `pedia/v1`（不校验输入 schema，统一升到当前 schema）；
+ *   1) schema 升到 fact.data/v2；
  *   2) provenance.mode 缺失时按来源推断：世界书载体（next.medium='worldbook'）＝ author，
  *      小说/剧本结构锚点（分析得来）＝ analyze；
  *   3) status 缺失时补 draft；validity 缺失时按 span 推双时间轴（无锚点给 null/null）；
@@ -16,16 +17,16 @@
 import {
   DEFAULT_ENTRY_STATUS,
   ENTRY_STATUSES,
-  PEDIA_SCHEMA,
+  FACT_SCHEMA,
   createRhythmSpec,
   sha1Hex,
-  validatePediaEntry
-} from '../pedia/domain/pediaSchema.js'
-import { validityFromSpan } from '../pedia/domain/validity.js'
+  validateFactEntry
+} from '../fact/domain/pediaSchema.js'
+import { validityFromSpan } from '../fact/domain/validity.js'
 import { createNovelStylePack, styleEntryFromWorldbook } from './packs/novel-style.mjs'
-import { segmentText } from '../pedia/domain/segment.js'
+import { segmentText } from '../fact/domain/segment.js'
 
-export const PEDIA_MIGRATION_VERSION = 'pedia/v1→v2'
+export const FACT_MIGRATION_VERSION = 'pedia/v1→fact.data/v2'
 
 function isPlainObject(value) {
   return Object.prototype.toString.call(value) === '[object Object]'
@@ -86,7 +87,7 @@ function migrateCharacter(entry) {
 /**
  * 迁移单条 v1 条目。
  * 返回 { ok, entry, styleEntry, checks, losses, warnings }；
- * style 条目返回 entry=null、styleEntry=能力包条目（不参与 pedia 校验）。
+ * style 条目返回 entry=null、styleEntry=能力包条目（不参与 fact 校验）。
  */
 export function migrateV1Entry(entry, _options = {}) {
   const losses = []
@@ -106,7 +107,7 @@ export function migrateV1Entry(entry, _options = {}) {
     return { ok: true, entry: null, styleEntry, losses, warnings, checks: { ok: true, errors: [], warnings: [] } }
   }
 
-  const next = { ...entry, schema: PEDIA_SCHEMA }
+  const next = { ...entry, schema: FACT_SCHEMA }
   if (next.status === undefined) {
     next.status = DEFAULT_ENTRY_STATUS
   } else if (!ENTRY_STATUSES.includes(str(next.status))) {
@@ -130,7 +131,7 @@ export function migrateV1Entry(entry, _options = {}) {
   if (next.layer === 'character') Object.assign(next, migrateCharacter(next))
   if (next.layer === 'plot') Object.assign(next, migratePlot(next, losses, warnings))
 
-  const checks = validatePediaEntry(next)
+  const checks = validateFactEntry(next)
   return { ok: checks.ok, entry: next, styleEntry: null, checks, losses, warnings }
 }
 
@@ -159,7 +160,7 @@ export function migrateV1Hub(input, options = {}) {
       continue
     }
     if (!result.ok) {
-      issues.push({ code: 'PEDIA_INVALID', id: result.entry.id, name: result.entry.name, errors: result.checks.errors })
+      issues.push({ code: 'FACT_INVALID', id: result.entry.id, name: result.entry.name, errors: result.checks.errors })
     }
     entries.push(result.entry)
   }
@@ -170,8 +171,8 @@ export function migrateV1Hub(input, options = {}) {
 
   return {
     ok: issues.length === 0,
-    schema: PEDIA_SCHEMA,
-    version: PEDIA_MIGRATION_VERSION,
+    schema: FACT_SCHEMA,
+    version: FACT_MIGRATION_VERSION,
     valid: issues.length === 0,
     entries,
     stylePack,

@@ -1,5 +1,5 @@
 /**
- * P2a 抽取 usecase：章节原文 → 段（100–300 字）→ LlmPort → pedia/v2 plot 草稿。
+ * P2a 抽取 usecase：章节原文 → 段（100–300 字）→ LlmPort → fact.data/v2 plot 草稿。
  *
  * 业务口径来自 NovelPedia `src/extract.py`（只读参照）：
  *   - `_parse_json` 的容错解析（剥围栏、截取首个对象）；
@@ -9,20 +9,20 @@
  *
  * 与参考实现的差异（ADR P2a）：
  *   - 文本先由 domain/segment.js 切成 100–300 字的段，一段一次 LLM、一份草稿；
- *   - 输出是 pedia/v2 plot 草稿：status=draft、provenance.mode=analyze；
+ *   - 输出是 fact.data/v2 plot 草稿：status=draft、provenance.mode=analyze；
  *   - analyze 模式禁止存原文，provenance 只记 quote_hash（sha1）；
  *   - 同一 bundle 重跑用确定性 operationId 幂等，不重复落库。
  *
- * 不读写磁盘、不依赖宿主模块：LLM 与 PediaStore 都从端口注入。
+ * 不读写磁盘、不依赖宿主模块：LLM 与 FactStore 都从端口注入。
  */
 
-import { PEDIA_SCHEMA } from '../../domain/vocabulary.js'
+import { FACT_SCHEMA } from '../../domain/vocabulary.js'
 import { sha1Hex, stableEntryId } from '../../domain/stableId.js'
-import { validatePediaEntry } from '../../domain/schema.js'
+import { validateFactEntry } from '../../domain/schema.js'
 import { canTransitionStatus } from '../../domain/status.js'
 import { segmentStats, segmentText } from '../../domain/segment.js'
 import { assertLlmPort } from '../../ports/llmPort.js'
-import { assertPediaStore } from '../../ports/pediaStore.js'
+import { assertFactStore } from '../../ports/pediaStore.js'
 import { EXTRACT_SYSTEM_PROMPT, buildExtractPrompt } from './prompts.mjs'
 
 /** 契约上限：解析失败最多重试 2 次（合计最多 3 次调用）。 */
@@ -33,7 +33,7 @@ export const V2_MAX_ACTINFO = 12
 
 const ROLES = new Set(['主事', '参与', '提及'])
 const TIMELINES = new Set(['顺叙', '倒叙', '插叙'])
-const DEFAULT_EXTRACTOR = 'pedia/pipeline/extract@1'
+const DEFAULT_EXTRACTOR = 'fact/pipeline/extract@1'
 
 function isPlainObject(value) {
   return Object.prototype.toString.call(value) === '[object Object]'
@@ -247,7 +247,7 @@ export function normalizeExtraction(raw, context = {}) {
   const when = isPlainObject(source.when) ? source.when : {}
   const timeline = TIMELINES.has(str(when.timeline).trim()) ? str(when.timeline).trim() : '顺叙'
   return {
-    schema: 'pedia-extract/v2',
+    schema: 'fact-extract/v2',
     chapterNo: Number.isInteger(context.chapterNo) ? context.chapterNo : null,
     sceneId: context.sceneId ?? null,
     segment: {
@@ -263,7 +263,7 @@ export function normalizeExtraction(raw, context = {}) {
 }
 
 /**
- * 抽取记录 → pedia/v2 plot 草稿（status=draft，provenance.mode=analyze，只存 quote_hash）。
+ * 抽取记录 → fact.data/v2 plot 草稿（status=draft，provenance.mode=analyze，只存 quote_hash）。
  * @param {Object} extraction normalizeExtraction 的输出
  * @param {{domain?:string, book?:string, bookId?:string, sceneId?:number|string, text:string, extractor?:string}} context
  */
@@ -287,7 +287,7 @@ export function buildPlotDraft(extraction, context = {}) {
   const title = firstText(record.notes, `${record.where}·${whoNames.join('/')}`).slice(0, 24)
 
   const draft = {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain, slot: '', name }),
     layer: 'plot',
     name,
@@ -328,8 +328,8 @@ export function buildPlotDraft(extraction, context = {}) {
  */
 export async function persistEntries(store, entries, options = {}) {
   if (!store) return { saved: [], warnings: [] }
-  assertPediaStore(store)
-  const prefix = firstText(options.operationPrefix, 'pedia-pipeline')
+  assertFactStore(store)
+  const prefix = firstText(options.operationPrefix, 'fact-pipeline')
   const saved = []
   const warnings = []
 
@@ -377,7 +377,7 @@ export async function persistEntries(store, entries, options = {}) {
  * @param {string} [input.bookId]
  * @param {string[]} [input.knownNames]
  * @param {string} [input.extractor]
- * @param {Object} [input.store] PediaStore
+ * @param {Object} [input.store] FactStore
  * @param {number} [options.maxRetries] 0–2，默认 2
  */
 export async function extractChapter(input = {}, options = {}) {
@@ -443,7 +443,7 @@ export async function extractChapter(input = {}, options = {}) {
     const extraction = normalizeExtraction(call.value, { chapterNo, sceneId, segment })
     extractions.push(extraction)
     const draft = buildPlotDraft(extraction, { domain, book, bookId, sceneId, text: segment.text, extractor })
-    const validation = validatePediaEntry(draft)
+    const validation = validateFactEntry(draft)
     if (!validation.ok) {
       failures.push({ segmentIndex: segment.index, code: 'DRAFT_INVALID', errors: validation.errors })
       continue

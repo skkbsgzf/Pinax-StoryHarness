@@ -1,5 +1,5 @@
 /**
- * PediaStore 端口（Core-shape：只定契约，不落实现）。
+ * FactStore 端口（Core-shape：只定契约，不落实现）。
  *
  * 实现方：adapters/memoryPediaStore.mjs（参考实现）与宿主（Next 侧接项目文件存储，
  * 迁 Core 后接 createProjectTransactionService）。
@@ -10,7 +10,7 @@
  *     新建时 expectedRevision 为 0 或缺省。
  *
  * @typedef {Object} StoredEntry
- * @property {Object} entry   pedia/v2 条目（不可变快照）
+ * @property {Object} entry   fact.data/v2 条目（不可变快照）
  * @property {number} revision 该条目当前的 revision（从 1 起）
  *
  * @typedef {Object} SaveOptions
@@ -27,7 +27,7 @@
  *                                  REVISION_MISMATCH / NOT_FOUND / OPERATION_CONFLICT
  * @property {Object} [error]       失败详情（含 currentRevision 等）
  *
- * @typedef {Object} PediaStore
+ * @typedef {Object} FactStore
  * @property {(id: string) => Promise<StoredEntry|null>} get
  * @property {(filter?: {layer?: string, domain?: string, slot?: string, status?: string,
  *            atSpan?: number|{from?: number, to?: number}}) => Promise<{entries: StoredEntry[], total: number}>} list
@@ -35,9 +35,9 @@
  * @property {(id: string, options: SaveOptions) => Promise<SaveResult>} remove
  */
 
-export const PEDIA_STORE_METHODS = Object.freeze(['get', 'list', 'save', 'remove'])
+export const FACT_STORE_METHODS = Object.freeze(['get', 'list', 'save', 'remove'])
 
-export const PEDIA_STORE_WRITE_CODES = Object.freeze([
+export const FACT_STORE_WRITE_CODES = Object.freeze([
   'OPERATION_ID_REQUIRED',
   'VALIDATION_FAILED',
   'REVISION_MISMATCH',
@@ -46,14 +46,14 @@ export const PEDIA_STORE_WRITE_CODES = Object.freeze([
 ])
 
 /** 实现是否满足端口形状（鸭子类型，不要求继承）。 */
-export function isPediaStore(candidate) {
+export function isFactStore(candidate) {
   if (!candidate || (typeof candidate !== 'object' && typeof candidate !== 'function')) return false
-  return PEDIA_STORE_METHODS.every((method) => typeof candidate[method] === 'function')
+  return FACT_STORE_METHODS.every((method) => typeof candidate[method] === 'function')
 }
 
-export function assertPediaStore(candidate) {
-  if (!isPediaStore(candidate)) {
-    throw new TypeError(`PediaStore 端口缺方法：需要 ${PEDIA_STORE_METHODS.join('/')}`)
+export function assertFactStore(candidate) {
+  if (!isFactStore(candidate)) {
+    throw new TypeError(`FactStore 端口缺方法：需要 ${FACT_STORE_METHODS.join('/')}`)
   }
   return candidate
 }

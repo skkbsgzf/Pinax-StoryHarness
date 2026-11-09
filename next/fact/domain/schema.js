@@ -1,5 +1,5 @@
 /**
- * pedia/v2 条目信封校验器（domain 真源，Core 平移件）。
+ * fact.data/v2 条目信封校验器（domain 真源，Core 平移件）。
  *
  * 校验分两档：errors 是硬错误（必填/类型/枚举/id 漂移/状态机），warnings 不拦转。
  * 注意：castRole 完整性在 analyze 模式是 errors、author 模式是 warnings（ADR S2-1）。
@@ -11,8 +11,8 @@ import {
   DEFAULT_ENTRY_STATUS,
   ENTRY_STATUSES,
   KNOWLEDGE_KINDS,
-  PEDIA_LAYERS,
-  PEDIA_SCHEMA,
+  FACT_LAYERS,
+  FACT_SCHEMA,
   PLOT_EVENT_TRACKS,
   PROVENANCE_MODES,
   STRUCTURE_TEMPLATE_KINDS,
@@ -374,10 +374,10 @@ function validateStructureTemplates(entry, addError) {
 }
 
 /**
- * 校验一个 pedia/v2 条目信封。
+ * 校验一个 fact.data/v2 条目信封。
  * 返回 { ok, errors, warnings }；errors 是硬错误（必填/类型/枚举/id 漂移/状态机），warnings 不拦转。
  */
-export function validatePediaEntry(entry) {
+export function validateFactEntry(entry) {
   const errors = []
   const warnings = []
   const addError = (code, field, message) => errors.push({ code, field, message })
@@ -387,13 +387,13 @@ export function validatePediaEntry(entry) {
     addError('INVALID_ENTRY', 'entry', '条目必须是对象')
     return { ok: false, errors, warnings }
   }
-  if (entry.schema !== PEDIA_SCHEMA) {
-    addError('SCHEMA_MISMATCH', 'schema', `schema 必须是 ${PEDIA_SCHEMA}`)
+  if (entry.schema !== FACT_SCHEMA) {
+    addError('SCHEMA_MISMATCH', 'schema', `schema 必须是 ${FACT_SCHEMA}`)
   }
   const layer = str(entry.layer)
-  const spec = PEDIA_LAYERS[layer]
+  const spec = FACT_LAYERS[layer]
   if (!spec) {
-    addError('UNKNOWN_LAYER', 'layer', `layer 必须是 ${Object.keys(PEDIA_LAYERS).join('/')}`)
+    addError('UNKNOWN_LAYER', 'layer', `layer 必须是 ${Object.keys(FACT_LAYERS).join('/')}`)
   }
 
   for (const field of spec?.required ?? []) {

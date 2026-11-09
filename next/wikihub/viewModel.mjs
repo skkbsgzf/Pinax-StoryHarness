@@ -1,9 +1,9 @@
-import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from '../pedia/domain/pediaSchema.js'
+import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from '../fact/domain/pediaSchema.js'
 
 /**
  * wikihub 三栏视图模型（批次 W3 · 纯函数，浏览器侧可用）。
  *
- * 输入＝pedia/v2 hub 条目集（worldbookToHub 的结果或任意 { entries } / 条目数组），
+ * 输入＝fact.data/v2 hub 条目集（worldbookToHub 的结果或任意 { entries } / 条目数组），
  * 输出＝世界书三栏维基版式要用的四件事：
  *   1) 左索引树：layer → domain → group（世界观＝11 个标准槽位名；软层＝层名）→ 条目，
  *      每级带条目数；人物／剧情两层的「小说／剧本锚点占位组」始终在场（惰性，见 limitations）；
@@ -12,7 +12,7 @@ import { OTHER_SLOT, WORLDVIEW_SLOTS, WORLDVIEW_SLOT_NAMES } from '../pedia/doma
  *   3) 信息卡字段：槽位中文名／域／别名／序位／类型／关系数／字数／修订／来源路径；
  *   4) 正文＝条目 md 原文（hub 只补信息，不重写正文）。
  *
- * S1（pedia/v2）：一等公民层只有 worldview／character／plot；文风不再是层，
+ * S1（fact.data/v2）：一等公民层只有 worldview／character／plot；文风不再是层，
  * 旧 style 条目进视图时逐条记 STYLE_LAYER_DECOUPLED 并丢弃，文风内容改由能力包
  * （hub.stylePack → model.stylePack）承载。
  *
@@ -144,7 +144,7 @@ function normalizeRelations(value) {
  * 同时带上看板既有组件吃得着的兼容字段（cat／keys／summary），排序与表格不用另写一套。
  */
 function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
-  // 两种输入形状：pedia 条目（正文/元数据在 next.worldbook 快照里）与运行时读回的世界书条目
+  // 两种输入形状：fact 条目（正文/元数据在 next.worldbook 快照里）与运行时读回的世界书条目
   // （name/keys/content 都在顶层）——后者把自己当快照，信息卡与蓝链词表不因形状而丢字段。
   const snapshot = isPlainObject(raw.next?.worldbook)
     ? raw.next.worldbook
@@ -155,7 +155,7 @@ function normalizeEntry(raw, index, warnings, fallbackDomain = '') {
   let id = firstText(raw.id)
   if (!id) {
     id = `entry-${index + 1}`
-    warnings.push({ code: 'MISSING_ID', message: `条目「${name}」没有 pedia id，本视图用占位 id ${id}` })
+    warnings.push({ code: 'MISSING_ID', message: `条目「${name}」没有 fact id，本视图用占位 id ${id}` })
   }
   if (layer === 'worldview' && !WORLDVIEW_SLOTS[slot]) {
     if (slot) warnings.push({ code: 'UNKNOWN_SLOT', message: `条目「${name}」的槽位「${slot}」不认识，按其他显示` })
@@ -417,7 +417,7 @@ function buildPlaceholders(layer, anchors) {
 /**
  * hub 条目集 → 三栏视图模型。
  *
- * 输入：pedia 条目数组／{ entries }／worldbookToHub 的返回值。
+ * 输入：fact 条目数组／{ entries }／worldbookToHub 的返回值。
  * options：
  *   book     书名（顶层展示口，默认「世界书」）
  *   domain   兜底域（条目自带 domain 优先）
@@ -425,7 +425,7 @@ function buildPlaceholders(layer, anchors) {
  *
  * 返回 { version, book, domain, entries, layers, linkTable, stylePack, warnings, counts }。
  * layers 里 worldview 按 11 槽位分组，character/plot 各一组（另带 placeholders）；
- * stylePack 是 pedia/v2 的文风能力包（可能为 null），不再作为视图层出现。
+ * stylePack 是 fact.data/v2 的文风能力包（可能为 null），不再作为视图层出现。
  */
 export function buildHubViewModel(input, options = {}) {
   const hub = Array.isArray(input) ? { entries: input } : (isPlainObject(input) ? input : {})
@@ -449,7 +449,7 @@ export function buildHubViewModel(input, options = {}) {
       warnings.push({ code: 'ENTRY_NOT_OBJECT', message: `第 ${index + 1} 条不是对象，已跳过` })
       return
     }
-    // S1：pedia/v2 没有 style 层，旧数据里的文风条目按能力包口径处理，不画进三栏。
+    // S1：fact.data/v2 没有 style 层，旧数据里的文风条目按能力包口径处理，不画进三栏。
     if (raw.layer === 'style') {
       warnings.push({
         code: 'STYLE_LAYER_DECOUPLED',

@@ -5,8 +5,8 @@ import { readFile, readdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, relative, resolve } from 'node:path'
 import {
-  PEDIA_SCHEMA,
-  PEDIA_LAYERS,
+  FACT_SCHEMA,
+  FACT_LAYERS,
   WORLDVIEW_SLOTS,
   CATEGORY_MAP,
   ENTRY_STATUSES,
@@ -19,11 +19,11 @@ import {
   sha1Hex,
   slotForCategory,
   isOrderedSlot,
-  validatePediaEntry,
+  validateFactEntry,
   isWorldviewEntry,
   createRhythmSpec,
   instantiateStructureTemplate
-} from '../pedia/domain/pediaSchema.js'
+} from '../fact/domain/pediaSchema.js'
 import {
   normalizeSpan,
   validityBounds,
@@ -32,8 +32,8 @@ import {
   intersectValidity,
   validityFromSpan,
   validateValidityShape
-} from '../pedia/domain/validity.js'
-import { checkPerspective, normalizeKnowledgeLedger } from '../pedia/domain/perspective.js'
+} from '../fact/domain/validity.js'
+import { checkPerspective, normalizeKnowledgeLedger } from '../fact/domain/perspective.js'
 import {
   SEGMENT_MIN_CHARS,
   SEGMENT_MAX_CHARS,
@@ -42,15 +42,15 @@ import {
   segmentStats,
   splitParagraphs,
   splitSentences
-} from '../pedia/domain/segment.js'
-import { createAliasIndex } from '../pedia/domain/aliases.js'
+} from '../fact/domain/segment.js'
+import { createAliasIndex } from '../fact/domain/aliases.js'
 
 /**
- * P1 域层合同测试：只钉 next/pedia/domain 的纯函数口径——
+ * P1 域层合同测试：只钉 next/fact/domain 的纯函数口径——
  *   1) 词表/稳定 id/状态机/双时间轴/schema/视角/分段/别名；
- *   2) 静态边界：pedia 域不得 import 宿主（node 内置、shell/runtime/kernel/carriers）；
+ *   2) 静态边界：fact 域不得 import 宿主（node 内置、shell/runtime/kernel/carriers）；
  *   3) wikihub 里没有域实现副本（旧入口只剩转发薄壳）。
- * 期望值来自 pedia/v2 定稿（ADR）与 v1 迁移口径，不另立标准。
+ * 期望值来自 fact.data/v2 定稿（ADR）与 v1 迁移口径，不另立标准。
  */
 
 const sha1 = (text) => createHash('sha1').update(text, 'utf8').digest('hex')
@@ -60,7 +60,7 @@ function worldviewEntry(overrides = {}) {
   const domain = overrides.domain ?? '停摆之城'
   const slot = overrides.slot ?? 'locations'
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain, slot, name }),
     layer: 'worldview',
     name,
@@ -77,7 +77,7 @@ function characterEntry(overrides = {}) {
   const name = overrides.name ?? '柯秒'
   const domain = overrides.domain ?? '停摆之城'
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'character', domain, slot: '', name }),
     layer: 'character',
     name,
@@ -93,7 +93,7 @@ function plotEntry(overrides = {}) {
   const name = overrides.name ?? '停摆'
   const domain = overrides.domain ?? '停摆之城'
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'plot', domain, slot: '', name }),
     layer: 'plot',
     name,
@@ -106,10 +106,10 @@ function plotEntry(overrides = {}) {
 }
 
 test('词汇表：三层一等公民、11 槽位、34 类归并；style 不在层里（S1 解耦）', () => {
-  assert.deepEqual(Object.keys(PEDIA_LAYERS), ['worldview', 'character', 'plot'])
-  assert.equal(PEDIA_LAYERS.worldview.align, 'hard')
-  assert.equal(PEDIA_LAYERS.character.align, 'soft')
-  assert.equal(PEDIA_LAYERS.style, undefined)
+  assert.deepEqual(Object.keys(FACT_LAYERS), ['worldview', 'character', 'plot'])
+  assert.equal(FACT_LAYERS.worldview.align, 'hard')
+  assert.equal(FACT_LAYERS.character.align, 'soft')
+  assert.equal(FACT_LAYERS.style, undefined)
   assert.equal(Object.keys(WORLDVIEW_SLOTS).length, 11)
   assert.equal(isOrderedSlot('power_levels'), true)
   assert.equal(isOrderedSlot('locations'), false)
@@ -124,7 +124,7 @@ test('词汇表：三层一等公民、11 槽位、34 类归并；style 不在�
 })
 
 test('稳定 id：sha1 与 node:crypto 同值，格式固定 12 位十六进制', () => {
-  assert.equal(sha1Hex('pedia/v2'), sha1('pedia/v2'))
+  assert.equal(sha1Hex('fact.data/v2'), sha1('fact.data/v2'))
   assert.equal(sha1Hex(''), sha1(''))
   const id = stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'locations', name: '旧钟楼' })
   assert.equal(id, sha1('worldview|停摆之城|locations|旧钟楼').slice(0, 12))
@@ -179,26 +179,26 @@ test('双时间轴：归一化、相交、交集与从 span 推 validity（无�
 
 test('信封校验：必填/枚举/id 漂移/quote 哈希规则；castRole 在 analyze 是错、author 是警告', () => {
   const base = worldviewEntry()
-  assert.equal(validatePediaEntry(base).ok, true)
+  assert.equal(validateFactEntry(base).ok, true)
   assert.equal(isWorldviewEntry(base), true)
-  assert.deepEqual(validatePediaEntry({ ...base, id: '000000000000' }).errors.map((error) => error.code).includes('ID_MISMATCH'), true)
-  assert.equal(validatePediaEntry({ ...base, slot: 'weird' }).errors.some((error) => error.code === 'UNKNOWN_SLOT'), true)
-  assert.equal(validatePediaEntry({ ...base, definition: '' }).errors.some((error) => error.code === 'MISSING_REQUIRED'), true)
-  assert.equal(validatePediaEntry({ ...base, status: 'weird' }).errors.some((error) => error.code === 'STATUS_INVALID'), true)
+  assert.deepEqual(validateFactEntry({ ...base, id: '000000000000' }).errors.map((error) => error.code).includes('ID_MISMATCH'), true)
+  assert.equal(validateFactEntry({ ...base, slot: 'weird' }).errors.some((error) => error.code === 'UNKNOWN_SLOT'), true)
+  assert.equal(validateFactEntry({ ...base, definition: '' }).errors.some((error) => error.code === 'MISSING_REQUIRED'), true)
+  assert.equal(validateFactEntry({ ...base, status: 'weird' }).errors.some((error) => error.code === 'STATUS_INVALID'), true)
 
   const analyzeWithQuote = {
     ...base,
     provenance: { ...base.provenance, mode: 'analyze', quote: '原文' }
   }
-  assert.equal(validatePediaEntry(analyzeWithQuote).errors.some((error) => error.code === 'PROVENANCE_QUOTE_NOT_HASHED'), true, 'analyze 不得带 quote 原文')
+  assert.equal(validateFactEntry(analyzeWithQuote).errors.some((error) => error.code === 'PROVENANCE_QUOTE_NOT_HASHED'), true, 'analyze 不得带 quote 原文')
 
   const incompleteCast = characterEntry({
     castRole: { tier: 'supporting', goal: '', plotFunction: '' }
   })
-  const asAuthor = validatePediaEntry(incompleteCast)
+  const asAuthor = validateFactEntry(incompleteCast)
   assert.equal(asAuthor.ok, true, 'author 模式先给警告')
   assert.ok(asAuthor.warnings.some((warning) => warning.code === 'CAST_ROLE_INCOMPLETE'))
-  const asAnalyze = validatePediaEntry({
+  const asAnalyze = validateFactEntry({
     ...incompleteCast,
     provenance: { ...incompleteCast.provenance, mode: 'analyze' }
   })
@@ -206,10 +206,10 @@ test('信封校验：必填/枚举/id 漂移/quote 哈希规则；castRole 在 a
   assert.ok(asAnalyze.errors.some((error) => error.code === 'CAST_ROLE_INCOMPLETE'))
 
   const ordered = worldviewEntry({ name: '钟表境', slot: 'power_levels' })
-  assert.ok(validatePediaEntry(ordered).warnings.some((warning) => warning.code === 'ORDERED_SLOT_WITHOUT_RANK'))
+  assert.ok(validateFactEntry(ordered).warnings.some((warning) => warning.code === 'ORDERED_SLOT_WITHOUT_RANK'))
 
   const plot = plotEntry({ events: [{ index: 1, track: 'dream', segments: [{ index: 1, chars: 0 }] }] })
-  const plotResult = validatePediaEntry(plot)
+  const plotResult = validateFactEntry(plot)
   assert.ok(plotResult.errors.some((error) => error.code === 'PLOT_EVENT_TRACK'))
   assert.ok(plotResult.errors.some((error) => error.code === 'PLOT_EVENT_SEGMENT_CHARS'))
 })
@@ -302,10 +302,10 @@ test('别名 union-find：正反向互指；同一个词被两条条目声明时
   assert.equal(index.add('', ['x']).ok, false)
 })
 
-/* ---------- 静态边界：pedia 域必须宿主无关 ---------- */
+/* ---------- 静态边界：fact 域必须宿主无关 ---------- */
 
-const pediaRoot = resolve(fileURLToPath(new URL('../pedia/', import.meta.url)))
-const repoNext = resolve(pediaRoot, '..')
+const factRoot = resolve(fileURLToPath(new URL('../fact/', import.meta.url)))
+const repoNext = resolve(factRoot, '..')
 
 async function walk(dir) {
   const out = []
@@ -327,8 +327,8 @@ function* specifiersOf(source) {
   }
 }
 
-test('静态边界：next/pedia 只 import 域内相对路径，不碰 node 内置与宿主模块', async () => {
-  const files = await walk(pediaRoot)
+test('静态边界：next/fact 只 import 域内相对路径，不碰 node 内置与宿主模块', async () => {
+  const files = await walk(factRoot)
   assert.ok(files.length >= 10, '域文件应被扫到')
 
   for (const file of files) {
@@ -337,7 +337,7 @@ test('静态边界：next/pedia 只 import 域内相对路径，不碰 node 内�
     for (const specifier of specifiersOf(source)) {
       assert.ok(specifier.startsWith('.'), `${shown} 出现非相对 import：${specifier}`)
       const target = resolve(dirname(file), specifier)
-      const inside = relative(pediaRoot, target)
+      const inside = relative(factRoot, target)
       assert.ok(inside && !inside.startsWith('..'), `${shown} 越界 import：${specifier}`)
     }
     assert.doesNotMatch(source, /\brequire\s*\(/u, `${shown} 不得用 require`)
@@ -348,26 +348,26 @@ test('静态边界：next/pedia 只 import 域内相对路径，不碰 node 内�
   }
 })
 
-test('静态边界：wikihub 不残留域实现（旧入口只剩转发薄壳，内部 import 指向 pedia）', async () => {
+test('静态边界：wikihub 不残留域实现（旧入口只剩转发薄壳，内部 import 指向 fact）', async () => {
   const wikihubRoot = resolve(repoNext, 'wikihub')
   const shim = await readFile(join(wikihubRoot, 'pediaSchema.mjs'), 'utf8')
-  assert.match(shim, /export \* from '\.\.\/pedia\/domain\/pediaSchema\.js'/u)
-  assert.doesNotMatch(shim, /export (const|function) (PEDIA_SCHEMA|validatePediaEntry|sha1Hex)/u, '薄壳不得再定义实现')
+  assert.match(shim, /export \* from '\.\.\/fact\/domain\/pediaSchema\.js'/u)
+  assert.doesNotMatch(shim, /export (const|function) (FACT_SCHEMA|validateFactEntry|sha1Hex)/u, '薄壳不得再定义实现')
   const segmentShim = await readFile(join(wikihubRoot, 'segment.mjs'), 'utf8')
-  assert.match(segmentShim, /export \* from '\.\.\/pedia\/domain\/segment\.js'/u)
+  assert.match(segmentShim, /export \* from '\.\.\/fact\/domain\/segment\.js'/u)
 
   const files = await walk(wikihubRoot)
   for (const file of files) {
     if (file.endsWith('pediaSchema.mjs') || file.endsWith('segment.mjs')) continue
     const source = await readFile(file, 'utf8')
     const shown = relative(repoNext, file)
-    assert.doesNotMatch(source, /export (function|const) (validatePediaEntry|stableEntryId|sha1Hex|segmentText|WORLDVIEW_SLOTS)\b/u, `${shown} 仍在定义域实现`)
+    assert.doesNotMatch(source, /export (function|const) (validateFactEntry|stableEntryId|sha1Hex|segmentText|WORLDVIEW_SLOTS)\b/u, `${shown} 仍在定义域实现`)
   }
 
   for (const name of ['convert.mjs', 'migrate.mjs', 'build.mjs', 'render.mjs', 'viewModel.mjs']) {
     const source = await readFile(join(wikihubRoot, name), 'utf8')
-    assert.match(source, /from '\.\.\/pedia\/domain\//u, `${name} 应直接从 next/pedia 导入`)
+    assert.match(source, /from '\.\.\/fact\/domain\//u, `${name} 应直接从 next/fact 导入`)
   }
   const pack = await readFile(join(wikihubRoot, 'packs', 'novel-style.mjs'), 'utf8')
-  assert.match(pack, /from '\.\.\/\.\.\/pedia\/domain\//u, '能力包也直接吃 pedia 域')
+  assert.match(pack, /from '\.\.\/\.\.\/fact\/domain\//u, '能力包也直接吃 fact 域')
 })

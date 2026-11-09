@@ -1,15 +1,15 @@
 /**
- * PediaStore 的内存参考实现（适配层，供测试与无宿主场景用）。
+ * FactStore 的内存参考实现（适配层，供测试与无宿主场景用）。
  *
  * 事务口径与 Core 对齐（迁移时整段换成 core 的 createProjectTransactionService）：
  *   - 每次写必须带 operationId：同一 operationId 重放返回首次结果（duplicate=true），不重复落库；
  *   - 更新必须带 expectedRevision（新建给 0 或缺省）：与当前 revision 不符返回 REVISION_MISMATCH；
- *   - 条目落库前过 validatePediaEntry：有硬错误拒绝写（VALIDATION_FAILED），警告随结果返回。
+ *   - 条目落库前过 validateFactEntry：有硬错误拒绝写（VALIDATION_FAILED），警告随结果返回。
  *
  * 本文件不读磁盘、不依赖 node 内置模块：同一实现可在浏览器侧当缓存用。
  */
 
-import { validatePediaEntry } from '../domain/schema.js'
+import { validateFactEntry } from '../domain/schema.js'
 import { isActiveAt } from '../domain/validity.js'
 
 function isPlainObject(value) {
@@ -42,7 +42,7 @@ function fail(code, error) {
 /**
  * @param {Object[]|{entries?: Object[]}} [initial]
  */
-export function createMemoryPediaStore(initial = []) {
+export function createMemoryFactStore(initial = []) {
   const source = Array.isArray(initial)
     ? initial
     : (isPlainObject(initial) && Array.isArray(initial.entries) ? initial.entries : [])
@@ -68,7 +68,7 @@ export function createMemoryPediaStore(initial = []) {
   }
 
   return {
-    version: 'pedia-store/memory@1',
+    version: 'fact-store/memory@1',
 
     async get(id) {
       const record = records.get(str(id))
@@ -108,7 +108,7 @@ export function createMemoryPediaStore(initial = []) {
         stats.rejected += 1
         return fail('VALIDATION_FAILED', { message: '条目缺少 id' })
       }
-      const validation = validatePediaEntry(entry)
+      const validation = validateFactEntry(entry)
       if (!validation.ok) {
         stats.rejected += 1
         return fail('VALIDATION_FAILED', { errors: validation.errors, warnings: validation.warnings })
@@ -181,4 +181,4 @@ export function createMemoryPediaStore(initial = []) {
   }
 }
 
-export default createMemoryPediaStore
+export default createMemoryFactStore

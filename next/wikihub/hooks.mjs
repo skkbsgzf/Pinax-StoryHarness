@@ -1,7 +1,7 @@
 /**
- * pedia/v2 hook 契约（ADR S3：只定接口，不接引擎）。
+ * fact.data/v2 hook 契约（ADR S3：只定接口，不接引擎）。
  *
- * 作者口径：pedia 能力集成在 agent 底部，与项目唯一绑定；创作动作通过宿主 hook 触发：
+ * 作者口径：fact 能力集成在 agent 底部，与项目唯一绑定；创作动作通过宿主 hook 触发：
  *   - 写大纲 / 续写 → 自动补全数据（suggestCompletion）；
  *   - 产生变更     → 自动 diff 校验（diffValidate）；
  *   - 纯文笔润色   → 不改 data，只提供调用（readOnlyQuery）。
@@ -37,7 +37,7 @@ export const HOOK_CONTRACTS = Object.freeze({
     timing: 'after-outline-write',
     semantics: 'suggest',
     writesData: false,
-    description: '写完大纲后自动补全 pedia 数据建议（人物/设定/剧情字段），只给建议不落盘'
+    description: '写完大纲后自动补全 fact 数据建议（人物/设定/剧情字段），只给建议不落盘'
   }),
   onContinueWrite: Object.freeze({
     id: 'onContinueWrite',
@@ -53,7 +53,7 @@ export const HOOK_CONTRACTS = Object.freeze({
     timing: 'after-data-change',
     semantics: 'validate',
     writesData: false,
-    description: 'pedia 数据变更后做 diff 校验（状态机/视角/粒度/一致性），只读'
+    description: 'fact 数据变更后做 diff 校验（状态机/视角/粒度/一致性），只读'
   }),
   onPolish: Object.freeze({
     id: 'onPolish',

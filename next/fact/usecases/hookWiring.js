@@ -15,15 +15,15 @@
 import { extractRefs } from './precheck.js'
 import { createAliasIndex } from '../domain/aliases.js'
 import { stableEntryId } from '../domain/stableId.js'
-import { OTHER_SLOT, PEDIA_SCHEMA } from '../domain/vocabulary.js'
+import { OTHER_SLOT, FACT_SCHEMA } from '../domain/vocabulary.js'
 
-export const PEDIA_HOOK_WIRING_VERSION = 'pedia-hook-wiring/v1'
+export const FACT_HOOK_WIRING_VERSION = 'fact-hook-wiring/v1'
 
 /** 草案来源标识：与拆书管线（analyze）分开，方便管线跑过来时认出这是钩子占的位。 */
-export const DRAFT_EXTRACTOR = 'pinax-next/pedia-hooks@1'
+export const DRAFT_EXTRACTOR = 'pinax-next/fact-hooks@1'
 
-/** 提案外形版本：`.pinax/proposals/` 的既有 JSON 外壳，kind 用 pedia-* 区分。 */
-export const PEDIA_PROPOSAL_SCHEMA = 'pinax-proposal@1'
+/** 提案外形版本：`.pinax/proposals/` 的既有 JSON 外壳，kind 用 fact-* 区分。 */
+export const FACT_PROPOSAL_SCHEMA = 'pinax-proposal@1'
 
 /**
  * 会触发保存钩子的工具 → 保存物类别。
@@ -102,13 +102,13 @@ export function draftEntryForEntity(name, options = {}) {
   const slot = firstText(options.slot, OTHER_SLOT)
   const extractor = firstText(options.extractor, DRAFT_EXTRACTOR)
   return {
-    schema: PEDIA_SCHEMA,
+    schema: FACT_SCHEMA,
     id: stableEntryId({ layer: 'worldview', domain, slot, name: entity }),
     layer: 'worldview',
     domain,
     slot,
     name: entity,
-    definition: `正文引用了「${entity}」，这是 pedia 钩子自动建的空草案（pipelinePending）；设定正文待作者或拆书管线补齐。`,
+    definition: `正文引用了「${entity}」，这是 fact 钩子自动建的空草案（pipelinePending）；设定正文待作者或拆书管线补齐。`,
     provenance: {
       mode: 'author',
       book,
@@ -129,12 +129,12 @@ export function draftEntryForEntity(name, options = {}) {
 export function buildSuggestionProposal({ action = 'continue', suggestions = [], completion = null, notes = [], counts = null, at = new Date(), id = '' } = {}) {
   const list = Array.isArray(suggestions) ? suggestions : []
   return {
-    schema: PEDIA_PROPOSAL_SCHEMA,
-    kind: 'pedia-suggestions',
+    schema: FACT_PROPOSAL_SCHEMA,
+    kind: 'fact-suggestions',
     id: str(id),
     status: 'pending',
     createdAt: toISO(at),
-    target: { kind: 'pedia', action: str(action) },
+    target: { kind: 'fact', action: str(action) },
     note: `续写补全建议 ${list.length} 条（只给建议，不自动改正文）`,
     suggestions: list,
     completion: completion ?? null,
@@ -148,12 +148,12 @@ export function buildDraftEntriesProposal({ tool = '', entries = [], missing = [
   const list = Array.isArray(entries) ? entries : []
   const names = list.map((entry) => str(entry?.name).trim()).filter(Boolean)
   return {
-    schema: PEDIA_PROPOSAL_SCHEMA,
-    kind: 'pedia-draft-entries',
+    schema: FACT_PROPOSAL_SCHEMA,
+    kind: 'fact-draft-entries',
     id: str(id),
     status: 'pending',
     createdAt: toISO(at),
-    target: { kind: 'pedia', source: str(tool) },
+    target: { kind: 'fact', source: str(tool) },
     note: `保存后发现 ${list.length} 个正文引用但 hub 没有的条目（${names.join('、')}）；草案 status=proposed、pipelinePending=true，等作者或拆书管线补全。`,
     entries: list,
     missing: Array.isArray(missing) && missing.length ? [...missing] : names
