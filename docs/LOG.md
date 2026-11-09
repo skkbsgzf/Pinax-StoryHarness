@@ -1,5 +1,10 @@
 # 开发日志
 
+## 2026-11-09 · W3 方案 B：世界书三栏维基版式数据源切 hub（Next 线，本地）
+
+- 作者否决 W2 iframe 挂载，裁定方案 B：hub 数据喂 68-R2 原生三栏版式。新增 `next/wikihub/viewModel.mjs`（hub→分组树/链接表/Infobox 字段/被引统计，词表单一来源，render.mjs 反向取用）；`EntriesBoard.vue` 先 `worldbookToHub` 再 `buildHubViewModel`，左树层/域/槽位/条目四级带计数＋人物/剧情占位组；`EntryDetailPanel.vue` 有 hub 时蓝链词表＝hubLinkTargets＋资料/约束词表（`wikiLinks.mergeTokenMaps` 同名不同物剔除）；convert.mjs 补 aliases 并入 keys。68-R2 视觉资产全保留。kernel 909 过、UI 251、visual-contract 全绿（6f4612ed，qoduck 26min/184 轮一次过）。
+- **截屏验收（dameng-px）**：三栏/hub 分组/Infobox/关系图全部成立；**问题**：13 条中 11 条落「其他」——dameng 分类前缀（剧作·/设定·/真相层·）不在 pedia category_map，属分类映射缺口；左树方块卡偏重、中栏标题重复。待作者裁定分类口径后修。
+
 ## 2026-11-09 · W1–W2 wikihub：pedia/v1 枢纽格式＋自闭环 wiki 视图（Next 线，本地）
 
 - 作者裁定：以自有 NovelPedia 的 **pedia/v1 统一数据规范为枢纽格式（hub）**，实现三载体双向转换＋wiki 自闭环视图（NovelPedia 逻辑结构×Pinax Next 视觉）。参照仓库 ref-Novelpedia 只读。
