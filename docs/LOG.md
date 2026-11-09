@@ -1,5 +1,11 @@
 # 开发日志
 
+## 2026-11-09 · P2b 存量迁移器（本地）
+
+- `next/pedia/usecases/migrateLegacy.js` 四路径（df458434）：worldStore→worldview（category/group/injection.group/cat→category_map 11 槽，Host 字段 `next.worldbook` 无损快照）；大纲 nodes/edges→plot 事件图（causes→causal、foreshadows→setup＋hypothesis 轨 setup/payoffSuggestion、alternative/parallel→relation，自环/缺端点 dropped）；账本 v4→双时间轴事实＋character.knowledge[]；章节→场景骨架（segment 100–300 字，`pipelinePending:true` 留管线精抽，quote_hash 只存哈希原文不落）。迁入一律 proposed＋mode=author；**operationId 幂等重跑 diff=0**、dryRun 零写入（spy store 断言）；losses 九类如实记账（category-unmapped/edge-dropped/payoff-suggestion-only/alternative-degraded/ledger 区间近似等）。
+- 落库复用 P2a persistEntries（内容哈希 operationId＋状态机保护）。node:test 968/968（+7）；qoduck 9min/54 轮一次过。**P 系库层收齐：P0 格式＋P1 域＋P2a 管线＋P2b 迁移器。**
+- 剩余：P3 技能数据契约→P4 推演/hook 接线（shell）→P5 作品化门禁。
+
 ## 2026-11-09 · P2a 拆书管线 JS 化（本地）
 
 - `next/pedia/usecases/pipeline/` 四件（c4f7e567）：prompts.mjs（抽取/人物/设定三组提示词，逐条溯源 ref-Novelpedia prompts.py/character_agent.py/setting_agent.py，扩展 v2 anchors/memoryPoints/castRole/readerCognition）；extract.js（段切分→LlmPort→plot 草稿，parseJsonLoose 容错＋≤2 重试＋失败隔离＋operationId 幂等）；mine.js（say/do 通道积累 anchors·memoryPoints、设定识别与 definition 补充，走状态机——adopted 不降级、superseded 终态不回写、通用词拒收）；cluster.js（余弦 0.5 单链归并，VectorPort 注入，复用 domain/aliases）。fake 端口零网络；node:test 961/961（+11）。
