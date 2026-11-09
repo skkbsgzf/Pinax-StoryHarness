@@ -1,5 +1,12 @@
 # 开发日志
 
+## 2026-11-09 · P0 pedia/v2 schema 定稿（Next wikihub 垫床，本地）
+
+- ADR 定稿（作者 2026-11-09 裁定，`D:\Pinax-e2e\wikihub-arch\pedia-v2-adr-final.md`）：D1=A Core 新域两步走／D2=A 一次切换三判据／D3=C 章→场景双层／D4=A 条目级 mode／**S1 文风解耦**（style 移出一等公民，降为小说体裁能力包，与剧本格式/画风同属上层包装）＋S2 三大创作质量语义（人物塑造/剧情节奏/知识铺陈）＋S3 Core 核心 Tool hook 绑定创作行为（润色只调用不写数）＋S4 段级粒度 100–300 字。
+- P0 实现（f83c3f0b）：pediaSchema v2——三层一等公民、条目信封（mode/status 状态机 `validateStatusTransition` 纯函数/double 时间轴/事件双轨）、character 塑造字段（anchors 三通道/memoryPoints/castRole：supporting 与 minor 缺 goal·plotFunction 在 analyze 拒绝、author 警告）、plot rhythmSpec（500/1500/4500 字窗口＋笑燃泪梗 novelty 标记）＋structureTemplates、知情矩阵＋`checkPerspective` 视角违规校验器（读者认知 firstMention/supplementNeeded）、`segment.mjs` 段级粒度（100–300 字边界测试）、`migrate.mjs` v1→v2 迁移器（style 条目→能力包）、`hooks.mjs` hook 契约接口（onOutlineWrite/onContinueWrite→suggestCompletion；onDataChange→diffValidate；onPolish→readOnlyQuery，read-only 语义标注——引擎接线是 P1 Core 批）、`packs/novel-style.mjs` 能力包。viewModel/render/build 同步。
+- 门禁：五段全绿（kernel 930/930、UI 251、lint 0、验收 44/44、打包过）；qoduck 14min/106 轮一次过（dwfrun-b92a1ee3）。调度方 salvage：范围核对（wikihub 13 文件 ±2081 行）＋禁区终检零触碰。
+- 下一步：P1 Core `feat/pedia-domain` 分支（与 T12 对齐原作者合并谈判后推进）；P2a 管线 JS 化 ∥ P2b 存量迁移器。
+
 ## 2026-11-09 · W4 归类修正＋左树清单式；T11c persist 口径对齐（Next 线，本地）
 
 - **W4（66b5cba9）**：`convert.mjs` 新增表驱动 `NAME_PREFIX_RULES`（8 条，只救落 other 的条目，cat/type/目录命中的不抢位；`mappings[].via` 留 `prefix:` 记号）——剧作·→style 层 `creative_rules`（pedia soft 层的 Next 扩展，组名「创作规则」）、设定·序列体系→power_levels、设定·界与十二时辰→locations、真相层·＋三组织/三派/三流→orgs、真相层·＋界灵→creatures、其余设定·/真相层·→concepts。dameng 13 条实测 **other=0**、losses 空。`EntriesBoard.vue` 左树改清单式（去边框卡片、一行一条、令牌字号、当前项 `--nav-selected` 高亮）。node:test 912/912。截屏复验通过（`D:\Pinax-e2e\w3-wikihub-shots\png\w3-wikihub-full.png`）。口径按调度方推荐案执行（作者未及答），可逆。
