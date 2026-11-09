@@ -1,5 +1,10 @@
 # 开发日志
 
+## 2026-11-09 · P2a 拆书管线 JS 化（本地）
+
+- `next/pedia/usecases/pipeline/` 四件（c4f7e567）：prompts.mjs（抽取/人物/设定三组提示词，逐条溯源 ref-Novelpedia prompts.py/character_agent.py/setting_agent.py，扩展 v2 anchors/memoryPoints/castRole/readerCognition）；extract.js（段切分→LlmPort→plot 草稿，parseJsonLoose 容错＋≤2 重试＋失败隔离＋operationId 幂等）；mine.js（say/do 通道积累 anchors·memoryPoints、设定识别与 definition 补充，走状态机——adopted 不降级、superseded 终态不回写、通用词拒收）；cluster.js（余弦 0.5 单链归并，VectorPort 注入，复用 domain/aliases）。fake 端口零网络；node:test 961/961（+11）。
+- Limitations（记账）：真实 LLM/embedding 质量未验证（本批纯库层）；读者注意力切分、全书 normalize_terms、strengthen（体系分层/矛盾检测）、文风分析未移植——后续批按需。qoduck 10min/53 轮一次过。
+
 ## 2026-11-09 · P1 pedia 域骨架（fork 内 Core-shape，本地）
 
 - 作者裁定：pedia 域在个人 fork 内成型、不动 `D:\Pinax-core`；目录形状按平移 `core/src/pedia/` 设计。
