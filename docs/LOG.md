@@ -1,5 +1,13 @@
 # 开发日志
 
+## 2026-11-10 · M2/M3＋收尾清理（本地）——M 系库层与渲染全收官
+
+- **M2 章纲投影器（4c5e462f，CodeBuddy hy4 19min 一次过）**：`outlineProjector.js` 零 import 纯函数——replay 事件流→大纲原生形状（与 P2b migrateOutline 输入对称）：settle→节点一拍一节点（seq 权威序）、相邻拍 causes 主干、hypothesis open→foreshadows（payoff 留空）、未选候选→alternative 留档（archived:true）、导演注入 author 标记；幂等深度相等。20 拍读数：nodes=20/causes=19/foreshadows=4/alternative=40。roundtrip 主干还原：节点名 20/20、因果序严格递增、伏笔 4/4；alternative 不还原＝如实损失记账。**事件流口径 limitation**：投影器消费富事件流（candidates 需带完整候选数组）——DeducePanel/fact-session 当前只记 {round,count}，外壳接线前需补候选明细入流。
+- **M3 成书渲染（9c429bee，16min/182 轮一次过）**：`next/fact/usecases/render/` 三件——chapterize（目标弧启发式：pov∷goal 标记变化分组＋每章拍数上限可配；13 拍→3 章 [4,3,6]）、prose（小说叙述目标，**禁主持问答体**——与 DEDUCE_DRAMA_SYSTEM_PROMPT 断言互不等且互不为子串；知情约束只注 POV 已知；文风 styleSpec 参数化不 import 能力包＝静态边界）、renderBatch（多章×多文风重渲染，provenance＝batchId＋styleSpecHash＋renderKey 全 sha1 稳定无时间戳；两次运行全同）。渲染稿过确定性知情断言（复用 precheckDraft，PERSPECTIVE_LEAK not-in-ledger/known-later）。kernel 1048/1048（+8）。
+- **收尾清理（已批）**：`jsonRecords.mjs` 删除（T21 起引用归零；skeleton-contract 顶层断言同步退役，注释记 2026-11-09 T21 事实）。
+- **调度事故复盘（第三轮）**：M2/M3 首轮回滚＝调度方 d54aed3（entries 接线修复）漏改 visual-contract 钉住的字面量断言＋漏跑门禁即推——HEAD 带红致两批内核段误红（执行方三轮如实拒改禁区）。修（1b0cecce 契约跟随）后重派全过。**元教训终稿**：改被契约测试钉住的文件＝必须同步改契约＋必跑门禁；no-op replace 与钉字面量断言同属「静默失配」家族，rewrite 后 grep 赋值/断言本体。
+- 至此 **M1＋M2＋M3 全收官**：推演循环（引擎/存储/UI）＋章纲投影＋成书渲染（分章/知情贯穿/多文风/双叙述纪律）。kernel 1048/1048。**M 系剩 M4（fronts/clocks 张力）＋M5（连续宇宙补丁通道＋多周目）**；诡秘之主实测前需 LlmPort 子 Agent 形态接入批（作者裁定：无 API token，开子 Agent 走既有模型通道）。
+
 ## 2026-11-10 · M1-c 场景卡 UI（本地）——M1 全系收官
 
 - **M1-c（e291391e，CodeBuddy hy4 一次过 8min/140 轮）**：`DeducePanel.vue`（648 行）推演面板——setup 阶段（冻结范围/主视角选择＋拒草稿开局）／playing 阶段（局面卡 who·where·tension·hook＋候选来源徽章 ▮必然 ⚙命运(骰点 trace) ✦戏剧＋选择按钮＋玩家/导演切换＋收束/中断）＋第一视角两面板（已知情报 knowledgeOf 裁剪／人物关系）＋本局回执。挂载＝AppNext 中栏覆盖层（标题栏「推演」钮切换，不注册页签/槽位/新通道——避开守卫⑪–⑬）；渲染层直接 import 纯 fact 模块（bundle f/f2/l 判据全过，未拖 fs/wikihub/runtime）。回执并入既有 serviceSnapshot。

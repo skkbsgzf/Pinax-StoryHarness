@@ -95,7 +95,7 @@ test('M2 口径：next/carriers 发布十一块载体，目录不重叠且落在
   const stray = entries.filter((name) => name.endsWith('.carrier.json') || name === 'manifests.json')
   assert.deepEqual(stray, [], '清单只允许写在 manifest.mjs 里过校验器，散落 JSON 会绕过 C1–C8')
   const published = entries.filter((name) => !name.startsWith('.'))
-  assert.deepEqual(published.filter((name) => name.endsWith('.mjs')).sort(), ['index.mjs', 'jsonRecords.mjs'], '顶层只允许注册表与共用记录底座（jsonRecords 不含清单，清单仍写在各自 manifest.mjs）')
+  assert.deepEqual(published.filter((name) => name.endsWith('.mjs')).sort(), ['index.mjs'], '顶层只允许注册表（jsonRecords.mjs 已退役：记录底座归 fact 引擎 fileRecordTools，2026-11-09 T21 起）')
   assert.deepEqual(published.filter((name) => !name.includes('.')).sort(), ['comic', 'dossier', 'experience', 'material', 'notes', 'novel', 'online', 'outline', 'script', 'video', 'worldbook'], '批次60：设定与资料合并为 dossier，十一块载体各占一栏')
 
   const kernel = new Set(kernelToolNames())
