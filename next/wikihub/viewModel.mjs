@@ -539,6 +539,28 @@ export function filterHubEntries(entries, { text = '', group = '' } = {}) {
   })
 }
 
+/**
+ * 正文首个标题是否就是条目名（批次 W5 · 修复①）。
+ *
+ * 阅读列首的大标题由视图给出；正文若又以同名一级标题开头，屏幕上会出现两行一样的题。
+ * 判据只认**正文第一个非空行**（ATX `#` 或 setext `===`），归一化空白后与条目名逐字相等才算；
+ * 正文中段出现的同名 H1 不动——那是作者的行文结构，不是重复的题。
+ */
+export function entryContentLeadsWithName(content, name) {
+  const title = str(name).replace(/\s+/gu, ' ').trim()
+  const text = str(content).replace(/\r\n?/gu, '\n')
+  if (!title || !text.trim()) return false
+  const lines = text.split('\n')
+  let index = 0
+  while (index < lines.length && !lines[index].trim()) index += 1
+  if (index >= lines.length) return false
+  const first = lines[index]
+  const atx = /^[ \t]{0,3}#[ \t]+(.*?)[ \t]*#*[ \t]*$/u.exec(first)
+  let heading = atx ? atx[1] : ''
+  if (!heading && /^[ \t]{0,3}=+[ \t]*$/u.test(lines[index + 1] ?? '')) heading = first
+  return heading.replace(/\s+/gu, ' ').trim() === title
+}
+
 /** 筛选下拉的选项：模型里出现过的槽位／层（出现序），外加「全部槽位」清空位。 */
 export function hubGroupOptions(model) {
   const options = [{ value: '', label: '全部槽位' }]

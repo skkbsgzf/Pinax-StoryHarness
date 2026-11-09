@@ -5136,10 +5136,12 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     // 批次59 铁律四：世界书是 web 模板，没有左树；类别导航树随左栏一起退场。
     expect(wrapper.find('.nx-index-window').exists()).toBe(false)
     expect(wrapper.find('[data-test="entry-category-tree"]').exists()).toBe(false)
-    // 列表态：中栏是阅读列——表格与整书图谱都不在场（信息卡缩览另挂自己的锚点）。
+    // 列表态：中栏是阅读列——表格与整书图谱都不在场；关系图住在阅读列右上角的卡片里（批次 W5）。
     expect(wrapper.find('[data-test="entries-table"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="entries-graph"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="entries-infobox-graph"]').exists(), '信息卡底部该有图谱缩览').toBe(true)
+    expect(wrapper.find('[data-test="entries-graph-card"]').exists(), '阅读列右上角该有关系图卡').toBe(true)
+    expect(wrapper.find('[data-test="entries-graph-card-graph"]').exists(), '图谱卡里要画出关系图').toBe(true)
+    expect(wrapper.find('[data-test="entries-infobox-graph"]').exists(), '信息卡里不再有第二个图谱').toBe(false)
 
     // 阅读列的 wiki 皮：条目名＝大标题（doc-title 族，展示体白名单内），正文容器挂 nx-wiki-article。
     const title = wrapper.find('[data-test="entry-wiki-title"]')
@@ -5161,11 +5163,69 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
     await flushPromises()
     expect(wrapper.find('[data-test="entries-infobox-collapse"]').exists()).toBe(true)
 
+    // 图谱卡可折叠：收起后只剩展开钮，展开回去图还在（卡片自己的状态，不动信息卡）。
+    await wrapper.find('[data-test="entries-graph-card-collapse"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="entries-graph-card-graph"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="entries-graph-card-expand"]').exists()).toBe(true)
+    await wrapper.find('[data-test="entries-graph-card-expand"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="entries-graph-card-graph"]').exists()).toBe(true)
+
     // 类别筛选与看板区共用 entriesFilterCat 一格：下拉一选，行数跟着变。
     // 〔批次 W3〕下拉值换成 hub 槽位 key（编年目录里的两条 event 归「历史事件」）。
     await wrapper.find('[data-test="entries-filter-category"]').setValue('events')
     await flushPromises()
     expect(wrapper.findAll('[data-test="entries-board"] .nx-tree-item')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  /**
+   * 批次 W5 · 修复①：正文第一个一级标题就是条目名时，阅读列首的视图标题不再重复画一遍——
+   * 题面只剩正文里那一个（正文原样渲染，视图不抢着再念）。
+   */
+  it('批次 W5 修复①：正文首个 H1 与条目名相同时，视图标题不重复渲染', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge({ entryContent: '# 人物·柯秒\n\n冷穿越剧版主角，醒来在雪夜。' })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    const row = wrapper.findAll('[data-test="entries-board"] .nx-tree-item').find((item) => item.text().includes('人物·柯秒'))
+    await row.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="entry-wiki-title"]').exists(), '同名 H1 已在正文里，视图标题该让位').toBe(false)
+    const heading = wrapper.find('[data-test="entry-rendered"] h1')
+    expect(heading.exists(), '正文自己的 H1 照原样渲染').toBe(true)
+    expect(heading.text()).toBe('人物·柯秒')
+    wrapper.unmount()
+  })
+
+  /**
+   * 批次 W5 · 修复②：零计数的结构锚点组默认不摆（沉默层：没有东西就不画容器）；
+   * 有计数的锚点照常在场，标题行的「锚点」开关是空组的唯一唤出口。
+   */
+  it('批次 W5 修复②：零计数锚点组默认收起，「锚点」开关才唤出', async () => {
+    globalThis.localStorage?.clear()
+    const bridge = writingBridge()
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    await openBoard(wrapper, '世界书')
+
+    const placeholders = () => wrapper.findAll('[data-test="entry-placeholder"]')
+    // 世界书栏没有载入章节／剧本锚点：两组计数都是 0 → 默认一个都不摆，人物／剧情空层也不上屏。
+    expect(placeholders()).toEqual([])
+    expect(wrapper.find('[data-layer="character"]').exists(), '零计数占位组不该把空层撑上屏').toBe(false)
+    expect(wrapper.find('[data-layer="plot"]').exists(), '零计数占位组不该把空层撑上屏').toBe(false)
+
+    await wrapper.find('[data-test="entries-anchor-toggle"]').trigger('click')
+    await flushPromises()
+    expect(placeholders().map((node) => node.text().split(' · ')[0])).toEqual([
+      '小说人物锚点', '剧本角色锚点', '小说章节锚点', '剧本分集锚点'
+    ])
+    expect(wrapper.find('[data-layer="character"]').exists()).toBe(true)
+    expect(wrapper.find('[data-layer="plot"]').exists()).toBe(true)
     wrapper.unmount()
   })
 

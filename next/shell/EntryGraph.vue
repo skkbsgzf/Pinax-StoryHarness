@@ -18,9 +18,10 @@ const props = defineProps({
   /** 世界书条目清单（与列表／表格同源 data.entries，不新增工具调用）。 */
   entries: { type: Array, default: () => [] },
   /**
-   * 〔批次68-R2 任务二 · 挂载位适配〕挂载场合：'board'＝中栏图谱切换态（默认，行为一字不动）；
-   * 'infobox'＝信息卡底部 260px 缩览——同一组件同一数据源，只换 data-test 锚点
-   * （entries-infobox-graph，让「中栏图谱态」的既有判据不被缩览分身误命中）与画布高度。
+   * 〔批次 W5〕挂载场合：'board'＝中栏图谱切换态（默认，行为一字不动）；
+   * 'corner'＝阅读列右上角的关系图卡——同一组件同一数据源，只换 data-test 锚点
+   * （entries-graph-card-graph，让「中栏图谱态」的既有判据不被卡片分身误命中）
+   * 与画布高度（挂载方用 --nx-entry-graph-height 给）。
    */
   variant: { type: String, default: 'board' }
 })
@@ -117,7 +118,7 @@ function openPoint(point) {
 </script>
 
 <template>
-  <div class="nx-entry-graph" :data-test="variant === 'infobox' ? 'entries-infobox-graph' : 'entries-graph'">
+  <div class="nx-entry-graph" :class="`is-${variant}`" :data-test="variant === 'corner' ? 'entries-graph-card-graph' : 'entries-graph'">
     <svg
       ref="svgEl"
       class="nx-entry-graph-canvas"
@@ -178,10 +179,14 @@ function openPoint(point) {
   position: relative;
   margin: 0 0 8px;
 }
+/* 阅读列右上角的关系图卡：外边距由卡片自己给，图与卡沿同一条边。 */
+.nx-entry-graph.is-corner {
+  margin: 0;
+}
 .nx-entry-graph-canvas {
   display: block;
   width: 100%;
-  /* 〔批次68-R2 任务二〕高度可由挂载方给（信息卡底部缩览 260px：外层设 --nx-entry-graph-height）；
+  /* 〔批次 W5〕高度可由挂载方给（阅读列右上角卡片 210px：外层设 --nx-entry-graph-height）；
      不设就还是原来那块 340px 方形画布。 */
   height: var(--nx-entry-graph-height, 340px);
   border: 1px solid var(--hairline-soft);

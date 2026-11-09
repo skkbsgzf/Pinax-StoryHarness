@@ -896,7 +896,7 @@ test('批次59：布局模板是宿主词汇；folder 有树，web／gallery 没
   assert.ok(index.includes('nx-context-menu'), '大纲／章节自己的右键菜单仍在（内容操作，不是窗口动作）')
 })
 
-test('〔批次68-R2 任务二〕世界书三栏维基阅读版：死口径 260px:1fr:min(46%,430px)、缩览 260px、窄屏折下、wiki 皮挂对容器', async () => {
+test('〔批次68-R2 任务二／W5〕世界书三栏维基阅读版：死口径 260px:1fr:min(46%,430px)、图谱卡右上角、窄屏折下、wiki 皮挂对容器', async () => {
   // 新增判据随登记进册（工单禁止边界口径）：这条只钉版式声明与挂载词汇，不放宽任何既有守卫。
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
 
@@ -906,10 +906,16 @@ test('〔批次68-R2 任务二〕世界书三栏维基阅读版：死口径 260p
   assert.match(ruleBody(layout, '.nx-wiki-infobox {'), /flex:\s*0 0 min\(46%, 430px\)/u, '信息卡 min(46%,430px)')
   // 收起态只收窄自己——阅读列吃满是 flex 自然给出，不许借收起改三栏其它声明。
   assert.match(ruleBody(layout, '.nx-wiki-infobox.is-collapsed {'), /flex:\s*0 0 auto/u, '信息卡收起＝一钮收窄')
-  // 信息卡底部图谱缩览 260px（EntryGraph 画布高度吃 --nx-entry-graph-height，board 态默认 340px 不动）。
-  assert.match(ruleBody(layout, '.nx-wiki-infobox-graph {'), /--nx-entry-graph-height:\s*260px/u, '信息卡缩览图 260px')
+  // 〔批次 W5〕关系图从信息卡竖栏搬进阅读列右上角：卡片宽 ≈300–360px、画布 210px、
+  // hover 以右上角为原点放大（只向左下扩，不给阅读列造横滚条）；信息卡里的旧缩览块整体退役。
+  assert.match(ruleBody(layout, '.nx-wiki-corner {'), /flex:\s*0 1 340px/u, '图谱卡起排 340px')
+  assert.match(ruleBody(layout, '.nx-wiki-corner {'), /max-width:\s*360px/u, '图谱卡上限 360px')
+  assert.match(ruleBody(layout, '.nx-wiki-graph-card {'), /--nx-entry-graph-height:\s*210px/u, '图谱卡画布 210px')
+  assert.match(ruleBody(layout, '.nx-wiki-graph-card {'), /transform-origin:\s*top right/u, 'hover 放大以右上角为原点')
+  assert.match(ruleBody(layout, '.nx-wiki-graph-card:hover {'), /transform:\s*scale\(1\.12\)/u, 'hover 放大图谱卡')
+  assert.equal(layout.includes('.nx-wiki-infobox-graph'), false, '信息卡里的旧图谱缩览块要随搬迁删净')
   const graphVue = stripComments(await readFile(join(shellDir, 'EntryGraph.vue'), 'utf-8'))
-  assert.match(graphVue, /height:\s*var\(--nx-entry-graph-height,\s*340px\)/u, '图谱画布默认高度仍是 340px，缩览由变量给')
+  assert.match(graphVue, /height:\s*var\(--nx-entry-graph-height,\s*340px\)/u, '图谱画布默认高度仍是 340px，卡片由变量给')
 
   // ② 窄窗口语义：信息卡折到阅读列下方（工单②「@media 语义」）。
   assert.match(layout, /@media[^{]*\{[\s\S]*?\.nx-wiki-infobox\s*\{[^}]*order:\s*3[^}]*\}/u, '窄屏信息卡要折到阅读列下方')
@@ -921,20 +927,44 @@ test('〔批次68-R2 任务二〕世界书三栏维基阅读版：死口径 260p
   assert.match(ruleBody(layout, '.entry-text.nx-wiki-article blockquote {'), /border-inline-start:/u, '引用块竖线')
   assert.match(ruleBody(layout, '.entry-text.nx-wiki-article .nx-wikilink {'), /border-radius:\s*var\(--nx-radius-pill\)/u, '蓝链胶囊走 --nx-radius-pill 刻度')
   assert.doesNotMatch(layout, /--font-display:[^;]*;[\s\S]{0,80}?\.nx-wiki/u, 'wiki 皮不许自己声明展示体')
+  // 〔批次 W5 密度〕正文行距／段距、h1/h3 层级、信息卡行分隔：全部走刻度或相对单位，不新造字号档。
+  assert.match(ruleBody(layout, '.entry-text.nx-wiki-article {'), /line-height:\s*1\.78/u, '阅读面行距收一档')
+  assert.match(ruleBody(layout, '.entry-text.nx-wiki-article p {'), /margin:\s*0 0 0\.72em/u, '段距按 em 跟字号走')
+  assert.match(ruleBody(layout, '.entry-text.nx-wiki-article h3 {'), /font-size:\s*var\(--nx-fs-lg\)/u, '三级题走刻度')
+  assert.match(ruleBody(layout, '.nx-wiki-infobox-rows dt {'), /border-top:/u, '信息卡行间发丝线')
+  assert.match(ruleBody(layout, '.nx-wiki-infobox-rows dt {'), /padding:\s*4px 0/u, '信息卡行密度')
 
   // ④ 挂载词汇：三栏排版在 EntriesBoard；关系列表在信息卡只摆一遍（详情面 wiki 态让位）；
+  //    图谱卡挂阅读列首的 corner 插槽（entries-graph-card 一族），信息卡里不再有第二个图谱。
   //    批次44／60 的两段式容器随结构翻案退役（不许留半截死 DOM）。
   const board = await readFile(join(shellDir, 'EntriesBoard.vue'), 'utf-8')
-  for (const needle of ['entries-wiki-cols', 'entries-tree-col', 'entries-center-col', 'entries-infobox', 'entries-infobox-collapse', 'entries-infobox-expand', 'infobox-graph']) {
-    assert.ok(board.includes(`data-test="${needle}"`) || board.includes(`data-test="${needle}"`), `EntriesBoard 缺信息卡／三栏锚点：${needle}`)
+  for (const needle of [
+    'entries-wiki-cols', 'entries-tree-col', 'entries-center-col', 'entries-infobox',
+    'entries-infobox-collapse', 'entries-infobox-expand', 'entries-anchor-toggle',
+    'entries-graph-card', 'entries-graph-card-collapse', 'entries-graph-card-expand'
+  ]) {
+    assert.ok(board.includes(`data-test="${needle}"`), `EntriesBoard 缺三栏／图谱卡锚点：${needle}`)
   }
+  assert.equal(board.includes('data-test="infobox-graph"'), false, '信息卡旧图谱锚点要随搬迁删净')
+  assert.equal(board.includes('variant="infobox"'), false, 'EntryGraph 的 infobox 挂载位退役')
+  assert.match(board, /<template v-if="hubModel\.entries\.length" #corner>/u, '图谱卡经 corner 插槽挂到阅读列首')
+  // 修复②：零计数锚点默认不摆，开关是唯一唤出口（沉默层）；模型不动，只在渲染层筛。
+  assert.match(board, /showEmptyAnchors\.value \|\| placeholder\.count > 0/u, '零计数锚点组默认收起')
+  assert.match(board, /@click="showEmptyAnchors = !showEmptyAnchors"/u, '锚点开关要真能唤出空组')
   assert.ok(board.includes('wiki'), '中栏详情面要以 wiki 态挂载')
   const panel = await readFile(join(shellDir, 'EntryDetailPanel.vue'), 'utf-8')
   assert.match(panel, /wiki:\s*\{\s*type:\s*Boolean/u, '详情面要有 wiki 开关（默认关，独立详情面行为不动）')
   assert.match(panel, /class="doc-title nx-wiki-title"/u, '条目名＝大标题（阅读列首，展示体走 .doc-title 白名单族）')
+  assert.match(panel, /<slot name="corner" \/>/u, '阅读列首要给关系图卡留 corner 槽位')
+  // 修复①：正文首个 H1 与条目名相同时，视图标题不再重复渲染。
+  assert.match(panel, /entryContentLeadsWithName/u, '详情面要判正文首个标题是否与条目名重复')
+  assert.match(panel, /v-if="showWikiTitle" class="doc-title nx-wiki-title"/u, '重复时视图标题不渲染（正文那个 H1 保留）')
   assert.match(panel, /!data\.editingEntry && !wiki && entryRelations\.length/u, 'wiki 态下关系列表让位信息卡（同一份数据不摆两遍）')
   const pane = await readFile(join(shellDir, 'CarrierPaneHost.vue'), 'utf-8')
   assert.ok(!pane.includes('nx-entries-workspace-board') && !pane.includes('nx-entries-workspace-detail'), '两段式容器已翻案退役，不许留死壳')
+  const graph = stripComments(await readFile(join(shellDir, 'EntryGraph.vue'), 'utf-8'))
+  assert.match(graph, /variant === 'corner' \? 'entries-graph-card-graph' : 'entries-graph'/u, '图谱卡分身要有独立锚点')
+  assert.equal(graph.includes("'infobox'"), false, 'infobox 挂载位退役')
 })
 
 test('〔批次68-R2 任务三〕composer 卡片三层钉死：＋ 单通路、状态排真读数、模型 chip 无清单不可点、不摆麦克风死钮、停止占发送位', async () => {

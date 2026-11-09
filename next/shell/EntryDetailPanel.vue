@@ -1,7 +1,7 @@
 <script setup>
 import { computed, inject, nextTick, onMounted, ref, watch } from 'vue'
 import { renderMarkdown } from './mdRender.mjs'
-import { hubLinkTargets } from '../wikihub/viewModel.mjs'
+import { entryContentLeadsWithName, hubLinkTargets } from '../wikihub/viewModel.mjs'
 import { buildEntryTokenMap, buildKnowledgeCatalog, computeBacklinks, linkifyEntryNames, mergeTokenMaps, ownEntryTokens } from './wikiLinks.mjs'
 
 /**
@@ -53,6 +53,12 @@ const openKnowledge = inject('pinaxOpenKnowledge', null)
 
 /** 阅读态的 md 渲染：与其它文档面同一条路径（mdRender.mjs）。 */
 const entryHtml = computed(() => renderMarkdown(props.data.entry?.content ?? ''))
+
+/**
+ * 〔批次 W5 · 修复①〕正文首个 H1 与条目名相同时，阅读列首不再重复画同一行题：
+ * 标题面只剩正文里那一个（作者写进正文的题保持原样，视图不抢着再念一遍）。
+ */
+const showWikiTitle = computed(() => !entryContentLeadsWithName(props.data.entry?.content, props.data.entry?.name))
 
 /**
  * 双链词表（批次60：跨载体）：
@@ -198,8 +204,16 @@ const entryMetaLine = computed(() => {
         <button v-else type="button" class="control-quiet entry-cancel" :disabled="data.busy" @click="data.cancelEditEntry()">取消</button>
       </span>
     </div>
-    <!-- 〔批次68-R2 任务二〕wiki 皮的阅读列首：条目名＝大标题（编辑态不加，编辑面先是正文）。 -->
-    <h1 v-if="wiki && !data.editingEntry" class="doc-title nx-wiki-title" data-test="entry-wiki-title">{{ data.entry.name }}</h1>
+    <!-- 〔批次 W5〕阅读列首＝标题区：左侧是题（正文首个 H1 同名时不再重复渲染），
+         右侧是宿主经 corner 插槽给的关系图卡——图谱从信息卡竖栏搬进阅读列右上角。 -->
+    <div v-if="wiki && !data.editingEntry && (showWikiTitle || $slots.corner)" class="nx-wiki-hero" data-test="entry-wiki-hero">
+      <div class="nx-wiki-hero-lead">
+        <h1 v-if="showWikiTitle" class="doc-title nx-wiki-title" data-test="entry-wiki-title">{{ data.entry.name }}</h1>
+      </div>
+      <div v-if="$slots.corner" class="nx-wiki-corner" data-test="entry-wiki-corner">
+        <slot name="corner" />
+      </div>
+    </div>
     <!-- 条目信息（批次31 · P18 第 4 条）：关键词／标签／摘要／关系默认收起，编辑面先是正文；
          这一行点开才是字段（照 Obsidian properties）。裸 md 没有 frontmatter：改成一句说明。 -->
     <div v-if="data.editingEntry && data.entry.contract" class="entry-meta-row">

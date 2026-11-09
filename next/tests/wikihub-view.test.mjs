@@ -7,6 +7,7 @@ import {
   HUB_VIEW_SLOT_LABELS,
   buildHubLinkTable,
   buildHubViewModel,
+  entryContentLeadsWithName,
   filterHubEntries,
   hubEntryTokensOf,
   hubGroupOptions,
@@ -305,4 +306,20 @@ test('层级 dot 的统计口径：relations 提到或正文包含都算「被�
   const byName = new Map(model.entries.map((entry) => [entry.name, counts.get(entry.id)]))
   assert.equal(byName.get('钟楼'), 2)
   assert.equal(byName.get('停摆的表'), 0)
+})
+
+test('修复①：只有正文首个标题（ATX／setext）与条目名逐字相同才判重复', () => {
+  const name = '人物·柯秒'
+  // ATX：允许前导空行、行尾闭合 #；空白归一化后再比。
+  assert.equal(entryContentLeadsWithName('# 人物·柯秒\n\n冷穿越剧版主角。', name), true)
+  assert.equal(entryContentLeadsWithName('\n\n#  人物·柯秒  ###\n正文', name), true)
+  // setext 一级标题。
+  assert.equal(entryContentLeadsWithName('人物·柯秒\n=====\n\n正文', name), true)
+  // 不同的题、二级题、没有题、正文中段的同名 H1 都不算重复（那是作者的行文结构）。
+  assert.equal(entryContentLeadsWithName('# 柯秒\n正文', name), false)
+  assert.equal(entryContentLeadsWithName('## 人物·柯秒\n正文', name), false)
+  assert.equal(entryContentLeadsWithName('冷穿越剧版主角。', name), false)
+  assert.equal(entryContentLeadsWithName('正文一段。\n\n# 人物·柯秒\n正文', name), false)
+  assert.equal(entryContentLeadsWithName('', name), false)
+  assert.equal(entryContentLeadsWithName('# 人物·柯秒', ''), false)
 })

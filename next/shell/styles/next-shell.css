@@ -966,24 +966,35 @@ input.doc-title {
   font-weight: 600;
   color: var(--archive-ink-soft);
 }
-/* 信息卡读数表：左列标签、右列值（缺的字段整行不摆——不编造）。 */
+/* 信息卡读数表：左列标签、右列值（缺的字段整行不摆——不编造）。
+   批次 W5 密度：行与行之间用一道发丝线分隔（照 NovelPedia 的 infobox 行），
+   纵向留白收进行内 padding，读数扫描线更稳。 */
 .nx-wiki-infobox-rows {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 10px;
+  gap: 0 10px;
   margin: 0 0 8px;
   font-size: var(--nx-fs-2xs);
+  line-height: 1.5;
 }
 .nx-wiki-infobox-rows dt {
+  padding: 4px 0;
+  border-top: 1px solid var(--hairline-soft);
   color: var(--text-muted);
   white-space: nowrap;
 }
 .nx-wiki-infobox-rows dd {
+  padding: 4px 0;
+  border-top: 1px solid var(--hairline-soft);
   margin: 0;
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--text-primary);
   font-variant-numeric: tabular-nums;
+}
+.nx-wiki-infobox-rows > dt:first-child,
+.nx-wiki-infobox-rows > dd:nth-child(2) {
+  border-top: 0;
 }
 .nx-wiki-infobox-badge,
 .nx-wiki-infobox-provenance {
@@ -1002,9 +1013,70 @@ input.doc-title {
 .nx-wiki-infobox-hint {
   color: var(--text-muted);
 }
-/* 信息卡底部的图谱缩览：EntryGraph 画布高度吃这个变量（工单口径 260px）。 */
-.nx-wiki-infobox-graph {
-  --nx-entry-graph-height: 260px;
+/* —— 阅读列首「标题区」（批次 W5）：左是条目名，右是关系图卡（图谱从信息卡竖栏搬来） ————
+   卡在文档流里（标题区右侧的浮动格），不 absolute 叠正文：窄了先换行到标题下方；
+   hover 放大以右上角为原点，只向左下扩——不给阅读列造横向滚动条。 */
+.nx-wiki-hero {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+.nx-wiki-hero-lead {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.nx-wiki-corner {
+  flex: 0 1 340px;
+  min-width: min(100%, 300px);
+  max-width: 360px;
+  margin-inline-start: auto;
+}
+.nx-wiki-graph-card {
+  --nx-entry-graph-height: 210px;
+  position: relative;
+  z-index: 1;
+  padding: 6px 8px 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: var(--surface-workbench-raised);
+  transform-origin: top right;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+.nx-wiki-graph-card:hover {
+  z-index: 2;
+  transform: scale(1.12);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-wiki-graph-card:focus-within {
+  z-index: 2;
+  transform: scale(1.12);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-wiki-graph-card.is-collapsed {
+  padding: 4px 8px;
+}
+.nx-wiki-graph-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.nx-wiki-graph-card-title {
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--archive-ink-soft);
+}
+.nx-wiki-graph-card-collapse,
+.nx-wiki-graph-card-expand {
+  font-size: var(--nx-fs-2xs);
+}
+.nx-wiki-graph-card-expand {
+  width: 100%;
+  justify-content: flex-start;
 }
 
 /* —— 层级 dot（统计口径：按被引用次数分档，树行前缀与信息卡共用） ————————— */
@@ -1042,25 +1114,47 @@ input.doc-title {
   font-size: var(--nx-fs-2xl);
   line-height: 1.35;
   margin: 0 0 2px;
+  padding-bottom: 0.18em;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+/* 阅读面行距与段距（批次 W5 密度）：NovelPedia 正文是「密一点、段间留一口」，
+   .entry-text 继承的 1.9 行距在这里收一档；段距按 em 跟字号走，不另立刻度。 */
+.entry-text.nx-wiki-article {
+  line-height: 1.78;
+}
+.entry-text.nx-wiki-article p {
+  margin: 0 0 0.72em;
 }
 /* h2 章节底线（NovelPedia 的 sec>h2 版式语言）。 */
 .entry-text.nx-wiki-article h2 {
-  margin-top: 1.6em;
+  margin-top: 1.5em;
   padding-bottom: 0.25em;
   border-bottom: 1px solid var(--hairline-soft);
+}
+/* 正文里的一级题（多用于同名 H1 去重后的替代题面）与三级题：层次靠字号档位＋字重。 */
+.entry-text.nx-wiki-article h1 {
+  margin: 1.4em 0 0.5em;
+  font-size: var(--nx-fs-2xl);
+  font-weight: 600;
+}
+.entry-text.nx-wiki-article h3 {
+  margin: 1.2em 0 0.4em;
+  font-size: var(--nx-fs-lg);
+  font-weight: 600;
 }
 /* 首段导语：阅读列的第一段抬一档（--nx-fs-xl，刻度内，不是第六档裸字号）。 */
 .entry-text.nx-wiki-article > p:first-of-type {
   font-size: var(--nx-fs-xl);
   color: var(--text-primary);
 }
-/* 引用块＝quote 版式（出处若写在引用行里，随原文如实呈现）。 */
+/* 引用块＝quote 版式（出处若写在引用行里，随原文如实呈现）：
+   竖线与底色取中性墨色——引用是正文的一部分，不抢强调色。 */
 .entry-text.nx-wiki-article blockquote {
   margin: 1em 0;
-  padding: 6px 14px;
-  border-inline-start: 3px solid var(--accent);
+  padding: 8px 14px;
+  border-inline-start: 3px solid var(--archive-ink-soft);
   border-radius: var(--nx-radius-xs);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: color-mix(in srgb, var(--archive-ink) 4%, transparent);
   color: var(--text-muted);
 }
 /* 条目间蓝链的胶囊皮见下面 .nx-wikilink 基础规则之后（特异度更高，位置无所谓；
@@ -1125,6 +1219,13 @@ input.doc-title {
   .nx-wiki-center {
     flex: 1 1 45%;
     min-height: 140px;
+  }
+  /* 窄屏的关系图卡不再钉 340px：整行折到标题下方，hover 放大也留在列内。 */
+  .nx-wiki-corner {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+    margin-inline-start: 0;
   }
   .nx-wiki-infobox {
     order: 3;

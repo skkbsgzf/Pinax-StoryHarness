@@ -31,12 +31,16 @@ import {
  *   ② 中央阅读列＝选中条目的 wiki 阅读版式（EntryDetailPanel wiki 态，正文仍是 md 原文）；
  *      表格／图谱两态仍在——切换钮把中栏在「阅读／表格／图谱」之间循环；
  *   ③ 右信息卡＝hub 字段（槽位／域／别名／序位／类型／关系数／字数／修订／来源）
- *      ＋ 关系列表（目标能唯一解析就染蓝，未收录的灰显 wl-missing）＋ 图谱缩览。
+ *      ＋ 关系列表（目标能唯一解析就染蓝，未收录的灰显 wl-missing）；
+ *      关系图不在卡里——批次 W5 起嵌在阅读列右上角（可折叠、hover 放大），见 ②。
  *
  * 三条纪律一个字没动：
  *   1) 三态视图记忆按项目根落 localStorage（键 entriesView.<projectRoot>，照 paneForm 先例）；
  *   2) 筛选、排序、层级 dot 都是纯前端的事，数据源仍是 data.entries／data.entry（不新增工具调用）；
  *   3) 筛选下拉与窄栏的类别树共用 data.entriesFilterCat 一格——两边不各记一份。
+ *
+ * 批次 W5 两条小修：正文首个 H1 与条目名相同时视图不再重复画题（详情面自理）；
+ * 零计数的结构锚点组默认不摆，标题行「锚点」开关是唯一唤出口（沉默层原则）。
  *
  * 层级 dot 的诚实口径：数据里没有作者声明的权重，dot 一律按**被引用次数**统计分档，
  * 文案写明「统计」；档位边界 6/3/1 只是视觉分档，不是放行闸，也不冒充作者意图。
@@ -60,6 +64,13 @@ const filter = ref('')
 const sort = ref(null)
 /** 信息卡整体收起（一钮，收起后阅读列吃满）。 */
 const infoboxCollapsed = ref(false)
+/** 阅读列右上角关系图卡收起（只影响卡片自己，阅读列宽度不动）。 */
+const graphCardCollapsed = ref(false)
+/**
+ * 〔批次 W5 · 修复②〕零计数的结构锚点组默认不摆（沉默层：没有内容就看不见容器）。
+ * 锚点组本身是诚实的结构说明，仍可经标题行这枚开关唤出；有计数的锚点组照常在场。
+ */
+const showEmptyAnchors = ref(false)
 
 /**
  * 〔批次68-R2 调度方补刀〕窄容器自动收信息卡：三栏死口径（260 树＋信息卡 ≤430）在主组被
@@ -190,7 +201,10 @@ const visibleLayers = computed(() => {
       })
       .filter((domainInfo) => domainInfo.groups.length)
     const count = domains.reduce((sum, domainInfo) => sum + domainInfo.count, 0)
-    const placeholders = active ? [] : layer.placeholders
+    // 零计数的锚点组默认收起（沉默层）；有计数的照常在场，作者点开「锚点」才看空组。
+    const placeholders = active
+      ? []
+      : layer.placeholders.filter((placeholder) => showEmptyAnchors.value || placeholder.count > 0)
     if (!count && !placeholders.length) continue
     layers.push({ ...layer, domains, count, placeholders })
   }
@@ -365,6 +379,15 @@ const infoboxTier = computed(() => {
             :title="VIEW_TOGGLE[view].title"
             @click="toggleView"
           >{{ VIEW_TOGGLE[view].label }}</button>
+          <!-- 〔批次 W5〕零计数的结构锚点默认不摆：这枚开关是唯一的唤出口（标题行，不藏在悬浮里）。 -->
+          <button
+            type="button"
+            class="control-quiet nx-entries-anchor-toggle"
+            data-test="entries-anchor-toggle"
+            :aria-pressed="showEmptyAnchors ? 'true' : 'false'"
+            title="显示没有条目的结构锚点组"
+            @click="showEmptyAnchors = !showEmptyAnchors"
+          >锚点</button>
           <input
             v-model="filter"
             class="nx-field nx-entries-filter"
@@ -420,7 +443,7 @@ const infoboxTier = computed(() => {
                 <p class="workspace-nav-section nx-entry-category" data-test="entry-category">
                   {{ group.label }}<span class="nx-hub-count"> · {{ group.count }}</span>
                 </p>
-                <ul class="nx-tree">
+                <ul class="nx-tree nx-wiki-tree-list">
                   <li v-for="item in group.entries" :key="item.id" class="nx-tree-line">
                     <button
                       type="button"
@@ -507,14 +530,15 @@ const infoboxTier = computed(() => {
           </tbody>
         </table>
 
-        <!-- 图谱态（批次36 · 任务二）：整书大图在中栏；信息卡的小图此时让位。 -->
+        <!-- 图谱态（批次36 · 任务二）：整书大图在中栏；阅读列右上角的关系图卡只属于阅读态，此时不挂。 -->
         <EntryGraph
           v-else-if="view === 'graph' && visibleEntries.length"
           :entries="visibleEntries"
           @open="openEntry"
         />
 
-        <!-- 阅读态（批次68-R2）：条目详情面的 wiki 皮——名＝大标题、h2 底线、导语、蓝链胶囊。 -->
+        <!-- 阅读态（批次68-R2）：条目详情面的 wiki 皮——名＝大标题、h2 底线、导语、蓝链胶囊。
+             批次 W5：关系图从信息卡搬进阅读列右上角（corner 插槽），可折叠、hover 放大。 -->
         <EntryDetailPanel
           v-else
           :data="data"
@@ -526,10 +550,34 @@ const infoboxTier = computed(() => {
           wiki
           empty-hint="从左边条目树里选一条条目。"
           @chip-action="emit('chip-action')"
-        />
+        >
+          <template v-if="hubModel.entries.length" #corner>
+            <aside class="nx-wiki-graph-card" :class="{ 'is-collapsed': graphCardCollapsed }" data-test="entries-graph-card">
+              <header class="nx-wiki-graph-card-head">
+                <span class="nx-wiki-graph-card-title">关系图</span>
+                <button
+                  type="button"
+                  class="control-quiet nx-wiki-graph-card-collapse"
+                  data-test="entries-graph-card-collapse"
+                  aria-label="收起关系图"
+                  @click="graphCardCollapsed = true"
+                >收起</button>
+              </header>
+              <EntryGraph v-if="!graphCardCollapsed" variant="corner" :entries="hubModel.entries" @open="openEntry" />
+              <button
+                v-else
+                type="button"
+                class="control-quiet nx-wiki-graph-card-expand"
+                data-test="entries-graph-card-expand"
+                aria-label="展开关系图"
+                @click="graphCardCollapsed = false"
+              >展开关系图</button>
+            </aside>
+          </template>
+        </EntryDetailPanel>
       </div>
 
-      <!-- ③ 右信息卡（min(46%,430px)）：hub 字段＋关系列表＋图谱（底部 260px）。可一钮收起。 -->
+      <!-- ③ 右信息卡（min(46%,430px)）：hub 字段＋关系列表（图谱已搬到阅读列右上角）。可一钮收起。 -->
       <aside v-if="data.entry || infoboxCollapsed" class="nx-wiki-infobox" :class="{ 'is-collapsed': infoboxCollapsed }" data-test="entries-infobox">
         <button
           v-if="infoboxCollapsed"
@@ -569,17 +617,12 @@ const infoboxTier = computed(() => {
               </dd>
             </template>
           </dl>
-          <!-- 关系列表（与 EntryGraph 同一数据源 relations[].to；没有关系就不摆这块）。 -->
+          <!-- 关系列表（与阅读列关系图同一数据源 relations[].to；没有关系就不摆这块）。 -->
           <div v-if="!data.editingEntry && infoboxRelations.length" class="nx-wiki-infobox-relations">
             <p class="nx-wiki-infobox-subhead">关系</p>
             <ul class="entry-relations-read" data-test="entry-relations-read">
               <li v-for="(relation, index) in infoboxRelations" :key="`infobox-rel-${index}`"><a v-if="relationTarget(relation.to)" class="nx-wikilink" :data-entry="relation.to" href="#" @click.prevent="openRelationTarget(relation.to)">{{ relation.to }}</a><span v-else class="wl-missing" :title="relationMissingHint(relation.to)">{{ relation.to }}</span><span v-if="relationDetail(relation)"> · {{ relationDetail(relation) }}</span></li>
             </ul>
-          </div>
-          <!-- 图谱缩览（底部 260px）：数据源仍是这份 hub entries，0 边如实文案由 EntryGraph 自己守。 -->
-          <div v-if="view !== 'graph' && hubModel.entries.length" class="nx-wiki-infobox-graph" data-test="infobox-graph">
-            <p class="nx-wiki-infobox-subhead">关系图</p>
-            <EntryGraph variant="infobox" :entries="hubModel.entries" @open="openEntry" />
           </div>
         </template>
       </aside>
@@ -613,33 +656,50 @@ const infoboxTier = computed(() => {
   flex: none;
   min-width: 30px;
 }
+/* 零计数锚点组的唤出开关：与视图切换钮同一行、同一控件词汇，不额外占一行。 */
+.nx-entries-anchor-toggle {
+  flex: none;
+  font-size: var(--nx-fs-2xs);
+}
 
-/* —— hub 分层树（W3）：层头／域头／槽位头三级；计数走 tabular-nums，不在正文里再念一遍 ——— */
+/* —— hub 分层树（W3）：层头／域头／槽位头三级；计数走 tabular-nums，不在正文里再念一遍 ———
+   批次 W5 密度：层头最重、域头次之、槽位头带一道竖线再缩进；条目行整体缩到槽位头之下，
+   层级差靠缩进＋字重读数，不靠加粗整棵树的字号。 */
 .nx-hub-layer + .nx-hub-layer {
-  margin-top: 10px;
+  margin-top: 12px;
 }
 .nx-hub-layer-head {
-  margin: 0 0 2px;
-  color: var(--archive-ink);
+  margin: 0 0 3px;
+  font-size: var(--nx-fs-md);
   font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--archive-ink);
 }
 .nx-hub-domain-head {
-  margin: 0 0 2px 10px;
+  margin: 0 0 2px 12px;
   font-size: var(--nx-fs-2xs);
   font-weight: 500;
+  letter-spacing: 0.04em;
   color: var(--archive-ink-soft);
 }
-/* 组头（槽位/组名＋计数）：比层头轻一档的度量，语义与计数不动（批次 W4 只收行高）。 */
+/* 组头（槽位/组名＋计数）：比层头轻一档的度量；左侧竖线把整组条目圈在同一层里。 */
 .nx-entry-category {
-  margin: 6px 0 2px;
+  margin: 8px 0 2px 16px;
+  padding-inline-start: 8px;
+  border-inline-start: 2px solid var(--hairline-soft);
   font-size: var(--nx-fs-2xs);
   font-weight: 500;
+  letter-spacing: 0.03em;
   color: var(--archive-ink-soft);
 }
 .nx-hub-count {
   color: var(--text-muted);
   font-weight: 400;
   font-variant-numeric: tabular-nums;
+}
+/* 条目行整体缩进一档（与槽位头的竖线区形成层级），行内度量仍是紧凑 24px。 */
+.nx-wiki-tree-list {
+  padding-inline-start: 18px;
 }
 .nx-hub-placeholder-hint {
   margin: 0 0 4px 10px;
