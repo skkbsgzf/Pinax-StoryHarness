@@ -728,8 +728,11 @@ export function createSessionStore(projectRoot, options = {}) {
   }
 
   /**
-   * 落盘：save 可以是异步（主进程写 JSONL）。同步抛错与 Promise 拒绝都只降级，
-   * 不打断状态机——回答还在，作者还能接着问；`persistent` 会变 false。
+   * 落盘：save 可以是异步（主进程写 JSONL）。
+   * 〔T11c〕失败回执也算降级，与 core `agent/fileSessionState` 同口径：同步抛错、Promise 拒绝，
+   * 以及异步路径 resolve 出的 `false`／`{ok:false}`（主进程拒写／磁盘满）——
+   * 三者都只降级、不打断状态机（回答还在，作者还能接着问），并推一次快照让 `persistent` 如实变 false。
+   * 同步成功路径不变（返回 undefined／真值即视为写成功）。
    */
   function persist() {
     if (!save) return false
@@ -737,15 +740,20 @@ export function createSessionStore(projectRoot, options = {}) {
       const returned = save({ sessions, activeId })
       if (returned && typeof returned.then === 'function') {
         returned.then(
-          () => {},
+          (result) => {
+            if (result === false || result?.ok === false) {
+              degraded = true
+              notify()
+            }
+          },
           () => {
             degraded = true
             notify()
           }
         )
       }
-      degraded = false
-      return true
+      degraded = returned === false || returned?.ok === false
+      return !degraded
     } catch {
       degraded = true
       return false
