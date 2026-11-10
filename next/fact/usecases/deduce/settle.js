@@ -42,8 +42,20 @@ export function settleChoice({ state, domain, candidate, seedPrompt } = {}) {
   const entry = beatEntry({ state, domain, candidate, decidedBy })
   const gained = [...(candidate.refs ?? []), ...(seedPrompt ? [seedPrompt] : [])].filter((n) => n && n !== state.pov)
   const knowledgeDelta = { pov: state.pov, gained: [...new Set(gained)] }
-  pushLog(state, 'settle', { text: candidate.text, source: candidate.source, decidedBy })
+  // P-WIRE：事件流带 pov/goal——M2 投影器把它落进节点、M3 chapterize 才能按「视角∷目标」分章。
+  // 旧形状只有 text/source/decidedBy，多视角重演时所有拍都退回按 domain 分组＝分不出章。
+  pushLog(state, 'settle', { text: candidate.text, source: candidate.source, decidedBy, pov: state.pov, goal: goalOf(candidate) })
   return { entry, knowledgeDelta }
+}
+
+/**
+ * 拍的目标标记：只认候选显式给的 goal/objective。
+ * 不从 refs 猜——每拍引用不同实体，猜出来的目标每拍都变，chapterize 会按「视角∷目标」
+ * 一拍切一章（M3 的分章语义是「目标确立→转折/了结＝一章」，目标必须跨拍稳定）。
+ * 缺显式目标时留空，分章退回「同视角连续拍 ＋ 拍数上限」，等 M4 的目标弧来填。
+ */
+function goalOf(candidate) {
+  return String(candidate?.goal ?? candidate?.objective ?? '').trim()
 }
 
 /** 导演注入：author 事件直落（命运之笔之外的作者之笔）。 */
@@ -53,7 +65,7 @@ export function settleInject({ state, domain, name, definition }) {
   entry.name = `第${state.round}拍·${trunc(name, 18)}`
   entry.definition = definition ?? '导演注入'
   entry.provenance.source = '导演注入'
-  pushLog(state, 'settle', { text: entry.name, source: '导演注入', decidedBy: 'author' })
+  pushLog(state, 'settle', { text: entry.name, source: '导演注入', decidedBy: 'author', pov: state.pov })
   return { entry, knowledgeDelta: { pov: state.pov, gained: [name] } }
 }
 

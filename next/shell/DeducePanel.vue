@@ -13,6 +13,7 @@ import { openDeduceSession } from '../fact/usecases/deduce/opening.js'
 import { presentTurn, applyDirectorAction } from '../fact/usecases/deduce/turn.js'
 import { settleChoice, settleInject, settleHypothesis } from '../fact/usecases/deduce/settle.js'
 import { createSessionStore } from '../fact/usecases/deduce/sessionStore.js'
+import { addKnownExtra } from '../fact/usecases/deduce/sessionState.js'
 
 /**
  * 推演面板（M1-c · 第一视角）：AppNext 直接挂载的一枚中栏面板，不走新页签、不注册新槽位。
@@ -75,6 +76,10 @@ const known = ref([])
 const relationRows = computed(() => povRelations(frozenEntries.value, session.value?.pov ?? '', known.value))
 const receipts = ref([])
 const snapshot = ref(null)
+/** 本拍局面上下文的知情保真度（P-WIRE）：ledger＝按账本裁；world＝账本为空、降级已记账。 */
+const sceneContextInfo = ref(null)
+/** 知情降级只报一次，别每拍刷一条同样的回执。 */
+const knownDegraded = ref(false)
 
 let store = null
 let seq = 1
@@ -111,6 +116,8 @@ async function openSession() {
     snapshot.value = null
     candidates.value = []
     sceneCard.value = null
+    sceneContextInfo.value = null
+    knownDegraded.value = false
     record('opening', { pov: opened.session.pov, worldHash: opened.session.worldHash })
     pushReceipt('info', `开局：世界书已冻结（${worldviewEntries.value.length} 条设定），主视角「${opened.session.pov}」。`, { runId })
     phase.value = 'playing'
@@ -133,6 +140,14 @@ async function refreshTurn() {
     })
     sceneCard.value = turn.sceneCard
     candidates.value = turn.candidates
+    sceneContextInfo.value = turn.sceneContext ?? null
+    // 知情降级如实上抛一次（每局只报第一次）：账本为空不是错误，但作者要知道视角裁剪没生效。
+    const fidelity = turn.sceneContext?.knowledgeFidelity
+    if (fidelity === 'world' && !knownDegraded.value) {
+      knownDegraded.value = true
+      pushReceipt('warn', turn.sceneContext?.warnings?.find((item) => item.code === 'KNOWLEDGE_LEDGER_EMPTY')?.message
+        ?? '主视角没有知情账本：本局按世界级可见降级，第一视角裁剪未生效。')
+    }
     // 候选明细进事件流（M 系接线批）：M2 投影器吃的是 candidates 数组，
     // 只记 {round,count} 的旧形状喂不饱章纲——明细与来源徽章一并留档，回放/投影同源。
     record('candidates', { round: state.value.round, count: turn.candidates.length, candidates: turn.candidates })
@@ -152,6 +167,9 @@ async function choose(option) {
   for (const name of result.knowledgeDelta.gained) {
     if (name && !known.value.includes(name)) known.value = [...known.value, name]
   }
+  // P-WIRE：知情增量同时落进会话状态——下一拍的可见域从 state.knownExtra 取，
+  // 两处同源才不会「情报面板知道、局面卡不知道」。
+  addKnownExtra(state.value, result.knowledgeDelta.gained)
   record('settle', { text: candidate.text, source: candidate.source })
   record('knowledge-delta', { gained: result.knowledgeDelta.gained })
   pushReceipt('info', `第 ${state.value.round} 拍 · ${candidate.badge} ${candidate.source}：${candidate.text}`, { decidedBy: result.entry.provenance.decidedBy })
@@ -191,6 +209,7 @@ async function injectBeat() {
   record('director-inject', { name })
   record('settle', { text: name, source: '导演注入' })
   if (!known.value.includes(name)) known.value = [...known.value, name]
+  addKnownExtra(state.value, [name])
   pushReceipt('info', `导演注入：${name} —— ${definition || '导演注入'}`)
   injectName.value = ''
   injectDefinition.value = ''
@@ -217,6 +236,8 @@ function reset() {
   known.value = []
   receipts.value = []
   snapshot.value = null
+  sceneContextInfo.value = null
+  knownDegraded.value = false
   error.value = ''
   injectName.value = ''
   injectDefinition.value = ''
@@ -225,6 +246,9 @@ function reset() {
   seed = 1
   runId = ''
 }
+
+/** 悬置伏笔（P-WIRE）：plot 里 hypothesis+open 的条目——推演张力来自上一拍没解决的事。 */
+const openHooks = computed(() => sceneContextInfo.value?.openHypotheses ?? [])
 
 /** 已知情报／关系目标点开＝跳世界书条目视图（复用外壳既有的 pinaxOpenKnowledge 蓝链落点）。 */
 function jumpTo(name) {
@@ -289,6 +313,16 @@ function jumpTo(name) {
             <span class="nx-deduce-field-label">{{ field.label }}</span>
             <span class="nx-deduce-field-value">{{ field.value }}</span>
           </div>
+          <p
+            v-if="sceneContextInfo"
+            class="nx-deduce-fidelity"
+            :class="{ 'is-degraded': sceneContextInfo.knowledgeFidelity !== 'ledger' }"
+            data-test="deduce-fidelity"
+          >
+            {{ sceneContextInfo.knowledgeFidelity === 'ledger'
+              ? `第一视角 · 已知 ${sceneContextInfo.known.length} 项`
+              : '知情账本为空 · 本局按世界级可见降级' }}
+          </p>
         </div>
 
         <p class="nx-deduce-legend" data-test="deduce-badge-legend">
@@ -355,6 +389,13 @@ function jumpTo(name) {
             </li>
           </ul>
           <p v-if="!relationRows.length" class="nx-deduce-hint">本视角暂无可见关系。</p>
+        </section>
+
+        <section v-if="openHooks.length" class="nx-deduce-panel" data-test="deduce-open-hooks">
+          <h3 class="nx-deduce-panel-title">悬置伏笔 · {{ openHooks.length }}</h3>
+          <ul class="nx-deduce-list">
+            <li v-for="item in openHooks" :key="item.id" class="nx-deduce-hook">{{ item.definition || item.name }}</li>
+          </ul>
         </section>
 
         <section class="nx-deduce-panel" data-test="deduce-receipts">
@@ -464,6 +505,20 @@ function jumpTo(name) {
   font-size: var(--nx-fs-lg);
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+/* 知情保真度读数：跨两列贴在卡片底部——作者一眼看得出这一局是「按账本裁」还是「降级」。
+   降级用弱化文案而非警示色（不是错误，是数据不全）。 */
+.nx-deduce-fidelity {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-deduce-fidelity.is-degraded {
+  color: var(--text-muted);
+  font-style: italic;
 }
 .nx-deduce-legend {
   display: flex;

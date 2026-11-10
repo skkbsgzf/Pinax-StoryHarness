@@ -11,8 +11,22 @@ export function createSessionState({ runId, pov, worldHash, budgetMax = 8 } = {}
     round: 0,
     aiActionsLeft: budgetMax,
     fronts: {}, // M4：威胁前线／压力时钟接口占位（本批不实现，见 ADR 裁定 ②）
+    // P-WIRE：本局结算累积的知情增量（不含条目级 ledger 里的原始记录）。
+    // 局面卡与候选的可见域＝ledger ∪ knownExtra——两处同源，才不会「情报面板知道、局面卡不知道」。
+    knownExtra: [],
     log: [] // 事件日志：{round, kind, ...}——replay 与成书渲染的数据源
   }
+}
+
+/** 结算知情增量并入本局已知（幂等：重复并入不重复计数）。 */
+export function addKnownExtra(state, names = []) {
+  const merged = new Set(Array.isArray(state.knownExtra) ? state.knownExtra : [])
+  for (const raw of Array.isArray(names) ? names : []) {
+    const name = String(raw ?? '').trim()
+    if (name) merged.add(name)
+  }
+  state.knownExtra = [...merged]
+  return state.knownExtra
 }
 
 export function beginRound(state) {
