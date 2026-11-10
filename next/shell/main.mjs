@@ -877,9 +877,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     onThemeChanged: async (theme) => {
       updateTitleBarOverlay({ theme, zoom: currentUiZoom })
     },
-    // 导入既有稿（E1）：结构动作由作者在向导里显式按两次（计划→执行），与建项目同级走主进程；
-    // dryRun≠false 一律当计划，只有显式 false 才落盘。
-    importProject: ({ sourcePath, targetPath, dryRun }) => (dryRun ? planImport({ sourcePath, targetPath }) : runImport({ sourcePath, targetPath })),
+    // 导入既有稿（E1，向导化后支持逐类多源）：结构动作由作者在向导里显式按两次（计划→执行），
+    // 与建项目同级走主进程；dryRun≠false 一律当计划，只有显式 false 才落盘。
+    importProject: ({ sourcePath, targetPath, dryRun, sources }) => (dryRun ? planImport({ sourcePath, targetPath, sources }) : runImport({ sourcePath, targetPath, sources })),
     // 批次30：大纲转换（散文章节稿 → 大纲/outline.json）。源 md 只读、现有节点不动；
     // dryRun 缺省由通道按 true 传进来，只扫描不写盘。
     outlineImport: (args) => importOutlineChapters(args),

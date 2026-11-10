@@ -1504,7 +1504,7 @@ const EMPTY_STATE_ALLOWLIST = [
   { file: 'MaterialGallery.vue', snippet: '还没有记录', reason: '新建输入与钮就在同容器下方（超出 ±2 行窗口，逐条登记）' },
   { file: 'settings/ExportSection.vue', snippet: '还没有打开的文档', reason: '动作在索引窗（先去开文档），本节不复制一条假导出钮' },
   { file: 'settings/HistorySection.vue', snippet: '还没有历史快照', reason: '快照由定时器自动落，无主操作可给' },
-  { file: 'settings/ImportSection.vue', snippet: '还没有写入任何文件', reason: '预览读数句；执行钮 import-apply 在同一计划块里（超出 ±2 行窗口）' },
+  { file: 'settings/ProjectWizardSection.vue', snippet: '还没有写入任何文件', reason: '预览读数句（向导化后 ImportSection 的继承者）；执行钮 wizard-next 在共用动作条里（超出 ±2 行窗口）' },
   { file: 'settings/ProposalsSection.vue', snippet: '还没有提案', reason: '提案由模型／运行时写下，节内无可造提案的动作' }
 ]
 
@@ -1659,7 +1659,8 @@ test('〔批次68-R3 门禁⑲／批次68-R4 扩展〕设置弹窗常驻文案�
   const files = (await readdir(settingsDir, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && entry.name.endsWith('.vue'))
     .map((entry) => join(settingsDir, entry.name))
-  assert.ok(files.length >= 14, `设置节扫描面只有 ${files.length} 份（应有 14 节），空了等于没测`)
+  // 新建／导入合并为一份 ProjectWizardSection（作者 2026-11-11 完整流向导化）：14 → 13。
+  assert.ok(files.length >= 13, `设置节扫描面只有 ${files.length} 份（应有 13 节），空了等于没测`)
   // 〔批次68-R4〕目录本体进面：SettingsModal 的常驻话（空态、搜索无命中、组头）也归这一闸管。
   const scoped = [...files, join(shellDir, 'SettingsModal.vue')]
   const offenders = []

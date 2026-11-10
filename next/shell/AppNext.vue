@@ -9,8 +9,7 @@ import RuntimeDock from './RuntimeDock.vue'
 import SettingsModal from './SettingsModal.vue'
 import PrefsSection from './settings/PrefsSection.vue'
 import CarriersSection from './settings/CarriersSection.vue'
-import NewProjectSection from './settings/NewProjectSection.vue'
-import ImportSection from './settings/ImportSection.vue'
+import ProjectWizardSection from './settings/ProjectWizardSection.vue'
 import OutlineImportSection from './settings/OutlineImportSection.vue'
 import BackupSection from './settings/BackupSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
@@ -574,8 +573,8 @@ const settingsSections = computed(() => [
   // 项目
   { id: 'carriers', title: '载体管理', group: '项目', keywords: ['板块', '载体', '启用', '停用', '主载体', '权限', '数据目录'], component: CarriersSection, props: { carriers: carriers.value } },
   // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
-  { id: 'import', title: '导入既有稿', group: '项目', keywords: ['带稿上车', '稿子目录', '项目位置', '导入计划', '原文件只新增不修改'], component: ImportSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
-  { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹'], component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
+  { id: 'import', title: '导入既有稿', group: '项目', keywords: ['带稿上车', '稿子目录', '项目位置', '导入计划', '原文件只新增不修改', '剧本', '世界书'], component: ProjectWizardSection, props: { bridge: props.bridge, mode: 'import', primaryCarriers: primaryCarriers.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
+  { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹', '主载体'], component: ProjectWizardSection, props: { bridge: props.bridge, mode: 'create', primaryCarriers: primaryCarriers.value, extraEnabled: extraEnabled.value } },
   { id: 'primary', title: '主载体选择', group: '项目', keywords: ['这个项目要创作什么', '创作小说还是剧本'], component: PrimaryCarrierSection, props: { carriers: carriers.value, companions: companions.value, extraEnabled: extraEnabled.value } },
   // 文档
   { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
@@ -2298,7 +2297,10 @@ const companions = computed(() => carriers.value.filter((item) => !item.isPrimar
 /** 清单里声明了 primary 的板块才配当主载体：没有就明说空框架，不让作者点一个假的。 */
 const canPickPrimary = computed(() => carriers.value.some((item) => item.primary))
 /** 新建项目载荷里的主载体 id（原 createProject 内联的那一句，提出来给节经 props 注入）。 */
-const primaryCarrierId = computed(() => carriers.value.find((item) => item.primary)?.id ?? null)
+/** 向导第②步的主载体候选（作者 2026-11-11 点单）：声明了 primary 的板块全列（小说／剧本），不再硬编码第一个。 */
+const primaryCarriers = computed(() => carriers.value
+  .filter((item) => item.primary)
+  .map((item) => ({ id: item.id, title: item.title, projectKind: item.primary?.projectKind ?? null })))
 
 async function refresh() {
   if (!props.bridge?.request) return
@@ -2684,7 +2686,6 @@ onBeforeUnmount(() => {
     <div class="next-shell app-shell" :data-dragging="dragging">
       <ActivityRail
         :boards="boards"
-        :carriers="carriers"
         :project="project"
         :active-id="activeBoardId"
         :open-id="indexOpen ? activeBoardId : null"
@@ -2726,7 +2727,21 @@ onBeforeUnmount(() => {
              偏好／载体管理／主载体选择／新建项目全部收进统一的设置二级页（SettingsModal，模板尾部），
              这里不再内嵌任何配置 section。 -->
 
-        <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
+        <!-- 无项目＝开始页（作者 2026-11-11 裁定两连：①「没有项目时左侧很多灰的不可用载体很诡异」
+             ——竖条灰格一并退役；②「项目的新建和导入做成完整的流」）。指南层：一句话＋一个主操作钮；
+             打开/导入作次操作。有项目但没板时保留原句（竖条此刻真的可点）。 -->
+        <div v-if="!boards.length" class="center-empty">
+          <template v-if="!project">
+            <p class="center-empty-main">从一个空文件夹开始你的下一本书。</p>
+            <div class="center-empty-actions">
+              <button type="button" class="control-primary" data-test="empty-new-project" @click="openSection('newProject')">新建项目</button>
+              <button type="button" class="control-secondary" data-test="empty-open-project" @click="void openProjectFolder()">打开项目文件夹…</button>
+              <button type="button" class="control-secondary" data-test="empty-import" @click="openSection('import')">导入既有稿…</button>
+            </div>
+            <p class="center-empty-sub">右栏对话照常可用。</p>
+          </template>
+          <p v-else>当前没有已启用的载体板块。右栏对话照常可用。</p>
+        </div>
 
         <!-- 〔批次76-R3 任务1／2〕页签行归组（VS Code 编辑器组模型）：不再有横跨整屏的全局那一条。
              每个页组一列，列内**首行**＝本组自己的签行，签行只列本组的页；side 列只在侧组真有页时出现

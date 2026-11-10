@@ -117,9 +117,12 @@ test('标题栏与页内菜单行（工单F）：overlay 留给原生窗控，�
 
   // 无项目形态（反馈③）：竖条数据来自 registry.list() 的 carriers，而不是已打开项目的 view。
   const railSource = await readFile(new URL('../shell/ActivityRail.vue', import.meta.url), 'utf-8')
-  assert.match(railSource, /carriers: \{ type: Array/, '竖条必须能收到 registry.list() 的载体清单')
-  assert.match(railSource, /aria-disabled="true"/, '无项目时的载体格必须是禁用态')
-  assert.match(railSource, /打开项目后可用/, '无项目时的载体格必须说明原因')
+  // 作者 2026-11-11 裁定翻案（灰载体格很诡异）：竖条不再收 registry 载体清单，
+  // 无项目时只有「新建项目…／打开项目…」两枚动作＋主题钮——沉默层，不提前展示未来的板。
+  assert.doesNotMatch(railSource, /carriers: \{ type: Array/, '灰载体格已退役：竖条不再收 registry 载体清单')
+  assert.doesNotMatch(railSource, /aria-disabled="true"/, '灰格退役：竖条没有禁用格')
+  assert.match(railSource, /aria-label="新建项目…"/, '无项目时新建是主操作')
+  assert.match(railSource, /aria-label="打开项目…"/, '无项目时打开是次操作')
   assert.match(appSource, /:carriers="carriers"/, 'AppNext 必须把 carriers 传给竖条')
 })
 
@@ -751,7 +754,7 @@ test('导入既有稿通道（E1）：适配器注入即通、dryRun 默认走�
 
   const planned = await injected.dispatch(IPC_CHANNELS.projectImportRun, { sourcePath: 'D:/稿子', targetPath: 'D:/books' })
   assert.equal(planned.ok, true)
-  assert.deepEqual(calls.at(-1), { sourcePath: 'D:/稿子', targetPath: 'D:/books', dryRun: true }, '缺省必须是计划模式（dryRun:true）')
+  assert.deepEqual(calls.at(-1), { sourcePath: 'D:/稿子', targetPath: 'D:/books', dryRun: true, sources: null }, '缺省必须是计划模式（dryRun:true；sources 缺省 null＝整目录自动识别）')
 
   await injected.dispatch(IPC_CHANNELS.projectImportRun, { sourcePath: 'D:/稿子', targetPath: 'D:/books', dryRun: false })
   assert.equal(calls.at(-1).dryRun, false, '显式 false 才落盘')

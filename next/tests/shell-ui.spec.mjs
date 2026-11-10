@@ -120,7 +120,10 @@ describe('空框架外壳', () => {
     expect(wrapper.find('.col-dock').exists()).toBe(true)
     expect(wrapper.findAll('.resizer')).toHaveLength(2)
 
-    expect(wrapper.text()).toContain('当前没有已启用的载体板块')
+    // 无项目＝开始页（作者 2026-11-11 裁定）：一句话＋主操作钮；右栏对话照常可用的说明垫底。
+    expect(wrapper.text()).toContain('从一个空文件夹开始你的下一本书')
+    expect(wrapper.find('[data-test="empty-new-project"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('右栏对话照常可用')
     expect(wrapper.text()).toContain(RUNTIME_CONTRACT.title)
     expect(wrapper.find('.authoring-knowledge').exists()).toBe(true)
     expect(wrapper.find('.authoring-knowledge__input-row textarea').exists()).toBe(true)
@@ -2200,8 +2203,8 @@ describe('偏好与模型面板（批次8①）', () => {
     delete document.documentElement.dataset.writingFocus
   })
 
-  it('新建项目走「选目录」：未选目录时新建钮禁用，选后载荷带 root 与名字', async () => {
-    const view = { ...emptyFrameworkView(), needsPrimary: true, carriers: [{ id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }] }
+  it('新建走完整向导：位置 → 创作什么（主载体卡）→ 创建并打开（载荷带 root／名字／主载体）', async () => {
+    const view = { ...emptyFrameworkView(), needsPrimary: false, openError: null, carriers: [{ id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }] }
     const handlers = new Map()
     const pick = vi.fn(async () => ({ ok: true, value: { picked: true, path: 'D:/books/new-book' } }))
     const create = vi.fn(async () => ({ ok: true, value: {} }))
@@ -2217,28 +2220,39 @@ describe('偏好与模型面板（批次8①）', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 工单B0 弹窗化：新建项目不再内嵌在核心区，入口是「文件 → 新建项目…」菜单事件。
+    // 工单B0 弹窗化：新建入口是「文件 → 新建项目…」菜单事件，落在统一二级页的向导节。
     expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(false)
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.create' })
     await flushPromises()
-    expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(true)
+    const panel = wrapper.find('[aria-label="新建项目"]')
+    expect(panel.exists()).toBe(true)
 
-    const createBtn = wrapper.find('[aria-label="新建项目"] .control-primary')
-    expect(createBtn.attributes('disabled')).toBeDefined()
-    await wrapper.find('[aria-label="新建项目"] .control-secondary').trigger('click')
+    // ① 位置：下一步钮在选目录前禁用；选中后名称自动带目录名（可改）。
+    const nextBtn = panel.find('[data-test="wizard-next"]')
+    expect(nextBtn.attributes('disabled')).toBeDefined()
+    await panel.find('[data-test="wizard-pick-dir"]').trigger('click')
     await flushPromises()
     expect(pick).toHaveBeenCalledTimes(1)
-    expect(createBtn.attributes('disabled')).toBeUndefined()
-
-    await wrapper.find('[aria-label="新建项目"] .prefs-input').setValue('我的新书')
-    await createBtn.trigger('click')
+    expect(panel.find('.prefs-input').element.value).toBe('new-book')
+    await panel.find('.prefs-input').setValue('我的新书')
+    await nextBtn.trigger('click')
     await flushPromises()
+
+    // ② 创作什么：主载体卡从声明了 primary 的板块来（不再硬编码第一个）；点卡即选中。
+    const card = panel.find('[data-test="wizard-primary-screenplay"]')
+    expect(card.exists()).toBe(true)
+    await card.trigger('click')
+    await nextBtn.trigger('click')
+    await flushPromises()
+
+    // 创建载荷：主载体跟着选中的卡走（D2 正式问法，不猜）。
     expect(create).toHaveBeenCalledWith({ name: '我的新书', primaryCarrier: 'fixture.script', extraEnabled: [], root: 'D:/books/new-book' })
+    expect(panel.find('[data-test="wizard-done"]').exists()).toBe(true)
     wrapper.unmount()
   })
 })
 
-describe('导入既有稿向导（工单E1）', () => {
+describe('新建／导入统一向导（作者 2026-11-11 完整流）', () => {
   function importBridge({ handlers = new Map(), view = carrierView() } = {}) {
     const request = vi.fn(async (channel, payload) => {
       if (channel === IPC_CHANNELS.view) return { ok: true, value: view }
@@ -2264,11 +2278,12 @@ describe('导入既有稿向导（工单E1）', () => {
   }
   const APPLIED = { ...PLAN, mode: 'apply', createdCount: 3, reusedCount: 0, failedCount: 0, written: [], warnings: [] }
 
-  it('菜单打开→选目录→生成计划走导入通道（dryRun:true）→执行（dryRun:false）→projectOpen 打开新项目', async () => {
+  it('菜单打开→位置→主载体→逐类勾选（正文＋世界书）→计划带 sources→执行→projectOpen 打开新项目', async () => {
     const handlers = new Map()
     const picks = [
-      { ok: true, value: { picked: true, path: 'D:/稿子/大梦' } },
-      { ok: true, value: { picked: true, path: 'D:/books/大梦' } }
+      { ok: true, value: { picked: true, path: 'D:/books/大梦' } },
+      { ok: true, value: { picked: true, path: 'D:/稿子/正文' } },
+      { ok: true, value: { picked: true, path: 'D:/稿子/世界书' } }
     ]
     const pick = vi.fn(async () => picks.shift())
     const create = vi.fn(async () => ({ ok: true, value: { root: 'D:/books/大梦' } }))
@@ -2279,14 +2294,14 @@ describe('导入既有稿向导（工单E1）', () => {
     handlers.set(IPC_CHANNELS.projectImportRun, importRun)
     handlers.set(IPC_CHANNELS.projectOpen, open)
 
-    // 还没开项目：主载体仍由板块清单给出（导入要先能建项目骨架）。
+    // 还没开项目：主载体候选由板块清单给出（小说／剧本都声明了 primary，向导里选，不硬编码）。
     const view = { ...carrierView(), project: null, needsPrimary: false, openError: null }
     const bridge = importBridge({ handlers, view })
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
     expect(wrapper.find('[aria-label="导入既有稿"]').exists()).toBe(false)
 
-    // 文件 → 导入既有稿…：统一二级页落在 import 节。
+    // 文件 → 导入既有稿…：统一二级页落在向导节。
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.import' })
     await flushPromises()
     const panel = wrapper.find('[aria-label="导入既有稿"]')
@@ -2294,35 +2309,57 @@ describe('导入既有稿向导（工单E1）', () => {
     expect(panel.attributes('role')).toBe('tabpanel')
     expect(wrapper.find('[data-test="settings-tab-import"]').exists()).toBe(true)
 
-    // ① 选稿子目录 → ② 选空目录当项目位置（两次都走同一枚系统对话框通道）。
-    await panel.find('[data-test="import-pick-source"]').trigger('click')
+    // ① 位置 → ② 主载体。
+    await panel.find('[data-test="wizard-pick-dir"]').trigger('click')
     await flushPromises()
-    expect(panel.find('[data-test="import-source"]').text()).toBe('D:/稿子/大梦')
     expect(panel.find('.prefs-input').element.value).toBe('大梦')
-    await panel.find('[data-test="import-pick-target"]').trigger('click')
+    await panel.find('[data-test="wizard-next"]').trigger('click')
     await flushPromises()
-    expect(panel.find('[data-test="import-target"]').text()).toBe('D:/books/大梦')
-
-    // ③ 生成计划：先建 @2 骨架（session.create），再走导入通道的 dryRun。
-    await panel.find('[data-test="import-plan"]').trigger('click')
+    await panel.find('[data-test="wizard-primary-novel"]').trigger('click')
+    await panel.find('[data-test="wizard-next"]').trigger('click')
     await flushPromises()
-    expect(create).toHaveBeenCalledWith({ name: '大梦', primaryCarrier: 'fixture.novel', extraEnabled: [], root: 'D:/books/大梦' })
-    expect(importRun.mock.calls.at(-1)[0]).toEqual({ sourcePath: 'D:/稿子/大梦', targetPath: 'D:/books/大梦', dryRun: true })
 
-    const planView = panel.find('[data-test="import-plan-view"]')
+    // ③ 逐类勾选（一种或几种）：勾「正文」与「世界书」，各给一个只读源目录。
+    const classRows = panel.findAll('[data-test="wizard-class-row"]')
+    expect(classRows.length).toBeGreaterThan(2)
+    const chapterRow = classRows.find((node) => node.text().includes('正文（小说稿）'))
+    const worldbookRow = classRows.find((node) => node.text().includes('世界书'))
+    await chapterRow.find('input[type="checkbox"]').setValue(true)
+    await worldbookRow.find('input[type="checkbox"]').setValue(true)
+    await chapterRow.find('.control-secondary').trigger('click')
+    await flushPromises()
+    await worldbookRow.find('.control-secondary').trigger('click')
+    await flushPromises()
+
+    // ④ 生成计划：先建骨架（session.create），再走导入通道的 dryRun——载荷带 sources（逐类）。
+    await panel.find('[data-test="wizard-next"]').trigger('click')
+    await flushPromises()
+    // 勾了正文＋世界书：两类所属载体自动并进伴生启用（向导的稿类→载体联动）。
+    expect(create).toHaveBeenCalledWith({ name: '大梦', primaryCarrier: 'fixture.novel', extraEnabled: ['pinax.carrier.novel', 'pinax.carrier.worldbook'], root: 'D:/books/大梦' })
+    expect(importRun.mock.calls.at(-1)[0]).toEqual({
+      sources: [{ category: 'chapter', path: 'D:/稿子/正文' }, { category: 'worldbook', path: 'D:/稿子/世界书' }],
+      targetPath: 'D:/books/大梦',
+      dryRun: true
+    })
+
+    const planView = panel.find('[data-test="wizard-plan-view"]')
     expect(planView.exists()).toBe(true)
-    const categories = planView.findAll('[data-test="import-category"]').map((node) => node.text())
+    const categories = planView.findAll('[data-test="wizard-category"]').map((node) => node.text())
     expect(categories).toEqual(['正文：2', '世界书：1'])
     expect(planView.text()).toContain('跳过 1 个')
-    expect(planView.find('[data-test="import-skipped"]').text()).toContain('杂件/笔记.md')
+    expect(planView.find('[data-test="wizard-skipped"]').text()).toContain('杂件/笔记.md')
 
     // 执行导入：dryRun:false 落盘 → 再经 projectOpen 打开新项目 → refresh。
     const viewCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length
-    await panel.find('[data-test="import-apply"]').trigger('click')
+    await panel.find('[data-test="wizard-next"]').trigger('click')
     await flushPromises()
-    expect(importRun.mock.calls.at(-1)[0]).toEqual({ sourcePath: 'D:/稿子/大梦', targetPath: 'D:/books/大梦', dryRun: false })
+    expect(importRun.mock.calls.at(-1)[0]).toEqual({
+      sources: [{ category: 'chapter', path: 'D:/稿子/正文' }, { category: 'worldbook', path: 'D:/稿子/世界书' }],
+      targetPath: 'D:/books/大梦',
+      dryRun: false
+    })
     expect(open).toHaveBeenCalledWith({ root: 'D:/books/大梦' })
-    expect(wrapper.find('[data-test="import-done"]').text()).toContain('已导入 3 个文件')
+    expect(panel.find('[data-test="wizard-done"]').text()).toContain('已导入 3 个文件')
     expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length).toBeGreaterThan(viewCallsBefore)
 
     // 结构动作走 shell 通道，不经内核写族那条 runtimeToolCall——那条路上 kernelWriteGuard 把
@@ -2335,14 +2372,14 @@ describe('导入既有稿向导（工单E1）', () => {
   it('导入失败原样摊开 typed error：code 与 message 都显示，不假装成功', async () => {
     const handlers = new Map()
     const picks = [
-      { ok: true, value: { picked: true, path: 'D:/稿子/旧项目' } },
-      { ok: true, value: { picked: true, path: 'D:/books/旧项目' } }
+      { ok: true, value: { picked: true, path: 'D:/books/旧项目' } },
+      { ok: true, value: { picked: true, path: 'D:/稿子/旧稿' } }
     ]
     handlers.set(IPC_CHANNELS.projectPickDir, vi.fn(async () => picks.shift()))
     handlers.set(IPC_CHANNELS.projectCreate, vi.fn(async () => ({ ok: true, value: {} })))
     handlers.set(IPC_CHANNELS.projectImportRun, vi.fn(async () => ({
       ok: false,
-      error: { code: 'PINAX_INVALID_INPUT', message: '该目录已是或曾是 Pinax 项目（含 .pinax/project.json）：D:/稿子/旧项目' }
+      error: { code: 'PINAX_INVALID_INPUT', message: '稿源目录已是或曾是 Pinax 项目（含 .pinax/ 元数据目录）：D:/稿子/旧稿' }
     })))
     const view = { ...carrierView(), project: null, needsPrimary: false, openError: null }
     const bridge = importBridge({ handlers, view })
@@ -2352,18 +2389,26 @@ describe('导入既有稿向导（工单E1）', () => {
     await flushPromises()
 
     const panel = wrapper.find('[aria-label="导入既有稿"]')
-    await panel.find('[data-test="import-pick-source"]').trigger('click')
+    await panel.find('[data-test="wizard-pick-dir"]').trigger('click')
     await flushPromises()
-    await panel.find('[data-test="import-pick-target"]').trigger('click')
+    await panel.find('[data-test="wizard-next"]').trigger('click')
     await flushPromises()
-    await panel.find('[data-test="import-plan"]').trigger('click')
+    await panel.find('[data-test="wizard-primary-novel"]').trigger('click')
+    await panel.find('[data-test="wizard-next"]').trigger('click')
+    await flushPromises()
+    const classRows = panel.findAll('[data-test="wizard-class-row"]')
+    const chapterRow = classRows.find((node) => node.text().includes('正文（小说稿）'))
+    await chapterRow.find('input[type="checkbox"]').setValue(true)
+    await chapterRow.find('.control-secondary').trigger('click')
+    await flushPromises()
+    await panel.find('[data-test="wizard-next"]').trigger('click')
     await flushPromises()
 
-    const failure = panel.find('[data-test="import-error"]')
+    const failure = panel.find('[data-test="wizard-error"]')
     expect(failure.exists()).toBe(true)
     expect(failure.text()).toContain('PINAX_INVALID_INPUT')
     expect(failure.text()).toContain('已是或曾是 Pinax 项目')
-    expect(panel.find('[data-test="import-plan-view"]').exists()).toBe(false)
+    expect(panel.find('[data-test="wizard-plan-view"]').exists()).toBe(false)
     expect(handlers.get(IPC_CHANNELS.projectOpen)).toBeUndefined()
     wrapper.unmount()
   })
@@ -3131,7 +3176,7 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
 })
 
 describe('无项目时的竖条（工单F · 作者反馈③）', () => {
-  it('竖条常驻：载体格禁用＋「打开项目后可用」，打开/新建动作可用，主题钮仍在底部', async () => {
+  it('竖条无项目形态（作者 2026-11-11 裁定「灰载体格很诡异」）：只有新建/打开/主题三格，灰格退役', async () => {
     const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
     const pick = vi.fn(async () => ({ ok: true, value: { picked: false, path: null } }))
     const open = vi.fn(async () => ({ ok: true, value: {} }))
@@ -3146,11 +3191,8 @@ describe('无项目时的竖条（工单F · 作者反馈③）', () => {
     expect(rail.find('[aria-label="打开项目…"]').exists()).toBe(true)
     expect(rail.find('[aria-label="新建项目…"]').exists()).toBe(true)
 
-    // registry.list() 的两块载体照常出现，但是禁用态，并说明打开项目后可用。
-    const cells = rail.findAll('.nx-ribbon-item[aria-disabled="true"]')
-    expect(cells).toHaveLength(2)
-    expect(cells.map((node) => node.attributes('aria-label'))).toEqual(['小说（夹具）', '剧本（夹具）'])
-    expect(cells[0].attributes('data-tooltip')).toBe('打开项目后可用')
+    // 灰载体格退役（沉默层：无项目时一个板都不存在，不提前展示）：全竖条没有禁用格。
+    expect(rail.findAll('.nx-ribbon-item[aria-disabled="true"]')).toHaveLength(0)
     expect(rail.find('.nx-ribbon-item.is-bottom').exists()).toBe(true)
 
     // 打开项目…：走系统目录对话框；取消就什么都不做（不调 projectOpen）。

@@ -33,9 +33,10 @@ export const IMPORT_LIMITS = Object.freeze({
   maxDepth: 12
 })
 
-/** 源目录顶层名 → 类别（server/mcp/projectImport.js:16-28 的同一张表）。 */
+/** 源目录顶层名 → 类别（server/mcp/projectImport.js:16-28 的同一张表；剧本是 Next 侧新增类）。 */
 export const IMPORT_CATEGORY_BY_DIR = Object.freeze({
   正文: 'chapter',
+  剧本: 'script',
   大纲: 'outline',
   世界书: 'worldbook',
   规则: 'rule',
@@ -49,7 +50,14 @@ export const IMPORT_CATEGORY_BY_DIR = Object.freeze({
 })
 
 /** 项目内允许写入的顶层目录（白名单；越出即拒绝，绝不写到项目外）。 */
-const ALLOWED_PROJECT_DIRS = new Set(['正文', '大纲', '世界书', '构思', '资料', '日志', '约束'])
+const ALLOWED_PROJECT_DIRS = new Set(['正文', '剧本', '大纲', '世界书', '构思', '资料', '日志', '约束'])
+
+/**
+ * 逐类导入（向导「一种或几种都可以」）的类别闭集：作者勾选哪些类，就各给一个只读源目录。
+ * category 与 IMPORT_CATEGORY_BY_DIR 的 decision 同名；形态识别照旧（章节仍要认出章节号、
+ * 世界书仍要过契约 v2），认不出的照样 skip——逐类指定的是「去哪找」，不替作者放宽「算什么」。
+ */
+export const IMPORT_SOURCE_CATEGORIES = Object.freeze(['chapter', 'script', 'worldbook', 'outline', 'rule', 'idea', 'source', 'log'])
 
 const CHAPTER_HEADING = /^\s*(?:#{1,6}\s*)?(?:第\s*([0-9零一二三四五六七八九十百千两]+)\s*[章节回]\s*[·・:：、,，.。_\-—]?\s*([^\n]{0,60})|([0-9]{1,3})\s*[._\-—]\s*([^\n]{1,60}))/u
 const CHAPTER_DIR_NAME = /第\s*[0-9零一二三四五六七八九十百千两]+\s*[章节回]/u
@@ -155,14 +163,17 @@ function readSourceFile(file) {
   return text
 }
 
-/** 单文件分类：只认确定性形态，认不出归 skip 并给出原因（server/mcp/projectImport.js:176-312 的同源子集）。 */
-function classifyFile({ entry, text }) {
+/** 单文件分类：只认确定性形态，认不出归 skip 并给出原因（server/mcp/projectImport.js:176-312 的同源子集）。
+ *  forced＝逐类导入指定的类别：只替换「类别判定」（不再看顶层目录名），章节号/世界书契约等形态识别照旧。 */
+function classifyFile({ entry, text, forced = null }) {
   const name = path.posix.basename(entry.relative)
   const parents = entry.chain.slice(0, -1)
   const topDir = entry.chain[0]
-  const tail = parents.length ? parents.slice(1).join('/') : ''
+  // auto 模式的首层是类目目录（正文/世界书…），相对目标要跳过它；
+  // 逐类强转时源根本身就是这一类的根，全部层级都保留。
+  const tail = forced ? parents.join('/') : (parents.length ? parents.slice(1).join('/') : '')
   const cleanName = stripExtension(name)
-  const category = IMPORT_CATEGORY_BY_DIR[topDir]
+  const category = forced ?? IMPORT_CATEGORY_BY_DIR[topDir]
 
   if (BINARY_EXTENSION.test(name)) {
     return { decision: 'skip', reason: 'binary-not-importable', detail: '图片/音视频/字体/压缩包/PDF 不是文本导入对象，保留在源目录' }
@@ -231,6 +242,11 @@ function classifyFile({ entry, text }) {
     return { decision: 'rule', name: cleanName, target: `约束/${safeSegment(cleanName)}.md`, chars: normalizeText(text).length }
   }
 
+  // 剧本（Next 侧新增类）：一文件一篇目，平铺进 剧本/ 并保留源内层级；篇目名＝文件名（不编集数）。
+  if (category === 'script') {
+    return { decision: 'script', name: cleanName, target: `剧本/${safeRelative(tail, cleanName)}.md`, chars: normalizeText(text).length }
+  }
+
   const inChapterDir = parents.some((dir) => CHAPTER_DIR_NAME.test(dir))
   if (category === 'chapter' || (!category && inChapterDir && PROSE_NAME.test(name))) {
     const shape = chapterShapeOf({ name, parents, text })
@@ -278,87 +294,133 @@ function isInside(child, parent) {
   return path.resolve(child).toLowerCase().startsWith(prefix.toLowerCase())
 }
 
-/** 入参校验：源/目标都是绝对目录、互不包含、源不是（曾是）Pinax 项目、目标必须是项目根。 */
-function resolveInputs({ sourcePath, targetPath } = {}) {
-  const source = typeof sourcePath === 'string' ? sourcePath.trim() : ''
+/** 入参校验：源/目标都是绝对目录、互不包含、源不是（曾是）Pinax 项目、目标必须是项目根。
+ *  两种形态：单源（sourcePath，整目录自动识别）与逐类（sources=[{category, path}]，向导「一种或几种」）。
+ *  返回统一为 { roots: [{root, category|null}], targetRoot, sourceRoot }——buildPlan 只认 roots。 */
+function resolveInputs({ sourcePath, targetPath, sources } = {}) {
+  if (sources !== null && sources !== undefined && (!Array.isArray(sources) || !sources.length)) {
+    return fail('INVALID_INPUT', 'sources 必须是非空数组（每项 {category, path}）；整目录自动识别请不要传 sources。')
+  }
+  const list = Array.isArray(sources) && sources.length
+    ? sources.map((item, index) => {
+        const category = String(item?.category ?? '')
+        if (!IMPORT_SOURCE_CATEGORIES.includes(category)) {
+          return { error: fail('INVALID_INPUT', `第 ${index + 1} 个稿源的类别「${category || '(空)'}」不在可导入类别（${IMPORT_SOURCE_CATEGORIES.join('／')}）里。`) }
+        }
+        const value = String(item?.path ?? '').trim()
+        if (!value) return { error: fail('INVALID_INPUT', `第 ${index + 1} 个稿源（${category}）缺路径：勾了这一类，就要给这一类的稿子目录。`) }
+        return { category, path: value }
+      })
+    : null
+  if (list && list.some((item) => item.error)) return list.find((item) => item.error).error
+  if (!list && !(typeof sourcePath === 'string' && sourcePath.trim())) {
+    return fail('INVALID_INPUT', '请提供稿子目录（sourcePath）：要导入的既有素材在哪个文件夹？')
+  }
   const target = typeof targetPath === 'string' ? targetPath.trim() : ''
-  if (!source) return fail('INVALID_INPUT', '请提供稿子目录（sourcePath）：要导入的既有素材在哪个文件夹？')
   if (!target) return fail('INVALID_INPUT', '请提供新项目位置（targetPath）：稿子要收进哪个空目录？')
-  for (const [label, value] of [['稿子目录', source], ['新项目位置', target]]) {
-    if (!path.isAbsolute(value)) return fail('INVALID_INPUT', `${label}必须是绝对路径：${value}`)
-    if (value.includes('..')) return fail('INVALID_INPUT', `${label}不允许包含 ..：${value}`)
-  }
-  const sourceRoot = path.resolve(source)
+  if (!path.isAbsolute(target) || target.includes('..')) return fail('INVALID_INPUT', `新项目位置必须是绝对路径且不含 ..：${target}`)
   const targetRoot = path.resolve(target)
-  if (!fs.existsSync(sourceRoot) || !fs.statSync(sourceRoot).isDirectory()) {
-    return fail('INVALID_INPUT', `稿子目录不存在或不是目录：${sourceRoot}`)
-  }
   if (!fs.existsSync(targetRoot) || !fs.statSync(targetRoot).isDirectory()) {
     return fail('INVALID_INPUT', `新项目位置不存在或不是目录：${targetRoot}`)
   }
-  if (isSamePath(sourceRoot, targetRoot)) {
-    return fail('INVALID_INPUT', '稿子目录不能就是项目根：导入是把稿子收进项目的标准目录，两者必须是不同目录（原稿目录只读）。')
+
+  const sourceRoots = list
+    ? list.map((item) => ({ category: item.category, root: path.resolve(item.path) }))
+    : [{ category: null, root: path.resolve(String(sourcePath).trim()) }]
+  for (const { category, root } of sourceRoots) {
+    const label = category ? `「${category}」稿源目录` : '稿子目录'
+    if (!path.isAbsolute(String(root)) || String(sourcePath ?? '').includes('..') || (Array.isArray(sources) && sources.some((item) => String(item?.path ?? '').includes('..')))) {
+      return fail('INVALID_INPUT', `${label}必须是绝对路径且不含 ..：${root}`)
+    }
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
+      return fail('INVALID_INPUT', `${label}不存在或不是目录：${root}`)
+    }
+    if (isSamePath(root, targetRoot)) {
+      return fail('INVALID_INPUT', `${label}不能就是项目根：导入是把稿子收进项目的标准目录，两者必须是不同目录（原稿目录只读）。`)
+    }
+    if (isInside(targetRoot, root)) {
+      return fail('INVALID_INPUT', `新项目位置不能在${label}里面：导入只新增目标项目里的文件，绝不往源目录写。`)
+    }
+    if (isInside(root, targetRoot)) {
+      return fail('INVALID_INPUT', `${label}不能在新项目位置里面：导入只新增目标项目里的文件，绝不往源目录写。`)
+    }
+    // 裁定第 5 条：源目录里已有 .pinax/ → 计划阶段如实报「该目录已是或曾是 Pinax 项目」并停，不猜。
+    if (fs.existsSync(path.join(root, '.pinax'))) {
+      return fail('INVALID_INPUT', `${label}已是或曾是 Pinax 项目（含 .pinax/ 元数据目录）：${root}。导入源必须是作者的原稿目录——请另选一个目录，或先把 .pinax/ 移走再导入。`, { sourcePath: root })
+    }
   }
-  if (isInside(targetRoot, sourceRoot)) {
-    return fail('INVALID_INPUT', '新项目位置不能在稿子目录里面：导入只新增目标项目里的文件，绝不往源目录写。')
+  // 多源之间也要互不包含：两个源互相套着，「只读源」的边界就说不清了。
+  for (let a = 0; a < sourceRoots.length; a++) {
+    for (let b = a + 1; b < sourceRoots.length; b++) {
+      if (isSamePath(sourceRoots[a].root, sourceRoots[b].root)) {
+        return fail('INVALID_INPUT', `「${sourceRoots[a].category}」与「${sourceRoots[b].category}」选了同一个目录：同一批稿子扫两遍没有意义，请各给各的目录（或合并成一类）。`)
+      }
+      if (isInside(sourceRoots[a].root, sourceRoots[b].root) || isInside(sourceRoots[b].root, sourceRoots[a].root)) {
+        return fail('INVALID_INPUT', `「${sourceRoots[a].category}」与「${sourceRoots[b].category}」的目录互相套着（${sourceRoots[a].root} / ${sourceRoots[b].root}）：源的只读边界会说不清，请给两处互不相干的目录。`)
+      }
+    }
   }
-  if (isInside(sourceRoot, targetRoot)) {
-    return fail('INVALID_INPUT', '稿子目录不能在新项目位置里面：导入只新增目标项目里的文件，绝不往源目录写。')
-  }
-  // 裁定第 5 条：源目录里已有 .pinax/ → 计划阶段如实报「该目录已是或曾是 Pinax 项目」并停，不猜。
-  // 判据是 .pinax/ 目录本身而不是 project.json：骨架可能在（上一次导入/建项目留下的），清单不一定还在。
-  if (fs.existsSync(path.join(sourceRoot, '.pinax'))) {
-    return fail('INVALID_INPUT', `该目录已是或曾是 Pinax 项目（含 .pinax/ 元数据目录）：${sourceRoot}。导入源必须是作者的原稿目录——请另选一个目录，或先把 .pinax/ 移走再导入。`, { sourcePath: sourceRoot })
-  }
+  // 目标必须是已建骨架的项目根（向导先建项目再导入）。
   if (!fs.existsSync(path.join(targetRoot, '.pinax', 'project.json'))) {
     return fail('INVALID_INPUT', `新项目位置还不是 Pinax 项目（缺 .pinax/project.json）：${targetRoot}。向导会先用「先建项目」建好骨架再导入。`, { targetPath: targetRoot })
   }
-  return ok({ sourceRoot, targetRoot })
+  return ok({ sourceRoot: sourceRoots[0].root, roots: sourceRoots, targetRoot, sources: list ? list.map((item) => ({ category: item.category, path: path.resolve(item.path) })) : null })
 }
 
-/** 生成计划（纯读）：遍历 + 分类 + 同源收敛，不写任何文件（目标只在校验与落盘两步用到）。 */
-function buildPlan({ sourceRoot }) {
-  const scanned = walkSource(sourceRoot)
+/** 生成计划（纯读）：遍历（一个或多个源）＋ 分类 ＋ 同源收敛，不写任何文件。
+ *  roots＝[{root, category}]：category 为 null 是整目录自动识别；给定时逐类强转（形态识别照旧）。 */
+function buildPlan({ roots }) {
   const plan = []
   const skipped = []
   let bytesSeen = 0
   let considered = 0
+  const files = []
+  const symlinks = []
+  const tooDeep = []
+  for (const { root, category } of roots) {
+    const scanned = walkSource(root)
+    files.push(...scanned.files.map((entry) => ({ ...entry, root, forced: category ?? null })))
+    symlinks.push(...scanned.symlinks.map((item) => path.basename(root) + '/' + item))
+    tooDeep.push(...scanned.tooDeep.map((item) => path.basename(root) + '/' + item))
+  }
+  const manySources = roots.length > 1
 
-  for (const entry of scanned.files) {
+  for (const entry of files) {
+    const display = manySources ? `${path.basename(entry.root)}/${entry.relative}` : entry.relative
     if (considered >= IMPORT_LIMITS.maxFiles) {
-      skipped.push({ file: entry.relative, reason: 'over-limit', detail: `已达 maxFiles=${IMPORT_LIMITS.maxFiles}，其余未处理` })
+      skipped.push({ file: display, reason: 'over-limit', detail: `已达 maxFiles=${IMPORT_LIMITS.maxFiles}，其余未处理` })
       continue
     }
     const baseName = path.posix.basename(entry.relative)
     if (BINARY_EXTENSION.test(baseName)) {
-      skipped.push({ file: entry.relative, reason: 'binary-not-importable', detail: '图片/音视频/字体/压缩包/PDF 不是文本导入对象，保留在源目录' })
+      skipped.push({ file: display, reason: 'binary-not-importable', detail: '图片/音视频/字体/压缩包/PDF 不是文本导入对象，保留在源目录' })
       continue
     }
     if (!TEXT_EXTENSION.test(baseName)) {
-      skipped.push({ file: entry.relative, reason: 'not-text', detail: '只导入 md/txt/markdown/json' })
+      skipped.push({ file: display, reason: 'not-text', detail: '只导入 md/txt/markdown/json' })
       continue
     }
     let stat
-    try { stat = fs.statSync(path.join(sourceRoot, entry.relative)) } catch { continue }
+    try { stat = fs.statSync(path.join(entry.root, entry.relative)) } catch { continue }
     if (stat.size > IMPORT_LIMITS.maxFileBytes) {
-      skipped.push({ file: entry.relative, reason: 'file-too-large', detail: `超过 ${IMPORT_LIMITS.maxFileBytes} 字节单文件上限` })
+      skipped.push({ file: display, reason: 'file-too-large', detail: `超过 ${IMPORT_LIMITS.maxFileBytes} 字节单文件上限` })
       continue
     }
     if (bytesSeen + stat.size > IMPORT_LIMITS.maxTotalBytes) {
-      skipped.push({ file: entry.relative, reason: 'total-too-large', detail: `累计超过 ${IMPORT_LIMITS.maxTotalBytes} 字节上限` })
+      skipped.push({ file: display, reason: 'total-too-large', detail: `累计超过 ${IMPORT_LIMITS.maxTotalBytes} 字节上限` })
       continue
     }
     considered++
     bytesSeen += stat.size
-    const text = readSourceFile(path.join(sourceRoot, entry.relative))
-    if (text === null) { skipped.push({ file: entry.relative, reason: 'unreadable', detail: '读取失败、超限或含二进制字节' }); continue }
-    const classified = classifyFile({ entry, text })
+    const text = readSourceFile(path.join(entry.root, entry.relative))
+    if (text === null) { skipped.push({ file: display, reason: 'unreadable', detail: '读取失败、超限或含二进制字节' }); continue }
+    const classified = classifyFile({ entry, text, forced: entry.forced })
     if (classified.decision === 'skip') {
-      skipped.push({ file: entry.relative, reason: classified.reason, code: classified.code || null, detail: classified.detail || '' })
+      skipped.push({ file: display, reason: classified.reason, code: classified.code || null, detail: classified.detail || '' })
       continue
     }
     plan.push({
-      source: entry.relative,
+      source: display,
       bytes: stat.size,
       chars: classified.chars ?? normalizeText(text).length,
       ...classified,
@@ -390,7 +452,7 @@ function buildPlan({ sourceRoot }) {
   const byReason = {}
   for (const item of skipped) byReason[item.reason] = (byReason[item.reason] || 0) + 1
 
-  return { scanned, skipped, deduped, collapsed, bytesSeen, considered, byDecision, byReason }
+  return { scanned: { files, symlinks, tooDeep }, skipped, deduped, collapsed, bytesSeen, considered, byDecision, byReason }
 }
 
 function baseReport({ mode, sourceRoot, targetRoot, built }) {
@@ -470,9 +532,9 @@ function writeNewFile({ root, target, text }) {
   return { created: true, reused: false }
 }
 
-/** 分类计划（dryRun）：只读源目录，产出一份可给人核对的报告。 */
-export function planImport({ sourcePath, targetPath } = {}) {
-  const resolved = resolveInputs({ sourcePath, targetPath })
+/** 分类计划（dryRun）：只读源目录（单源自动识别，或逐类多源），产出一份可给人核对的报告。 */
+export function planImport({ sourcePath, targetPath, sources = null } = {}) {
+  const resolved = resolveInputs({ sourcePath, targetPath, sources })
   if (!resolved.ok) return resolved
   try {
     const built = buildPlan(resolved.value)
@@ -483,8 +545,8 @@ export function planImport({ sourcePath, targetPath } = {}) {
 }
 
 /** 执行导入：按同一套计划落盘到目标项目的标准目录；失败逐条记账，不中断其余文件。 */
-export function runImport({ sourcePath, targetPath } = {}) {
-  const resolved = resolveInputs({ sourcePath, targetPath })
+export function runImport({ sourcePath, targetPath, sources = null } = {}) {
+  const resolved = resolveInputs({ sourcePath, targetPath, sources })
   if (!resolved.ok) return resolved
   try {
     const built = buildPlan(resolved.value)

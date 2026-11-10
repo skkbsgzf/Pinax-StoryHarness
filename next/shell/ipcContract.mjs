@@ -475,9 +475,15 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return session.createBare({ name: input.name })
       // E1 导入既有稿：结构动作与 projectCreate 同级——作者在统一二级页里显式按下，
       // 不经写族闸（那条闸拦的是模型侧的内核写族），也不碰 server/mcp 的导入语义。
+      // sources＝逐类导入（向导「一种或几种」）：[{category, path}]，给了就按类扫描；校验在适配器。
       case IPC_CHANNELS.projectImportRun:
         return importProject
-          ? importProject({ sourcePath: input.sourcePath, targetPath: input.targetPath, dryRun: input.dryRun !== false })
+          ? importProject({
+              sourcePath: input.sourcePath,
+              targetPath: input.targetPath,
+              dryRun: input.dryRun !== false,
+              sources: Array.isArray(input.sources) ? input.sources : null
+            })
           : fail('INVALID_INPUT', '导入适配器未接入（主进程未注入 projectImportAdapter）：这条通道现在只报缺，不落盘')
       // 批次30：散文章节稿 → 大纲/outline.json。与导入同级的结构动作，走 shell 通道不经写族闸；
       // 只认当前项目根与当前文件服务（渲染层指定不了别的目录），dryRun 缺省＝只扫描不写盘。

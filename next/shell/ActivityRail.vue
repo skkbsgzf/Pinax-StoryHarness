@@ -7,14 +7,13 @@ import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchToolt
  * 最左一栏：图标竖条（Obsidian 的 ribbon）。
  *
  * 有项目：一格＝一块板（一个载体）。点它：右边开出索引窗；再点同一格：索引窗收起。
- * 无项目（工单F · 作者反馈③「没有项目的情况下，左边的按钮也给我弄没了」）：
- * 载体清单来自 registry.list()（与「有没有打开项目」无关，见 next/shell/ipcContract.mjs 的
- * carriers 分支），画成禁用格（tooltip「打开项目后可用」）；顶部再加「打开项目…」「新建项目…」
- * 两枚动作，底部照旧留主题钮。动作只上报事件——通道调用与弹窗落点仍在 AppNext（与菜单同一条分发）。
+ * 无项目（作者 2026-11-11 裁定：原「载体格禁用态」很诡异——「没有项目的时候，左侧弄很多
+ * 灰的不可用载体就很诡异」，11 个灰格是提前展示未来才存在的东西）：只留「新建项目…」（主操作）
+ * 与「打开项目…」两枚动作，底部照旧留主题钮。动作只上报事件——通道调用与弹窗落点仍在
+ * AppNext（与菜单同一条分发）。
  *
  * 图标与提示复用老前端本体（WorkbenchIcon / workbenchTooltip），
- * 度量与配色抄老前端 .workspace-activity-bar（src/components/workbench/WorkspaceContentGroups.vue:190-196），
- * 数字由 next/tests/visual-contract.test.mjs 钉住，不许两边各漂各的。
+ * 度量与配色抄老前端 .workspace-activity-bar（src/components/workbench/WorkspaceContentGroups.vue:190-196）。
  */
 const props = defineProps({
   boards: { type: Array, default: () => [] },
@@ -22,10 +21,8 @@ const props = defineProps({
   /** 哪个板块的索引窗正开着（开着的那一格才有展开记号）。 */
   openId: { type: String, default: null },
   scheme: { type: String, default: 'light' },
-  /** 已打开的项目；null／缺省＝无项目形态（载体格禁用 + 打开／新建动作）。 */
+  /** 已打开的项目；null／缺省＝无项目形态（只有新建／打开两枚动作）。 */
   project: { type: Object, default: null },
-  /** registry.list() 的载体清单：无项目时也照常给（不依赖 view）。 */
-  carriers: { type: Array, default: () => [] },
   /**
    * 载体 id → { color, unackedNotices }（批次49，服务与通知池的行色）。
    * 没声明的载体不在表里——没有服务／MCP 的板不画点。
@@ -35,13 +32,6 @@ const props = defineProps({
 const emit = defineEmits(['select', 'toggle-theme', 'open-project', 'new-project'])
 
 const isDark = computed(() => props.scheme === 'dark')
-
-/** 载体格的图标：清单里目录窗 pane 声明的那枚（没有就退回库图标）。 */
-function carrierIcon(carrier) {
-  const panes = Array.isArray(carrier?.panes) ? carrier.panes : []
-  const pane = panes.find((item) => item?.slot === 'left-dock' && item.icon) ?? panes.find((item) => item?.icon)
-  return pane?.icon ?? 'library'
-}
 </script>
 
 <template>
@@ -73,17 +63,8 @@ function carrierIcon(carrier) {
       </button>
     </template>
 
-    <!-- 无项目形态（工单F · 反馈③）：动作钮常驻，载体格如实禁用，不让左栏只剩主题钮。 -->
+    <!-- 无项目形态（作者 2026-11-11 裁定）：新建为主操作，打开为次操作；灰载体格退役。 -->
     <template v-else>
-      <button
-        type="button"
-        class="nx-ribbon-item"
-        aria-label="打开项目…"
-        v-workbench-tooltip="{ text: '打开项目…', side: 'right' }"
-        @click="emit('open-project')"
-      >
-        <WorkbenchIcon name="folder-open" :size="20" />
-      </button>
       <button
         type="button"
         class="nx-ribbon-item"
@@ -94,18 +75,13 @@ function carrierIcon(carrier) {
         <WorkbenchIcon name="plus" :size="20" />
       </button>
       <button
-        v-for="carrier in carriers"
-        :key="carrier.id"
         type="button"
-        class="nx-ribbon-item is-disabled"
-        aria-disabled="true"
-        tabindex="-1"
-        :aria-label="carrier.title"
-        :data-carrier-id="carrier.id"
-        data-tooltip="打开项目后可用"
-        v-workbench-tooltip="{ text: '打开项目后可用', side: 'right' }"
+        class="nx-ribbon-item"
+        aria-label="打开项目…"
+        v-workbench-tooltip="{ text: '打开项目…', side: 'right' }"
+        @click="emit('open-project')"
       >
-        <WorkbenchIcon :name="carrierIcon(carrier)" :size="22" />
+        <WorkbenchIcon name="folder-open" :size="20" />
       </button>
     </template>
 

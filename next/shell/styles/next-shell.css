@@ -479,6 +479,23 @@ body {
   line-height: 1.7;
   color: var(--text-muted);
 }
+/* 无项目开始页（作者 2026-11-11 裁定）：一句话＋一个主操作钮＋两个次操作，右栏对话可用的说明垫底。 */
+.center-empty-main {
+  margin: 0 0 12px;
+  font-size: var(--nx-fs-lg);
+  color: var(--text-primary);
+}
+.center-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.center-empty-sub {
+  margin: 0;
+  font-size: var(--nx-fs-md);
+  color: var(--text-muted);
+}
 
 /* —— 拖拽把手 ————————————————————————————————————————————— */
 .resizer {
