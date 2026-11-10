@@ -14,6 +14,7 @@ import { presentTurn, applyDirectorAction } from '../fact/usecases/deduce/turn.j
 import { settleChoice, settleInject, settleHypothesis } from '../fact/usecases/deduce/settle.js'
 import { createSessionStore } from '../fact/usecases/deduce/sessionStore.js'
 import { addKnownExtra } from '../fact/usecases/deduce/sessionState.js'
+import { buildWorldbookPatch } from '../fact/usecases/deduce/patchChannel.js'
 
 /**
  * 推演面板（M1-c · 第一视角）：AppNext 直接挂载的一枚中栏面板，不走新页签、不注册新槽位。
@@ -86,6 +87,12 @@ const tensionInfo = ref({ level: 'low', heat: 0, active: 0, filled: [] })
 const triggers = computed(() => tensionInfo.value.filled ?? [])
 /** 悬置伏笔（P-WIRE）：plot 里 hypothesis+open 的条目——推演张力来自上一拍没解决的事。 */
 const openHooks = computed(() => sceneContextInfo.value?.openHypotheses ?? [])
+/** P-M5：收束时编出的世界书补丁（proposed，待作者采纳）。 */
+const lastPatch = ref(null)
+/** P-M5：重演源（上一局事件流作固定端点）。 */
+const replaySource = ref(null)
+/** P-M5：重演时选的下一个视角。 */
+const replayPov = ref('')
 
 let store = null
 let seq = 1
@@ -109,7 +116,13 @@ async function openSession() {
     return
   }
   try {
-    const opened = openDeduceSession({ entries: frozenEntries.value, pov: povChoice.value })
+    const opened = openDeduceSession({
+      entries: frozenEntries.value,
+      pov: povChoice.value,
+      // P-M5：有重演源时把它作为固定端点带进开局（端点固定、路径自由）。
+      priorEvents: replaySource.value?.priorEvents ?? [],
+      lineage: replaySource.value ? { parent: replaySource.value.sourceRunId, atSeq: replaySource.value.sourceRound } : null
+    })
     session.value = opened.session
     state.value = opened.state
     runId = opened.session.runId
@@ -231,8 +244,45 @@ function finish(reason) {
   record('session-end', { reason })
   const events = store?.listEvents(runId).events ?? []
   snapshot.value = archiveSnapshot({ state: state.value, session: session.value, reason, events })
+  // P-M5 补丁通道：收束时把已确认的拍编成世界书补丁（一律 proposed，作者显式采纳）。
+  // 中断也生成——中断前发生过的事同样是事实；只是不给「已收束」的措辞。
+  try {
+    const patch = buildWorldbookPatch({
+      events,
+      domain: props.worldName || '推演',
+      bookId: session.value?.worldHash?.slice(0, 8) ?? '',
+      existingIds: (props.entries ?? []).map((entry) => String(entry?.id ?? ''))
+    })
+    lastPatch.value = patch
+    if (patch.patches.length) {
+      pushReceipt('info', `本局可回写 ${patch.patches.length} 条已确认事实（proposed，待你采纳）。`, { patches: patch.patches.length })
+    } else if (patch.notes.length) {
+      pushReceipt('info', patch.notes.join('；'))
+    }
+  } catch (err) {
+    lastPatch.value = null
+    pushReceipt('warn', `补丁编不出来（本局留档不受影响）：${err?.message ?? String(err)}`)
+  }
   pushReceipt('info', `${reason === 'interrupt' ? '中断' : '收束'}：本局已留档（第 ${state.value.round} 拍，${snapshot.value.eventCount} 条事件）。`, snapshot.value)
   phase.value = 'archived'
+}
+
+/**
+ * P-M5 换视角重演：用本局事件流作固定端点，换一个视角重开一局。
+ * 端点固定、路径自由——新局只钉住「上一次已确认发生了什么」，不钉住怎么到达。
+ * 实现上不绕路：直接把 priorEvents 交给 openSession 走同一条开局链。
+ */
+function replayAs(otherPov) {
+  const events = store?.listEvents(runId).events ?? []
+  if (!events.length || !otherPov) return
+  // 先抓快照：reset 会清掉 runId 与 store。
+  const source = { priorEvents: [...events], sourceRunId: runId, sourceRound: snapshot.value?.round ?? 0 }
+  const receiptsBefore = receipts.value
+  reset()
+  replaySource.value = source
+  povChoice.value = otherPov
+  receipts.value = receiptsBefore
+  pushReceipt('info', `重演准备：视角「${otherPov}」，把上一局 ${events.filter((event) => event.type === 'settle').length} 拍作为固定端点。点「冻结世界书并开局」开始。`)
 }
 
 function reset() {
@@ -248,6 +298,7 @@ function reset() {
   sceneContextInfo.value = null
   knownDegraded.value = false
   tensionInfo.value = { level: 'low', heat: 0, active: 0, filled: [] }
+  lastPatch.value = null
   error.value = ''
   injectName.value = ''
   injectDefinition.value = ''
@@ -459,7 +510,7 @@ function jumpTo(name) {
       </aside>
     </div>
 
-    <!-- 收束／中断：快照留档 -->
+    <!-- 收束／中断：快照留档 ＋ 补丁回写 ＋ 换视角重演 -->
     <div v-else class="nx-deduce-archived" data-test="deduce-archived">
       <p class="nx-deduce-lead">{{ snapshot?.reason === 'interrupt' ? '本局已中断' : '本局已收束' }}，快照留档如下。</p>
       <dl class="nx-deduce-archive-grid">
@@ -469,6 +520,37 @@ function jumpTo(name) {
         <div><dt>事件数</dt><dd>{{ snapshot?.eventCount }}</dd></div>
         <div><dt>状态指纹</dt><dd>{{ snapshot?.stateHash }}</dd></div>
       </dl>
+
+      <section v-if="lastPatch" class="nx-deduce-panel" data-test="deduce-patch">
+        <h3 class="nx-deduce-panel-title">世界书补丁 · {{ lastPatch.patches.length }}</h3>
+        <p class="nx-deduce-hint">只收已确认事实，一律 proposed——作者采纳后才进世界书。</p>
+        <ul class="nx-deduce-list">
+          <li v-for="item in lastPatch.patches.slice(0, 8)" :key="item.id" class="nx-deduce-patch">
+            <span class="nx-deduce-patch-name">{{ item.name }}</span>
+            <span class="nx-deduce-patch-status">{{ item.status }}</span>
+          </li>
+        </ul>
+        <p v-if="lastPatch.notes.length" class="nx-deduce-hint">{{ lastPatch.notes.join('；') }}</p>
+      </section>
+
+      <section class="nx-deduce-panel" data-test="deduce-replay">
+        <h3 class="nx-deduce-panel-title">换视角重演</h3>
+        <p class="nx-deduce-hint">本局已确认的 {{ snapshot?.round }} 拍会成为固定端点：换视角重走同一时段，端点不动、路径自由。</p>
+        <div class="nx-deduce-setup-row">
+          <label class="nx-deduce-setup-label" for="deduce-replay-pov">下一局主视角</label>
+          <select id="deduce-replay-pov" v-model="replayPov" class="nx-deduce-select" data-test="deduce-replay-pov">
+            <option v-for="item in characters.filter((entry) => entry.name !== snapshot?.pov)" :key="item.name" :value="item.name">{{ item.name }}</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          class="control-primary nx-deduce-replay-go"
+          data-test="deduce-replay-go"
+          :disabled="!replayPov"
+          @click="replayAs(replayPov)"
+        >以「{{ replayPov || '…' }}」重演</button>
+      </section>
+
       <button type="button" class="control-primary nx-deduce-reopen" data-test="deduce-reopen" @click="reset">重新开局</button>
     </div>
 

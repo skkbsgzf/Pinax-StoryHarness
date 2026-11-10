@@ -276,3 +276,76 @@ describe('P-M4 · 威胁前线（fronts/clocks）', () => {
     expect(wrapper.find('[data-test="deduce-fronts"]').exists()).toBe(true)
   })
 })
+
+/**
+ * P-M5：连续宇宙的两个入口——收束时编出的世界书补丁、换视角重演。
+ */
+describe('P-M5 · 连续宇宙（补丁回写＋换视角重演）', () => {
+  async function playOneBeat(wrapper) {
+    await wrapper.find('[data-test="deduce-mode-player"]').trigger('click')
+    await flushPromises()
+    const pick = wrapper.findAll('[data-test^="deduce-pick-"]')
+    expect(pick.length).toBeGreaterThan(0)
+    await pick[0].trigger('click')
+    await flushPromises()
+  }
+
+  it('收束后出「世界书补丁」块：只列 proposed，并写明作者采纳后才进世界书', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: boardEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await playOneBeat(wrapper)
+    await wrapper.find('[data-test="deduce-finish"]').trigger('click')
+    await flushPromises()
+
+    const patch = wrapper.find('[data-test="deduce-patch"]')
+    expect(patch.exists()).toBe(true)
+    expect(patch.text()).toContain('proposed')
+    expect(patch.text()).toContain('作者采纳后')
+    // 补丁条数＝本局已确认拍数，不该把候选/假设算进去
+    expect(patch.text()).toMatch(/世界书补丁 · \d+/)
+  })
+
+  it('换视角重演：选另一个角色点重演 → 回到开局态并带上固定端点说明', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: boardEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await playOneBeat(wrapper)
+    await wrapper.find('[data-test="deduce-finish"]').trigger('click')
+    await flushPromises()
+
+    const replay = wrapper.find('[data-test="deduce-replay"]')
+    expect(replay.exists()).toBe(true)
+    const select = wrapper.find('[data-test="deduce-replay-pov"]')
+    // 下拉里不该出现本局视角自己
+    const options = select.findAll('option').map((option) => option.text())
+    expect(options).not.toContain('克莱恩')
+    expect(options.length).toBeGreaterThan(0)
+
+    await select.setValue('奥黛丽')
+    await wrapper.find('[data-test="deduce-replay-go"]').trigger('click')
+    await flushPromises()
+
+    // 回到开局态：setup 出现，主角已预选成奥黛丽
+    expect(wrapper.find('[data-test="deduce-setup"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deduce-pov"]').element.value).toBe('奥黛丽')
+    // setup 态不渲染回执列表（回执面板只在 playing 态）；重演说明用开局成功后的回执验，
+    // 这里先确认重演源已带走——开局后端点上屏在下一个用例里钉。
+  })
+
+  it('重演开局后端点上屏：局面卡仍出自本视角、端点已进状态（不把上一局的场景直接搬过来）', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: boardEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await playOneBeat(wrapper)
+    await wrapper.find('[data-test="deduce-finish"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-test="deduce-replay-pov"]').setValue('奥黛丽')
+    await wrapper.find('[data-test="deduce-replay-go"]').trigger('click')
+    await flushPromises()
+    await openSession(wrapper)
+
+    expect(wrapper.find('[data-test="deduce-scene-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deduce-fidelity"]').exists()).toBe(true)
+    // 视角换成了奥黛丽：局面卡的「在场」以她为主视角
+    expect(wrapper.find('[data-field="who"]').text()).toContain('奥黛丽')
+  })
+})

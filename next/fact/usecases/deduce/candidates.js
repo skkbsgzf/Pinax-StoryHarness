@@ -97,6 +97,10 @@ export async function dramaCandidates({ state, pov, llmPort, seedPrompt, limit =
     locations: (sceneContext?.locations ?? []).slice(0, 4),
     rules: (sceneContext?.rules ?? []).map((item) => item.name).slice(0, 5),
     openHooks: (sceneContext?.openHypotheses ?? []).slice(0, 3).map((item) => item.definition || item.name),
+    // P-M5 换视角重演：先跑视角已确认的拍是固定端点——后跑视角只能换路径，不能改写结果。
+    ...(Array.isArray(state.replayEndpoints) && state.replayEndpoints.length
+      ? { fixedEndpoints: state.replayEndpoints.slice(0, 6).map((item) => `第${item.round ?? '?'}拍：${item.text}`) }
+      : {}),
     recentEvents: state.log.filter((l) => l.kind === 'settle').slice(-3).map((l) => l.text ?? '')
   })
   const spend = spendAi(state, 1)
