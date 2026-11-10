@@ -195,9 +195,6 @@ describe('运行时栏', () => {
     })
     expect(wrapper.find('.authoring-knowledge__error').text()).toContain('未接模型运行器')
     expect(wrapper.text()).not.toContain('编造')
-    // 工具面折在底部一个折叠层里，默认不摊开。
-    expect(wrapper.find('.authoring-knowledge__agent-detail').attributes('open')).toBeUndefined()
-    expect(wrapper.findAll('.authoring-knowledge__agent-list li')).toHaveLength(19)
     wrapper.unmount()
   })
 
@@ -445,7 +442,6 @@ describe('运行时栏', () => {
 
     expect(wrapper.find('[data-test="usage-chip"]').text()).toBe('1200 in／380 out')
     expect(wrapper.find('[data-test="usage-chip"]').attributes('title')).toBe('这一轮模型给出的用量')
-    expect(wrapper.find('[data-test="session-usage"]').text()).toContain('最近一轮 1200 in／380 out（计 1580）')
 
     // 状态那一格走的是 messageStatus 唯一读判口；老数据没有 status 字段也读得出「已完成」。
     const status = wrapper.find('.authoring-knowledge__answer-status')
@@ -482,7 +478,7 @@ describe('运行时栏', () => {
     // 负断言：屏上任何地方都不许出现「0 tokens」，也不许出现「0 in／0 out」这种假数。
     expect(wrapper.text()).not.toContain('0 tokens')
     expect(wrapper.text()).not.toContain('0 in')
-    // 会话级那一格没有数就不画——留一格 0 比不画更坏。
+    // 会话级那一格已随状态排退役（作者 2026-11-11 裁定）：永不在屏上。
     expect(wrapper.find('[data-test="session-usage"]').exists()).toBe(false)
     expect(wrapper.findComponent(AssistantDialog).props('messages').at(-1).usage).toBe(null)
     wrapper.unmount()
@@ -1556,11 +1552,9 @@ describe('运行时栏', () => {
     wrapper.unmount()
   })
 
-  it('〔批次68-R2 任务三〕composer 卡片三层：＋ 菜单插触发符走同一条 typeahead、状态排全真数据、模型 chip 无清单不可点、不摆麦克风死钮', async () => {
+  it('〔批次68-R2 任务三〕composer 卡片：＋ 菜单插触发符走同一条 typeahead、模型 chip 无清单不可点、不摆麦克风死钮（状态排随作者 2026-11-11 裁定退役）', async () => {
     const wrapper = mount(AssistantDialog, {
       props: {
-        inflight: 2,
-        tools: ['pinax_project_list'],
         messages: [
           { id: 'q1', role: 'user', text: '这章节奏怎么样？', at: '10:00' },
           {
@@ -1571,7 +1565,7 @@ describe('运行时栏', () => {
         ]
       }
     })
-    // 三层结构：卡片（输入行＋控件排）→ 状态排 → 折叠区。
+    // 卡片（输入行＋控件排）。状态排与「工具面与用量明细」折叠区随作者 2026-11-11 裁定退役。
     const card = wrapper.find('[data-test="composer-card"]')
     expect(card.exists()).toBe(true)
     expect(card.find('.authoring-knowledge__input-row textarea').exists()).toBe(true)
@@ -1585,16 +1579,8 @@ describe('运行时栏', () => {
     expect(wrapper.find('[data-test="composer-model-chip"]').attributes('disabled')).toBeDefined()
     expect(wrapper.find('[data-test="composer-model-chip"]').text()).toBe('模型未回报')
 
-    // 状态排三项全真数据：在途＝宿主 ask 计数；上下文＝最近一条真 envelope；本轮 tokens＝既有 usage 链。
-    const status = wrapper.find('[data-test="composer-status"]')
-    expect(status.find('[data-test="status-inflight"]').text()).toBe('在途 2')
-    expect(status.find('[data-test="status-envelope"]').text()).toBe('上下文 6 块／1800 字')
-    expect(status.find('[data-test="status-tokens"]').text()).toBe('本轮 1580 tokens')
-    // 工具面与 session-usage 收进状态排下方同一折叠区（内容只挪位）。
-    const more = wrapper.find('[data-test="composer-more"]')
-    expect(more.exists()).toBe(true)
-    expect(more.find('[data-test="session-usage"]').text()).toContain('最近一轮 1200 in／380 out（计 1580）')
-    expect(more.find('.authoring-knowledge__agent-detail').exists()).toBe(true)
+    expect(wrapper.find('[data-test="composer-status"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="composer-more"]').exists()).toBe(false)
 
     // ＋ 菜单：三项都指向既有触发符；点「技能与命令」＝往草稿插 `/` 并唤起**同一条** typeahead 弹层。
     await wrapper.find('[data-test="composer-plus"]').trigger('click')
@@ -1607,34 +1593,6 @@ describe('运行时栏', () => {
     expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="composer-plus-menu"]').exists()).toBe(false)
     wrapper.unmount()
-
-    // 没数据的状态排如实「未回报」：不换算冒充、不落 0；连明细折叠区都不画。
-    const bare = mount(AssistantDialog, { props: { messages: [] } })
-    expect(bare.find('[data-test="status-inflight"]').text()).toBe('在途 0')
-    expect(bare.find('[data-test="status-envelope"]').text()).toBe('上下文 未回报')
-    expect(bare.find('[data-test="status-tokens"]').text()).toBe('本轮 tokens 未回报')
-    expect(bare.find('[data-test="composer-more"]').exists()).toBe(false)
-    bare.unmount()
-  })
-
-  /**
-   * 〔批次68-R5 发现6〕双「未回报」不许同屏：答过而全线没有 usage 回报时，卡片 chip
-   * 「这一轮没有用量」就是那一格诚实回报，状态排的 tokens 格省略；没答过时状态排照常如实报。
-   */
-  it('〔批次68-R5 发现6〕回答在场且无用量回报时，状态排 tokens 那格省略；无回答时仍如实「未回报」', async () => {
-    const answered = mount(AssistantDialog, {
-      props: { messages: [{ id: 'a1', role: 'agent', text: '第三章更好。', at: '10:01' }] }
-    })
-    expect(answered.find('[data-test="usage-chip"]').text()).toBe('这一轮没有用量')
-    expect(answered.find('[data-test="status-tokens"]').exists(), '两格并报是同一件事说两遍').toBe(false)
-    expect(answered.find('[data-test="status-envelope"]').exists(), '只省略 tokens 那一格，其余状态排不动').toBe(true)
-    answered.unmount()
-
-    const withUsage = mount(AssistantDialog, {
-      props: { messages: [{ id: 'a1', role: 'agent', text: '好。', at: '10:01', usage: { input: 10, output: 5, total: 15 } }] }
-    })
-    expect(withUsage.find('[data-test="status-tokens"]').text()).toBe('本轮 15 tokens')
-    withUsage.unmount()
   })
 })
 
@@ -1718,7 +1676,7 @@ describe('Obsidian 三栏', () => {
     wrapper.unmount()
   })
 
-  it('批次76-R2 任务4：地址不画在应用面上，作读数进页签 tooltip／状态栏／右键菜单这三处', async () => {
+  it('批次76-R2 任务4：地址不画在应用面上，作读数进页签 tooltip／右键菜单（原状态栏一读随底栏退役减为两处）', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     // 宿主侧才碰剪贴板（内容组件不许自己抄）；platform 一并给上，别让别处读 navigator.platform 落空。
     vi.stubGlobal('navigator', { clipboard: { writeText }, platform: 'Win32' })
@@ -1745,11 +1703,7 @@ describe('Obsidian 三栏', () => {
       expect(tab.attributes('data-page-address')).toBe(url)
       expect(tab.attributes('title')).toContain(url)
 
-      // ③ 状态栏那条「载体」读数末尾多的是内嵌浏览器地址，不是新辟一格。
-      const status = wrapper.find('[data-test="status-address"]')
-      expect(status.exists(), '状态栏要能看见这一页开的是哪个端口').toBe(true)
-      expect(status.text()).toBe(url)
-
+      // ③（原状态栏一读已随全局底栏退役。）
       // ④ 复制动作落在右键菜单那一项；反馈用的是这一页数据面上既有的 notice 行，不新开 chrome。
       tab.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }))
       await flushPromises()
@@ -1769,14 +1723,13 @@ describe('Obsidian 三栏', () => {
     }
   })
 
-  it('批次76-R2 任务4：不是应用面的页就没有地址读数，状态栏与菜单都不凭空多出一段', async () => {
+  it('批次76-R2 任务4：不是应用面的页就没有地址读数，菜单不凭空多出一段', async () => {
     const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
     await flushPromises()
 
     const tab = wrapper.find('[data-page-instance="novel.editor#1"]')
     expect(tab.exists()).toBe(true)
     expect(tab.attributes('data-page-address') ?? '', '正文页没有内嵌浏览器地址').toBe('')
-    expect(wrapper.find('[data-test="status-address"]').exists(), '没有地址就别在状态栏编一条').toBe(false)
 
     tab.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }))
     await flushPromises()
@@ -4627,74 +4580,11 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     wrapper.unmount()
   })
 
-  /**
-   * 状态栏（批次63 任务1）。三条判据逐条落在 DOM 上：
-   *   · 四要素齐（服务灯／载体·页组／在册窗数／焦点文档字数），读数全从既有事实源现取；
-   *   · 不做死按钮（作者裁定③）：整条状态栏只有服务灯那一个 button，点它开的是既有那一节；
-   *   · 灯的颜色与未确认条数来自 serviceLogPool 快照（与竖条状态点同一来源，不是第二份账）。
-   */
-  it('状态栏：四要素读数、唯一可点件点开「服务与通知」，不新增任何动作（批次63 任务1）', async () => {
-    const handlers = new Map([[IPC_CHANNELS.runtimeServiceLog, () => ({
-      ok: true,
-      value: {
-        log: {
-          at: '2026-11-02T00:00:00.000Z', ackedAt: null, entries: [],
-          carriers: [
-            { carrierId: 'pinax.carrier.outline', carrierTitle: '大纲', color: 'green', unackedNotices: 0, items: [] },
-            { carrierId: 'fixture.novel', carrierTitle: '小说（夹具）', color: 'orange', unackedNotices: 2, items: [] }
-          ]
-        }
-      }
-    })]])
-    const bridge = pageBridge({ handlers })
+  it('状态栏（批次63）已随作者 2026-11-11 裁定整体退役：全局底部不再加任何底栏', async () => {
+    const bridge = pageBridge({ handlers: new Map() })
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
-
-    const bar = wrapper.find('[data-test="status-bar"]')
-    expect(bar.exists(), '底栏必须常驻（不是悬浮层）').toBe(true)
-    expect(bar.attributes('aria-label')).toBe('状态栏')
-    // 挂在三栏之后：标题栏 → 三栏 → 状态栏，它是根的最后一段。
-    expect(bar.element.previousElementSibling?.classList.contains('next-shell')).toBe(true)
-
-    // ① 服务灯：一盏一载体，颜色与非色读数（标题名＋未确认条数）都在文本里。
-    const lights = bar.findAll('.nx-status-light')
-    expect(lights).toHaveLength(2)
-    expect(lights[1].attributes('data-status')).toBe('orange')
-    expect(bar.find('[data-test="status-services"]').text()).toContain('小说（夹具）')
-    expect(bar.find('[data-test="status-services"]').text()).toContain('2')
-
-    // ② 载体：开局站在主载体那块板上。
-    expect(bar.find('[data-test="status-carrier"]').text()).toContain('小说（夹具）')
-
-    // ③「1＋N 的 N」＝在册窗数：开局只有宿主补出来的那一页，正文自动载入第一章（夹具那份 3 字）。
-    expect(bar.find('[data-test="status-windows"]').text()).toContain('1')
-    expect(bar.find('[data-test="status-chars"]').text()).toContain('3 字')
-
-    // ④ 焦点跟着走：切出大纲页＝在册两条，字数如实退回破折号（大纲不是可计字的文档）。
-    await openOutlineBoard(wrapper)
-    expect(bar.find('[data-test="status-windows"]').text()).toContain('2')
-    expect(bar.find('[data-test="status-carrier"]').text()).toContain('大纲')
-    expect(bar.find('[data-test="status-carrier"]').text()).toContain('主组')
-    expect(bar.find('[data-test="status-chars"]').text()).toContain('—')
-
-    // 回到正文那一页，读数又回来——同一个读数源（那一页自己的数据面），不是第二份账。
-    await wrapper.find('.nx-page-tab[data-page-instance="novel.editor#1"]').trigger('click')
-    await flushPromises()
-    expect(bar.find('[data-test="status-carrier"]').text()).toContain('小说（夹具）')
-    expect(bar.find('[data-test="status-chars"]').text()).toContain('3 字')
-
-    // 不做死按钮：整条状态栏只有服务灯那一个钮，且它落在共享控件词汇里。
-    const buttons = bar.findAll('button')
-    expect(buttons).toHaveLength(1)
-    expect(buttons[0].classes()).toContain('control-quiet')
-    expect(buttons[0].attributes('data-test')).toBe('status-services')
-
-    // 点它＝打开既有的「服务与通知」节（与右栏／竖条状态点同一个落点），不是新动作。
-    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
-    await buttons[0].trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.workbench-modal').exists(), '状态灯点开的是统一弹窗').toBe(true)
-    expect(wrapper.find('[role="tabpanel"][aria-label="服务与通知"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="status-bar"]').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -5827,12 +5717,8 @@ describe('故障隔离：全部载体停用（批次63 任务2）', () => {
     // 空态要说话，不是留一片白。
     expect(wrapper.text()).toContain('当前没有已启用的载体板块')
 
-    // 状态栏照常挂载并报数：没有板就没有载体名，窗数为 0，字数留破折号。
-    const bar = wrapper.find('[data-test="status-bar"]')
-    expect(bar.exists(), '状态栏不依赖任何载体').toBe(true)
-    expect(bar.find('[data-test="status-carrier"]').text()).toContain('—')
-    expect(bar.find('[data-test="status-windows"]').text()).toContain('0')
-    expect(bar.find('[data-test="status-chars"]').text()).toContain('—')
+    // 状态栏已退役（作者 2026-11-11 裁定）：底部不再有任何全局底栏。
+    expect(wrapper.find('[data-test="status-bar"]').exists()).toBe(false)
     wrapper.unmount()
   })
 

@@ -74,7 +74,8 @@ import { buildEntryTokenMap, linkifyEntryNames } from './wikiLinks.mjs'
  *   因为右侧的保存 chip／编辑／工具那些动作还得有个落脚的行。
  *   〔大纲面例外〕`input.doc-title`（改节点名的输入框）保留——它是**控件**不是标题层级，撤了作者就没法改名；
  *   读态那一行 `h2 outline-reading-title` 同样撤掉，节点名归窗头。
- *   〔状态栏例外〕底部 StatusBar 的 doc 读数（名字＋字数）保留：那是读数行，不是第二层标题。
+ *   〔作者 2026-11-11 裁定〕原「状态栏例外」（底部 StatusBar 的 doc 读数）随全局状态栏退役一起失效——
+ *   底部默认在全局范围内不加任何底部栏，宿主要读数自己加。
  */
 const props = defineProps({
   pane: { type: Object, default: null },

@@ -21,7 +21,6 @@ import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import ServicesSection from './settings/ServicesSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import CommandPalette from './CommandPalette.vue'
-import StatusBar from './StatusBar.vue'
 import CollapseOrb from './CollapseOrb.vue'
 import DeducePanel from './DeducePanel.vue'
 import { useBoardData } from './useBoardData.mjs'
@@ -521,14 +520,10 @@ function onDeduceReceipt({ level, message, data } = {}) {
 }
 
 /**
- * 状态栏（批次63 任务1）的四要素读数。
- *
- * 一句话：状态栏只转述，不记账——四个数全从既有事实源现取，外壳不留第二份真相。
- *   ① 服务灯＝serviceLogPool 那份快照（与竖条状态点、设置页「服务与通知」同一来源）；
- *   ② 载体＝此刻那块板的标题；页组＝此刻那一页在 main 还是 side 组；
- *   ③「1＋N 的 N」＝在册窗数（工单口径：openWindows，四种形态都算在册）；
- *   ④ 字数＝此刻那一页装载的文档：有草稿读作者手上那份，没草稿读盘上那份的字数。
- * 唯一可点件（服务灯）落的是既有那节：点开设置里的「服务与通知」，不新增任何动作。
+ * 服务灯读数（悬浮球 CollapseOrb 的 notices 在吃这一份）。
+ * 〔作者 2026-11-11 裁定〕全局底部状态栏整体退役（「底部默认在全局范围内不加任何底部栏，
+ * 各宿主需要自己加」）——四要素里只有服务灯还有宿主（悬浮球），其余读数随状态栏一起删。
+ * 一句话：只转述不记账——数从 serviceLogPool 快照现取，与竖条状态点、设置页「服务与通知」同一来源。
  */
 const statusLights = computed(() => (serviceSnapshot.value?.carriers ?? [])
   .filter((carrier) => carrier?.carrierId && carrier?.color)
@@ -538,48 +533,6 @@ const statusLights = computed(() => (serviceSnapshot.value?.carriers ?? [])
     color: carrier.color,
     notices: carrier.unackedNotices ?? 0
   })))
-
-const STATUS_GROUP_LABELS = { main: '主组', side: '侧组' }
-
-/** 此刻站在哪块板（竖条那一格）；没开项目就没板。 */
-const statusCarrier = computed(() => activeBoard.value?.title ?? '')
-
-const statusPageGroup = computed(() => {
-  const instance = focusedInstance()
-  const group = instance ? workspaceSnapshot.value.entries[instance]?.group : null
-  return group ? STATUS_GROUP_LABELS[group] ?? String(group) : ''
-})
-
-/** 「1＋N 的 N」：此刻在册的窗数（页／浮窗／收进悬浮球的那些都算）。 */
-const statusWindows = computed(() => openWindows.value.length)
-
-/**
- * 〔批次76-R2 任务4〕状态栏那一段网址：此刻焦点页是内嵌浏览器才有读数，其余页面是空串（那一段不渲染）。
- * 应用面顶部常驻的 URL 行撤了，「跑的是谁的端口」这个信息不该跟着消失——它挂进**已有**的状态栏，
- * 不新增第五项，也不新开一行 chrome。
- */
-const statusAddress = computed(() => addressOf(focusedInstance()))
-
-/** 编辑面与草稿位的对照：草稿非空就读草稿（作者手上那份），否则读盘上那份的 totalChars。 */
-const STATUS_DOC_FIELDS = [
-  ['chapter', 'draft'], ['entry', 'entryDraft'], ['note', 'noteDraft'], ['rule', 'ruleDraft'],
-  ['document', 'documentDraft'], ['script', 'scriptDraft'], ['record', null]
-]
-
-/** 焦点文档：标题＋字数。没装可计字的文档就 chars=null，状态栏如实留一道破折号。 */
-const statusDoc = computed(() => {
-  const page = pageDataOf(focusedInstance())
-  for (const [key, draftKey] of STATUS_DOC_FIELDS) {
-    const doc = page?.[key]
-    if (!doc) continue
-    const draft = draftKey ? page?.[draftKey] : null
-    if (typeof draft === 'string' && draft) return { title: doc.title ?? doc.name ?? '', chars: draft.length }
-    const chars = Number.isFinite(doc.totalChars) ? doc.totalChars
-      : typeof doc.text === 'string' ? doc.text.length : null
-    return { title: doc.title ?? doc.name ?? '', chars }
-  }
-  return { title: '', chars: null }
-})
 
 /**
  * 载体声明节的内容组件表（工单B · P14 第三步）：键是「声明 id」（不是载体 id）。
@@ -2963,20 +2916,6 @@ onBeforeUnmount(() => {
 
       <WorkbenchTooltip />
     </div>
-
-    <!-- 批次63 任务1：底栏常驻的状态栏。它是 .nx-shell-root 的最后一段（标题栏 → 三栏 → 状态栏），
-         四个读数全由上面那几格现取，组件自己不认识桥。 -->
-    <StatusBar
-      :lights="statusLights"
-      :carrier="statusCarrier"
-      :page-group="statusPageGroup"
-      :windows="statusWindows"
-      :doc-title="statusDoc.title"
-      :doc-chars="statusDoc.chars"
-      :address="statusAddress.url"
-      :address-note="statusAddress.note"
-      @open-services="openSection('services')"
-    />
   </div>
 </template>
 

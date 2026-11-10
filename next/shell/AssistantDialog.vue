@@ -19,7 +19,6 @@ import {
 } from './hotkeys.mjs'
 import { formatRelativeTime, messageStatus } from './agentSessions.mjs'
 import { buildTimelineBlocks, timelinePath } from './conversationTimeline.mjs'
-import { toolDisplayRows } from './toolDisplay.mjs'
 import ConversationTimeline from './ConversationTimeline.vue'
 import { renderMarkdown } from './mdRender.mjs'
 
@@ -68,8 +67,6 @@ const props = defineProps({
   title: { type: String, default: 'Pi-Agent' },
   /** 〔批次68-R2 任务三〕缺省语换成截图那句：三类触发符直接写进占位，菜单不收起来也能被教到。 */
   placeholder: { type: String, default: '发消息或创建任务，/ 调用指令，@ 素材' },
-  /** 折叠层的工具名清单（默认不展开）。 */
-  tools: { type: Array, default: () => [] },
   /** 当前模式：review（提案制）／auto（直写）／blocked（这块目录只读，写入被拒也不出提案）。 */
   mode: { type: String, default: 'review' },
   /** 会话列表摘要：[{ id, title, updatedAt, messageCount }]（agentSessions.list()）。 */
@@ -88,11 +85,6 @@ const props = defineProps({
   hotkeys: { type: Object, default: () => ({}) },
   /** 统一二级页开着时为 true：Esc 先归它（照 FloatingWidget 的 suspendEsc 先例）。 */
   suspendEsc: { type: Boolean, default: false },
-  /**
-   * 〔批次68-R2 任务三〕状态排「在途」读数：RuntimeDock 那个真实 ask 计数
-   * （beginWork/endWork 一对括号），不是 busy 布尔的另一种拼写。
-   */
-  inflight: { type: Number, default: 0 },
   /**
    * 〔批次68-R2 任务三〕模型 chip 的清单数据源：运行时模型面真名（surface 侧有清单才传）。
    * 本批探针只有 endpoint 与状态、没有模型名 → 缺省空数组，界面按「无清单时只显示不可点」如实画。
@@ -125,13 +117,6 @@ const modeTitle = computed(() => ({
   blocked: '锁定模式：写入一律被拒，也不出提案（这块目录只读）'
 }[props.mode] ?? '审阅模式：AI 产出走提案，确认后才落盘'))
 watch(() => props.mode, () => { pendingAuto.value = false })
-
-/**
- * 〔批次68-R1 任务1〕工具面折叠层的两读行：中文名在前、原始 id 在后。
- * 取名规则不在这里写（`toolDisplay.mjs`，node:test 直接测那份纯函数）——
- * 组件只负责摆，不负责造词。
- */
-const toolRows = computed(() => toolDisplayRows(props.tools))
 
 function requestMode() {
   // 从两档「更 unsafe」的档位回 review 都不设闸：点一下就回，不留确认条（既有口径）。
@@ -501,51 +486,6 @@ function usageText(message) {
   if (!usage) return '这一轮没有用量'
   return `${usage.input} in／${usage.output} out`
 }
-
-/** 会话级用量指示（输入区右上）：取最近一条**真带 usage** 的助手消息，没有就不画这一格。 */
-const sessionUsage = computed(() => {
-  const list = Array.isArray(props.messages) ? props.messages : []
-  for (let index = list.length - 1; index >= 0; index -= 1) {
-    const message = list[index]
-    if (message?.role === 'agent' && message.usage) return message.usage
-  }
-  return null
-})
-
-/**
- * 〔批次68-R5 发现6〕双「未回报」同屏判据：已经答过、而全线没有任何 usage 回报时，
- * 卡片上的「这一轮没有用量」chip 就是那格诚实回报，状态排再摆一句「本轮 tokens 未回报」
- * 是同一件事说两遍——同屏时省略状态排那一格。没答过（或压根没消息）时状态排照常如实报。
- */
-const tokensCellRedundant = computed(() => {
-  if (sessionUsage.value) return false
-  const list = Array.isArray(props.messages) ? props.messages : []
-  return list.some((message) => message?.role === 'agent')
-})
-
-/**
- * 〔批次68-R2 任务三〕状态排「上下文组装」读数：最近一条真 `envelope` 运行事件
- * （runnerAdvisor 组装完信封发出的那条 {stage:'envelope', blocks, chars}）。
- * 先看 in-flight 的 liveTrail，定格了就回找最近一条带 trail 的消息——两处都没有就如实「未回报」，
- * 不许拿草稿字数或别的什么换算一个数来冒充。
- */
-function latestEnvelope(events) {
-  const list = Array.isArray(events) ? events : []
-  for (let index = list.length - 1; index >= 0; index -= 1) {
-    if (list[index]?.stage === 'envelope') return list[index]
-  }
-  return null
-}
-const envelopeReading = computed(() => {
-  const live = latestEnvelope(props.liveTrail)
-  if (live) return live
-  const list = Array.isArray(props.messages) ? props.messages : []
-  for (let index = list.length - 1; index >= 0; index -= 1) {
-    const hit = latestEnvelope(list[index]?.trail)
-    if (hit) return hit
-  }
-  return null
-})
 
 const copiedId = ref('')
 let copyTimer = null
@@ -1092,33 +1032,6 @@ onBeforeUnmount(() => {
         >切到锁定（只读）</button>
         <button type="button" class="authoring-knowledge__mode-confirm-cancel" @click="cancelAuto">取消</button>
       </div>
-
-      <!-- 状态排（卡片下方小字一行，全部真数据，缺哪条报哪条「未回报」，不换算不冒充）：
-           在途＝RuntimeDock 的 ask 计数；上下文＝最近一条真 envelope 事件；本轮 tokens＝既有 usage 链。 -->
-      <div class="nx-composer-status" data-test="composer-status">
-        <span data-test="status-inflight">在途 {{ inflight }}</span>
-        <span data-test="status-envelope">{{ envelopeReading ? `上下文 ${Number(envelopeReading.blocks) || 0} 块／${Number(envelopeReading.chars) || 0} 字` : '上下文 未回报' }}</span>
-        <span v-if="!tokensCellRedundant" data-test="status-tokens">{{ sessionUsage ? `本轮 ${sessionUsage.total} tokens` : '本轮 tokens 未回报' }}</span>
-      </div>
-
-      <!-- 既有「工具面」折叠层与 session-usage 收进状态排下方的这一层折叠区：内容一字未动，只挪位。
-           会话级用量（批次77 任务2）：取最近一条真带 usage 的助手消息——DeepWrite 那条
-           「上下文圆环只看最近同模型那一轮」的口径，不做累计估算。数值只记账，不当任何闸。 -->
-      <details v-if="sessionUsage || tools.length" class="nx-composer-more" data-test="composer-more">
-        <summary>工具面与用量明细</summary>
-        <p v-if="sessionUsage" class="authoring-knowledge__composer-usage" data-test="session-usage">
-          最近一轮 {{ sessionUsage.input }} in／{{ sessionUsage.output }} out（计 {{ sessionUsage.total }}）
-        </p>
-        <details v-if="tools.length" class="authoring-knowledge__agent-detail">
-          <summary><WorkbenchIcon name="chevron-down" :size="12" />工具面（{{ tools.length }}）</summary>
-          <ul class="authoring-knowledge__agent-list">
-            <li v-for="tool in toolRows" :key="tool.name" class="authoring-knowledge__agent-item">
-              <span class="authoring-knowledge__agent-name" :title="tool.name">{{ tool.displayName }}</span>
-              <span class="authoring-knowledge__agent-id">{{ tool.name }}</span>
-            </li>
-          </ul>
-        </details>
-      </details>
     </footer>
   </section>
 </template>
@@ -1218,18 +1131,6 @@ onBeforeUnmount(() => {
 .authoring-knowledge__send:hover:not(:disabled) { background: var(--workbench-action-hover); color: var(--workbench-action-text); }
 .authoring-knowledge__send:disabled { background: var(--nav-hover); color: var(--text-muted); cursor: default; }
 .authoring-knowledge button:focus-visible, .authoring-knowledge summary:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 3px; }
-.authoring-knowledge__agent-detail { margin: 0 0 8px; padding: 0; border: 0; background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
-.authoring-knowledge__agent-detail summary { cursor: pointer; min-height: 30px; padding: 0; display: flex; align-items: center; gap: 6px; line-height: 1.5; list-style: none; }
-.authoring-knowledge__agent-detail[open] summary svg { transform: rotate(180deg); }
-.authoring-knowledge__agent-detail summary::-webkit-details-marker { display: none; }
-.authoring-knowledge__agent-detail summary:focus-visible { outline: 2px solid var(--workbench-focus); outline-offset: 2px; }
-.authoring-knowledge__agent-list { margin: 4px 0 0; padding-left: 18px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
-/* 〔批次68-R1 任务1〕工具面那一叠原来是 46 行**等宽裸工具 id**（pinax_project_list…）——
-   作者读不出那是什么，等宽还把界面读成代码。现在一行两读：主读数＝清单里的中文名（界面族＋次要色），
-   次要行＝原始 id（角注档），悬停仍能把 id 单独报出来。清单里没有中文名的如实写「未命名工具」，不编造。 */
-.authoring-knowledge__agent-item { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.authoring-knowledge__agent-name { font-family: var(--font-interface); font-size: var(--nx-fs-md); color: var(--text-secondary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.authoring-knowledge__agent-id { font-family: var(--font-interface); font-size: var(--nx-fs-2xs); color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @keyframes knowledge-pulse { to { opacity: .28; transform: scale(.72); } }
 @media (pointer: coarse) {
   .authoring-knowledge__send { width: 44px; height: 44px; }
@@ -1328,8 +1229,6 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='error'] { color: var(--danger); }
 .authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='stopped'] { color: var(--signal-warm); }
 .authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='streaming'] { color: var(--accent); }
-/* 会话级用量（输入区右上）：一行的极淡小字，数值只记账、不当任何闸。 */
-.authoring-knowledge__composer-usage { margin: 0 2px 4px; text-align: end; color: var(--text-muted); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; }
 
 /* 〔批次77 任务3〕停止钮：与发送钮同族同尺寸（命中区走既有 --workspace-control-height，
    不自立一档数值），只是配色取「会被拒」那一支——它是收手，不是提交。 */
@@ -1364,11 +1263,4 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .nx-composer-model { display: inline-flex; max-width: 168px; min-height: 24px; align-items: center; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--nx-radius-pill); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nx-composer-model:not(:disabled) { color: var(--text-secondary); cursor: pointer; }
 .nx-composer-model-list { position: absolute; z-index: var(--z-popover, 30); right: 0; bottom: calc(100% + 6px); display: flex; min-width: 168px; flex-direction: column; gap: 2px; margin: 0; padding: 6px; list-style: none; border: 1px solid var(--hairline-soft); border-radius: var(--nx-radius-xs); background: var(--surface-workbench-raised); color: var(--text-primary); font-size: var(--nx-fs-md); }
-/* 状态排：卡片下方一行小字，三项全是真数据；缺哪条如实报「未回报」，不换算冒充（守卫⑦同口径）。 */
-.nx-composer-status { display: flex; flex-wrap: wrap; gap: 10px; margin: 2px 4px 0; color: var(--text-muted); font-family: var(--font-interface); font-size: var(--nx-fs-2xs); line-height: 1.5; font-variant-numeric: tabular-nums; }
-/* 折叠区（状态排下方）：原「工具面」details 与 session-usage 收进来，内容一字未动、只挪位。 */
-.nx-composer-more { margin-top: 2px; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
-.nx-composer-more > summary { display: flex; min-height: 26px; align-items: center; gap: 6px; list-style: none; cursor: pointer; }
-.nx-composer-more > summary::-webkit-details-marker { display: none; }
-.nx-composer-more .authoring-knowledge__composer-usage { margin: 2px 0 4px; text-align: start; }
 </style>

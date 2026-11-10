@@ -976,12 +976,7 @@ test('〔批次68-R2 任务三〕composer 卡片三层钉死：＋ 单通路、�
     'data-test="composer-card"',
     'data-test="composer-controls"',
     'data-test="composer-plus"',
-    'data-test="composer-model-chip"',
-    'data-test="composer-status"',
-    'data-test="status-inflight"',
-    'data-test="status-envelope"',
-    'data-test="status-tokens"',
-    'data-test="composer-more"'
+    'data-test="composer-model-chip"'
   ]) {
     assert.ok(dialog.includes(needle), `composer 三层缺锚点：${needle}`)
   }
@@ -992,13 +987,9 @@ test('〔批次68-R2 任务三〕composer 卡片三层钉死：＋ 单通路、�
   // ② 麦克风不摆死钮（语音后端本批不做，屏上连字都不许出现；模板注释里的这句话不算上屏）。
   assert.ok(!dialog.replace(/<!--[\s\S]*?-->/gu, '').includes('麦克风') && !dialog.includes('composer-mic'), '麦克风不该作为钮/锚点出现')
 
-  // ③ 模型 chip：无清单＝disabled（只显示不可点——不编造）；在途读数走宿主真计数。
+  // ③ 模型 chip：无清单＝disabled（只显示不可点——不编造）。
   assert.match(dialog, /class="control-quiet nx-composer-model"[\s\S]{0,200}:disabled="!modelNames\.length"/u,
     '模型 chip 无清单时必须不可点（并落在共享控件词汇 control-quiet 里）')
-  assert.match(dialog, /inflight:\s*\{\s*type:\s*Number/u, '状态排「在途」是宿主传下来的计数，不是 busy 的另一种拼写')
-  const dock = stripComments(await readFile(join(shellDir, 'RuntimeDock.vue'), 'utf-8'))
-  assert.match(dock, /const inflightCount = ref\(0\)/u, 'RuntimeDock 的 ask 计数要进模板，得先是响应式')
-  assert.match(dock, /:inflight="inflightCount"/u, '计数没传给 composer 状态排')
 
   // ④ 停止钮只在 busy 时出现，且就站在发送钮那一格（v-if/v-else 同一位）。
   assert.match(dialog, /v-if="busy"[\s\S]{0,200}data-test="composer-stop"[\s\S]*?v-else[\s\S]{0,120}authoring-knowledge__send/u,
@@ -1008,13 +999,10 @@ test('〔批次68-R2 任务三〕composer 卡片三层钉死：＋ 单通路、�
   const triggerCalls = dialog.match(/insertTrigger\(/gu)?.length ?? 0
   assert.ok(triggerCalls >= 3, '＋菜单与 skill.menu 键位必须共用 insertTrigger 这一条通路')
 
-  // ⑥ 状态排缺数据如实「未回报」，不许换算冒充。
-  assert.match(dialog, /上下文 \$\{Number\(envelopeReading\.blocks\)[\s\S]*?上下文 未回报/u, 'envelope 读数没有真事件时是「未回报」')
-  assert.match(dialog, /本轮 tokens 未回报/u, 'usage 没有回报时是「未回报」')
+  // ⑥（原状态排「未回报」守卫随状态排退役——作者 2026-11-11 裁定；诚实回报只剩气泡上的 usage-chip。）
 
-  // ⑦ 新样式的字号/圆角一律走刻度（门禁⑭⑮的整块读数之外，这里点名三处新档）。
+  // ⑦ 新样式的字号/圆角一律走刻度（门禁⑭⑮的整块读数之外，这里点名新档）。
   assert.match(dialog, /\.nx-composer-card \{[^}]*border-radius:\s*var\(--radius-surface\)/u, '卡片圆角走 token')
-  assert.match(dialog, /\.nx-composer-status \{[^}]*font-size:\s*var\(--nx-fs-2xs\)/u, '状态排字号走刻度')
   assert.match(dialog, /\.nx-composer-model \{[^}]*border-radius:\s*var\(--nx-radius-pill\)/u, '模型 chip 圆角走刻度')
 })
 
@@ -1229,15 +1217,14 @@ test('〔批次76-R2 守卫⑫〕应用面高度链：窗 body → pane → 应�
   assert.match(hostSource, /referrerpolicy="no-referrer"/u, 'iframe 的 referrerpolicy 不许动')
   assert.match(hostSource, /sandbox="allow-scripts allow-forms allow-same-origin allow-popups"/u, 'iframe 的 sandbox 白名单不许动')
 
-  // 宿主侧三个读处都在（页签 tooltip／状态栏那一段／右键菜单那一项），且地址只有一处来源。
+  // 宿主侧读处都在（页签 tooltip／右键菜单那一项；原「状态栏那一段」随底栏退役），且地址只有一处来源。
   const app = stripComments(await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')).replace(/<!--[\s\S]*?-->/g, '')
-  for (const needle of ['onAppAddress', 'addressOf(', 'copyAppAddress(', 'statusAddress', 'appAddress']) {
+  for (const needle of ['onAppAddress', 'addressOf(', 'copyAppAddress(', 'appAddress']) {
     assert.ok(app.includes(needle), `AppNext 缺地址上抛后的落点：${needle}`)
   }
   const strip = stripComments(await readFile(join(shellDir, 'PaneTabStrip.vue'), 'utf-8'))
   assert.ok(strip.includes('data-page-address') && strip.includes('entry.address'), '页签 tooltip 没带上地址')
-  const status = await readFile(join(shellDir, 'StatusBar.vue'), 'utf-8')
-  assert.ok(status.includes('data-test="status-address"') && status.includes('address: { type: String'), '状态栏没接地址那一段')
+  // （原第三读处＝底部状态栏，随作者 2026-11-11 裁定退役——读处从三减为二。）
   const menu = await readFile(join(shellDir, 'PaneFormMenu.vue'), 'utf-8')
   assert.ok(menu.includes('copy-url') && menu.includes('复制地址单开'), '「复制地址单开」没搬进右键菜单')
   // 内容组件不许自己去碰剪贴板（复制归宿主那一份菜单，不留第二条旁路）。
@@ -1459,10 +1446,8 @@ test('〔批次68-R1 门禁⑯〕字体三族使用面：chrome 里出 display�
   // 老轨导航词汇那一段（Arial 漏的落点）必须在壳层把族指回界面栈——src/** 不许动，清作用面只有这一处。
   assert.match(layout, /\.theme-legacy \.app-shell \.workspace-sidebar \.workspace-nav-label\s*\{[^}]*font-family:\s*var\(--font-interface\)/u,
     '索引窗左栏的族没改指壳层 token：老轨那份 --font-sans＋硬编码仍会漏进界面')
-  // 工具面那一叠不再是等宽主读数（46 行裸 id 是工单点名的症状）。
-  const dialog = await readFile(join(shellDir, 'AssistantDialog.vue'), 'utf-8')
-  assert.match(dialog, /class="authoring-knowledge__agent-name"/u, '工具面没有中文名那一读')
-  assert.equal(/<code>\{\{\s*tool\.name\s*\}\}<\/code>/u.test(dialog), false, '工具面又回到「一行裸 id 的等宽 code」')
+  // （原「工具面两读」判据随「工具面与用量明细」折叠区一起退役——作者 2026-11-11 裁定，
+  //   Agent 卡底部不再挂任何常驻小字行；工具清单要看就去设置页。）
 })
 
 /**
