@@ -21,6 +21,16 @@ import { defineSkillContract } from '../fact/usecases/skillContract.js'
 
 /** 五张卡的名字必须与 next/skills/<name>/SKILL.md 的目录名一致（装载层会再核一次）。 */
 export const SKILL_CONTRACTS = Object.freeze({
+  // 正文来源由受控文件工具读取；不要求先有事实包才能从零开抽。
+  'fact-extract': defineSkillContract({
+    skill: 'fact-extract',
+    requires: { layers: ['worldview', 'character', 'plot'] },
+    produces: [
+      { layer: 'plot', asStatus: 'draft', mode: 'analyze' },
+      { layer: 'character', asStatus: 'proposed', mode: 'analyze' },
+      { layer: 'worldview', asStatus: 'proposed', mode: 'analyze' }
+    ]
+  }),
   /**
    * 章节改写：需要当前章的剧情事件＋前后跨度、在场角色锚点，产出正文增量（plot 草稿）
    * 与「因新设定触发而新增」的世界观提案（proposed，不直写 adopted）。

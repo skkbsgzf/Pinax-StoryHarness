@@ -23,6 +23,7 @@ import { importOutlineChapters } from '../runtime/outlineImportService.mjs'
 import * as projectBackup from '../runtime/projectBackupService.mjs'
 import { createKnowledgeService, setSharedKnowledgeService } from '../runtime/knowledgeService.mjs'
 import { createWritingComplete } from '../runtime/writingComplete.mjs'
+import { createFactLlmService } from '../runtime/factLlmService.mjs'
 import { collectSettingDeclarations, createFileSettingsStore } from '../settingsStore.mjs'
 import { buildSettingsSchema, createFileCarrierOverridesStore, readCarrierOverridesSync } from '../carrierOverridesStore.mjs'
 import { installAppOriginHeaderRewrite } from './appOriginHeaders.mjs'
@@ -618,6 +619,12 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     }
   })
 
+  // fact LlmPort（M 系接线批）：作者裁定「无 API token，开子 Agent 走既有模型通道」。
+  // 默认派发＝CodeBuddy CLI 纯补全（--tools "" 禁工具、中性 cwd、会话不落盘）；模型名与超时
+  // 从 env 取（PINAX_FACT_LLM_MODEL／PINAX_FACT_LLM_TIMEOUT_MS），渲染层经 IPC 指定不了。
+  // CLI 不在 PATH 时通道如实报 IO_FAILED——戏剧✦层缺席不阻塞必然▮／命运⚙，不编字冒充模型。
+  const factLlm = createFactLlmService()
+
   /**
    * 每插件配置（批次45）：项目级 `.pinax/settings.json`，换项目就换一份。
    * 声明白名单用 getter 从注册表现取——装配期之后再加的插件也不会被写闸漏掉。
@@ -788,6 +795,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     // 知识服务（H2）：同一枚单例；通道只把 session.projectRoot 交给它，渲染层指定不了别的根。
     knowledgeService,
     writingComplete,
+    // M 系接线批：推演／抽取／成书渲染的 LlmPort 出口（子 Agent 形态，见 factLlmService 头注）。
+    factLlm,
     settingsStoreFor,
     carrierOverridesFor,
     // P4 S3：fact hook 接线（保存→diffValidate／续写→suggestCompletion／润色→readOnlyQuery）。

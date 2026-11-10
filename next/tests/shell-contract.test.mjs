@@ -207,6 +207,37 @@ test('历史五通道（D1）：未注入时如实报缺，不静默假装可用
   }
 })
 
+test('fact LLM 通道（M 系接线批）：名字钉死，未注入报缺，注入后只转发白名单载荷', async () => {
+  // 名字钉在契约里：渲染层适配器与主进程分发共用同一份常量，换名就是换合同。
+  assert.equal(IPC_CHANNELS.factLlmComplete, 'pinax:agent:fact:llm-complete')
+
+  const { dispatcher } = harness()
+  const unwired = await dispatcher.dispatch(IPC_CHANNELS.factLlmComplete, { prompt: '给出候选' })
+  assert.equal(unwired.ok, false)
+  assert.equal(unwired.error.code, NEXT_ERROR_CODES.INVALID_INPUT)
+  assert.match(unwired.error.message, /未接入/)
+
+  // 注入假服务：通道只把 {prompt, system, maxTokens} 递过去——渲染层夹带的
+  // model／cwd／command 一律不采信（进程怎么起、用哪个模型是主进程 env 说了算）。
+  const seen = []
+  const wired = createIpcDispatcher({
+    session: harness().session,
+    factLlm: {
+      complete: async (request) => {
+        seen.push(request)
+        return { ok: true, value: { text: '候选文本', usage: null } }
+      }
+    }
+  })
+  const result = await wired.dispatch(IPC_CHANNELS.factLlmComplete, {
+    prompt: '给出候选', system: '提议器', maxTokens: 400,
+    model: 'evil-model', cwd: 'C:/', command: 'rm -rf'
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.value.text, '候选文本')
+  assert.deepEqual(seen, [{ prompt: '给出候选', system: '提议器', maxTokens: 400 }])
+})
+
 test('历史五通道（D1）：注入后按当前项目根分发；没有项目时如实拒绝', async () => {
   const calls = []
   const gitHistory = {
@@ -277,7 +308,7 @@ test('空框架：不装任何插件，外壳可进入、可打开项目、可�
     // 这条断言守的是「运行时与载体启停是两回事」，不是「载体不能禁用」。
     assert.equal(view.value.runtime.disableable, false)
     assert.equal(view.value.runtime.ownsSlot, 'right')
-    assert.equal(view.value.runtime.tools.length, 22, '运行时工具面不依附于任何插件（内核 20 ＋ 技能读取 1 ＋ 服务日志读取 1）')
+    assert.equal(view.value.runtime.tools.length, 27, '运行时工具面不依附于任何插件（内核 25 ＋ 技能读取 1 ＋ 服务日志读取 1）')
     assert.equal(view.value.runtime.started, true, '项目没打开成功时运行时也必须活着')
 
     // 「问一句话」在 M1 的如实形态：通道通、预算通，但没有模型运行器 → 明确报缺，不编回答。

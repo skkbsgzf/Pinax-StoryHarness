@@ -31,7 +31,7 @@ async function session(label = 'runtime') {
   return { workspace, root, registry, opened, runtime }
 }
 
-test('运行时是内置一级公民：起得来、列出 22 工具、全程不开端口', async () => {
+test('运行时是内置一级公民：起得来、列出 27 工具、全程不开端口', async () => {
   const { workspace, runtime, registry } = await session()
   try {
     assert.equal(RUNTIME_CONTRACT.builtIn, true)
@@ -40,13 +40,13 @@ test('运行时是内置一级公民：起得来、列出 22 工具、全程不�
 
     const started = await runtime.start()
     assert.equal(started.ok, true, JSON.stringify(started.error ?? {}))
-    assert.equal(started.value.toolCount, 22)
+    assert.equal(started.value.toolCount, 27)
     assert.equal(started.value.portsOpened, 0)
     assert.equal(await probePort(39551), false, 'Next 运行时不该在任何端口上监听')
     assert.equal(registry.ownerOfTool('pinax_chapter_read'), null, 'M1 阶段工具仍由内核持有')
 
     const dock = runtime.dockViewModel()
-    assert.equal(dock.tools.length, 22, '20 内核 ＋ 技能读取 1 ＋ 服务日志读取 1')
+    assert.equal(dock.tools.length, 27, '25 内核 ＋ 技能读取 1 ＋ 服务日志读取 1')
     assert.equal(dock.tools.every((tool) => tool.owner === 'kernel'), true)
   } finally {
     await runtime.stop()
@@ -82,7 +82,7 @@ test('M1 没接模型运行器时如实报错，不编一段回答冒充模型',
     assert.equal(answer.ok, false)
     assert.equal(answer.error.code, 'PINAX_DEPENDENCY_UNMET')
     assert.match(answer.error.message, /未接模型运行器/)
-    assert.equal(answer.error.details.toolCount, 22)
+    assert.equal(answer.error.details.toolCount, 27)
   } finally {
     await runtime.stop()
     await workspace.cleanup()

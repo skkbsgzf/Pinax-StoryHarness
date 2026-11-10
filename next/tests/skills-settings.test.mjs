@@ -105,11 +105,12 @@ test('〔批次77 任务5〕随包五份技能都补齐了 domain，且都在词
     availableTools: [
       'pinax_project_context', 'pinax_chapter_read', 'pinax_chapter_save',
       'pinax_outline_read', 'pinax_outline_save', 'pinax_worldbook_list',
-      'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_skill_read'
+      'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_skill_read',
+      'pinax_extract_prepare', 'pinax_extract_next', 'pinax_extract_submit', 'pinax_extract_status', 'pinax_extract_finish'
     ]
   })
   assert.deepEqual(loaded.rejected, [])
-  assert.equal(loaded.skills.length, 5)
+  assert.equal(loaded.skills.length, 6)
   for (const skill of loaded.skills) {
     assert.ok(SKILL_DOMAINS.includes(skill.domain), `${skill.name} 的 domain「${skill.domain}」不在词表里`)
     assert.notEqual(skillDomainLabel(skill.domain), SKILL_UNDOMAINED_LABEL, `${skill.name} 还没分域`)

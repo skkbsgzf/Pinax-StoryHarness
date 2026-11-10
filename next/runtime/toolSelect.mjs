@@ -88,6 +88,13 @@ export function selectTools({ tools = [], intent = '', skill = null, limit = TOO
     return finish(picked, entries, index, dropped)
   }
 
+  // 产品抽取是有断点的五工具工作流，不能被章节读工具挤掉；第六槽留方法正文。
+  if (/抽取|补抽|开抽|wiki\s*化|事实建库/iu.test(text) && entries.some((tool) => tool.name === 'pinax_extract_prepare')) {
+    take('pinax_skill_read')
+    for (const tool of entries.filter((item) => item.name.startsWith('pinax_extract_'))) take(tool.name)
+    return finish(picked, entries, index, dropped)
+  }
+
   take('pinax_project_context')
   // 服务面：意图里提到服务／端口／日志／通知／状态，就把只读日志工具带进读槽。
   if (SERVICE_INTENT.test(text)) take('pinax_service_log_list')

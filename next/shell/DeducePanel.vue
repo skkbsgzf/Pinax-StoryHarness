@@ -26,7 +26,8 @@ import { createSessionStore } from '../fact/usecases/deduce/sessionStore.js'
 const props = defineProps({
   /** 世界书面条目（data.entries，与列表／图谱同源；不新增工具调用）。 */
   entries: { type: Array, default: () => [] },
-  /** 可选 LlmPort（{ complete() }）。本批 AppNext 不注入：戏剧✦层如实缺席，只在词表里留位。 */
+  /** 可选 LlmPort（{ complete() }）。AppNext 经 fact:llm-complete IPC 注入主进程子 Agent 通道
+   *  （M 系接线批）；未注入／通道失败时戏剧✦层如实缺席，必然▮／命运⚙照旧（失败隔离在 fact 消费侧）。 */
   llmPort: { type: [Object, Function], default: null },
   worldName: { type: String, default: '' }
 })
@@ -132,7 +133,9 @@ async function refreshTurn() {
     })
     sceneCard.value = turn.sceneCard
     candidates.value = turn.candidates
-    record('candidates', { round: state.value.round, count: turn.candidates.length })
+    // 候选明细进事件流（M 系接线批）：M2 投影器吃的是 candidates 数组，
+    // 只记 {round,count} 的旧形状喂不饱章纲——明细与来源徽章一并留档，回放/投影同源。
+    record('candidates', { round: state.value.round, count: turn.candidates.length, candidates: turn.candidates })
   } catch (err) {
     error.value = err?.message ?? String(err)
   } finally {

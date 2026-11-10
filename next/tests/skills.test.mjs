@@ -106,12 +106,13 @@ test('随框架发布的五个技能：宽项目全装，窄项目如实少装',
       'pinax_worldbook_list',
       'pinax_worldbook_read',
       'pinax_worldbook_save',
-      'pinax_skill_read'
+      'pinax_skill_read',
+      'pinax_extract_prepare', 'pinax_extract_next', 'pinax_extract_submit', 'pinax_extract_status', 'pinax_extract_finish'
     ]
   })
   assert.deepEqual(
     wide.skills.map((skill) => skill.name).sort(),
-    ['chapter-rewrite', 'continuity-check', 'outline-restructure', 'scene-expand', 'worldbook-refactor']
+    ['chapter-rewrite', 'continuity-check', 'fact-extract', 'outline-restructure', 'scene-expand', 'worldbook-refactor']
   )
   assert.deepEqual(wide.rejected, [])
 
@@ -121,7 +122,7 @@ test('随框架发布的五个技能：宽项目全装，窄项目如实少装',
     availableTools: ['pinax_project_context', 'pinax_chapter_read', 'pinax_worldbook_list', 'pinax_chapter_save', 'pinax_skill_read']
   })
   assert.deepEqual(narrow.skills.map((skill) => skill.name).sort(), ['chapter-rewrite', 'continuity-check', 'scene-expand'])
-  assert.equal(narrow.rejected.length, 2)
+  assert.equal(narrow.rejected.length, 3)
   assert.equal(narrow.rejected.every((item) => item.code === 'SKILL_TOOLS_NOT_ON_SURFACE'), true)
 })
 
@@ -163,7 +164,7 @@ test('运行时面：技能清单与 pinax_skill_read 都到位，未知技能�
   const { workspace, runtime } = await skillProject('skills-surface')
   try {
     const skills = runtime.skills()
-    assert.equal(skills.names.length, 5, `装载了 ${skills.names.length} 个：${skills.rejected.map((item) => item.dir).join('、')}`)
+    assert.equal(skills.names.length, 6, `装载了 ${skills.names.length} 个：${skills.rejected.map((item) => item.dir).join('、')}`)
     assert.deepEqual(skills.rejected, [])
     assert.ok(runtime.listTools().some((tool) => tool.name === 'pinax_skill_read'))
     const skillTool = runtime.listTools().find((tool) => tool.name === 'pinax_skill_read')

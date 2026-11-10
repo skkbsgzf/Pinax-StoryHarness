@@ -94,12 +94,12 @@ test('注册顺序：剧本排在 worldbook 之后（竖条一格一载体）', 
   ])
 })
 
-test('工具面：剧本载体启用后三把工具进面、归属它；内核 20 面不变', async () => {
+test('工具面：剧本载体启用后三把工具进面、归属它；内核 25 面不变', async () => {
   const { workspace, runtime, opened } = await scriptProject('script-surface')
   try {
     assert.equal(opened.value.view.projectKind, 'screenplay', '剧本可以是剧本项目的主载体')
     assert.deepEqual([...runtime.surfaceInfo().carrierToolNames].sort(), [...SCRIPT_TOOL_NAMES].sort())
-    assert.equal(runtime.listTools().length, 25, '20 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 剧本自有 3')
+    assert.equal(runtime.listTools().length, 30, '25 内核 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ 剧本自有 3')
     assert.equal(runtime.ownerOf('pinax_script_list'), SCRIPT_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_script_read'), SCRIPT_CARRIER_ID)
     assert.equal(runtime.ownerOf('pinax_script_save'), SCRIPT_CARRIER_ID)

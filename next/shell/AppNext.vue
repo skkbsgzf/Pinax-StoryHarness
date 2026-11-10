@@ -439,7 +439,8 @@ const settingsOpen = ref(false)
 const activeSection = ref('prefs')
 /**
  * M1-c 推演面板：AppNext 直接挂载的一枚中栏覆盖层（v-if 控制显隐）。
- * 不注册新页签／槽位／视图／IPC 通道——避开守卫⑪⑫⑬的页态契约面，也不给 bundle 添宿主依赖。
+ * 不注册新页签／槽位／视图——避开守卫⑪⑫⑬的页态契约面，也不给 bundle 添宿主依赖。
+ * M 系接线批：戏剧✦层的 LlmPort 经 fact:llm-complete 一条 IPC 通道走主进程子 Agent（见下）。
  */
 const deduceOpen = ref(false)
 function toggleDeduce() {
@@ -447,6 +448,25 @@ function toggleDeduce() {
 }
 function closeDeduce() {
   deduceOpen.value = false
+}
+
+/**
+ * 推演面板的 LlmPort 适配器（M 系接线批）：渲染层不 spawn 进程、不持凭据——
+ * 只把 {prompt, system, maxTokens} 递过桥，收 {text, usage}；失败抛错，由 fact 消费侧
+ * 失败隔离（戏剧✦层缺席不阻塞必然▮／命运⚙）。AbortSignal 过不了结构化克隆，在桥这边就地裁决。
+ * 通道未接入／桥不在时同样抛错——面板如实缺席，绝不编一段文字冒充模型。
+ */
+const deduceLlmPort = {
+  async complete(request = {}) {
+    if (request?.signal?.aborted) throw new Error('推演补全已被取消')
+    const result = await props.bridge?.request(IPC_CHANNELS.factLlmComplete, {
+      prompt: request?.prompt,
+      system: request?.system,
+      maxTokens: request?.maxTokens
+    })
+    if (!result?.ok) throw new Error(result?.error?.message ?? '推演模型通道没有交回可用结果')
+    return result.value
+  }
 }
 
 /**
@@ -2835,6 +2855,7 @@ onBeforeUnmount(() => {
           v-if="deduceOpen"
           :entries="indexData?.entries?.length ? indexData.entries : data.entries"
           :world-name="project?.name ?? ''"
+          :llm-port="deduceLlmPort"
           @close="closeDeduce"
           @receipt="onDeduceReceipt"
         />

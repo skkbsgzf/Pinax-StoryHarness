@@ -117,7 +117,11 @@ export const IPC_CHANNELS = Object.freeze({
   skillsList: 'pinax:agent:skills:list',
   skillsToggle: 'pinax:agent:skills:toggle',
   skillsBody: 'pinax:agent:skills:body',
-  skillsImport: 'pinax:agent:skills:import'
+  skillsImport: 'pinax:agent:skills:import',
+  // M 系接线批：fact 引擎 LlmPort 的主进程出口（推演戏剧✦层／抽取／成书渲染共用这一条）。
+  // 载荷只认 {prompt, system?, maxTokens?}——model／cwd／command 由主进程配置钉死，渲染层指定不了；
+  // 进程与凭据都在内核侧，渲染层只收 {text, usage}。不注入时如实报缺，戏剧✦层缺席不阻塞必然/命运。
+  factLlmComplete: 'pinax:agent:fact:llm-complete'
 })
 
 /**
@@ -343,8 +347,14 @@ export function shellView(session) {
  *                       保存类工具（章节/大纲/世界书）成功后做 diffValidate＋缺失实体草案；
  *                       续写产出补全建议提案、润色只读查询。钩子是旁路：失败不影响主动作。
  *                       不注入时两个动作照旧——接线不在这一层，fs／hub 转换器也进不了渲染层依赖图。
+ * deps 扩展（M 系接线批 fact LlmPort）：
+ *   factLlm —— next/runtime/factLlmService.mjs 的 createFactLlmService：{ complete({prompt,system,maxTokens}) }。
+ *                       作者裁定「无 API token，开子 Agent 走既有模型通道」——默认派发是 CodeBuddy CLI
+ *                       纯补全（--tools "" 禁工具），进程与凭据都在主进程。通道只转发白名单载荷，
+ *                       渲染层指定不了 model／cwd／command。不注入时 fact:llm-complete 如实报缺，
+ *                       推演面板的戏剧✦层缺席不阻塞必然▮／命运⚙（失败隔离在 fact 消费侧）。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null, factLlm = null }) {
   // 批次62 任务2：这条通道认的 id 集不再是「MENU_TEMPLATE 的拍平结果」这一份死集合，
   // 而是 MENU_TEMPLATE ∪ registry.commands()，每次现算（载体可被启用／停用）。
   // 见下方 acceptedMenuIds —— 全文件只有那一处口径。
@@ -639,6 +649,13 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         return skillsService ? skillsService.body(input.name) : skillsUnwired()
       case IPC_CHANNELS.skillsImport:
         return skillsService ? skillsService.importFrom(input.sourceDir) : skillsUnwired()
+      // M 系接线批：fact LlmPort 出口。载荷白名单在这里钉死——渲染层递 model／cwd／command 也不采信，
+      // 进程怎么起、用哪个模型是主进程配置（env）说了算。AbortSignal 过不了结构化克隆，渲染层适配器
+      // 在桥那边自己处理中止；这条通道只收可克隆的 {prompt, system, maxTokens}。
+      case IPC_CHANNELS.factLlmComplete: {
+        if (!factLlm?.complete) return fail('INVALID_INPUT', '推演模型通道未接入（主进程未创建 factLlmService）：这条通道现在只报缺，不编任何文字')
+        return factLlm.complete({ prompt: input.prompt, system: input.system, maxTokens: input.maxTokens })
+      }
       case IPC_CHANNELS.runtimeToolCall: {
         if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')
         const tool = input.tool

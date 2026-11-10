@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'vite'
 import { loadSkills } from '../skills/loadSkills.mjs'
 import { SKILL_READ_TOOL } from '../runtime/skillTools.mjs'
+import { EXTRACTION_TOOL_NAMES } from '../runtime/factExtractionTools.mjs'
 import { BUILT_IN_CARRIER_IDS, loadBuiltInCarrierPlugins } from '../carriers/index.mjs'
 import { loadBuiltInCarriersFromDir } from '../kernel/pluginLoader.mjs'
 import { checkHostDescriptor } from './exportHostDescriptor.mjs'
@@ -132,10 +133,10 @@ try {
   const names = runtime.listTools().map((tool) => tool.name)
   const skillRejected = runtime.surfaceInfo().skills?.rejected?.map((item) => item.code) ?? []
   await runtime.stop()
-  check('d2 运行时面：内核 20 ＋ pinax_skill_read ＋ pinax_service_log_list（22）', names.length === 22 && names.includes('pinax_skill_read') && names.includes('pinax_service_log_list'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
+  check('d2 运行时面：内核 20 ＋ pinax_skill_read ＋ pinax_service_log_list ＋ fact 抽取链 5（27）', names.length === 27 && names.includes('pinax_skill_read') && names.includes('pinax_service_log_list') && names.includes('pinax_extract_prepare'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
   check('内核版本对外可见：KERNEL_INFO.contractVersion=1', mod.KERNEL_INFO?.contractVersion === '1', mod.NEXT_VERSION ?? '')
 } catch (error) {
-  check('d 产物自足可执行：import 产物后 in-process 列出 22 工具（内核 20 ＋ 技能读取＋服务日志读取）', false, String(error?.message || error).slice(0, 120))
+  check('d 产物自足可执行：import 产物后 in-process 列出 27 工具（内核 20 ＋ 技能读取＋服务日志读取＋抽取链）', false, String(error?.message || error).slice(0, 120))
 }
 
 console.log(`ℹ 原生模块：bundle 文本引用 better-sqlite3 ＝ ${/better-sqlite3/.test(bundle) ? '是' : '否'}；换档脚本在 win32 直接 return，Electron ABI 档要在出包后单独核`)
@@ -247,7 +248,7 @@ check('m 技能目录进产物：.build/skills/<技能>/SKILL.md 与源码逐一
 // 只有内核 19 把时四份技能本就该被如实拒装（空框架面），不能拿那个面来判装机轨。
 const carrierDeclaredTools = BUILT_IN_CARRIER_PLUGINS
   .flatMap((plugin) => plugin?.manifest?.tools ?? [])
-const fullSurface = [...new Set([...kernelSurfaceNames, ...carrierDeclaredTools, SKILL_READ_TOOL])]
+const fullSurface = [...new Set([...kernelSurfaceNames, ...carrierDeclaredTools, SKILL_READ_TOOL, ...EXTRACTION_TOOL_NAMES])]
 const loadedFromBuild = await loadSkills({ dir: SKILLS_TARGET, availableTools: fullSurface })
 check('m2 装机轨技能可装载：loadSkills 在 .build/skills 按源码目录数装载且零拒装',
   loadedFromBuild.skills.length === sourceSkillDirs.length && loadedFromBuild.rejected.length === 0,

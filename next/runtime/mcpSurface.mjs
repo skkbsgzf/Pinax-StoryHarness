@@ -6,6 +6,7 @@ import { KERNEL_WRITE_TOOL_NAMES, guardKernelToolCall } from './kernelWriteGuard
 import { loadSkills, skillDomainLabel, SKILL_ORIGINS } from '../skills/loadSkills.mjs'
 import { createSkillTools, SKILL_READ_TOOL } from './skillTools.mjs'
 import { createServiceLogTools, SERVICE_LOG_LIST_TOOL } from './serviceLogTools.mjs'
+import { createFactExtractionTools, EXTRACTION_TOOL_NAMES } from './factExtractionTools.mjs'
 
 /**
  * 运行时的工具面（WP3 → M2 · WP6）。
@@ -63,12 +64,13 @@ export async function createRuntimeSurface({ registry, view, fileService, adviso
   // 技能装载：tools 必须都在这一刻的面上（内核 ∪ 载体 ∪ 原生工具），缺一把就不装载并记账。
   // 批次49：pinax_service_log_list 与 pinax_skill_read 同属运行时原生工具，恒定上报——
   // 没有服务时它如实回空数组，工具面形状不随项目有没有服务而漂。
-  const availableTools = [...kernelToolNames(), ...map.keys(), SKILL_READ_TOOL, SERVICE_LOG_LIST_TOOL]
+  const availableTools = [...kernelToolNames(), ...map.keys(), SKILL_READ_TOOL, SERVICE_LOG_LIST_TOOL, ...EXTRACTION_TOOL_NAMES]
   // 批次77 任务5：装载层现在认得「项目」这件事——`.pinax/skills.json` 的启停真值与 `.pinax/skills/`
   // 那层导入的包都按当前项目根读。root 就是上面那一行已经算好的项目根（没有项目时两处都跳过）。
   const loaded = await loadSkills({ ...(skillsDir ? { dir: skillsDir } : {}), availableTools, projectRoot: root })
   const nativeMap = createSkillTools({ skills: loaded.skills })
   for (const [name, entry] of createServiceLogTools({ pool: serviceLogPool })) nativeMap.set(name, entry)
+  for (const [name, entry] of createFactExtractionTools({ root, fileService, registry, view })) nativeMap.set(name, entry)
   const guard = (tool, args) => guardKernelToolCall({ tool, args, root, registry })
   // 协议 v3：启用的载体可以把外部 MCP 服务端挂进来（view.mcp 已在安装期按 prefix 仲裁过命名空间）。
   // 相对路径按插件自己的目录解析（与服务声明同一口径）：清单里写 'mcp.mjs' 的，落地的也是插件目录里那一份。
