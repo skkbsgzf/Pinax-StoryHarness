@@ -199,3 +199,80 @@ describe('M1-c · 外壳接线（AppNext 直接挂载，不越界）', () => {
     expect(bridge.request.mock.calls.every((call) => allowed.includes(call[0]))).toBe(true)
   })
 })
+
+/**
+ * P-M4：威胁前线面板与导演三动。
+ * 前线从世界书 rules 槽位里的 fronts 模板立起——夹具里给「序列魔药」那条规则挂一份模板。
+ */
+describe('P-M4 · 威胁前线（fronts/clocks）', () => {
+  function frontEntries() {
+    return [
+      { name: '克莱恩', cat: '人物', summary: '灰雾之上的复生者。', knowledge: [{ fromEntry: '旧钟楼', kind: '驻守' }] },
+      { name: '旧钟楼', cat: '地点', summary: '鲁恩王国北郊的钟楼。' },
+      {
+        name: '序列魔药',
+        cat: '规则',
+        summary: '服食魔药才能晋升。',
+        fronts: { name: '失控的魔药', threat: '每次服食都在赌命，总有一天会失控', danger: 'high', max: 3, idleThreshold: 99, trigger: '魔药失控，整条街的人都听见了' }
+      }
+    ]
+  }
+
+  it('开局即立前线：面板出「威胁前线」，时钟读数 0/3；局面卡张力报前线而不是单拍骰点', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+
+    const panel = wrapper.find('[data-test="deduce-fronts"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('失控的魔药')
+    expect(panel.text()).toContain('0/3')
+    expect(wrapper.find('[data-field="tension"]').text()).toContain('失控的魔药')
+  })
+
+  it('导演三动：点燃推进一格、已处理归零挂机计数、结掉后不再出现在活跃清单', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await wrapper.find('[data-test="deduce-mode-director"]').trigger('click')
+    await flushPromises()
+
+    const fire = wrapper.findAll('[data-test^="deduce-front-fire-"]')
+    expect(fire.length).toBe(1)
+    await fire[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="deduce-fronts"]').text()).toContain('1/3')
+
+    const touch = wrapper.findAll('[data-test^="deduce-front-touch-"]')
+    await touch[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="deduce-receipts"]').text()).toContain('已标记处理')
+
+    const resolve = wrapper.findAll('[data-test^="deduce-front-resolve-"]')
+    await resolve[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="deduce-fronts"]').exists()).toBe(false)
+  })
+
+  it('点燃到满格：报「已触发」并列出待接世界动作（不静默）', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await wrapper.find('[data-test="deduce-mode-director"]').trigger('click')
+    await flushPromises()
+
+    for (let i = 0; i < 3; i += 1) {
+      const fire = wrapper.findAll('[data-test^="deduce-front-fire-"]')
+      if (!fire.length) break
+      await fire[0].trigger('click')
+      await flushPromises()
+    }
+    const panel = wrapper.find('[data-test="deduce-fronts"]')
+    expect(panel.text()).toContain('已触发')
+    expect(wrapper.find('[data-test="deduce-trigger"]').text()).toContain('魔药失控')
+  })
+
+  it('玩家模式不显示导演三动（前线只读）', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    expect(wrapper.findAll('[data-test^="deduce-front-fire-"]').length).toBe(0)
+    expect(wrapper.find('[data-test="deduce-fronts"]').exists()).toBe(true)
+  })
+})

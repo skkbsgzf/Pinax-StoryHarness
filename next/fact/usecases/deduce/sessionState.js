@@ -1,7 +1,7 @@
 /** 推演会话状态容器（M1-a）：回合数／AI 动作预算／事件日志（replay 源）。
- * fronts/clocks 是 M4：这里只留 fronts 接口形状（空实现＋TODO），不假装已实现。 */
+ * fronts/clocks 见 ./fronts.js（P-M4）：这里持有数组，推进由引擎按确定性源驱动。 */
 
-export function createSessionState({ runId, pov, worldHash, budgetMax = 8 } = {}) {
+export function createSessionState({ runId, pov, worldHash, budgetMax = 8, fronts = [] } = {}) {
   return {
     version: 'deduce-session/v1',
     runId,
@@ -10,7 +10,8 @@ export function createSessionState({ runId, pov, worldHash, budgetMax = 8 } = {}
     budgetMax,
     round: 0,
     aiActionsLeft: budgetMax,
-    fronts: {}, // M4：威胁前线／压力时钟接口占位（本批不实现，见 ADR 裁定 ②）
+    // P-M4：威胁前线／压力时钟（从世界书 rules 预埋模板立起；空数组＝这一局没有累积压力）
+    fronts: Array.isArray(fronts) ? fronts : [],
     // P-WIRE：本局结算累积的知情增量（不含条目级 ledger 里的原始记录）。
     // 局面卡与候选的可见域＝ledger ∪ knownExtra——两处同源，才不会「情报面板知道、局面卡不知道」。
     knownExtra: [],

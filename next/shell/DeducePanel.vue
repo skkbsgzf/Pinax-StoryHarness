@@ -80,6 +80,12 @@ const snapshot = ref(null)
 const sceneContextInfo = ref(null)
 /** 知情降级只报一次，别每拍刷一条同样的回执。 */
 const knownDegraded = ref(false)
+/** 威胁前线（P-M4）：从世界书 rules 预埋模板立起；读数与待接世界动作一并透出。 */
+const fronts = computed(() => (state.value?.fronts ?? []).filter((front) => front.status === 'active'))
+const tensionInfo = ref({ level: 'low', heat: 0, active: 0, filled: [] })
+const triggers = computed(() => tensionInfo.value.filled ?? [])
+/** 悬置伏笔（P-WIRE）：plot 里 hypothesis+open 的条目——推演张力来自上一拍没解决的事。 */
+const openHooks = computed(() => sceneContextInfo.value?.openHypotheses ?? [])
 
 let store = null
 let seq = 1
@@ -118,6 +124,7 @@ async function openSession() {
     sceneCard.value = null
     sceneContextInfo.value = null
     knownDegraded.value = false
+    tensionInfo.value = { level: 'low', heat: 0, active: 0, filled: [] }
     record('opening', { pov: opened.session.pov, worldHash: opened.session.worldHash })
     pushReceipt('info', `开局：世界书已冻结（${worldviewEntries.value.length} 条设定），主视角「${opened.session.pov}」。`, { runId })
     phase.value = 'playing'
@@ -141,6 +148,8 @@ async function refreshTurn() {
     sceneCard.value = turn.sceneCard
     candidates.value = turn.candidates
     sceneContextInfo.value = turn.sceneContext ?? null
+    // P-M4：张力读数与待接世界动作每拍刷新（导演面板与局面卡读同一份）。
+    if (turn.tension) tensionInfo.value = turn.tension
     // 知情降级如实上抛一次（每局只报第一次）：账本为空不是错误，但作者要知道视角裁剪没生效。
     const fidelity = turn.sceneContext?.knowledgeFidelity
     if (fidelity === 'world' && !knownDegraded.value) {
@@ -238,6 +247,7 @@ function reset() {
   snapshot.value = null
   sceneContextInfo.value = null
   knownDegraded.value = false
+  tensionInfo.value = { level: 'low', heat: 0, active: 0, filled: [] }
   error.value = ''
   injectName.value = ''
   injectDefinition.value = ''
@@ -247,8 +257,31 @@ function reset() {
   runId = ''
 }
 
-/** 悬置伏笔（P-WIRE）：plot 里 hypothesis+open 的条目——推演张力来自上一拍没解决的事。 */
-const openHooks = computed(() => sceneContextInfo.value?.openHypotheses ?? [])
+async function fireFront(front) {
+  const result = applyDirectorAction({ state: state.value, action: 'fire', frontId: front.id })
+  if (!result.ok) {
+    error.value = result.message ?? '点火失败'
+    return
+  }
+  record('fronts-advance', { frontId: front.id, value: result.value, filled: result.filled, source: 'director' })
+  pushReceipt(result.triggered ? 'warn' : 'info', `导演点火：${front.name} → ${result.value}/${front.clocks.impending.max}${result.triggered ? '（已触发）' : ''}`)
+  if (result.triggered) await refreshTurn()
+}
+
+function touchFrontAction(front) {
+  const result = applyDirectorAction({ state: state.value, action: 'touch', frontId: front.id })
+  if (result.ok) pushReceipt('info', `已标记处理：${front.name}（挂机计数归零）`)
+}
+
+async function resolveFrontAction(front) {
+  const result = applyDirectorAction({ state: state.value, action: 'resolve', frontId: front.id, note: '导演结线' })
+  if (!result.ok) {
+    error.value = '结线失败'
+    return
+  }
+  pushReceipt('info', `结掉前线：${front.name}（这条不再计时）`)
+  await refreshTurn()
+}
 
 /** 已知情报／关系目标点开＝跳世界书条目视图（复用外壳既有的 pinaxOpenKnowledge 蓝链落点）。 */
 function jumpTo(name) {
@@ -398,6 +431,24 @@ function jumpTo(name) {
           </ul>
         </section>
 
+        <section v-if="fronts.length" class="nx-deduce-panel" data-test="deduce-fronts">
+          <h3 class="nx-deduce-panel-title">威胁前线 · {{ tensionInfo.level }}</h3>
+          <ul class="nx-deduce-list">
+            <li v-for="front in fronts" :key="front.id" class="nx-deduce-front" :data-status="front.status">
+              <span class="nx-deduce-front-name">{{ front.name }}</span>
+              <span class="nx-deduce-front-clock">{{ front.clocks.impending.value }}/{{ front.clocks.impending.max }}{{ front.clocks.impending.filled ? ' · 已触发' : '' }}</span>
+              <span v-if="mode === 'director'" class="nx-deduce-front-actions">
+                <button type="button" class="control-quiet" :data-test="`deduce-front-fire-${front.id}`" @click="fireFront(front)">点燃</button>
+                <button type="button" class="control-quiet" :data-test="`deduce-front-touch-${front.id}`" @click="touchFrontAction(front)">已处理</button>
+                <button type="button" class="control-quiet" :data-test="`deduce-front-resolve-${front.id}`" @click="resolveFrontAction(front)">结掉</button>
+              </span>
+            </li>
+          </ul>
+          <p v-for="trigger in triggers" :key="trigger.id" class="nx-deduce-trigger" data-test="deduce-trigger">
+            世界动作待接：{{ trigger.trigger || trigger.name }}
+          </p>
+        </section>
+
         <section class="nx-deduce-panel" data-test="deduce-receipts">
           <h3 class="nx-deduce-panel-title">本局回执</h3>
           <ul class="nx-deduce-list nx-deduce-receipts">
@@ -519,6 +570,37 @@ function jumpTo(name) {
 .nx-deduce-fidelity.is-degraded {
   color: var(--text-muted);
   font-style: italic;
+}
+/* 威胁前线行（P-M4）：名字＋时钟读数＋导演三动。已触发的行加左侧标记，
+   读起来像「这一条已经在动手了」，而不是又一条普通清单。 */
+.nx-deduce-front {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.nx-deduce-front[data-status='active'] .nx-deduce-front-clock {
+  color: var(--accent);
+}
+.nx-deduce-front-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.nx-deduce-front-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-deduce-front-actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.nx-deduce-trigger {
+  margin: 6px 0 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--accent);
 }
 .nx-deduce-legend {
   display: flex;

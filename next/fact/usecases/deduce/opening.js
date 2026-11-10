@@ -1,8 +1,10 @@
 /** 推演开局（M1-a）：世界冻结快照 v0 ＋ POV 绑定 ＋ runId 签发。
  * ADR：拒绝从草稿开局——worldview 条目必须全部 adopted，否则拒（D2 判据的世界侧前置）。
+ * P-M4：开局从世界书 rules 槽位预埋 fronts 模板立起威胁前线（有没有模板决定这一局有无累积压力）。
  * 禁宿主依赖：仅 import fact 域内模块。 */
 import { sha1Hex } from '../../domain/stableId.js'
 import { createSessionState } from './sessionState.js'
+import { frontsFromRules } from './fronts.js'
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value ?? null))
@@ -37,6 +39,9 @@ export function openDeduceSession({ entries, pov, runId } = {}) {
     worldHash,
     openedAt: new Date().toISOString()
   }
-  const state = createSessionState({ runId: session.runId, pov, worldHash })
+  // 威胁前线从世界书 rules 里的 fronts 模板立起——没写模板就没有累积压力（如实为空，不凭空造威胁）。
+  const fronts = frontsFromRules(list, { atRound: 0 })
+  session.frontCount = fronts.length
+  const state = createSessionState({ runId: session.runId, pov, worldHash, fronts })
   return { session, frozen, state, povEntry: clone(povEntry) }
 }

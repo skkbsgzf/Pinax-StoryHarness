@@ -3,6 +3,7 @@
 import { FACT_SCHEMA } from '../../domain/vocabulary.js'
 import { stableEntryId } from '../../domain/stableId.js'
 import { pushLog } from './sessionState.js'
+import { advanceFront } from './fronts.js'
 
 function trunc(text, n) {
   const s = String(text ?? '')
@@ -69,7 +70,8 @@ export function settleInject({ state, domain, name, definition }) {
   return { entry, knowledgeDelta: { pov: state.pov, gained: [name] } }
 }
 
-/** 命运受阻 → 假设轨（open 事件：留给后续拍/其他 POV 去解释——叠加微调的钩子）。 */
+/** 命运受阻 → 假设轨（open 事件：留给后续拍/其他 POV 去解释——叠加微调的钩子）。
+ * P-M4：检定受阻也是威胁前线的确定性推进源（世界趁你失手往前挪一步）。 */
 export function settleHypothesis({ state, domain, candidate }) {
   if (!candidate.trace || candidate.trace.success) return null
   const name = `第${state.round}拍·悬而未决`
@@ -88,6 +90,26 @@ export function settleHypothesis({ state, domain, candidate }) {
     },
     trace: candidate.trace
   }
-  pushLog(state, 'hypothesis', { text: candidate.text })
+  pushLog(state, 'hypothesis', { text: candidate.text, pov: state.pov })
+  // 受阻即推进：fronts 存在时给最紧的那条走一格（没有 fronts 就什么都不做，不凭空造压力）。
+  const advanced = advanceTightestFront(state, { round: state.round, source: 'fate-fail', note: '命运检定受阻' })
+  if (advanced) pushLog(state, 'fronts-advance', advanced)
   return entry
+}
+
+/** 推进当前最紧的一条 active front（按 impending 填充率取最大；全零取第一条）。 */
+function advanceTightestFront(state, options) {
+  const list = (Array.isArray(state.fronts) ? state.fronts : []).filter((item) => item?.status === 'active')
+  if (!list.length) return null
+  let target = list[0]
+  let ratio = -1
+  for (const front of list) {
+    const clock = front.clocks?.impending
+    if (!clock || !Number.isFinite(clock.max) || clock.max <= 0) continue
+    const current = (Number(clock.value) || 0) / clock.max
+    if (current > ratio) { ratio = current; target = front }
+  }
+  const result = advanceFront(state.fronts, target.id, options)
+  if (!result.ok) return null
+  return { frontId: target.id, name: target.name, value: result.value, filled: result.filled, triggered: result.triggered, source: options.source }
 }
