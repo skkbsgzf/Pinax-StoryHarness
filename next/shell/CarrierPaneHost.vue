@@ -1,0 +1,2314 @@
+<script setup>
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { renderMarkdown } from './mdRender.mjs'
+import { resolvePaneView } from './viewRegistry.mjs'
+import { recordCarrierOfPaneId } from './recordCarriers.mjs'
+import { availableWritingActions, referenceLabel } from './writingActions.mjs'
+import {
+  buildQuickWordCatalog,
+  filterQuickWords,
+  groupQuickWords,
+  markQuickWordUsed
+} from './quickWords.mjs'
+import { generateNameSuggestions } from './nameGenerator.mjs'
+import PluginPanelHost from './PluginPanelHost.vue'
+import EntryDetailPanel from './EntryDetailPanel.vue'
+import EntriesBoard from './EntriesBoard.vue'
+import ExternalAppHost from './ExternalAppHost.vue'
+import { buildEntryTokenMap, linkifyEntryNames } from './wikiLinks.mjs'
+
+/**
+ * 核心区里的载体面板：正文的编辑面、构思的编辑面、大纲的编辑面、世界书条目的阅读与编辑面
+ * （工单A2 起条目可改；工单C 起契约条目的 frontmatter 关键词／标签也能在编辑态改，随 save 的 meta 落盘）、
+ * 约束的编辑面（工单E2）、资料的阅读与编辑面（工单G1）、剧本的阅读与编辑面（批次26）。
+ *
+ * 协议 v1.1-A（作者 2026-10-28 裁定）：一个载体＝竖条一格＝一棵纯粹的本域内容树。
+ * M2.5-C 起视图解析走注册表（next/shell/viewRegistry.mjs）：pane 声明 view 就按类型查，
+ * 没声明时按 paneId 前缀回落（v1 兼容）——外壳里不再写死分支：
+ *   novel.* → 正文编辑（选中提案时换审阅面）
+ *   outline.* → 大纲编辑
+ *   notes.* → 构思编辑
+ *   worldbook.* → 条目阅读/编辑
+ *   script.* → 剧本阅读/编辑（批次26）
+ *   dossier.* → 资料／约束的阅读与编辑（批次60：设定与资料合并成一栏，按选中类型换面）
+ *
+ * 阅读态一律渲染 md（批次26）：Markdown → HTML 走 next/shell/mdRender.mjs（手写轻量解析，
+ * 输入先整段转义再拼我们自己的标签，出线前过一遍 sanitize）；编辑态仍是 textarea 纯文本——
+ * 作者改的是源文，不是渲染结果。所有 carrier 的阅读态共用同一条渲染路径。
+ *
+ * 数据不在这里自己取——索引窗与核心区共用 useBoardData 的同一份对象，
+ * 所以「索引窗列着第 1 版、正文存成了第 2 版」这种不同步不会发生。
+ * 认不出的 pane id 不空白、不假装能编辑：如实说这块视图还没实现。
+ *
+ * 保存交互（工单H1，对齐老版）：没有常驻保存按钮——Ctrl+S／Cmd+S 触发（编辑器聚焦时生效），
+ * 结果只落在编辑面头部一枚自动消失的保存 chip 上（复刻 wall__save-chip 的度量）。
+ *
+ * P18 文档为主合同（批次31，作者 2026-10-29 裁定）：「我们是一个面向 Obsidian 的 doc 类组件，
+ * 应该是以文档为主」。据此三件事落到这一枚组件上：
+ *   1. 编辑面就是文档本身——正文满幅铺在窗格底色上（无 border／无卡片背景／无圆角，只留呼吸留白）；
+ *   2. 控件只有三分：窗格头部一行（标题＋meta＋至多两个 quiet 操作，右端对齐）、按需浮现
+ *      （索引窗树行右键菜单／hover 显形）、Ctrl+S＋保存 chip；**常驻按钮行一律取消**；
+ *   3. 元数据默认折叠：条目的关键词／标签／摘要／关系收进一行「条目信息」层（照 Obsidian properties）。
+ * 面板型界面（提案审阅的两版对照）不受此合同约束——两份文档需要视觉分隔。
+ *
+ * 批次33（作者 2026-10-30 裁定）把第 2 条的「头部」再收一刀——文档头只放一个标题：
+ *   「作为一个 doc 来说，就是标题栏放一个标题，其他东西就不用放了，最多在底部放一些提示。」
+ *   1. 头部只剩一行 .doc-title（章节名／条目名／资料名／剧本名／规则名／提案文件名）；
+ *      〔批次76 裁定A 已改判本条：这一行整体上移成窗头「载体 · 文档」，内容层不再自绘，见文末〕
+ *      「正文」「演示之书 · novel」那层身份与项目名都不在文档头里再念一遍——
+ *      载体身份在竖条上，项目名在标题栏；
+ *   2. 写作面聚焦不再套蓝框（.editor-area 的 outline 规则已拆，焦点指示就是光标）。
+ *
+ * 批次43（作者 2026-10-31：「正文区域没有适配md格式原生渲染么，还有，你加了很多无效的提示，
+ * 然后文件添加了，修改了，也没发保存」）把同一份合同又推进一步：
+ *   1. 正文／构思／大纲／约束四个面也有阅读态了——md 渲染成 HTML（与条目／资料／剧本同一条路径），
+ *      头部一枚「编辑」切到 textarea；文档先是一篇文，再是编辑器；
+ *   2. 底部 .doc-meta-hint 不再摆路径 · 第 N 版 · N 字 · 节点数这些开发者信息，
+ *      只留作者用得上的：有没有没落盘的改动、是不是只载入了前段、条目自己的关键词与摘要；
+ *   3. 改动会自己落盘（自动保存，见 useBoardData）：作者不该靠记忆去按 Ctrl+S。
+ *
+ * 批次76（作者 2026-11-03 看完真窗口遍历后的〔裁定A〕）**改判批次33 的第 1 条**：
+ *   「我们只需要确保打开的第一章，在显示的时候是"小说 第一章"就行，避免冗余层级。」
+ *   ——标题面从「文档头那一行」上移成「窗头那一行」：窗头统一 `${载体名} · ${文档名}`（AppNext.windowTitle），
+ *   本组件**不再自绘 `h2.doc-title`**，正文／条目正文从第一行开始。`.doc-head` 容器留着，
+ *   因为右侧的保存 chip／编辑／工具那些动作还得有个落脚的行。
+ *   〔大纲面例外〕`input.doc-title`（改节点名的输入框）保留——它是**控件**不是标题层级，撤了作者就没法改名；
+ *   读态那一行 `h2 outline-reading-title` 同样撤掉，节点名归窗头。
+ *   〔状态栏例外〕底部 StatusBar 的 doc 读数（名字＋字数）保留：那是读数行，不是第二层标题。
+ */
+const props = defineProps({
+  pane: { type: Object, default: null },
+  /** useBoardData 的返回值。 */
+  data: { type: Object, required: true },
+  /** 当前项目根：看板区用它拼视图记忆的 localStorage 键（换项目＝各记各的）。 */
+  projectRoot: { type: String, default: '' }
+})
+/* 〔批次68-R2〕'focus-index'：空态的主操作钮——「去索引窗」真的把这块板对应的索引列打开，
+   指南层的铁律：指路必须给动作，光一句话打发不算数。 */
+const emit = defineEmits(['history', 'address', 'focus-index'])
+
+/**
+ * 视图解析（M2.5-C 任务二）：pane 声明 `view: 'pinax.view.*'`，宿主查注册表拿内容面；
+ * 没声明时按 id 前缀回落（v1 兼容，见 next/shell/viewRegistry.mjs 的 LEGACY_VIEW_BINDINGS）。
+ * 解析不到就出占位——不再在外壳里按前缀写死七个分支。
+ */
+const viewResolution = computed(() => resolvePaneView(props.pane, props.data))
+const viewKind = computed(() => {
+  const kind = viewResolution.value?.result?.kind ?? 'placeholder'
+  // 批次60：设定与资料的编辑面是同一块（document-detail），到约束上换成规则面孔。
+  // 判据用 selection（打开的是哪一类），不用 pane id 特判内容——保存目标随 viewKind 走。
+  if (kind === 'document-detail' && String(props.pane?.id ?? '').startsWith('dossier.')
+    && props.data.selection?.type === 'rule') {
+    return 'rule-editor'
+  }
+  return kind
+})
+const viewPlaceholderReason = computed(() => {
+  const resolution = viewResolution.value
+  if (!resolution) return '这块 pane 没有声明视图类型（view），宿主也不认它的 id 前缀。'
+  if (!resolution.result) return `视图类型 ${resolution.type} 没有内容面（kind）：宿主不知道该渲染哪一种。`
+  return ''
+})
+
+/**
+ * 阅读态的 md 渲染（批次26）：资料／剧本／提案几面走这条路径（mdRender.mjs）。
+ * 条目那一面搬进了 EntryDetailPanel（批次44：看板区要能单独摆它），那边自己渲染。
+ */
+const documentHtml = computed(() => renderMarkdown(props.data.document?.text ?? ''))
+const scriptHtml = computed(() => renderMarkdown(props.data.script?.text ?? ''))
+const recordHtml = computed(() => renderMarkdown(props.data.record?.body ?? ''))
+
+/**
+ * 正文／构思／大纲／约束的阅读面（批次43 · 作者 2026-10-31：「正文区域没有适配md格式原生渲染么」）。
+ *
+ * 这四个面原来只有 textarea——正文是 md 稿子，却以纯源码的样子摊在核心区，
+ * 与条目／资料／剧本那几面（早就有阅读态）不是一回事。现在它们与那几面对齐：
+ *   1) 阅读态＝源文渲染成 HTML（标题／粗体／列表／引用／代码块…），走同一条 mdRender 路径；
+ *   2) 编辑态＝textarea 拿源文（作者改的是源文，不是渲染结果）；
+ *   3) 〔批次68-R6 任务二〕正文的入口换成「点入即改」：阅读面点一段＝就地接稿那一段（textarea
+ *      在同一段落的位置接管），失焦或 Ctrl+S 保存回渲染态；「编辑」钮退役，「取消」与保存 chip 保留。
+ *      构思／大纲／约束不在本批面内（工单登记：其余载体不下），仍是头部「编辑」钮切换。
+ * 批次55：正文阅读面再按 preview.loading 分两档（见下面的分页块），构思／大纲／约束仍是整读。
+ */
+const noteHtml = computed(() => renderMarkdown(props.data.noteDraft ?? ''))
+const ruleHtml = computed(() => renderMarkdown(props.data.ruleDraft ?? ''))
+const outlineNoteHtml = computed(() => renderMarkdown(props.data.outlineDraft?.nodes?.[props.data.outlineNodeIndex]?.note ?? ''))
+
+const chapterEditing = ref(false)
+const noteEditing = ref(false)
+const outlineEditing = ref(false)
+const ruleEditing = ref(false)
+
+// 换一份稿子＝换一篇文：编辑态随之收掉（别把上一份的编辑姿势带到下一份上）。
+// 大纲按节点 id 判：把节点上下挪一挪，编辑的还是同一篇，不该把编辑区收走。
+watch(() => props.data.chapter?.file ?? null, () => {
+  chapterEditing.value = false
+  toolsOpen.value = false
+  copiedName.value = ''
+})
+watch(() => props.data.note?.file ?? null, () => { noteEditing.value = false })
+watch(() => props.data.rule?.file ?? null, () => { ruleEditing.value = false })
+watch(() => props.data.outlineDraft?.nodes?.[props.data.outlineNodeIndex]?.id ?? null, () => { outlineEditing.value = false })
+
+/* —— 正文阅读面：preview.loading 两档（批次55）————————————————————————
+ *
+ * 工单口径：`text-pages` 首次只渲染首屏，翻页／滚到底才懒补下一页；`bytes-complete` 保留整读
+ * （小文件、写前校验用）。载体用批次52 的 preview.register 指定档位。
+ *
+ * 两处落地约束：
+ *   1) 清单里的 preview 目前还没投到渲染层（批次53 欠账，ipcContract.shellView 未投影）；
+ *      所以先读 pane 上的 preview（投影补上后自动生效），没有就按内容面回落——
+ *      正文阅读面 text-pages，其余整读。清单补投影后删掉这条回落即可。
+ *   2) 编辑态 textarea 与 data.draft 一个字不动：分页只切「渲染什么」，
+ *      不切「编辑什么」——自动保存／指纹基线照旧以整份草稿为准。
+ *
+ * 页内取文先吃已载入的草稿（与编辑态同一份文字，未落盘的改动也看得见）；
+ * 草稿之外（只载入前段的大稿）才经 pinax_chapter_read 的 offset／maxChars 懒补。
+ */
+const CHAPTER_PAGE_CHARS = 2400
+const CHAPTER_LOADING_MODES = ['text-pages', 'bytes-complete']
+
+const chapterLoadingMode = computed(() => {
+  const declared = props.pane?.preview?.loading ?? props.pane?.previewLoading ?? null
+  if (CHAPTER_LOADING_MODES.includes(declared)) return declared
+  return viewKind.value === 'chapter-editor' ? 'text-pages' : 'bytes-complete'
+})
+const textPagesReading = computed(() => chapterLoadingMode.value === 'text-pages')
+
+const chapterPageIndex = ref(0)
+const chapterPageText = ref('')
+const chapterPageCache = ref({})
+const chapterPageBusy = ref(false)
+const chapterPageError = ref('')
+let chapterPageTicket = 0
+const chapterPagePending = new Map()
+
+const chapterTotalChars = computed(() => {
+  const total = Number(props.data.chapter?.totalChars)
+  if (Number.isSafeInteger(total) && total >= 0) return total
+  return String(props.data.draft ?? '').length
+})
+const chapterPageCount = computed(() => Math.max(1, Math.ceil(chapterTotalChars.value / CHAPTER_PAGE_CHARS)))
+
+function resetChapterPaging() {
+  chapterPageIndex.value = 0
+  chapterPageText.value = ''
+  chapterPageCache.value = {}
+  chapterPageError.value = ''
+  chapterPageTicket += 1
+  chapterPagePending.clear()
+}
+
+/** 懒补一页（草稿之外的部分）：走正文载体的 pinax_chapter_read，offset／maxChars 都是字符数。 */
+function fetchChapterPage(offset, maxChars) {
+  const file = props.data.chapter?.file
+  if (!file || typeof props.data.tool !== 'function') return Promise.resolve('')
+  const key = `${file}:${offset}:${maxChars}`
+  if (chapterPagePending.has(key)) return chapterPagePending.get(key)
+  const task = Promise.resolve(props.data.tool('pinax_chapter_read', { file, offset, maxChars }))
+    .then((result) => {
+      chapterPagePending.delete(key)
+      if (!result?.ok) {
+        chapterPageError.value = result?.message ?? '读取下一页失败'
+        return ''
+      }
+      return String(result.value?.text ?? '')
+    }, (error) => {
+      chapterPagePending.delete(key)
+      chapterPageError.value = String(error?.message ?? error)
+      return ''
+    })
+  chapterPagePending.set(key, task)
+  return task
+}
+
+async function resolveChapterPage(index) {
+  const draft = String(props.data.draft ?? '')
+  const start = index * CHAPTER_PAGE_CHARS
+  const truncated = props.data.chapter?.truncated === true
+  if (start < draft.length) {
+    const slice = draft.slice(start, start + CHAPTER_PAGE_CHARS)
+    // 草稿整段覆盖本页：直接用（作者未落盘的改动也照原样显示）。
+    if (!truncated || slice.length === CHAPTER_PAGE_CHARS) return slice
+    // 草稿只到页中间（只载入前段的大稿）：后半页懒补，拼成完整一页。
+    const rest = await fetchChapterPage(start + slice.length, CHAPTER_PAGE_CHARS - slice.length)
+    return slice + rest
+  }
+  if (!truncated) return ''
+  if (chapterPageCache.value[index] !== undefined) return chapterPageCache.value[index]
+  const text = await fetchChapterPage(start, CHAPTER_PAGE_CHARS)
+  chapterPageCache.value = { ...chapterPageCache.value, [index]: text }
+  return text
+}
+
+/** 落到某一页：只渲染这一页；页码钳在 0..count-1，迟到的旧请求按票号丢弃。 */
+async function loadChapterPage(index) {
+  if (!props.data.chapter || !textPagesReading.value) return
+  const bounded = Math.min(Math.max(Number.isSafeInteger(index) ? index : 0, 0), chapterPageCount.value - 1)
+  const ticket = ++chapterPageTicket
+  chapterPageBusy.value = true
+  chapterPageError.value = ''
+  const text = await resolveChapterPage(bounded)
+  if (ticket !== chapterPageTicket) return
+  chapterPageBusy.value = false
+  chapterPageIndex.value = bounded
+  chapterPageText.value = text
+}
+
+function goChapterPage(index) {
+  void loadChapterPage(index)
+}
+
+/** 滚到底＝翻下一页（「滚动触发下一页」）；已经是最后一页就不动。 */
+function onChapterReadingScroll(event) {
+  if (!textPagesReading.value || chapterPageBusy.value) return
+  const el = event?.target
+  if (!el || el.scrollTop + el.clientHeight < el.scrollHeight - 80) return
+  if (chapterPageIndex.value >= chapterPageCount.value - 1) return
+  goChapterPage(chapterPageIndex.value + 1)
+}
+
+// 换章：页码与页缓存清零，从第一页重新起读（编辑态同一条路——取消编辑回来也落回当前页）。
+watch(() => props.data.chapter?.file ?? null, () => {
+  resetChapterPaging()
+  void loadChapterPage(0)
+}, { immediate: true })
+
+// 草稿长度／修订号变化：重算当前页（自动保存回写也会走到这里）。
+watch(() => [props.data.draft, props.data.chapter?.revision], () => {
+  if (chapterEditing.value || !textPagesReading.value || !props.data.chapter) return
+  void loadChapterPage(chapterPageIndex.value)
+})
+
+watch(chapterEditing, (editing) => {
+  if (!editing) void loadChapterPage(chapterPageIndex.value)
+})
+
+/** 阅读面正文：text-pages 只看当前页，bytes-complete 仍是整份草稿（批次43 的旧行为）。 */
+const chapterReadingSourceText = computed(() => (textPagesReading.value ? chapterPageText.value : String(props.data.draft ?? '')))
+const chapterReadingHtml = computed(() => renderMarkdown(chapterReadingSourceText.value))
+
+/**
+ * 跨页重渲染（批次44 的 :key 招）：key 里带页号与页文长度，换页时整块 DOM 重来——
+ * 上一页留下的 .nx-wikilink 锚点不会跟着节点缓存漂到这一页上。
+ */
+const chapterReadingKey = computed(() => (textPagesReading.value
+  ? `page:${props.data.chapter?.file ?? ''}:${chapterPageIndex.value}:${chapterPageText.value.length}`
+  : `whole:${props.data.chapter?.file ?? ''}:${props.data.chapter?.revision ?? ''}`))
+
+/**
+ * 每页各自的 Wiki 词表（批次55 任务三）：唯一归属的词才进表（buildEntryTokenMap），
+ * 再按当前页文本过滤——这一页没出现的词不参与链接，换页即换表。
+ * 词表与点击解析共用同一张表：链出去的词点下去一定打得开（批次44 纪律）。
+ */
+const chapterEntryTokenMap = computed(() => buildEntryTokenMap(props.data.entries ?? []))
+const chapterLinkTokens = computed(() => {
+  const text = chapterReadingSourceText.value
+  if (!text) return []
+  return [...chapterEntryTokenMap.value.keys()].filter((token) => text.includes(token))
+})
+const chapterRenderedEl = ref(null)
+async function applyChapterLinks() {
+  await nextTick()
+  if (chapterEditing.value || !chapterRenderedEl.value) return
+  linkifyEntryNames(chapterRenderedEl.value, chapterLinkTokens.value, { firstOnly: true })
+}
+watch([chapterReadingKey, chapterReadingSourceText, chapterEntryTokenMap], applyChapterLinks)
+// 挂载即补一次：这一页的正文可能在面板挂载前就取回来了（批次61 一页一份文档），
+// 依赖没变就不触发 watch，蓝链会一条都不染。
+onMounted(applyChapterLinks)
+
+function onChapterRenderedClick(event) {
+  const link = event.target?.closest?.('.nx-wikilink')
+  if (link) {
+    const item = chapterEntryTokenMap.value.get(String(link.dataset.entry ?? ''))
+    if (!item) return
+    // 蓝链的目标是另一块 pane 的文档：交回宿主的唯一通路，不在这一页里就地换装（〔任务四〕归一）。
+    if (typeof openKnowledge === 'function') {
+      openKnowledge({ kind: 'entry', item })
+      return
+    }
+    props.data.openEntry(item)
+    return
+  }
+  // 〔批次68-R6 任务二〕点入即改：阅读面上不是蓝链的一下，就地接稿（判据㉑的交互声明）。
+  void enterChapterEditingFrom(event)
+}
+
+/**
+ * 〔批次68-R6 任务二〕阅读面某一段 → 源文那一段的光标落点。
+ *
+ * 映射口径（工单允许的「整块 textarea 接管」档，逐段说明为什么这样近似）：
+ *   - 第 n 个渲染块 ↔ 页源文里第 n 个「非空行段」（空行分块）：散文的绝大多数块
+ *     （纯段落、标题、列表、引用）是一一对得上的；含空行的围栏代码是已知例外，落点会偏到
+ *     围栏后的第一段——偏的是段内起点，不是整篇，字一个不会丢。
+ *   - 字级偏移不做（caretRangeFromPoint 拿到的渲染偏移与源文偏移隔着 md 标记，对不准），
+ *     落点定在**那一段的段首**；点不到块（空白处）落整页末尾。
+ *   - 滚动位置随光标走：接稿后把 textarea 滚到那一行（见 enterChapterEditingFrom），
+ *     「在同一段落的位置接管」量的是这个，不是复制 scrollTop 的像素值。
+ */
+function chapterBlockIndexFromEvent(event) {
+  const container = chapterRenderedEl.value
+  const node = event?.target
+  if (!container || !node || node === container || !container.contains(node)) return null
+  let cursor = node
+  while (cursor.parentElement && cursor.parentElement !== container) cursor = cursor.parentElement
+  if (!cursor.parentElement) return null
+  const index = Array.from(container.children).indexOf(cursor)
+  return index >= 0 ? index : null
+}
+
+/** 页源文按空行分块，取第 n 块的起始字符偏移；n 越界／缺省＝整页末尾。 */
+function chapterBlockStart(text, blockIndex) {
+  const value = String(text ?? '')
+  if (!Number.isSafeInteger(blockIndex) || blockIndex < 0) return value.length
+  let cursor = 0
+  let blocks = 0
+  let inBlock = false
+  while (cursor < value.length) {
+    const lineEnd = value.indexOf('\n', cursor)
+    const end = lineEnd === -1 ? value.length : lineEnd
+    if (value.slice(cursor, end).trim()) {
+      if (!inBlock) {
+        if (blocks === blockIndex) return cursor
+        blocks += 1
+      }
+      inBlock = true
+    } else {
+      inBlock = false
+    }
+    cursor = end + 1
+  }
+  return value.length
+}
+
+/**
+ * 整章展开：分页阅读面下草稿可能只载了前段（openChapter 的 maxChars 闸）。
+ * 「编辑＝改整篇」的前提是手里有整篇——补载走 useBoardData 的 loadFullChapterDraft
+ * 〔越界补登记〕（那是「多载入」不是「改动」：不置脏、对齐指纹基线，自动保存语义一字未动）。
+ * 补载失败就不进编辑态：宁可作者还在读，也不让半截草稿带着「保存会抹掉后段」的风险去改字。
+ */
+async function expandChapterForEditing() {
+  if (props.data.chapter?.truncated !== true) return true
+  if (typeof props.data.loadFullChapterDraft !== 'function') return false
+  const result = await props.data.loadFullChapterDraft()
+  if (!result?.ok) {
+    chapterPageError.value = result?.message ?? '后半段补载失败：这一章还只能整段读，先别在草稿上改。'
+    return false
+  }
+  return true
+}
+
+async function enterChapterEditingFrom(event) {
+  if (chapterEditing.value) return
+  const blockIndex = chapterBlockIndexFromEvent(event)
+  const pageStart = chapterBlockStart(chapterReadingSourceText.value, blockIndex)
+  const caret = (textPagesReading.value ? chapterPageIndex.value * CHAPTER_PAGE_CHARS : 0) + pageStart
+  if (!(await expandChapterForEditing())) return
+  chapterEditing.value = true
+  await nextTick()
+  const el = chapterArea.value
+  if (!el) return
+  const bounded = Math.min(caret, String(props.data.draft ?? '').length)
+  el.focus?.()
+  el.setSelectionRange?.(bounded, bounded)
+  props.data.setDraftSelection?.(bounded, bounded)
+  // 接稿的位置：textarea 滚到光标那一行（与打字机滚动同一把尺——隐藏镜像量光标纵坐标）。
+  const caretTop = caretTopIn(el)
+  if (caretTop > 0 && el.clientHeight > 0) {
+    el.scrollTop = Math.max(0, caretTop - el.clientHeight * 0.3)
+  }
+}
+
+/**
+ * 〔批次68-R6 任务二〕失焦／Ctrl+S 的收口：保存回渲染态。
+ * 有未落盘的改动才走保存（只点开看一眼不该推修订号）；落完回阅读面并翻回作者改的那一页
+ * （页码从光标位置现算——分页档下保存回分页，不回到页 1）。
+ */
+let committingChapter = false
+async function commitChapterEditing() {
+  if (committingChapter) return
+  committingChapter = true
+  try {
+    const caret = Number(chapterArea.value?.selectionStart ?? 0)
+    // 有未落盘的改动才走保存：只点开看一眼不该推修订号（自动保存那条指纹纪律的同一口径）。
+    if (props.data.pendingSave?.chapter) await props.data.save()
+    // 落盘没成（chip 正在报「版本冲突／保存失败」）就留在编辑态：稿子还在作者手里，退路是 chip 上的重试。
+    if (!props.data.pendingSave?.chapter) {
+      chapterEditing.value = false
+      // 分页档回到作者改的那一页（不是页 1）——「保存回分页」的那一步。
+      if (textPagesReading.value && props.data.chapter && caret > 0) void loadChapterPage(Math.floor(caret / CHAPTER_PAGE_CHARS))
+    }
+  } finally {
+    committingChapter = false
+  }
+}
+
+/**
+ * 未落盘的改动（批次43）：自动保存还没跑到时，底部给一句人话。
+ * 没有未落盘的改动时这一行整个不出现——文档面上不留常驻噪声。
+ */
+function pendingText(target) {
+  if (!props.data.pendingSave?.[target]) return ''
+  const feedback = props.data.saveFeedback
+  if (feedback?.target === target && feedback.status === 'saving') return '正在保存…'
+  return '未保存的改动'
+}
+
+const chapterPending = computed(() => pendingText('chapter'))
+const notePending = computed(() => pendingText('note'))
+const outlinePending = computed(() => pendingText('outline'))
+const rulePending = computed(() => pendingText('rule'))
+
+/**
+ * 正文写作动作（批次41 · 对齐老前端写作面）：「续写／改写／扩写／压缩／润色」收在正文下方一条轻量动作带上。
+ *
+ * 三个约定：
+ *   1) 动作带跟着写作面走——正文一聚焦就浮现，离开就收起；只剩「续写」时它也还在，
+ *      因为那是写作时最常按的那一下。有产出／生成中／报错时常驻，否则作者会看不到自己刚按出来的东西。
+ *   2) 结果不自动落进正文：先摆出来，作者按「插入光标处／替换选中段」才动稿子。
+ *      老版就是这个顺序——先看，再决定收不收。
+ *   3) 按钮用 mousedown.prevent，点它不会把焦点从 textarea 抢走，光标位置因此不会丢。
+ */
+const hasDraftSelection = computed(() => {
+  const range = props.data.draftSelection
+  return Boolean(range && Number(range.end) > Number(range.start))
+})
+const writingActions = computed(() => availableWritingActions({ hasSelection: hasDraftSelection.value }))
+const writingInstruction = ref('')
+const editorFocused = ref(false)
+const instructionFocused = ref(false)
+const writingBarVisible = computed(() => editorFocused.value || instructionFocused.value
+  || Boolean(props.data.writingBusy || props.data.writingResult || props.data.writingError))
+const writingBusy = computed(() => Boolean(props.data.writingBusy))
+const reviewBusy = computed(() => Boolean(props.data.reviewBusy))
+const chapterArea = ref(null)
+
+/* —— 写作工具（批次46B · 任务②）：快捷词与取名 ——————————————————————
+ * 两页共用一个 hover／点击才浮出的 quiet 弹层（P18 第 2 条：常驻按钮行取消）。
+ * 词表是派生物：世界书条目＋当前正文 n-gram（quickWords.mjs），启用与最近使用只活在模块内存里，
+ * 不落盘、不进偏好、不进 .pinax/——关掉应用就没了，这是有意的。
+ * 取名是纯本地名字池（nameGenerator.mjs）：批次内不重名，与世界书重名的摆灰但不替作者换掉。
+ */
+const toolsOpen = ref(false)
+const toolsTab = ref('words')
+const quickQuery = ref('')
+const quickCatalog = ref([])
+const nameForm = ref({ category: 'person', language: 'chinese', length: 'three', gender: 'neutral' })
+const nameBatch = ref([])
+const copiedName = ref('')
+let copiedTimer = null
+
+const quickGroups = computed(() => groupQuickWords(filterQuickWords(quickCatalog.value, quickQuery.value)))
+const quickGroupsVisible = computed(() => ['character', 'setting', 'extracted']
+  .map((key) => ({ key, label: quickGroupLabel(key), items: quickGroups.value[key] ?? [] }))
+  .filter((group) => group.items.length))
+
+function quickGroupLabel(key) {
+  if (key === 'character') return '角色'
+  if (key === 'setting') return '设定'
+  return '正文提取'
+}
+
+/** 打开弹层时现抽一次词表（正文可能刚改过）；开着的时候不随每次按键重算。 */
+function refreshQuickWords() {
+  quickCatalog.value = buildQuickWordCatalog({
+    entries: Array.isArray(props.data.entries) ? props.data.entries : [],
+    text: String(props.data.draft ?? ''),
+    limit: 16
+  })
+}
+
+function toggleTools(tab = 'words') {
+  if (toolsOpen.value && toolsTab.value === tab) {
+    toolsOpen.value = false
+    return
+  }
+  toolsOpen.value = true
+  toolsTab.value = tab
+  if (tab === 'words') refreshQuickWords()
+  else if (!nameBatch.value.length) generateNames()
+}
+
+function closeTools() {
+  toolsOpen.value = false
+}
+
+function generateNames() {
+  const form = nameForm.value
+  nameBatch.value = generateNameSuggestions({
+    entries: Array.isArray(props.data.entries) ? props.data.entries : [],
+    count: 8,
+    category: form.category,
+    language: form.language,
+    length: form.length,
+    gender: form.gender
+  })
+  copiedName.value = ''
+}
+
+/**
+ * 插入到正文光标处：阅读态先切编辑态，再按 textarea 的选区落字。
+ * 落完把光标移到片段之后——作者接着往下写，不用再点一下。
+ */
+async function insertAtCaret(snippet) {
+  const value = String(snippet ?? '')
+  if (!value) return
+  // 〔批次68-R6 任务二〕插入走「点入即改」同一条入口：先整章展开再落字——
+  // 半截草稿上落字，下一次保存会把没载入的后段抹掉；补载失败就停手（错误句已摆在页提示位）。
+  if (props.data.chapter?.truncated === true && !(await expandChapterForEditing())) return
+  if (!chapterEditing.value) chapterEditing.value = true
+  await nextTick()
+  const el = chapterArea.value
+  const current = String(props.data.draft ?? '')
+  const start = typeof el?.selectionStart === 'number' ? el.selectionStart : current.length
+  const end = typeof el?.selectionEnd === 'number' ? el.selectionEnd : start
+  const next = current.slice(0, start) + value + current.slice(end)
+  props.data.setDraft(next)
+  await nextTick()
+  const caret = start + value.length
+  el?.focus?.()
+  el?.setSelectionRange?.(caret, caret)
+  props.data.setDraftSelection?.(caret, caret)
+  closeTools()
+}
+
+function useQuickWord(item) {
+  markQuickWordUsed(item?.id)
+  void insertAtCaret(item?.text ?? '')
+}
+
+async function copyName(name) {
+  const text = String(name ?? '')
+  if (!text) return
+  try {
+    await globalThis.navigator?.clipboard?.writeText?.(text)
+  } catch {
+    // 没有剪贴板权限（或测试环境）：下面的提示照旧给，不假装复制成功。
+    copiedName.value = '复制失败，请手动选中'
+    return
+  }
+  copiedName.value = `已复制「${text}」`
+  if (copiedTimer) clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => {
+    copiedName.value = ''
+    copiedTimer = null
+  }, 1600)
+}
+
+/**
+ * 应用面的地址（批次58 的「复制地址单开」）本批不在这里管了（〔批次76-R2 任务4〕）：
+ * 地址由 ExternalAppHost 现算（清单＋工程覆盖），经 `address` 事件一路上抛给宿主——
+ * 落点是页签 tooltip 与底栏状态栏，复制动作进页签右键菜单。常驻脚行连同 copyAppUrl 一起退役，
+ * 不在内容组件里留第二条「没人按的旁路」。
+ */
+
+function onToolsKeydown(event) {
+  if (event.key !== 'Escape' || !toolsOpen.value) return
+  event.preventDefault()
+  closeTools()
+}
+
+/* —— 编辑器行为（批次46B · 任务④）：打字机滚动与段落聚焦 ——————————————————
+ * 偏好由 AppNext 写到根节点 data 属性上（dataset.writingTypewriter／writingFocus），
+ * 这里只在编辑事件发生时读一次——行为开关不是响应式的常驻循环。
+ * textarea 拿不到「当前段落的 DOM」，段落聚焦用上下两层遮罩近似：光标所在行亮，其余压暗。
+ * 打字机滚动要算光标的纵坐标，用一个与 textarea 同度量的隐藏镜像来量（textarea 自身没有 caret 坐标 API）。
+ */
+const focusModeActive = ref(false)
+const focusBand = ref({ top: 0, bottom: 0 })
+let effectFrame = 0
+
+function datasetFlag(name) {
+  return globalThis.document?.documentElement?.dataset?.[name] === 'on'
+}
+
+function caretTopIn(el) {
+  if (typeof globalThis.document?.createElement !== 'function') return 0
+  const mirror = globalThis.document.createElement('div')
+  const computed = globalThis.getComputedStyle?.(el)
+  mirror.style.position = 'absolute'
+  mirror.style.visibility = 'hidden'
+  mirror.style.pointerEvents = 'none'
+  mirror.style.top = '0'
+  mirror.style.left = '-9999px'
+  mirror.style.width = `${el.clientWidth}px`
+  mirror.style.height = 'auto'
+  if (computed) {
+    const props = ['font-family', 'font-size', 'font-weight', 'line-height', 'letter-spacing',
+      'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+      'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+      'box-sizing', 'text-indent', 'tab-size']
+    for (const name of props) {
+      const value = computed.getPropertyValue(name)
+      if (value) mirror.style.setProperty(name, value)
+    }
+  }
+  mirror.style.whiteSpace = 'pre-wrap'
+  mirror.style.wordWrap = 'break-word'
+  mirror.style.overflowWrap = 'break-word'
+  mirror.textContent = `${el.value.slice(0, el.selectionStart ?? 0)}\u200b`
+  globalThis.document.body.appendChild(mirror)
+  const top = mirror.getBoundingClientRect().height
+  mirror.remove()
+  return top
+}
+
+function applyEditorEffects(el) {
+  focusModeActive.value = datasetFlag('writingFocus')
+  if (!el || !editorFocused.value) {
+    focusBand.value = { top: 0, bottom: 0 }
+    return
+  }
+  const caretTop = caretTopIn(el)
+  const line = Number.parseFloat(globalThis.getComputedStyle?.(el)?.lineHeight ?? '') || 30
+  if (datasetFlag('writingTypewriter')) {
+    const target = Math.max(0, caretTop - el.clientHeight * 0.4)
+    if (Math.abs(el.scrollTop - target) > 1) el.scrollTop = target
+  }
+  if (focusModeActive.value) {
+    const viewTop = caretTop - el.scrollTop
+    focusBand.value = {
+      top: Math.max(0, viewTop - line * 0.9),
+      bottom: Math.max(0, el.clientHeight - viewTop - line * 1.6)
+    }
+  } else {
+    focusBand.value = { top: 0, bottom: 0 }
+  }
+}
+
+function scheduleEditorEffects(el) {
+  if (effectFrame) return
+  const schedule = typeof globalThis.requestAnimationFrame === 'function'
+    ? globalThis.requestAnimationFrame.bind(globalThis)
+    : (fn) => globalThis.setTimeout(fn, 16)
+  effectFrame = schedule(() => {
+    effectFrame = 0
+    applyEditorEffects(el ?? chapterArea.value)
+  })
+}
+
+function onEditorFocus(event) {
+  editorFocused.value = true
+  scheduleEditorEffects(event?.target)
+}
+
+function onEditorBlur(event) {
+  editorFocused.value = false
+  focusBand.value = { top: 0, bottom: 0 }
+  // 〔批次68-R6 任务二〕失焦＝保存回渲染态。焦点落在本面板内（取消钮、保存 chip 的「重试」）时
+  // 不插一脚：快捷词／动作条那些钮自带 mousedown.prevent，焦点根本不会走；真会走到这里的
+  // （取消、chip）由它们自己的语义收口，blur 不替它们保存。
+  if (!chapterEditing.value || committingChapter) return
+  const next = event?.relatedTarget
+  // 焦点走去的是**这一块面板自己**的控件才算「面板内挪焦」——分屏时另一格的 .pane 不算（否则两页互点会漏保存）。
+  const root = event?.currentTarget?.closest?.('.pane')
+  if (root && next && root.contains(next)) return
+  void commitChapterEditing()
+}
+
+function onEditorInput(event) {
+  props.data.setDraft(event.target.value)
+  scheduleEditorEffects(event.target)
+}
+
+function onEditorSelect(event) {
+  onDraftSelect(event)
+  scheduleEditorEffects(event?.target)
+}
+
+watch(() => props.data.draft, () => {
+  if (!editorFocused.value) return
+  // 落位／插入也会改 draft：光标位置随下一帧的选区一起量，不在这里抢滚动。
+  if (toolsOpen.value && toolsTab.value === 'words') return
+  scheduleEditorEffects()
+})
+
+function onDraftSelect(event) {
+  const el = event?.target
+  if (!el || typeof el.selectionStart !== 'number') return
+  props.data.setDraftSelection(el.selectionStart, el.selectionEnd)
+}
+
+function startWriting(actionId) {
+  if (!actionId) return
+  instructionFocused.value = false
+  props.data.requestWriting(actionId, writingInstruction.value)
+}
+
+/** 审查本章（批次46A）：走 authoring.review.chapter 只读轨，一句固定问句，结果落成下面的卡片。 */
+function startReview() {
+  instructionFocused.value = false
+  props.data.reviewChapter()
+}
+
+/** 「转改写」：把这条意见的描述预填进五动作的额外要求，再按改写发出（选区不动）。 */
+function reviewIssueToRewrite(issue) {
+  const description = String(issue?.message ?? '').trim()
+  if (!description) return
+  writingInstruction.value = description
+  props.data.requestWriting('rewrite', description)
+}
+
+function severityLabel(severity) {
+  if (severity === 'high') return '高'
+  if (severity === 'low') return '低'
+  return '中'
+}
+
+/**
+ * 提示词预览（批次46A）：折叠层按需读主进程留存的最近一次请求。
+ * 换了一条结果（落位／丢弃／重新生成）就自动收起——预览永远对着上面那张结果卡。
+ */
+const writingPreviewOpen = ref(false)
+const writingReferenceText = computed(() => (Array.isArray(props.data.writingResult?.references)
+  ? props.data.writingResult.references
+    .map((item) => `${referenceLabel(item.kind)} ${item.chars} 字`)
+    .join(' · ')
+  : ''))
+watch(() => props.data.writingResult, (value) => {
+  if (!value) writingPreviewOpen.value = false
+})
+async function toggleWritingPreview() {
+  writingPreviewOpen.value = !writingPreviewOpen.value
+  if (writingPreviewOpen.value) await props.data.loadWritingPreview()
+}
+
+/** 落位后把光标放回正文（caret 由 applyWritingResult 算好）：作者接着往下写，不用再点一下。 */
+watch(() => [props.data.draftSelection?.start, props.data.draftSelection?.end], async () => {
+  const start = Number(props.data.draftSelection?.start ?? 0)
+  const end = Number(props.data.draftSelection?.end ?? start)
+  await nextTick()
+  const el = chapterArea.value
+  if (!el || document.activeElement !== el) return
+  if (el.selectionStart !== start || el.selectionEnd !== end) el.setSelectionRange(start, end)
+})
+
+/**
+ * 记录型载体（批次40 · M4／M5）：中间这条记录详情／编辑面由 pane id 首段认出是哪一栏。
+ * 类型与状态用清单里的建议值做下拉；遇到老数据里的陌生值，把它原样加进选项——
+ * 不做「读得到但一保存就被洗成默认值」那种事。
+ */
+const recordCarrier = computed(() => recordCarrierOfPaneId(props.pane?.id))
+
+/**
+ * 漫画预览（批次49 · 批次48 欠账）：地址取这块载体在 services 声明里的端口，不写死 8191。
+ * 快照由 AppNext 经 provide 给（池的整份读数）；只有服务就绪（绿）时才可点。
+ * 落点仍归宿主：<a target="_blank"> 交给主进程 setWindowOpenHandler → shell.openExternal，
+ * 载体自己不调壳、不开窗（formTaxonomy 的 jump 纪律）。
+ */
+const serviceSnapshot = inject('pinaxServiceSnapshot', null)
+/**
+ * 跨载体跳转的唯一通路（批次61 · 〔任务四〕「同一根蓝链两种结果」的收口）：
+ * 章节正文里的条目蓝链，目标不在这一页（novel.editor 只渲染章节），必须由宿主决定
+ * 「揭示世界书那一页／换装那份条目」。宿主没给（浏览器预览、单测）才回落这一页自己的读法。
+ */
+const openKnowledge = inject('pinaxOpenKnowledge', null)
+const comicPreviewService = computed(() => {
+  if (recordCarrier.value?.key !== 'comic') return null
+  const carrierId = String(props.pane?.pluginId ?? '')
+  const row = (serviceSnapshot?.value?.carriers ?? []).find((entry) => entry.carrierId === carrierId)
+  return row?.items?.find((item) => item.kind === 'service' && Number.isSafeInteger(item.port)) ?? null
+})
+const comicPreviewReady = computed(() => comicPreviewService.value?.color === 'green')
+const comicPreviewUrl = computed(() => {
+  const port = comicPreviewService.value?.port
+  if (!Number.isSafeInteger(port)) return null
+  const base = `http://127.0.0.1:${port}/`
+  const root = String(props.projectRoot ?? '')
+  return root ? `${base}?root=${encodeURIComponent(root)}` : base
+})
+const recordTags = computed(() => (Array.isArray(props.data.record?.tags) ? props.data.record.tags : []))
+const recordRefs = computed(() => (Array.isArray(props.data.record?.refs) ? props.data.record.refs : []))
+const recordMetaCount = computed(() => {
+  const meta = props.data.record?.meta
+  return meta && typeof meta === 'object' && !Array.isArray(meta) ? Object.keys(meta).length : 0
+})
+const recordTypeOptions = computed(() => withCurrent(recordCarrier.value?.types, props.data.recordDraft?.type))
+const recordStatusOptions = computed(() => withCurrent(recordCarrier.value?.statuses, props.data.recordDraft?.status))
+function withCurrent(list, current) {
+  const out = [...(Array.isArray(list) ? list : [])]
+  const value = String(current ?? '').trim()
+  if (value && !out.includes(value)) out.push(value)
+  return out
+}
+
+/** 删除的两步确认：第一下只把按钮文案换成「确认删除」，换一条记录或再点一下才真的删。 */
+const recordDeleteArmed = ref(false)
+watch(() => props.data.record?.id, () => {
+  recordDeleteArmed.value = false
+})
+function askRemoveRecord() {
+  if (!recordDeleteArmed.value) {
+    recordDeleteArmed.value = true
+    return
+  }
+  recordDeleteArmed.value = false
+  void props.data.removeRecord()
+}
+const proposalCurrentHtml = computed(() => renderMarkdown(props.data.proposalChapter?.text ?? '（目标章还没读到）'))
+const proposalDraftHtml = computed(() => renderMarkdown(props.data.proposal?.content ?? ''))
+
+/**
+ * Wiki 双链与反向链接（批次38）：条目阅读态里其它条目的名字包成可点链接。
+ * 批次44 整块搬进了 EntryDetailPanel——词表与解析器现在共用一张表，
+ * 不会再出现「染成蓝色却点不动」的链接（作者 2026-10-31：「看着能跳转，但是其实不行」）。
+ */
+
+/** 提案头部的时刻：模型写这一版提案的时间（精确到分钟），解析不了就退回原话。 */
+function stampOf(value) {
+  const date = new Date(String(value ?? ''))
+  if (Number.isNaN(date.getTime())) return String(value ?? '')
+  const pad = (part) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/** 条目那一面的摘要预览、关系、meta 行都搬进了 EntryDetailPanel（批次44）。 */
+
+/**
+ * 资料板检索（工单H2）：输入在面板头部，结果只走 knowledge:search 通道（主进程 knowledgeService，
+ * worker 线程、零 HTTP）。命中若指向「资料/」下的文件，点击回到 pinax_document_read 打开原文；
+ * 否则只展示片段（知识库卡／归档片段没有可直接打开的原文）。
+ */
+const knowledgeQuery = ref('')
+
+const knowledgeEmptyText = computed(() => {
+  const error = props.data.knowledgeError
+  if (error) {
+    if (error.code === 'KNOWLEDGE_RUNTIME_MISSING') return '知识内核未安装'
+    if (error.code === 'KNOWLEDGE_BUSY') return '知识服务忙'
+    return `检索失败：${error.message ?? '未知错误'}`
+  }
+  if (!props.data.knowledgeSearched) return ''
+  return props.data.knowledgeResults?.length ? '' : '没有命中'
+})
+
+/** readRef 指向 资料/ 下的 .md/.txt 才是可打开的原文；知识库卡与归档片段只展示。
+ *  实测内核给项目卡片的 readRef 是编译产物 cards/…，原文路径在 provenance.path（如 资料/设定集.md）；
+ *  两个都看：readRef 优先，退回 provenance.path，仍不是资料文本就只展示片段。 */
+function knowledgeHitFile(hit) {
+  for (const value of [hit?.readRef, hit?.provenance?.path]) {
+    const reference = String(value ?? '').replaceAll('\\', '/')
+    if (reference.startsWith('资料/') && /\.(?:md|txt)$/iu.test(reference)) return reference
+  }
+  return null
+}
+
+async function runKnowledgeSearch() {
+  if (props.data.knowledgeSearching) return
+  const query = knowledgeQuery.value.trim()
+  if (!query) return
+  await props.data.searchKnowledge?.(query)
+}
+
+async function openKnowledgeHit(hit) {
+  const file = knowledgeHitFile(hit)
+  if (!file) return
+  const item = { file, title: hit.title ?? file }
+  // 检索命中也走同一条开窗通路：可打开的原文都在「资料/」下，所以落点是资料那一页；
+  // 不再「在当前这块面上就地换内容」（同一根蓝链两种结果的第三条，〔任务四〕）。
+  if (typeof openKnowledge === 'function') {
+    openKnowledge({ kind: 'document', item })
+    return
+  }
+  await props.data.openDocument(item)
+}
+
+/**
+ * 保存 chip（工单H1）：只认 useBoardData.saveFeedback 这一格。
+ * 六个编辑面共用同一条反馈状态，但每块面只显示自己 target 的那一条；
+ * saved 2.5 秒后收起，saving／error 常驻（失败带重试，STALE 换成重新载入）。
+ * 批次31（P18）起 chip 是保存的唯一常驻形态：大纲与条目的常驻「保存」按钮已拆净（双通道收成单通道）。
+ */
+const SAVE_TARGET_BY_VIEW = {
+  'chapter-editor': 'chapter',
+  'notes-editor': 'note',
+  'outline-editor': 'outline',
+  'rule-editor': 'rule',
+  'document-detail': 'document',
+  'script-editor': 'script',
+  'records-editor': 'record',
+  'entry-detail': 'entry',
+  // 看板区（批次44）：上图表列、下详情，详情里那条条目仍是同一个保存目标。
+  'entries-workspace': 'entry'
+}
+
+const chipVisible = ref(false)
+let chipTimer = null
+
+const saveChip = computed(() => {
+  const feedback = props.data.saveFeedback
+  if (!feedback) return null
+  return SAVE_TARGET_BY_VIEW[viewKind.value] === feedback.target ? feedback : null
+})
+const saveChipStale = computed(() => saveChip.value?.code === 'PINAX_STALE_REVISION')
+const saveChipText = computed(() => {
+  const chip = saveChip.value
+  if (!chip) return ''
+  if (chip.status === 'saving') return '保存中…'
+  // 自动保存的那一下只说「已保存」：版本号是开发者信息，作者要的是「落盘了没有」。
+  if (chip.status === 'saved') return chip.auto ? '已保存' : `已保存 · 第 ${chip.revision} 版`
+  return saveChipStale.value ? '保存失败 · 版本冲突' : '保存失败'
+})
+
+watch(() => props.data.saveFeedback, (feedback) => {
+  if (chipTimer) {
+    clearTimeout(chipTimer)
+    chipTimer = null
+  }
+  if (!feedback) {
+    chipVisible.value = false
+    return
+  }
+  chipVisible.value = true
+  if (feedback.status === 'saved') {
+    chipTimer = setTimeout(() => {
+      chipVisible.value = false
+      chipTimer = null
+    }, 2500)
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  if (chipTimer) clearTimeout(chipTimer)
+  if (copiedTimer) clearTimeout(copiedTimer)
+  if (effectFrame) {
+    if (typeof globalThis.cancelAnimationFrame === 'function') globalThis.cancelAnimationFrame(effectFrame)
+    else globalThis.clearTimeout(effectFrame)
+    effectFrame = 0
+  }
+})
+
+/** 编辑器聚焦时的 Ctrl+S／Cmd+S：只认编辑区里的事件，别处按快捷键不抢。 */
+function onPaneKeydown(event) {
+  if (!(event.ctrlKey || event.metaKey) || event.altKey) return
+  if (String(event.key ?? '').toLowerCase() !== 's') return
+  // 只认真正的编辑器（textarea／大纲标题输入框）：提案的 pre 也挂 .editor-area，不能当编辑区。
+  // 收口包②：条目摘要也是编辑面的一部分，在摘要栏里按 Ctrl+S 同样落这次保存。
+  // 批次28：大纲节点备注（textarea.outline-note）同样属于大纲草稿，按 Ctrl+S 落整份保存。
+  if (!event.target?.matches?.('textarea.editor-area, textarea.entry-meta-summary, textarea.outline-note, input.outline-title')) return
+  event.preventDefault()
+  // 〔批次68-R6 任务二〕正文编辑态的 Ctrl+S＝保存并回渲染态（与失焦同一条收口，不是第二次保存实现）。
+  if (viewKind.value === 'chapter-editor' && chapterEditing.value) {
+    void commitChapterEditing()
+    return
+  }
+  void saveCurrent()
+}
+
+function saveCurrent() {
+  switch (viewKind.value) {
+    case 'chapter-editor': return props.data.save()
+    case 'notes-editor': return props.data.saveNote()
+    case 'outline-editor': return props.data.saveOutline()
+    case 'rule-editor': return props.data.saveRule()
+    case 'document-detail': return props.data.saveDocument()
+    case 'script-editor': return props.data.editingScript ? props.data.saveScript() : undefined
+    case 'records-editor': return props.data.editingRecord ? props.data.saveRecord() : undefined
+    case 'entry-detail': return props.data.editingEntry ? props.data.saveEntry() : undefined
+    case 'entries-workspace': return props.data.editingEntry ? props.data.saveEntry() : undefined
+    default: return undefined
+  }
+}
+
+/** 失败 chip 的「重试」：同一份草稿再走一次保存（修订号仍是读到的那一版）。 */
+function retrySaveFromChip() {
+  void saveCurrent()
+}
+
+/** STALE 的「重新载入」：丢弃本稿、按磁盘重读当前文档（文案在 chip 里说明会丢弃未保存修改）。
+ *  速记与约束的正文随 list 工具一起回来，所以先重列再打开——不能拿手里这份旧 item 当磁盘。
+ *  大纲／条目（批次19 H1 收尾）同一条规矩：大纲整份重读后重新选中同一位置的节点，
+ *  条目先重列再打开，修订号与正文都以磁盘为准。 */
+async function reloadFromChip() {
+  const target = saveChip.value?.target
+  if (target === 'chapter' && props.data.chapter) {
+    await props.data.openChapter(props.data.chapter)
+    return
+  }
+  if (target === 'note') {
+    await props.data.loadNotes()
+    if (props.data.note) props.data.openNote(props.data.note)
+    return
+  }
+  if (target === 'rule') {
+    await props.data.loadRules()
+    if (props.data.rule) props.data.openRule(props.data.rule)
+    return
+  }
+  if (target === 'document' && props.data.document) await props.data.openDocument(props.data.document)
+  if (target === 'script' && props.data.script) await props.data.openScript(props.data.script)
+  if (target === 'record' && props.data.record) {
+    // 记录：先重列拿到最新文档修订号，再按 id 重读；不做静默合并。
+    const carrier = props.data.record.carrier
+    const id = props.data.record.id
+    await props.data.loadRecords(carrier, { syncCurrent: false })
+    const item = props.data.recordSets?.[carrier]?.records?.find((candidate) => candidate.id === id)
+    if (item) await props.data.openRecord(carrier, item)
+    return
+  }
+  if (target === 'outline') {
+    // loadOutline 会收起旧 chip（重读＝新状态）；节点下标按重读后的长度钳一下，节点被删也不越界。
+    await props.data.loadOutline()
+    const last = Math.max(0, (props.data.outline?.length ?? 1) - 1)
+    props.data.selectOutlineNode(Math.min(props.data.outlineNodeIndex ?? 0, last))
+    return
+  }
+  if (target === 'entry') {
+    await props.data.loadEntries()
+    if (props.data.entry) await props.data.openEntry(props.data.entry)
+  }
+}
+
+function actOnSaveChip() {
+  if (saveChipStale.value) void reloadFromChip()
+  else retrySaveFromChip()
+}
+
+/**
+ * 条目信息折叠层（批次31 · P18 第 4 条）整块搬进了 EntryDetailPanel（批次44）。
+ */
+</script>
+
+<template>
+  <div v-if="!pane" class="pane pane-empty">
+    <p>没有已启用的中栏面板。竖条、索引窗和右栏对话照常可用。</p>
+  </div>
+
+  <div v-else class="pane" :data-pane-id="pane.id" @keydown="onPaneKeydown">
+    <div v-if="data.error" class="pane-error">{{ data.error }}</div>
+    <div v-if="data.notice" class="pane-notice">{{ data.notice }}</div>
+
+    <template v-if="viewKind === 'chapter-editor'">
+      <div v-if="data.chapter" class="editor">
+        <div class="doc-head">
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <!-- 写作工具（批次46B）：快捷词与取名共用一个按需浮现的弹层，不占常驻按钮行。 -->
+            <span class="nx-tools-anchor" @keydown="onToolsKeydown">
+              <button
+                type="button"
+                class="control-quiet nx-tools-toggle"
+                data-test="writing-tools-toggle"
+                :aria-expanded="toolsOpen.toString()"
+                @mousedown.prevent
+                @click="toggleTools('words')"
+              >快捷词</button>
+              <div v-if="toolsOpen" class="nx-tools" data-test="writing-tools" role="dialog" aria-label="写作工具">
+                <div class="nx-tools-tabs">
+                  <button
+                    type="button"
+                    class="control-quiet nx-tools-tab"
+                    :class="{ 'is-active': toolsTab === 'words' }"
+                    data-test="tools-tab-words"
+                    @mousedown.prevent
+                    @click="toolsTab = 'words'; refreshQuickWords()"
+                  >快捷词</button>
+                  <button
+                    type="button"
+                    class="control-quiet nx-tools-tab"
+                    :class="{ 'is-active': toolsTab === 'names' }"
+                    data-test="tools-tab-names"
+                    @mousedown.prevent
+                    @click="toolsTab = 'names'; if (!nameBatch.length) generateNames()"
+                  >取名</button>
+                </div>
+                <div v-if="toolsTab === 'words'" class="nx-tools-body">
+                  <input
+                    v-model="quickQuery"
+                    class="nx-field is-tiny nx-tools-search"
+                    data-test="quick-word-search"
+                    placeholder="搜索快捷词"
+                    aria-label="搜索快捷词"
+                    spellcheck="false"
+                  >
+                  <p v-if="!quickGroupsVisible.length" class="nx-tools-empty" title="世界书条目，以及正文里出现两次以上的词，会自动收进来">还没有可用的词。</p>
+                  <template v-else>
+                    <div
+                      v-for="group in quickGroupsVisible"
+                      :key="group.key"
+                      class="nx-tools-group"
+                      :data-test="`quick-group-${group.key}`"
+                    >
+                      <p class="nx-tools-group-label">{{ group.label }}</p>
+                      <div class="nx-tools-chips">
+                        <button
+                          v-for="item in group.items"
+                          :key="item.id"
+                          type="button"
+                          class="control-quiet nx-tools-chip"
+                          :title="item.summary"
+                          data-test="quick-word"
+                          @mousedown.prevent
+                          @click="useQuickWord(item)"
+                        >{{ item.text }}</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <div v-else class="nx-tools-body">
+                  <div class="nx-tools-form">
+                    <select v-model="nameForm.category" class="nx-field is-tiny" aria-label="取名类别" data-test="name-category">
+                      <option value="person">人名</option>
+                      <option value="place">地名</option>
+                      <option value="organization">组织</option>
+                      <option value="ability">能力</option>
+                      <option value="item">器物</option>
+                    </select>
+                    <template v-if="nameForm.category === 'person'">
+                      <select v-model="nameForm.language" class="nx-field is-tiny" aria-label="取名语言" data-test="name-language">
+                        <option value="chinese">中文</option>
+                        <option value="western">西式</option>
+                        <option value="japanese">日式</option>
+                      </select>
+                      <select v-model="nameForm.length" class="nx-field is-tiny" aria-label="名字长度" data-test="name-length">
+                        <option value="two">双字</option>
+                        <option value="three">三字</option>
+                        <option value="multi">多字</option>
+                      </select>
+                      <select v-model="nameForm.gender" class="nx-field is-tiny" aria-label="取名性别" data-test="name-gender">
+                        <option value="neutral">中性</option>
+                        <option value="male">男</option>
+                        <option value="female">女</option>
+                      </select>
+                    </template>
+                    <button type="button" class="control-quiet nx-tools-roll" data-test="names-generate" @mousedown.prevent @click="generateNames">换一批</button>
+                  </div>
+                  <ul class="nx-tools-names">
+                    <li
+                      v-for="item in nameBatch"
+                      :key="item.name"
+                      class="nx-tools-name"
+                      :class="{ 'is-duplicate': item.duplicate }"
+                      data-test="name-suggestion"
+                    >
+                      <span class="nx-tools-name-text">{{ item.name }}</span>
+                      <span class="nx-tools-name-actions">
+                        <button
+                          type="button"
+                          class="control-quiet nx-tools-name-insert"
+                          :disabled="item.duplicate"
+                          :title="item.duplicate ? '世界书里已有这个名字' : '插入到光标处'"
+                          data-test="name-insert"
+                          @mousedown.prevent
+                          @click="insertAtCaret(item.name)"
+                        >插入</button>
+                        <button
+                          type="button"
+                          class="control-quiet nx-tools-name-copy"
+                          data-test="name-copy"
+                          @mousedown.prevent
+                          @click="copyName(item.name)"
+                        >复制</button>
+                      </span>
+                    </li>
+                  </ul>
+                  <p v-if="copiedName" class="nx-tools-empty" data-test="name-copied">{{ copiedName }}</p>
+                </div>
+              </div>
+            </span>
+            <!-- 〔批次68-R6 任务二〕「编辑」钮退役（判据㉑）：正文改从阅读面点入——
+                 默认就是能改的一篇文，不需要先按一枚钮声明「我要开始编辑了」。
+                 「取消」保留：它收的是编辑态这条路，与保存 chip 一起构成退出口。 -->
+            <button v-if="chapterEditing" type="button" class="control-quiet chapter-cancel" data-test="chapter-cancel" @click="chapterEditing = false">取消</button>
+          </span>
+        </div>
+        <!-- 阅读态（批次43）：正文是 md 稿子，默认渲染出来（标题／粗体／列表…），不再是裸源码。
+             批次55：text-pages 档只渲染当前页；key 带页号，翻页时整块重渲染（旧蓝链不残留）。
+             〔任务二〕点一段就地接稿（data-click-to-edit 是这条交互的机器声明，判据㉑钉它）；
+             蓝链自己先吸掉点击（词表与锚点同页，跨页不残留的纪律照旧）。 -->
+        <div
+          v-if="!chapterEditing"
+          :key="chapterReadingKey"
+          ref="chapterRenderedEl"
+          class="entry-text nx-rendered-md doc-reading chapter-reading"
+          data-test="chapter-rendered"
+          data-click-to-edit="chapter"
+          :data-page-mode="chapterLoadingMode"
+          :data-page-index="chapterPageIndex"
+          :data-page-count="chapterPageCount"
+          :data-page-chars="CHAPTER_PAGE_CHARS"
+          @scroll="onChapterReadingScroll"
+          @click="onChapterRenderedClick"
+          v-html="chapterReadingHtml"
+        />
+        <div v-if="!chapterEditing && textPagesReading && chapterPageCount > 1" class="chapter-pager" data-test="chapter-pager">
+          <button
+            type="button"
+            class="control-quiet"
+            data-test="chapter-page-prev"
+            :disabled="chapterPageIndex <= 0 || chapterPageBusy"
+            @click="goChapterPage(chapterPageIndex - 1)"
+          >上一页</button>
+          <span class="chapter-pager-state" data-test="chapter-page-indicator">{{ chapterPageIndex + 1 }} / {{ chapterPageCount }}</span>
+          <button
+            type="button"
+            class="control-quiet"
+            data-test="chapter-page-next"
+            :disabled="chapterPageIndex >= chapterPageCount - 1 || chapterPageBusy"
+            @click="goChapterPage(chapterPageIndex + 1)"
+          >下一页</button>
+        </div>
+        <p v-if="!chapterEditing && chapterPageError" class="pane-notice" data-test="chapter-page-error">{{ chapterPageError }}</p>
+        <div v-if="chapterEditing" class="nx-editor-wrap">
+          <textarea
+            ref="chapterArea"
+            class="editor-area"
+            :value="data.draft"
+            spellcheck="false"
+            aria-label="正文编辑器"
+            @input="onEditorInput"
+            @focus="onEditorFocus"
+            @blur="onEditorBlur"
+            @select="onEditorSelect"
+            @keyup="onEditorSelect"
+            @mouseup="onEditorSelect"
+            @scroll="scheduleEditorEffects(chapterArea)"
+          />
+          <!-- 段落聚焦（批次46B）：textarea 拿不到段落 DOM，用上下两层遮罩近似——
+               光标所在行亮着，其余压暗；遮罩不吃指针事件，点哪里都落回正文。 -->
+          <div
+            v-if="focusModeActive && editorFocused"
+            class="nx-focus-mask is-top"
+            :style="{ height: `${focusBand.top}px` }"
+            aria-hidden="true"
+          />
+          <div
+            v-if="focusModeActive && editorFocused"
+            class="nx-focus-mask is-bottom"
+            :style="{ height: `${focusBand.bottom}px` }"
+            aria-hidden="true"
+          />
+        </div>
+        <!-- 写作动作带（批次41）：正文一聚焦就浮现，离开就收起。按钮不抢焦点（mousedown.prevent），
+             所以「选中一段 → 按改写」之后光标与选区都还在原处。 -->
+        <div v-if="writingBarVisible" class="nx-writing-bar" data-test="writing-bar">
+          <span class="nx-writing-actions">
+            <button
+              v-for="action in writingActions"
+              :key="action.id"
+              type="button"
+              class="control-quiet nx-writing-action"
+              :data-test="`writing-${action.id}`"
+              :disabled="writingBusy"
+              @mousedown.prevent
+              @click="startWriting(action.id)"
+            >{{ action.label }}</button>
+          </span>
+          <!-- 审查本章（批次46A）：同一排动作里的只读项——它不改正文，只把意见摆出来。 -->
+          <button
+            type="button"
+            class="control-quiet nx-writing-review"
+            data-test="writing-review"
+            :disabled="writingBusy || reviewBusy"
+            @mousedown.prevent
+            @click="startReview"
+          >审查本章</button>
+          <input
+            v-model="writingInstruction"
+            class="nx-writing-ask"
+            type="text"
+            maxlength="500"
+            spellcheck="false"
+            placeholder="这次的要求（可不填）"
+            aria-label="写作动作的额外要求"
+            data-test="writing-instruction"
+            @focus="instructionFocused = true"
+            @blur="instructionFocused = false"
+            @keydown.enter.prevent="startWriting(writingActions[0]?.id)"
+          >
+          <span v-if="writingBusy" class="nx-writing-busy" role="status">正在写…</span>
+          <span v-else-if="hasDraftSelection" class="nx-writing-hint">
+            已选中 {{ data.draftSelection.end - data.draftSelection.start }} 字
+          </span>
+        </div>
+        <!-- 生成结果先摆出来，不自动落进正文：作者按「插入／替换」才动稿子。 -->
+        <div v-if="data.writingResult" class="nx-writing-result" data-test="writing-result">
+          <div class="nx-writing-result-head">
+            <span class="nx-writing-result-label">{{ data.writingResult.label }} · 还没落进正文</span>
+            <span class="nx-writing-actions">
+              <button
+                type="button"
+                class="control-secondary nx-writing-apply"
+                data-test="writing-apply"
+                @mousedown.prevent
+                @click="data.applyWriting()"
+              >{{ data.writingResult.target === 'replace' ? '替换选中段' : '插入光标处' }}</button>
+              <button
+                type="button"
+                class="control-quiet nx-writing-discard"
+                data-test="writing-discard"
+                @mousedown.prevent
+                @click="data.discardWriting()"
+              >丢弃</button>
+            </span>
+          </div>
+          <div class="nx-writing-text">{{ data.writingResult.text }}</div>
+          <!-- 参考块清单（批次46A）：这次用的是哪几块、各多少字；参考缺席时把原因照原话摊开。 -->
+          <p
+            v-if="writingReferenceText || data.writingResult.referenceNote"
+            class="nx-writing-refs"
+            data-test="writing-references"
+          >{{ writingReferenceText || data.writingResult.referenceNote }}</p>
+          <!-- 提示词预览（批次46A）：只读展示主进程留存的那一份，不实时、不跨项目。 -->
+          <div class="nx-writing-preview">
+            <button
+              type="button"
+              class="control-quiet nx-writing-preview-toggle"
+              data-test="writing-preview-toggle"
+              @mousedown.prevent
+              @click="toggleWritingPreview"
+            >{{ writingPreviewOpen ? '收起提示词' : '查看提示词' }}</button>
+            <div v-if="writingPreviewOpen" class="nx-writing-preview-body" data-test="writing-preview">
+              <p v-if="data.writingPreviewError" class="nx-writing-error nx-writing-preview-error" data-test="writing-preview-error">{{ data.writingPreviewError }}</p>
+              <template v-else-if="data.writingPreview">
+                <div class="nx-writing-preview-label">系统提示词</div>
+                <pre class="nx-writing-preview-text" data-test="writing-preview-system">{{ data.writingPreview.systemPrompt }}</pre>
+                <div class="nx-writing-preview-label">用户提示词</div>
+                <pre class="nx-writing-preview-text" data-test="writing-preview-user">{{ data.writingPreview.userPrompt }}</pre>
+              </template>
+              <p v-else class="nx-writing-preview-wait">正在读取最近一次请求…</p>
+            </div>
+          </div>
+        </div>
+        <p v-if="data.writingError" class="nx-writing-error" data-test="writing-error">{{ data.writingError }}</p>
+        <!-- 审查本章（批次46A）：摘要／问题／动作三层，问题可「转改写」；
+             结果不落正文、不进会话存储——这一栏收起就没了。 -->
+        <div v-if="reviewBusy || data.reviewResult || data.reviewError" class="nx-review" data-test="review-panel">
+          <div v-if="reviewBusy" class="nx-review-busy" role="status" data-test="review-busy">正在审查本章…</div>
+          <template v-else-if="data.reviewResult">
+            <div class="nx-review-head">
+              <span class="nx-review-label">本章审查</span>
+              <button type="button" class="control-quiet nx-review-close" data-test="review-discard" @mousedown.prevent @click="data.discardReview()">收起</button>
+            </div>
+            <p v-if="data.reviewResult.summary" class="nx-review-summary" data-test="review-summary">{{ data.reviewResult.summary }}</p>
+            <ol v-if="data.reviewResult.issues.length" class="nx-review-issues">
+              <li v-for="(issue, index) in data.reviewResult.issues" :key="`${issue.message}-${index}`" class="nx-review-issue" data-test="review-issue">
+                <span class="nx-review-severity" :class="`is-${issue.severity}`">{{ severityLabel(issue.severity) }}</span>
+                <span class="nx-review-issue-text">{{ issue.message }}</span>
+                <button type="button" class="control-quiet nx-review-rewrite" data-test="review-issue-rewrite" @mousedown.prevent @click="reviewIssueToRewrite(issue)">转改写</button>
+              </li>
+            </ol>
+            <ul v-if="data.reviewResult.actions.length" class="nx-review-actions">
+              <li v-for="(action, index) in data.reviewResult.actions" :key="`${action}-${index}`" data-test="review-action">{{ action }}</li>
+            </ul>
+          </template>
+          <p v-if="data.reviewError" class="nx-writing-error nx-review-error" data-test="review-error">{{ data.reviewError }}</p>
+        </div>
+        <!-- 底部只留作者用得上的信息（批次43）：有没有没落盘的改动、是不是只载入了前段。
+             路径 · 第 N 版 · N 字 这些是开发者信息，作者看不见也不需要（作者 2026-10-31）。 -->
+        <p v-if="chapterPending || data.chapter.truncated" class="doc-meta-hint">
+          {{ chapterPending }}<em v-if="data.chapter.truncated">只载入了前段（全文 {{ data.chapter.totalChars }} 字）：自动保存不会动它</em>
+        </p>
+      </div>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-chapter" title="也可以在那里新建一章：区标题右侧的 ＋">
+        <p>从左边索引窗里选一章。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 构思速记编辑面（工单B1）：照章节编辑器的形态。正文来自 pinax_notes_list 的随手带回，
+         保存走载体自有的 pinax_notes_save（带修订号，冲突如实摊开）。 -->
+    <template v-else-if="viewKind === 'notes-editor'">
+      <div v-if="data.note" class="editor">
+        <div class="doc-head">
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!noteEditing" type="button" class="control-secondary note-edit" data-test="note-edit" @click="noteEditing = true">编辑</button>
+            <button v-else type="button" class="control-quiet note-cancel" data-test="note-cancel" @click="noteEditing = false">取消</button>
+          </span>
+        </div>
+        <!-- 阅读态（批次43）：速记也是 md 稿子，默认渲染出来。 -->
+        <div v-if="!noteEditing" class="entry-text nx-rendered-md doc-reading note-reading" data-test="note-rendered" v-html="noteHtml" />
+        <textarea
+          v-else
+          class="editor-area"
+          :value="data.noteDraft"
+          spellcheck="false"
+          aria-label="构思编辑器"
+          @input="data.setNoteDraft($event.target.value)"
+        />
+        <p v-if="notePending || data.note.truncated" class="doc-meta-hint">
+          {{ notePending }}<em v-if="data.note.truncated">只载入了前段：自动保存不会动它</em>
+        </p>
+      </div>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-note" title="也可以在那里新建一篇：「构思」区标题右侧的 ＋">
+        <p>从左边索引窗里选一篇构思。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 大纲编辑面（工单B2 → 批次31 · P18）：中栏只剩文档本身。
+         节点标题是一行无边框大字，备注是标题下面的第二行无框文字——不再是一个框把内容装进去。
+         节点操作（上移／下移／删除／加同级／加子节点）整排退到索引窗大纲行的右键菜单，
+         树区标题行的「＋」在末尾追一个同级节点；改完自动落盘，Ctrl+S 可立刻存，结果只进头部 chip。 -->
+    <template v-else-if="viewKind === 'outline-editor'">
+      <div v-if="data.outlineDraft" class="editor">
+        <!-- 头部只有一行标题（批次33）：大纲文档的名字就是节点标题本身（可改的那枚输入框），
+             右端留保存 chip；批次43 起这一行还担着「编辑／取消」——读态是标题＋渲染出来的备注。 -->
+        <div class="doc-head">
+          <input
+            v-if="outlineEditing"
+            class="doc-title outline-title"
+            :value="data.outlineDraft.nodes[data.outlineNodeIndex]?.title ?? ''"
+            spellcheck="false"
+            aria-label="大纲节点标题"
+            title="改名、备注、增删与排序都先记在草稿上，改完自动落盘（Ctrl+S 可立刻存）"
+            @input="data.setOutlineNodeTitle(data.outlineNodeIndex, $event.target.value)"
+          >
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!outlineEditing" type="button" class="control-secondary outline-edit" data-test="outline-edit" @click="outlineEditing = true">编辑</button>
+            <button v-else type="button" class="control-quiet outline-cancel" data-test="outline-cancel" @click="outlineEditing = false">取消</button>
+          </span>
+        </div>
+        <!-- 阅读态（批次43）：节点备注是 md，渲染出来；标题就在头部那一行。 -->
+        <div v-if="!outlineEditing" class="entry-text nx-rendered-md doc-reading outline-reading" data-test="outline-rendered" v-html="outlineNoteHtml" />
+        <!-- 节点备注（批次28 · 工单1c）：这一节要写什么，一句话；note 是节点上的普通字段，
+             随整份草稿保存走（工具原样透传，不需要改合同）。批次31 起无边框，是标题下的第二行。 -->
+        <textarea
+          v-else
+          class="doc-field outline-note"
+          :value="data.outlineDraft.nodes[data.outlineNodeIndex]?.note ?? ''"
+          maxlength="200"
+          rows="2"
+          placeholder="这一节要写什么（一句话）"
+          spellcheck="false"
+          aria-label="大纲节点备注（最多 200 字）"
+          @input="data.setOutlineNodeNote(data.outlineNodeIndex, $event.target.value)"
+        />
+        <p v-if="outlinePending" class="doc-meta-hint">{{ outlinePending }}</p>
+      </div>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-outline" title="也可以在那里新建节点：大纲区标题右侧的 ＋">
+        <p>从左边索引窗里选一个大纲节点。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 提案审阅面（工单A）：模型改稿落在 .pinax/proposals/，这里做最后一道人审。
+         上下两段是同一章的两个版本（当前正文／提案新文），不逐句 diff——历史面板已有 diff 能力，后续复用。
+         采纳＝按此刻的章节修订号走载体 save（写入为新一版），弃用＝删提案文件；两者都不静默合并。 -->
+    <template v-else-if="viewKind === 'proposal-review'">
+      <div v-if="data.proposal" class="editor proposal-review">
+        <!-- 〔批次76 裁定A〕这一面的「提案审阅 · 文件名」整行撤了：窗头已经是「小说 · 提案名」，
+             再摆一行就是同一份文档名在同屏念第二遍。两版对照的框保留（P18 第 5 条豁免：两份文档需要视觉分隔）。 -->
+        <p v-if="data.proposal.note" class="pane-hint proposal-note">提案说明：{{ data.proposal.note }}</p>
+        <div class="proposal-stack">
+          <section class="proposal-panel">
+            <h5 class="proposal-label">
+              当前正文
+              <span class="editor-meta">{{ data.proposalChapter?.totalChars ?? 0 }} 字<template v-if="data.proposalChapter"> · 第 {{ data.proposalChapter.revision }} 版</template></span>
+            </h5>
+            <div class="entry-text proposal-text nx-rendered-md" v-html="proposalCurrentHtml" />
+          </section>
+          <section class="proposal-panel">
+            <h5 class="proposal-label">
+              提案新文
+              <span class="editor-meta">{{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字</span>
+            </h5>
+            <div class="editor-area proposal-text nx-rendered-md" aria-label="提案新文" v-html="proposalDraftHtml" />
+          </section>
+        </div>
+        <div class="editor-foot">
+          <!-- 面板型界面（P18 第 5 条豁免）：两版对照需要视觉分隔，采纳／弃用留在审阅面的动作行。
+               批次31：文档面已无常驻主按钮，这两枚也退回次级控件词汇（不复用主操作皮）。 -->
+          <button
+            type="button"
+            class="pane-btn proposal-adopt control-secondary"
+            :disabled="data.busy || !data.proposal.content"
+            @click="data.adoptProposal()"
+          >
+            {{ data.busy ? '写入中…' : '采纳（写入为新一版）' }}
+          </button>
+          <button type="button" class="control-quiet proposal-discard" :disabled="data.busy" @click="data.discardProposal()">弃用</button>
+        </div>
+        <p v-if="data.proposal.status === 'adopted'" class="pane-hint">这条提案已经采纳过；再采纳会按当前章节版本重新写入一版。</p>
+        <p class="doc-meta-hint">
+          {{ data.proposal.target?.file ?? '（没有目标章）' }} · {{ data.proposal.contentChars ?? (data.proposal.content?.length ?? 0) }} 字 · {{ stampOf(data.proposal.createdAt) }}
+        </p>
+      </div>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-proposal">
+        <p>从左边索引窗的「提案」区选一条。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 约束编辑面（工单E2）：照构思速记的同一形态。正文来自 pinax_rule_list 的随手带回，
+         保存走载体自有的 pinax_rule_save（带修订号，冲突如实摊开）。 -->
+    <template v-else-if="viewKind === 'rule-editor'">
+      <div v-if="data.rule" class="editor">
+        <div class="doc-head">
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!ruleEditing" type="button" class="control-secondary rule-edit" data-test="rule-edit" @click="ruleEditing = true">编辑</button>
+            <button v-else type="button" class="control-quiet rule-cancel" data-test="rule-cancel" @click="ruleEditing = false">取消</button>
+          </span>
+        </div>
+        <!-- 阅读态（批次43）：约束也是 md 稿子，默认渲染出来。 -->
+        <div v-if="!ruleEditing" class="entry-text nx-rendered-md doc-reading rule-reading" data-test="rule-rendered" v-html="ruleHtml" />
+        <textarea
+          v-else
+          class="editor-area"
+          :value="data.ruleDraft"
+          spellcheck="false"
+          aria-label="约束编辑器"
+          @input="data.setRuleDraft($event.target.value)"
+        />
+        <p v-if="rulePending || data.rule.truncated" class="doc-meta-hint">
+          {{ rulePending }}<em v-if="data.rule.truncated">只载入了前段：自动保存不会动它</em>
+        </p>
+      </div>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-rule" title="也可以在那里新建一份：「约束」区标题右侧的 ＋">
+        <p>从左边索引窗里选一份约束。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 条目详情面（批次44：整块搬进 EntryDetailPanel——看板区要能单独摆它，
+         蓝色双链的词表与解析器也在那边合成了一张表）。 -->
+    <template v-else-if="viewKind === 'entry-detail'">
+      <EntryDetailPanel
+        :data="data"
+        :chip="saveChip"
+        :chip-visible="chipVisible"
+        :chip-stale="saveChipStale"
+        :chip-text="saveChipText"
+        @chip-action="actOnSaveChip"
+      />
+    </template>
+
+    <!-- 世界书看板区（批次68-R2 · 任务二：三栏维基阅读版式，越界补登记——本文件不在工单允许清单，
+         改的只有这一块挂载结构：「上图表列、下详情」两段（批次44 口径）整块交给 EntriesBoard 排三栏，
+         详情面搬进 EntriesBoard 的中栏（chip 那四枚 prop 与空态措辞随之转交，保存链一字不动）。
+         web 模板没有左树（批次59 铁律四）：列举层的错误与契约警告仍跟着看板走。 -->
+    <template v-else-if="viewKind === 'entries-workspace'">
+      <div class="nx-entries-workspace" data-test="entries-workspace">
+        <p v-if="data.treeError" class="nx-index-error">{{ data.treeError }}</p>
+        <ul v-if="data.listWarnings?.length" class="nx-index-warn">
+          <li v-for="(warning, index) in data.listWarnings" :key="`entries-warning-${index}`">{{ warning }}</li>
+        </ul>
+        <EntriesBoard
+          :data="data"
+          :project-root="projectRoot"
+          :chip="saveChip"
+          :chip-visible="chipVisible"
+          :chip-stale="saveChipStale"
+          :chip-text="saveChipText"
+          @history="emit('history', { type: 'entry', item: $event })"
+          @chip-action="actOnSaveChip"
+        />
+      </div>
+    </template>
+
+    <!-- 应用面（批次44 · 〔批次76-R2 任务4〕chrome 减层后＝iframe 独占）。
+         外部应用不手搓：宿主给一块内嵌浏览器，端口那个页面自己长什么样就是什么样。
+         原来这里两行 chrome 都撤了：顶部那行 URL（ExternalAppHost 头）与底部这行「复制地址单开」——
+         地址的读数改进页签 tooltip 与底栏状态栏条目，复制动作改走页签右键菜单（作者裁定③：不做常驻死钮）。
+         空态与载入失败的文案仍在 ExternalAppHost 内部，那是「载不动」的说明，不是 chrome。 -->
+    <template v-else-if="viewKind === 'external-app'">
+      <div class="nx-app-pane">
+        <ExternalAppHost :pane="pane" :data="data" @address="emit('address', $event)" />
+      </div>
+    </template>
+
+    <!-- 资料（工单G1）：阅读态＝元信息＋pre 正文，编辑态＝textarea（Ctrl+S 保存）＋取消。
+         读的是 pinax_document_read 的全文（列表那份最多 20000 字，不能当编辑底稿）；
+         保存走载体自有的 pinax_document_save，带读到的修订号，冲突如实摊开。 -->
+    <template v-else-if="viewKind === 'document-detail'">
+      <!-- 资料板检索（工单H2）：头部输入＋结果列表；三种空态分开说（未装内核／服务忙／无命中）。 -->
+      <section class="reference-search">
+        <form class="reference-search-row" @submit.prevent="runKnowledgeSearch">
+          <input
+            v-model="knowledgeQuery"
+            class="nx-field is-tiny reference-search-input"
+            placeholder="在资料里检索…"
+            aria-label="资料检索"
+            spellcheck="false"
+            @keydown.enter.prevent="runKnowledgeSearch"
+            @keydown.esc.prevent="data.clearKnowledgeSearch?.()"
+          >
+          <button type="submit" class="control-secondary reference-search-submit" :disabled="data.knowledgeSearching || !knowledgeQuery.trim()">
+            {{ data.knowledgeSearching ? '检索中…' : '检索' }}
+          </button>
+        </form>
+        <p v-if="data.knowledgeSearching" class="pane-hint reference-search-state">检索中…</p>
+        <p v-else-if="knowledgeEmptyText" class="pane-hint reference-search-state">{{ knowledgeEmptyText }}</p>
+        <ul v-if="!data.knowledgeSearching && data.knowledgeResults?.length" class="reference-search-results">
+          <li v-for="(hit, index) in data.knowledgeResults" :key="hit.id ?? hit.readRef ?? index">
+            <button v-if="knowledgeHitFile(hit)" type="button" class="nx-row reference-search-hit" @click="openKnowledgeHit(hit)">
+              <span class="reference-search-hit-title">{{ hit.title ?? hit.file }}</span>
+              <span v-if="hit.readRef" class="reference-search-hit-meta">{{ hit.provenance?.path ?? hit.readRef }}</span>
+              <span class="reference-search-hit-excerpt">{{ hit.excerpt ?? '' }}</span>
+            </button>
+            <div v-else class="reference-search-hit is-static">
+              <span class="reference-search-hit-title">{{ hit.title ?? hit.file }}</span>
+              <span v-if="hit.readRef" class="reference-search-hit-meta">{{ hit.provenance?.path ?? hit.readRef }}</span>
+              <span class="reference-search-hit-excerpt">{{ hit.excerpt ?? '' }}</span>
+            </div>
+          </li>
+        </ul>
+      </section>
+      <div v-if="data.document" class="entry-body">
+        <div class="doc-head">
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!data.editingDocument" type="button" class="control-secondary document-edit" @click="data.editDocument()">编辑</button>
+            <!-- 取消退到头部右端（P18 第 2 条）：底部不再留按钮行。 -->
+            <button v-else type="button" class="control-quiet document-cancel" :disabled="data.busy" @click="data.cancelEditDocument()">取消</button>
+          </span>
+        </div>
+        <textarea
+          v-if="data.editingDocument"
+          class="editor-area"
+          :value="data.documentDraft"
+          spellcheck="false"
+          aria-label="资料编辑器"
+          @input="data.setDocumentDraft($event.target.value)"
+        />
+        <div v-else class="entry-text nx-rendered-md" aria-label="资料正文" v-html="documentHtml" />
+        <p v-if="data.document.truncated" class="pane-notice">
+          只载入了前 {{ data.document.text?.length ?? 0 }} 字，全篇 {{ data.document.totalChars }} 字：保存会覆盖未载入的部分。
+        </p>
+      </div>
+      <!-- 〔批次68-R5 发现2〕资料树还空着时这句「从左边索引窗里选一篇」就是第三块噪音——
+           选无可选，提示语并给左栏那个单空态（新建资料钮在那），这里只留检索框。 -->
+      <div v-else-if="!data.busy && !data.error && data.documents.length" class="pane-hint nx-empty-guide" data-test="empty-guide-document" title="也可以在那里新建一篇：「资料」区标题右侧的 ＋">
+        <p>从左边索引窗里选一篇资料。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 剧本（批次26 · M6 提前）：阅读态＝元信息＋md 渲染正文（场次标题、台词、△ 舞台说明都是 md 文本），
+         编辑态＝textarea（Ctrl+S 保存）＋取消。读的是 pinax_script_read 的全文（列表那份最多 20000 字）；
+         保存走载体自有的 pinax_script_save，带读到的修订号，冲突如实摊开。 -->
+    <template v-else-if="viewKind === 'script-editor'">
+      <div v-if="data.script" class="entry-body">
+        <div class="doc-head">
+          <span class="nx-pane-actions">
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <button v-if="!data.editingScript" type="button" class="control-secondary script-edit" @click="data.editScript()">编辑</button>
+            <!-- 取消退到头部右端（P18 第 2 条）：底部不再留按钮行。 -->
+            <button v-else type="button" class="control-quiet script-cancel" :disabled="data.busy" @click="data.cancelEditScript()">取消</button>
+          </span>
+        </div>
+        <textarea
+          v-if="data.editingScript"
+          class="editor-area"
+          :value="data.scriptDraft"
+          spellcheck="false"
+          aria-label="剧本编辑器"
+          @input="data.setScriptDraft($event.target.value)"
+        />
+        <div v-else class="entry-text nx-rendered-md" aria-label="剧本正文" v-html="scriptHtml" />
+        <p v-if="data.script.truncated" class="pane-notice">
+          只载入了前 {{ data.script.text?.length ?? 0 }} 字，全篇 {{ data.script.totalChars }} 字：保存会覆盖未载入的部分。
+        </p>
+      </div>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-script" title="也可以在那里新建一篇：「剧本」区标题右侧的 ＋">
+        <p>从左边索引窗里选一篇剧本。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 记录型载体（批次40 · M4／M5）：素材／漫画／视频／体验／联机共用这条详情面。
+         阅读态＝md 渲染正文＋标签／引用／类型状态；编辑态＝标题、类型、状态、标签、引用与正文。
+         Ctrl+S 与头部「保存」走同一个 saveRecord；meta 不在界面上拆，但保存时原样带回。
+         删除是两步确认：第一下只换文案，换一条记录即复位。 -->
+    <template v-else-if="viewKind === 'records-editor'">
+      <div v-if="data.record && recordCarrier" class="entry-body">
+        <div class="doc-head">
+          <span class="nx-pane-actions">
+            <!-- 漫画预览（批次49）：服务在跑才给链接；不在跑就禁用并说明原因。 -->
+            <template v-if="recordCarrier?.key === 'comic'">
+              <a
+                v-if="comicPreviewReady && comicPreviewUrl"
+                class="control-quiet records-preview"
+                :href="comicPreviewUrl"
+                target="_blank"
+                rel="noopener"
+                title="在浏览器中打开漫画预览"
+              >预览</a>
+              <button
+                v-else
+                type="button"
+                class="control-quiet records-preview"
+                disabled
+                title="服务未运行"
+              >预览</button>
+            </template>
+            <span v-if="chipVisible && saveChip" class="nx-save-chip" :class="`is-${saveChip.status}`" role="status" aria-label="保存状态">
+              <span class="nx-save-chip-state">{{ saveChipText }}</span>
+              <button v-if="saveChip.status === 'error'" type="button" class="nx-row nx-save-chip-action" @click="actOnSaveChip">{{ saveChipStale ? '重新载入' : '重试' }}</button>
+              <span v-if="saveChipStale" class="nx-save-chip-hint">会丢弃未保存修改</span>
+            </span>
+            <template v-if="data.editingRecord">
+              <button type="button" class="control-secondary records-save" :disabled="data.busy" @click="data.saveRecord()">保存</button>
+              <button type="button" class="control-quiet records-cancel" :disabled="data.busy" @click="data.cancelEditRecord()">取消</button>
+            </template>
+            <template v-else>
+              <button type="button" class="control-secondary records-edit" @click="data.editRecord()">编辑</button>
+              <button type="button" class="control-quiet records-remove" :disabled="data.busy" @click="askRemoveRecord()">{{ recordDeleteArmed ? '确认删除' : '删除' }}</button>
+            </template>
+          </span>
+        </div>
+        <div v-if="data.editingRecord" class="entry-meta-edit records-form">
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">标题</span>
+            <input
+              class="nx-field"
+              :value="data.recordDraft.title"
+              spellcheck="false"
+              aria-label="记录标题"
+              @input="data.setRecordField('title', $event.target.value)"
+            >
+          </label>
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">类型</span>
+            <select class="nx-field" :value="data.recordDraft.type" aria-label="记录类型" @change="data.setRecordField('type', $event.target.value)">
+              <option v-for="option in recordTypeOptions" :key="option" :value="option">{{ option }}</option>
+            </select>
+          </label>
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">状态</span>
+            <select class="nx-field" :value="data.recordDraft.status" aria-label="记录状态" @change="data.setRecordField('status', $event.target.value)">
+              <option v-for="option in recordStatusOptions" :key="option" :value="option">{{ option }}</option>
+            </select>
+          </label>
+          <label class="entry-meta-field">
+            <span class="entry-meta-label">标签</span>
+            <input
+              class="nx-field"
+              :value="data.recordDraft.tags"
+              spellcheck="false"
+              placeholder="逗号分隔"
+              aria-label="记录标签（逗号分隔）"
+              @input="data.setRecordField('tags', $event.target.value)"
+            >
+          </label>
+          <label class="entry-meta-field is-summary">
+            <span class="entry-meta-label">引用</span>
+            <textarea
+              class="nx-field"
+              :value="data.recordDraft.refs"
+              rows="2"
+              spellcheck="false"
+              placeholder="一行一条：相对路径或外链"
+              aria-label="记录引用（一行一条）"
+              @input="data.setRecordField('refs', $event.target.value)"
+            />
+          </label>
+        </div>
+        <textarea
+          v-if="data.editingRecord"
+          class="editor-area"
+          :value="data.recordDraft.body"
+          spellcheck="false"
+          aria-label="记录正文编辑器"
+          @input="data.setRecordField('body', $event.target.value)"
+        />
+        <div v-else class="entry-text nx-rendered-md" aria-label="记录正文" v-html="recordHtml" />
+        <p v-if="!data.editingRecord && recordTags.length" class="pane-hint">标签：{{ recordTags.join('、') }}</p>
+        <p v-if="!data.editingRecord && recordRefs.length" class="pane-hint">引用：{{ recordRefs.join(' · ') }}</p>
+        <p v-if="!data.editingRecord && recordMetaCount" class="pane-hint">这条记录还带着 {{ recordMetaCount }} 项载体私有字段（原样保存，界面不拆）。</p>
+        <p v-if="data.record.type || data.record.status" class="doc-meta-hint">{{ data.record.type || '未分类' }} · {{ data.record.status || '无状态' }}</p>
+      </div>
+      <div v-else-if="!data.busy && !data.error" class="pane-hint nx-empty-guide" data-test="empty-guide-record" :title="`也可以在那里新建一条：「${recordCarrier?.title ?? '记录'}」区标题右侧的 ＋`">
+        <p>从左边索引窗里选一条{{ recordCarrier?.title ?? '记录' }}。</p>
+        <button type="button" class="control-quiet nx-empty-guide-go" data-test="empty-go-index" @click="emit('focus-index')">去索引窗</button>
+      </div>
+    </template>
+
+    <!-- 自带面板（协议 v3 的 entry 面）：内容面是插件自己的页面，宿主只给一块沙箱 iframe
+         （sandbox=allow-scripts，无 allow-same-origin）＋一条只读工具桥。 -->
+    <template v-else-if="viewKind === 'custom-panel'">
+      <PluginPanelHost
+        :entry="pane.entry"
+        :plugin-id="pane.pluginId ?? ''"
+        :title="pane.pluginTitle ?? ''"
+      />
+    </template>
+
+    <!-- 只在真的没有对应视图时才显示（批次15 验收修：原来挂在第二条链的 v-else 上，
+         提案审阅态会误把占位文案渲染在审阅面之下）。 -->
+    <p v-else-if="viewKind === 'placeholder'" class="pane-note">
+      「{{ pane.pluginTitle }}」这块板块的面板视图还没做出来。它的工具和上下文块照常可用——先在右栏问 Pi-Agent。<span v-if="viewPlaceholderReason">（{{ viewPlaceholderReason }}）</span>
+    </p>
+  </div>
+</template>
+
+<style scoped>
+/* 提案审阅（工单A）：两段上下堆叠，各自独立滚动——长章不会把「采纳」按钮顶到看不见的地方。
+   颜色／字号／圆角一律走老前端 token（门禁见 next/tests/visual-contract.test.mjs）。
+   批次31（P18 第 5 条）：两版对照属于面板型界面，框留着（两份文档需要视觉分隔），只把外框收窄
+   ——内边距与标签间距各收一档，正文占的位置多回来一点。 */
+.proposal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+.proposal-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-muted);
+}
+.proposal-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--nx-fs-md);
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.proposal-note {
+  font-size: var(--nx-fs-md);
+  color: var(--text-muted);
+}
+.proposal-text {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: var(--nx-fs-lg);
+}
+
+/* 资料板检索（工单H2）：一条输入行＋结果列表；命中行仍是 .nx-row，静态片段不假装可点。 */
+.reference-search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-muted);
+}
+.reference-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.reference-search-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+.reference-search-submit {
+  flex: none;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: var(--nx-fs-md);
+}
+.reference-search-state {
+  font-size: var(--nx-fs-2xs);
+}
+.reference-search-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+.reference-search-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 100%;
+  min-height: 0;
+  padding: 6px 10px;
+  text-align: left;
+}
+.reference-search-hit.is-static {
+  cursor: default;
+  color: var(--text-muted);
+}
+.reference-search-hit-title {
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink);
+}
+.reference-search-hit-meta {
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.reference-search-hit-excerpt {
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+}
+
+/* 条目信息折叠层（批次31 · P18 第 4 条）：默认只有一行「▸ 条目信息 关键词 1 · 关系 0」，
+   点开才在正文之上摊开字段（照 Obsidian properties）。收起态的行高与正文行距同一档，
+   展开后字段仍走 .nx-field primitive，这里只调排布。 */
+.entry-meta-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.entry-meta-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 4px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.entry-meta-toggle:hover,
+.entry-meta-toggle:focus-visible {
+  color: var(--archive-ink);
+}
+.entry-meta-caret {
+  width: 1em;
+  text-align: center;
+}
+.entry-meta-hint {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* 条目元数据行（工单C）：关键词／标签两栏并列。输入沿用 .nx-field primitive
+   （颜色／圆角／字号都由它带），这里只调排布，不另起一套控件度量。 */
+.entry-meta-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+}
+.entry-meta-field {
+  display: flex;
+  flex: 1 1 220px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.entry-meta-label {
+  flex: none;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.entry-meta-field .nx-field {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+  resize: none;
+}
+/* 裸 md（没有 frontmatter）的说明：编辑态里的一句话，不再是带 .pane-hint 的常驻提示行
+   ——它说的是「为什么没有元数据」，属于这条条目的属性，不是操作提示。 */
+.entry-meta-bare {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 关系区（批次28 · 工单2b）：整行独占，一行一条；输入仍是 .nx-field primitive，这里只调排布。
+   目标／类型／立场三栏按 1.2 : 1 : 1 分宽，暗线是复选框＋小字，删行收在行尾。 */
+.entry-relations {
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+.entry-relation-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.entry-relation-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.entry-relation-row .nx-field {
+  flex: 1 1 120px;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+.entry-relation-row .entry-relation-target {
+  flex-grow: 1.2;
+}
+.entry-relation-covert {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.entry-relation-remove {
+  flex: none;
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: var(--nx-fs-2xs);
+}
+.entry-relation-add {
+  align-self: flex-start;
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: var(--nx-fs-2xs);
+}
+
+/* 阅读态的关系行：一条一行，前缀点做得比正文轻，不抢正文的注意力。 */
+.entry-relations-read {
+  margin: 0 0 8px;
+  padding-inline-start: 1.2em;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 大纲节点备注（批次28 · 工单1c → 批次31 P18）：标题下的第二行无框文字，
+   度量随 .doc-field（底色／描边／圆角都不画），这里只给高度与不随窗格缩放的手感。 */
+.outline-note {
+  min-height: 48px;
+  line-height: 1.7;
+  resize: none;
+}
+
+/* 摘要一栏（收口包②）：独占整行——label 顶对齐，textarea 占满剩余宽度，右侧一枚字数说明。
+   输入仍是 .nx-field primitive（颜色／圆角／字号都由它带），这里只调排布与高度。 */
+.entry-meta-field.is-summary {
+  flex-basis: 100%;
+  align-items: flex-start;
+}
+.entry-meta-field.is-summary .entry-meta-label {
+  padding-top: 8px;
+}
+.entry-meta-summary {
+  min-height: 56px;
+  line-height: 1.6;
+}
+.entry-meta-count {
+  flex: none;
+  padding-top: 8px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 阅读态的 md 渲染（批次26）。容器带 .entry-text 继承基础度量（字号／行高／墨色），
+   这里只把 pre-wrap 收回来——渲染出的块级标签之间会有换行，保留空白会把版面撑出空行。 */
+.entry-text.nx-rendered-md {
+  white-space: normal;
+}
+.nx-rendered-md :deep(p:first-child) {
+  margin-top: 0;
+}
+.nx-rendered-md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.nx-rendered-md :deep(p) {
+  margin: 0 0 0.9em;
+}
+/* 批次46B 排版偏好：阅读态才是逐段生效的载体（textarea 没有逐段 margin）。
+   段距／首行缩进读根节点的 --writing-* 变量；没写偏好时回退到默认（0.8em／2em）。
+   选择器比上面那条多一档（.doc-reading 前缀），所以它在文档里覆盖正文通用的 0.9em。 */
+.doc-reading :deep(p) {
+  margin: 0 0 var(--writing-paragraph-spacing, 0.8em);
+  text-indent: var(--writing-text-indent, 2em);
+}
+.nx-rendered-md :deep(h1),
+.nx-rendered-md :deep(h2),
+.nx-rendered-md :deep(h3),
+.nx-rendered-md :deep(h4),
+.nx-rendered-md :deep(h5),
+.nx-rendered-md :deep(h6) {
+  margin: 1.1em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--archive-ink);
+}
+.nx-rendered-md :deep(h1) { font-size: var(--nx-fs-2xl); }
+.nx-rendered-md :deep(h2) { font-size: var(--nx-fs-xl); }
+.nx-rendered-md :deep(h3) { font-size: var(--nx-fs-lg); }
+.nx-rendered-md :deep(h4),
+.nx-rendered-md :deep(h5),
+.nx-rendered-md :deep(h6) { font-size: var(--nx-fs-md); }
+.nx-rendered-md :deep(strong) {
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.nx-rendered-md :deep(em) {
+  font-style: italic;
+}
+.nx-rendered-md :deep(del) {
+  opacity: 0.7;
+}
+.nx-rendered-md :deep(ul),
+.nx-rendered-md :deep(ol) {
+  margin: 0 0 0.9em;
+  padding-inline-start: 1.4em;
+  list-style-position: outside;
+}
+.nx-rendered-md :deep(li) {
+  margin: 0.2em 0;
+}
+.nx-rendered-md :deep(blockquote) {
+  margin: 0 0 0.9em;
+  padding: 2px 0 2px 12px;
+  border-inline-start: 2px solid var(--hairline-soft);
+  color: var(--text-muted);
+}
+.nx-rendered-md :deep(hr) {
+  margin: 1.2em 0;
+  border: 0;
+  border-top: 1px solid var(--hairline-soft);
+}
+.nx-rendered-md :deep(code) {
+  padding: 1px 5px;
+  border-radius: var(--nx-radius-xs);
+  background: var(--surface-workbench-input);
+  font-family: var(--font-mono);
+  font-size: var(--nx-fs-md);
+}
+.nx-rendered-md :deep(pre.md-code) {
+  margin: 0 0 0.9em;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-input);
+  white-space: pre;
+}
+.nx-rendered-md :deep(pre.md-code code) {
+  padding: 0;
+  background: transparent;
+  font-size: var(--nx-fs-md);
+  line-height: 1.65;
+}
+.nx-rendered-md :deep(a) {
+  color: var(--archive-olive);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 应用面（批次58 起，批次76-R2 任务1＋4 收口）：内嵌浏览器就是这一面的全部——
+   地址行与常驻复制脚行都撤了，所以这里只剩一条高度链：
+   `.pane`（flex:1 1 auto）→ `.nx-app-pane` → `.nx-external-app` → iframe。
+   〔守卫⑫〕这条链上每一环都只写 flex/min-height，不许出现 `height: auto` 断点：
+   旧版 .nx-app-pane 用 height:100% 撑高，父级（窗 body 当时是块容器）没有确定高度，
+   100% 就拍平在内容上，iframe 实测只剩 150px。 */
+.nx-app-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.nx-app-pane :deep(.nx-external-app) {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+</style>
+
+<style scoped>
+/* legacy-copied：保存 chip 的度量逐条抄自老版的 wall__save-chip。
+   基准在 src/pages/Writing.scoped.css:213-250（src/pages/Authoring.vue:12-17 引用的就是这一枚；
+   样式实际住在 Writing.scoped.css，不在 Authoring.vue 的 SFC 里）。
+   只换数据源：老版读 saveStatus，这里读 useBoardData.saveFeedback；视觉不另起一套。
+   颜色一律走 token；12px 圆角是老版原件的度量，本块按门禁的 legacy-copied 例外保留。
+   字号那一档不例外——11px 与 --nx-fs-2xs 是同一个数，写成 token 既不改观感，也不会漏成第六档。 */
+.nx-save-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--archive-olive);
+  background: color-mix(in srgb, var(--bg-secondary) 70%, var(--archive-olive) 8%);
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-primary);
+  box-shadow:
+    inset 0 1px 0 var(--surface-workbench-raised),
+    inset 0 -1px 0 color-mix(in srgb, var(--archive-olive) 20%, transparent),
+    0 1px 2px color-mix(in srgb, var(--text-primary) 18%, transparent);
+  white-space: nowrap;
+}
+.nx-save-chip.is-saving {
+  border-style: dashed;
+  opacity: 0.85;
+}
+.nx-save-chip.is-saved {
+  border-color: color-mix(in srgb, var(--archive-olive) 60%, transparent);
+  background: color-mix(in srgb, var(--archive-olive) 14%, var(--bg-secondary));
+  /* 2.5 秒收起的最后 200ms 淡出（界面在 2.5s 整摘掉节点）。 */
+  animation: nx-save-chip-out 200ms ease 2300ms forwards;
+}
+@keyframes nx-save-chip-out {
+  to { opacity: 0; }
+}
+.nx-save-chip.is-error {
+  border-color: var(--archive-rose);
+  background: color-mix(in srgb, var(--archive-rose) 12%, var(--bg-secondary));
+  color: var(--archive-rose);
+}
+.nx-save-chip-state {
+  font-family: var(--font-interface);
+  font-weight: 500;
+  color: var(--archive-olive);
+}
+.nx-save-chip.is-error .nx-save-chip-state {
+  color: var(--archive-rose);
+  font-weight: 600;
+}
+/* 失败常驻时的动作：chip 里的小钮，不另占一条自救条。 */
+.nx-save-chip-action {
+  width: auto;
+  min-height: 0;
+  padding: 0 6px;
+  line-height: 1.6;
+  font-size: var(--nx-fs-2xs);
+  color: inherit;
+}
+.nx-save-chip-hint {
+  font-size: var(--nx-fs-2xs);
+  color: color-mix(in srgb, var(--archive-rose) 82%, var(--archive-ink));
+}
+</style>

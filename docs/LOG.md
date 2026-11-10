@@ -1,210 +1,149 @@
 # 开发日志
 
-## 2026-11-06 Core 开发与各端更新
+## 2026-11-10 · M2/M3＋收尾清理（本地）——M 系库层与渲染全收官
 
-按作者最新目标收缩范围：共享业务在独立 Core 仓库修改，Web/Pinix通过版本更新消费，不把UI默认文件存储、原生设备或Next迁移作为这条流程的前提。本轮新增开发连接、恢复、状态和固定包更新命令；开发连接只改变node_modules，正式安装继续使用不可覆盖的tarball/provenance。Core代码本轮没有改动。
+- **M2 章纲投影器（4c5e462f，CodeBuddy hy4 19min 一次过）**：`outlineProjector.js` 零 import 纯函数——replay 事件流→大纲原生形状（与 P2b migrateOutline 输入对称）：settle→节点一拍一节点（seq 权威序）、相邻拍 causes 主干、hypothesis open→foreshadows（payoff 留空）、未选候选→alternative 留档（archived:true）、导演注入 author 标记；幂等深度相等。20 拍读数：nodes=20/causes=19/foreshadows=4/alternative=40。roundtrip 主干还原：节点名 20/20、因果序严格递增、伏笔 4/4；alternative 不还原＝如实损失记账。**事件流口径 limitation**：投影器消费富事件流（candidates 需带完整候选数组）——DeducePanel/fact-session 当前只记 {round,count}，外壳接线前需补候选明细入流。
+- **M3 成书渲染（9c429bee，16min/182 轮一次过）**：`next/fact/usecases/render/` 三件——chapterize（目标弧启发式：pov∷goal 标记变化分组＋每章拍数上限可配；13 拍→3 章 [4,3,6]）、prose（小说叙述目标，**禁主持问答体**——与 DEDUCE_DRAMA_SYSTEM_PROMPT 断言互不等且互不为子串；知情约束只注 POV 已知；文风 styleSpec 参数化不 import 能力包＝静态边界）、renderBatch（多章×多文风重渲染，provenance＝batchId＋styleSpecHash＋renderKey 全 sha1 稳定无时间戳；两次运行全同）。渲染稿过确定性知情断言（复用 precheckDraft，PERSPECTIVE_LEAK not-in-ledger/known-later）。kernel 1048/1048（+8）。
+- **收尾清理（已批）**：`jsonRecords.mjs` 删除（T21 起引用归零；skeleton-contract 顶层断言同步退役，注释记 2026-11-09 T21 事实）。
+- **调度事故复盘（第三轮）**：M2/M3 首轮回滚＝调度方 d54aed3（entries 接线修复）漏改 visual-contract 钉住的字面量断言＋漏跑门禁即推——HEAD 带红致两批内核段误红（执行方三轮如实拒改禁区）。修（1b0cecce 契约跟随）后重派全过。**元教训终稿**：改被契约测试钉住的文件＝必须同步改契约＋必跑门禁；no-op replace 与钉字面量断言同属「静默失配」家族，rewrite 后 grep 赋值/断言本体。
+- 至此 **M1＋M2＋M3 全收官**：推演循环（引擎/存储/UI）＋章纲投影＋成书渲染（分章/知情贯穿/多文风/双叙述纪律）。kernel 1048/1048。**M 系剩 M4（fronts/clocks 张力）＋M5（连续宇宙补丁通道＋多周目）**；诡秘之主实测前需 LlmPort 子 Agent 形态接入批（作者裁定：无 API token，开子 Agent 走既有模型通道）。
 
-验证（本轮实际运行，均exit0）：Web/Pinix `npm run core:workflow:smoke`，覆盖两宿主隔离、源码编辑、Vite实际读取、依赖清单不变、恢复、脏源/同版本变更拒绝、断链恢复与npm ci；临时宿主安装实际0.16包并连接独立源码/导入/恢复；Web `npm run core:smoke`；两端定向eslint；Web `npm run verify:full` 30文件290例，Pinix同命令20文件200例；Pinix `npm run mobile:check` 22/22。未新增Vitest用例。无作者数据、用户服务或Next变更，未推送部署；本轮未做Windows命令或设备实测。
+## 2026-11-10 · M1-c 场景卡 UI（本地）——M1 全系收官
 
-共享逻辑兼容修改后，各端只更新依赖、验证并构建；新端口或破坏接口仍需Host适配。操作说明见 `docs/engineering/core-development.md`。不需要新增工作流规则。
+- **M1-c（e291391e，CodeBuddy hy4 一次过 8min/140 轮）**：`DeducePanel.vue`（648 行）推演面板——setup 阶段（冻结范围/主视角选择＋拒草稿开局）／playing 阶段（局面卡 who·where·tension·hook＋候选来源徽章 ▮必然 ⚙命运(骰点 trace) ✦戏剧＋选择按钮＋玩家/导演切换＋收束/中断）＋第一视角两面板（已知情报 knowledgeOf 裁剪／人物关系）＋本局回执。挂载＝AppNext 中栏覆盖层（标题栏「推演」钮切换，不注册页签/槽位/新通道——避开守卫⑪–⑬）；渲染层直接 import 纯 fact 模块（bundle f/f2/l 判据全过，未拖 fs/wikihub/runtime）。回执并入既有 serviceSnapshot。
+- **调度方补刀（d54aed3）**：面板 entries 接线修复——App 层 base data 从未加载世界书文档（0 条），改优先取索引页实例 entries。dameng-px 实测：0 条→**12 条冻结成功**，第 1 拍真实出卡（命运骰 5 受阻→hypothesis 轨、必然候选编年史）。
+- 门禁：kernel 1032/1032（+10）、vitest 18 文件 260（+7，CodeBuddy 环境本轮 vitest 正常收集——Node 24 caveat 未复现）、lint 0、验收 44/44、打包过。范围守卫通过（6 文件全在 next/shell∥fact∥tests）。
+- **M1 全系收官**：M1-a 引擎＋M1-b 会话存储＋M1-c UI＝50 拍仿真＋20 拍联跑＋真窗第一视角推演全通。验收场景（诡秘之主前几章 wiki 化＋推演续写）就绪，待真实模型接入体验。
 
-## 2026-11-06 Core全量迁移继续（进行中，未完成）
+## 2026-11-10 · M1-a/M1-b 推演循环引擎与会话存储（本地）——M1-c 移交
 
-作者指出0.9.0公共接口不等于前置完成，撤回“可以据此分工”的结论；不把未迁入部分转给组员来修改交付范围。
+- 推演式创作 ADR 定稿（`D:\Pinax-e2e\wikihub-arch\deduce-adr-final.md`，八裁定＋POV 补充：事件带 runId/pov、知情矩阵=第一视角、换角色重演＝叠加微调 hypothesis 轨、端点固定路径自由、多 POV 交替章节归 M3）。
+- **M1-a 引擎（da2015e）**：`next/fact/usecases/deduce/` 五件——opening 冻结快照（**拒草稿开局** WORLD_NOT_ADOPTED／POV_NOT_FOUND／worldHash）；turn 有界推进（局面卡 who/where/tension/hook 四字段）；candidates 三层（**L-必然▮** rules·events 确定性推导 adopted／**L-命运⚙** 2d6 seedable 剧情检定＋骰点 trace／**L-戏剧✦** LlmPort 提议 proposed＋事实包简报入 prompt，预算 1–8、失败隔离、**一致性筛**：引用未知实体候选层确定性拒＝端点固定路径自由）；settle（beat 条目 runId·pov·source·decidedBy fate|author＋hypothesis open 轨＝叠加微调钩子＋导演 veto/reroll/inject）；sessionState（预算容器＋事件日志 replay 源＋fronts M4 接口占位）。骰子自实现 mulberry32（不 import @pinax/core，保整目录平移纯度）。种子化 50 拍仿真零事务错误。
+- **M1-b 会话存储（14d4f9f）**：sessionStore 事件溯源形态——SESSION_EVENT_TYPES 15 种枚举收敛、sequence 唯一索引、checkpoint 五 purpose＋stateHash 篡改可检出、**branchSession 读档即分支**（lineage 链多级可溯＋父进度保留＋atSeq 裁父段）、replay 任意时点重建；memorySessionStore（持久层留 Host）。与引擎联跑 20 拍事件全落流。
+- **调度方式变更（作者指令）**：Qoder 平台故障（qoduck 不可用＋auto 挂＋flash 500，error_code 500 input_tokens 0）→ M1-a 首轮 qoduck/flash 双败 → **作者裁定切 CodeBuddy hy4 → 发现 CodeBuddy CLI 本机不存在（IDE 残缺安装）→ 作者裁定调度方直接实现 M1 三批**。执行流中断纪律全程有效（回滚无污染、门控正确跳过）。
+- 门禁：kernel 1022/1022（M1-a +9／M1-b +4）；gate v2 分段 acceptance/kernel/ui/bundle ok，lint 两处未用变量（brief 漏接 prompt／局面卡多余 rules）已修（ab1abac）复净。
+- **M1-c 场景卡 UI 移交下一执行方**：工单已附调度方侦察简报（页签系统＝workspace entries form:'page'＋viewRegistry；载体 pane 数据驱动；host 常驻面板 AppNext 直接挂载——建议走最浅路径避开守卫⑪–⑬页签契约区）。
+- 待办：真实模型质量验收（诡秘之主前几章 wiki 化＋推演续写＝M1 试验场景）；Kit 17 卡契约迁移；推演编排深度接线（BeatPlan 吃事实包）。
 
-独立Core的0.10开发态已抽取上下文编译、助手任务/会话存储/讨论上下文、正文内核/编排/文档结构，以及现有原生Pi会话模块。Node路径/JSONL、SDK和模型端口留Host注入。Next现有工具循环、写策略和审计拦截也迁入包，Host路径保留转发；两种运行方式仍然不同，没有宣称抽到同包就已统一所有语义。Next章节真实读写/删除走Core及fileService修订检查。
+## 2026-11-09 · F1+F2：品牌统一 fact.data／hook 绑 tool 化（本地）——F 系收官
 
-Web、Pinix共享书籍仓储（含重命名/删除/通知/恢复端口）、项目大纲仓储（含引用/指纹/端点校验/章节映射）、速记仓储和条目编辑（身份/元数据/作者修改/人物档案）；Web、Next的世界书文件合同源逐字节相同，现改为转发Core，富关系/未知字段往返保留。Core继续不依赖Vue/DOM/Node fs，markdown使用各端同版marked 18.0.3。
+- **F1（8b1ce0b2）**：pedia→fact 纯改名重构（53 文件 ±499/492 行，行为零变化）：`next/pedia/`→`next/fact/`（26 文件原样迁移）、schema `'fact.data/v2'`、全仓 import 与标识符同步（FACT_SCHEMA/validateFactEntry/FACT_STORE_*/runFactGate 等）、`factHookService.mjs`、日志 source `fact-hooks`、开关档 `.pinax/fact-hooks.json`（迁移器认旧档只读回落）。**保留 pedia 字样处**：NovelPedia 来源溯源（FACT_SOURCE/prompt 头/migrator 输入侧旧标识/`extra.pediaSlot` 兼容键）。改名一致性抽查：wikihub/skills/shell 残留 `next/pedia` 引用 0。kernel 1004/1004。
+- **F2（a17857af）**：fact 更新绑定 tool 调用链（作者纠偏落地）——`WRITE_HOOK_REGISTRY` 写工具注册表＋`DEFAULT_WRITE_HOOK`（表外写口自动默认钩子）；宿主注入自 KERNEL/CARRIER_WRITE_CLASS 非 structural/derived 全量写口（**未来新增写工具自动覆盖，fact 代码零改动**）；实体识别改内容驱动（`mineNamedEntities`：segment→确定性规则＋可选 LlmPort 注入，`stripBlueLinkSignals` 识别前剥 `@《…》`——测试断言纯符号文本候选为空、散文实体照常识别）；草案按实体名去重（跳过计数进通知文案）。kernel 1009/1009。
+- 过程账：F 系两轮被范围守卫拦（第一轮=守卫三重缺陷＋模板带病克隆；第二轮=工单漏项 skills/、F2 缺前置门控）——均已修复入册（元教训：克隆模板先核谱系；改名批次白名单按合法波及配；serial 依赖批必须有前置门控）。W5（fa3da49）已先行落地。
+- **fact 引擎全栈收官**：fact.data/v2 格式＋next/fact/ 域＋管线＋迁移器＋技能契约＋hook 接线（tool-bound）＋门禁，wiki 前端图谱嵌正文右上角。验收场景＝《诡秘之主》前几章 wiki 化＋推演续写实测（待开发收尾后进行）。
 
-Pinix旧章节修订需从editorDocument冻结；沿用Web规则，不再复制已有Web逻辑。旧测试中的100秒/8000字/doom-loop强停按现行Web合同更新，保留200例预算。包体最初超出1450000，定位到正文页直接载入检索目录；同步Web已有lazy facade后，实际包体1404208，完整门禁通过。不抬预算。此前无收益的写作指导拆分已撤回，避免为优化保留额外模块和手写长度常量。
+## 2026-11-09 · P5 作品化质量门禁（本地）——P 系收官
 
-组合证据：Web verify:full exit0（30文件290例、35项集成、应用/文档构建）；Pinix verify:full exit0（20文件200例，包体1404208），verify:mobile exit0（配置+本地资源构建）；Next verify:next exit0（817内核用例、UI、lint零警告、打包门禁），之后文件合同相关39项及lint通过；Core独立85例和隔离npm包消费通过（真实书籍/大纲/速记仓储、章节CRUD、条目编辑、文件往返、解析器、工具循环入口）；文件格式31项、设定编辑76断言通过。最终撤回指导拆分后的相关检查另跑，不把前一轮证据当最终产物证据。
+- `next/pedia/usecases/gate.js`（8651d5bd）：四类断言＋归一化报告＋round-trip 端口＋`runPediaGate` 汇总出口。**可判定项**（assertions，error 进 conflicts 拦、warning 不拦）：角色言行 vs anchors／rules 槽位结构化约束冲突／双时间轴批量 overlap／知情一致性全量（precheck 推广）。**不可判定项**（undecidable，诚实边界）：rules 只有自由文本 definition 无 `constraint:{key,value}` 的条目——门禁不拿文本猜语义，现有真实数据基本都落这里（后续让规则条目带结构化约束字段即可逐步转可判定）。
+- round-trip 保真：只比结构语义不比行文——实体集（条目名∪refs∪关系目标）／关系对／人物锚点逐行；载体分工 worldview 走世界书全字段、plot 走 `@《…》` 回读、人物无载体 JSON 身份往返＋`character-carrier-unavailable` 记 losses；gate 层静态边界不能 import wikihub——roundTrip 走端口注入，不注入时 `skipped:true` 如实报告，不假装测过。
+- 归一化回归：克莱恩基线随迁（克莱恩=周明瑞并组 1 组；跨条目同词声明「愚者」别名「克莱恩」仍并组但 conflicts 报双主张，`normalization.ok=false` 不静默选边）；category_map 48 键逐条断言全中。node:test 1003/1003（+9）；qoduck 8min/36 轮一次过。
 
-原生Pi抽取候选的两协议各21次模拟请求和218项交付检查已通过；首次wrapper缺闭括号由会话smoke捕获并修正。该候选未激活，仍需重新构建以更新来源哈希。未调用真实模型，未操作作品或用户服务。后续补入共享世界书注入/关系/结算及来源读取/背景修订/记忆排序。Pinix旧关键词断言按Web已有关系绑定优先修复，未增减用例。最终Web完整290例、Pinix完整200例及mobile构建通过（包体1405831/1404852）；独立Core提交`9bc4fa8`后由clean-source打包脚本生成0.10.0及SHA256/integrity回执，三端锁同一产物。候选运行包重新构建来源哈希，两协议各21次模拟请求通过。其他领域和跨端任务/持久化路径仍未全部接齐，未宣布前置完成。
+## 2026-11-09 · P 系战役总账（P0–P5 七批，2026-11-09 一日完成）
 
-0.11接续：独立Core本地提交`fc44e1f`，新增26文件/7527行，将Next小说/构思/大纲/世界书/剧本/资料工具和漫画等JSON记录型工具、会话状态与JSONL折叠/追加恢复、Web/Pinix版本与崩溃恢复、生成草稿恢复、运行目标/授权索引与依赖校验迁入共享包。地理索引构建函数继续由Host注入，地图引擎未移动。原生双槽快照状态机由Core负责，Filesystem/排除键仍是Host端口；文件写入确认才给durable回执。
+- **pedia 数据内核在 fork 内全线成型**：P0 格式（f83c3f0b）→P1 域骨架 next/pedia/ 四层（8a6f421d）→P2a 管线（c4f7e567）→P2b 迁移器（df458434）→P3 技能契约（4b3b2aef）→P4 hook 接线（c222ef17）→P5 门禁（8651d5bd）。kernel 930→1003；qoduck 七连一次过（8/12/10/9/7/10/8 分钟，零修复轮）。
+- 架构定型：next/pedia/＝Core-shape 域（禁宿主依赖，未来整目录平移 core/src/pedia/）；wikihub＝视图/转换层反向依赖 pedia；hooks 接进保存/续写/润色（旁路观察者＋总开关）；五张编剧 skill 带数据契约；gate 出口留给 CI/创作流程。
+- 作者裁定已全编码进 ADR（pedia-v2-adr-final.md）：文风解耦能力包／三大创作质量语义／hook 绑定／段级粒度。剩余：真实模型质量验收（作者体验）／Kit 侧 17 卡契约迁移／T12 平移 core 谈判。
 
-本批修复两类实际竞争：Pinix旧设备保存迟到时不再把新编辑标saved或清掉新恢复稿；确认抛错返回保存失败而非挂住。Next回答与会话保存捕获原项目/会话，切项目期间保留原store；主进程只允许回写当前或曾注册的会话目录，未知根拒绝，新发起工具/模型请求的目标已切换时拒绝误投。会话save返回明确失败也标未持久化，不丢内存回答。没有新增页面、弹窗或限制模型的次数/时长。
+## 2026-11-09 · P4 hook 接线创作动作（本地）
 
-本批验证：Web verify:full exit0（30/290，包体1406553）；Pinix verify:full exit0（20/200，包体1409882），mobile:check 22/22及mobile:sync exit0（本地资源构建+Capacitor Android同步）；Next verify:next exit0（819内核、238界面、lint零警告、打包全过）。新UI用例实际切项目并等待旧回答，返回原项目仍可见；Node用例验证原根写回/未知根拒写；Pinix原3用例内补入延迟确认/切章/失败重试断言，不扩预算。Core85项、124模块独立导入、静态检查与隔离包消费通过（载体写入、原生失败/重试、JSONL重开）。无Java/JDK，未构建APK或真机验收；没有调用付费模型、改用户数据、重启或部署。0.11由clean-source打包并带来源回执；本批Host接线本地集中提交，未推送。全量迁移仍需后续接齐上文列出的协议与领域，不把本批完成说成整体完成。
+- hookEngine 三入口接进 shell 真实链路（c222ef17）：章节/大纲/世界书保存→diffValidate（hub 快照 before/after＋draft 预检，**旁路观察者不阻塞保存**，issues/warnings 走 serviceLogPool source=`pedia-hooks`）；`@《…》` 缺条目→自动补 proposed＋pipelinePending 草案（汇 `.pinax/proposals/`，绝不改作者条目）；续写→suggestCompletion（factPack 建议落提案）；润色→readOnlyQuery 零写入。
+- 接线层：`next/pedia/usecases/hookWiring.js`（纯函数）＋`next/shell/pediaHookService.mjs`（316 行）；**进程层动刀论证**：hub 快照要读 fs＋跑 wikihub 转换器，放渲染层会拖包——沿用 skillsService/knowledgeService 注入模式（主进程建服务、通道转调用），未注入时行为与旧版逐字相同（测试钉住）。体积：外壳 2206.3/2500 kB、渲染层零增量。
+- 开关：项目级 `.pinax/pedia-hooks.json`（enabled/hooks.onSave·onContinue·onPolish，只认显式 false，坏档 warn＋默认全开）。hookEngine 补加法式 warnings（REFERENCE_UNRESOLVED 不再被宿主侧丢掉）。node:test 994/994（+15）；qoduck 10min/91 轮一次过。
+- Limitations：实体识别只认 `@《…》`（具名实体抽取归管线批）；缺失引用重复保存各生成一份草案未去重；作者可弃提案。
 
-0.12接续：独立Core提交`8b046d0`（39文件/9770行），将世界书完整状态/动作与归一/迁移、文件双写协调迁入`worldbook/*`，Web/Pinix原`worldStore`只绑定Pinia与平台端口。结构化设置/人物卡/地点合同共享；地图投影函数仍注入，未改地图生成或渲染。移动端明确不具备localmirror文件源，继续原生快照。记忆候选全流程、历史outbox、压缩/来源与事实/角色知情/时序/证据审计/回执/查询/备份迁入`memory/*`；数据库事务、ID工厂和浏览器事件留Host。沿用逻辑表与作者裁决语义，不把旧记忆自动变正式事实。
+## 2026-11-09 · P3 技能数据契约（本地）
 
-修复真实数据库接缝：历史先前只声明v1，而事实账本已有v4；两端历史现在走同一个`openLedgerDb`，历史与事实共存。隔离浏览器先打开v4再写/读209条历史，刷新、不可变导入、备份往返、quota和范围隔离通过；事实账本数据旅程1059行/1001回执、事实确认/更正与1440/390界面通过。原ledger smoke未固定中文locale导致中文按钮定位失败，已固定locale；独立测试无本机API，capabilities使用明确offline fixture，不过滤真实console错误。首次新深导入触发Vite优化重载，稳定后复跑成功。Pinix旧快照断言未包含已存在的资料升条目规则，按Web既有断言补source条目，保留纯读不落盘/不切active等验证，不增减200预算。
+- `next/pedia/usecases/skillContract.js`（4b3b2aef）：defineSkillContract 定义即拒（SkillContractError 带 field）／validateSkillContract 非抛错口／validateProduces 四关（schema→状态机可达→层槽白名单→asStatus·mode 一致）／assembleRequires 只读裁剪（深拷贝、dropped 记账、缺投影 warnings）。
+- 契约形状＝**集中注册表** `next/skills/contracts.mjs`（嵌套结构 frontmatter 表达不了；第三方包不写契约 contract:null 照装，向后兼容）。五卡挂契约：chapter-rewrite（plot+character，span current±1，produces 正文增量 draft＋新设定 proposed）、continuity-check（三层全量＋知情矩阵，produces nonEntry violation-list 包装 precheck）、outline-restructure（事件图→plot proposed＋relation-edges）、scene-expand（场景投影→scene-skeleton＋proposed）、worldbook-refactor（worldview 全槽→重组 proposed）。
+- loadSkills 装载校验：坏契约拒装记账；supports contract:null 向后兼容。prompt 正文未重写（只加契约段——按契约重写 prompt 留后续批）。node:test 979/979（+11）；qoduck 7min/46 轮一次过。
+- 17 张 kit 指令卡的契约迁移属 kit 侧后续。剩余：P4 hook 接线（shell 创作动作）→P5 作品化门禁。
 
-验证：Web verify:full exit0（30/290、包体1406576），Pinix verify:full exit0（20/200、包体1409682）；Next verify:next exit0（819内核/238界面、lint/打包）。Core85用例、158模块导入与静态检查、隔离安装无Pinia库CRUD/幂等条目及归档失败保留outbox通过；世界书迁移34项/双写47项/结算109断言通过。移动本地构建与Capacitor Android同步通过，APK/真机未验。已查看隔离账本桌面/手机截图并清理4张图，临时5307停止，现用服务、作品和模型配置未动。由清洁提交生成0.12固定产物及来源回执，三端同包；本批Host集中本地提交，未推送部署。该0.12批次余项由下一批0.13继续处理。
+## 2026-11-09 · P2b 存量迁移器（本地）
 
-0.13收口：Core0.13.0（fc5fb44）已完成本轮约定的迁移前置本地实现：Next主入口与Web/Pinix运行器共用Pi原生会话装配，旧手写循环只保留兼容入口；媒体/图片历史/素材规则与二进制端口共享，浏览器与文件Host实际接入。三端同包，来源SHA与安装源码逐文件一致。Next提案与工具固定原项目文件服务，修复项目骨架异步建目录未等待的竞态；完整回答不再被审稿summary覆盖。Web/Pinix媒体规则合流，Pinix采用引用保护及上游依赖的正确删除清理顺序，旧图片历史有兼容迁移。Next二进制字节不再经过字符串转换，保留原权限与快照/CAS。SDK首次助手运行时懒加载，原2.5MB外壳预算未放宽，外壳2001.3kB；新增检查对随包Pi模块执行长轮/提案/取消。
+- `next/pedia/usecases/migrateLegacy.js` 四路径（df458434）：worldStore→worldview（category/group/injection.group/cat→category_map 11 槽，Host 字段 `next.worldbook` 无损快照）；大纲 nodes/edges→plot 事件图（causes→causal、foreshadows→setup＋hypothesis 轨 setup/payoffSuggestion、alternative/parallel→relation，自环/缺端点 dropped）；账本 v4→双时间轴事实＋character.knowledge[]；章节→场景骨架（segment 100–300 字，`pipelinePending:true` 留管线精抽，quote_hash 只存哈希原文不落）。迁入一律 proposed＋mode=author；**operationId 幂等重跑 diff=0**、dryRun 零写入（spy store 断言）；losses 九类如实记账（category-unmapped/edge-dropped/payoff-suggestion-only/alternative-degraded/ledger 区间近似等）。
+- 落库复用 P2a persistEntries（内容哈希 operationId＋状态机保护）。node:test 968/968（+7）；qoduck 9min/54 轮一次过。**P 系库层收齐：P0 格式＋P1 域＋P2a 管线＋P2b 迁移器。**
+- 剩余：P3 技能数据契约→P4 推演/hook 接线（shell）→P5 作品化门禁。
 
-Web verify:full exit0（30/290）、Pinix verify:full exit0（20/200）、Next verify:next exit0（820内核/238界面，含原生Pi脚本供应商及打包模块执行）；Core85例/162模块导入、静态检查、隔离npm消费通过。两端真实浏览器媒体IDB/PNG解码/FileReader/刷新/备份回填通过；Pinix移动构建/Android同步通过。最终产物sha256 `2c0a05991b5fdc66237c401569d644befcb728f31df464197916ce6445aefed0`，三端安装源码逐文件等于干净Core。未调用付费模型、未验APK/Android真机或真实供应商长期质量；未推送部署、未重启用户服务。本批不改写作提示词，不把平台差异伪装成相同能力。
+## 2026-11-09 · P2a 拆书管线 JS 化（本地）
 
+- `next/pedia/usecases/pipeline/` 四件（c4f7e567）：prompts.mjs（抽取/人物/设定三组提示词，逐条溯源 ref-Novelpedia prompts.py/character_agent.py/setting_agent.py，扩展 v2 anchors/memoryPoints/castRole/readerCognition）；extract.js（段切分→LlmPort→plot 草稿，parseJsonLoose 容错＋≤2 重试＋失败隔离＋operationId 幂等）；mine.js（say/do 通道积累 anchors·memoryPoints、设定识别与 definition 补充，走状态机——adopted 不降级、superseded 终态不回写、通用词拒收）；cluster.js（余弦 0.5 单链归并，VectorPort 注入，复用 domain/aliases）。fake 端口零网络；node:test 961/961（+11）。
+- Limitations（记账）：真实 LLM/embedding 质量未验证（本批纯库层）；读者注意力切分、全书 normalize_terms、strengthen（体系分层/矛盾检测）、文风分析未移植——后续批按需。qoduck 10min/53 轮一次过。
 
-0.14范围更正：0.13将当时列出的运行/二进制接线完成误写为全量前置完成，现撤回。当前只继续主Pinax与Pinix，不继续改Next。Core0.14.0（3aa5421）完成本批23模块抽取：漫画页/草稿/阶段与候选、分镜文档/版本/快照、正文改编/脚本、生成归档/重试/迟到归属、布局/文字/导出、图片桥与渠道配置。主Pinax和Pinix实际调用同一固定包；浏览器存储/事件、HTTP与供应商适配留Host。Core保留来源注释，并将StoryForge参考策略的完整MIT文本随包交付。Web verify:full exit0（30/290）、Pinix verify:full exit0（20/200）、Core85例与185模块无Host导入/静态检查/隔离npm消费通过。脚本供应商验证漫画脚本→保存、旧稿保护新图、归档失败复用原图重试、迟到候选不清新请求，以及分镜版本/恢复/失败保留/ZIP。两端真实浏览器存储/刷新/导出与阶段图片显示通过；Pinix预览1100/390明暗截图已查看并清理。移动构建与Android同步通过，未验APK/真机/真实模型质量。整体Core迁移仍未完成：资料归档业务与IndexedDB拆分、体验/跑团状态和回合业务、SQLite派生目录的实际应用接线仍需继续。本轮未修改Next，未推送部署或重启用户服务。产物sha256 `554121ce8888879ed4c0ca30f9770a82b1aa050e952914d82a0803172e6d7d49`，安装源码逐文件与干净Core一致。临时5307/5308及截图在验收后清理。
+## 2026-11-09 · P1 pedia 域骨架（fork 内 Core-shape，本地）
 
-0.15资料批次：Core0.15.0（c6fe1d9）完成资料归档与解析这一批：来源/分块/创建工作区、共享去重/引用/删除/恢复、编码/章节/导入报告、选段及EPUB spine规则进入Core；原Web/Pinix路径实际调用共享仓储和解析工厂。IndexedDB事务、PDF/Mammoth/JSZip加载和worker保留Host。实际修复FNV32碰撞对`costarring/liquid`的误合并，并保留批量同文别名与后续共享片段的来源引用；Core单仓储写队列串行处理并发导入，失败不阻塞后续。Host跨表事务把恢复/清理一次提交，失败不留半份，真实库失败不转内存，读写后关闭连接。DOCX浏览器/Node参数适配；Pinix保留原主项目的pastedText/sourceInputMode。Web verify:full exit0（30/290）、Pinix verify:full exit0（20/200）、Core85例/196模块独立导入/静态检查与隔离npm消费通过。两端真实浏览器解析TXT/DOCX/EPUB/PDF及四格式Worker/取消，验证并发去重、实际FNV碰撞、原子写失败不留半份、不静默转内存、ZIP/刷新/工作区恢复和连接关闭；移动构建/Android同步通过，未验APK/真机/模型质量。产物sha256 `ad71f93ae962e43a9ef9ba0e40184e988c751a1f6d8a47a5b08bc3c89bfe09c1`，安装源码逐文件等于干净Core。Core仍余体验/跑团业务抽取；SQLite派生目录应用接线尚未启用，作为后续平台工作单列。本轮不改Next，未推送部署或重启用户服务。
-## 2026-11-06 分工前置公共基线
+- 作者裁定：pedia 域在个人 fork 内成型、不动 `D:\Pinax-core`；目录形状按平移 `core/src/pedia/` 设计。
+- `next/pedia/` 四层域（8a6f421d）：domain 九模块（词表/稳定 id 纯 JS SHA-1/状态机/双时间轴/schema/perspective/segment 100–300 字/别名 union-find/schema 桶）＋ports 三契约（PediaStore/VectorPort/LlmPort）＋usecases 四件（factPack 投影/hypothesis 回灌/precheck 预检/hookEngine 三 hook 永不写 store）＋memoryPediaStore（operationId 幂等＋expectedRevision 并发，注释标注平移后换 core 事务三件套）；index.js 70 导出，整目录可复制进 core。禁宿主依赖静态断言进测试。
+- wikihub 反向依赖重构：segment/pediaSchema 缩成转发壳，convert/viewModel/render/build/migrate 改 import `../pedia`——对外行为不变，双真源 grep 断言进测试。kernel 950/950（+20）；qoduck 12min/80 轮一次过。
+- 下一步：P2a 管线 JS 化（抽取/挖掘/聚类，LlmPort/VectorPort 注入）∥P2b 存量迁移器（worldStore/大纲/账本→pedia）。
 
-- 独立仓库`/home/recoletas/jiuguan/pinax-core`升级0.9.0，源码commit `5e429bc`：修改计算引擎注入文档/人物投影与ID；共享审阅工作集、完成审阅、权限、工具schema及富关系合同；日志写入、恢复、expected快照及幂等回执；project/entity/revision/operation命令和明确flush确认。失败不确认durable，重试不重复增修订。加入两项综合合同用例，独立测试85/85、包安装消费smoke通过；显式ESLint API扫描独立src/test无错误。大纲端点校验WIP已移交。
-- Web章节适配器修复失败/抛错仍污染内存的问题，恢复内容、版本、侧车与对象引用；助手计算、工作集、完成审阅、写入日志使用实际Core包。旧packages/core/src全退为转发，历史测试检查锁定包，不删除测试规避预算。Host未增加Vitest文件/用例。技能旧20/200规范与已存在的reporter30/290不一致，本轮只同步既有预算，不提高reporter。
-- 运行器交付改为从同一固定Core产物携带合同源码，哈希计实际交付字节。未安装额外运行器依赖；第1轮整合smoke暴露临时扩展目录仍直接复制兼容入口，已改为复用生产打包函数再通过。离线缓存缺包后完成普通npm安装，未改模型配置或作品。
-- 验证：`npm run verify:full` exit0，30/30文件、290/290用例，StoryAgent35/35，应用/文档构建、结构/体积/同步/diff通过。`core:smoke`通过；候选运行包`.runtime/core-foundation-20261106`构建通过，交付218项；原生会话OpenAI/Anthropic模拟各21请求、两次压缩、候选/提问续接与服务重开均通过，未调用真实模型。此前定向12文件/121例通过。所有演练在临时或合成数据上，无用户服务重启、部署、页面刷新或作品变更。
-- 交接：原需求文档的三组长期方向保留，现有统一计划写明首批接口与验收。Pinix/Next公开仓库已只读核对；Pinix远端仍无旧磁盘中的Core adapter，Next仍有独立fileService/atomicWrite，所以未声称三端页面已接。完整上下文编译、Pi编排及各Host迁入仍是后续工作；本轮完成的是让三组可使用同一公共基础开工。
+## 2026-11-09 · P0 pedia/v2 schema 定稿（Next wikihub 垫床，本地）
 
-## 2026-10-25 集中提交与推送准备
+- ADR 定稿（作者 2026-11-09 裁定，`D:\Pinax-e2e\wikihub-arch\pedia-v2-adr-final.md`）：D1=A Core 新域两步走／D2=A 一次切换三判据／D3=C 章→场景双层／D4=A 条目级 mode／**S1 文风解耦**（style 移出一等公民，降为小说体裁能力包，与剧本格式/画风同属上层包装）＋S2 三大创作质量语义（人物塑造/剧情节奏/知识铺陈）＋S3 Core 核心 Tool hook 绑定创作行为（润色只调用不写数）＋S4 段级粒度 100–300 字。
+- P0 实现（f83c3f0b）：pediaSchema v2——三层一等公民、条目信封（mode/status 状态机 `validateStatusTransition` 纯函数/double 时间轴/事件双轨）、character 塑造字段（anchors 三通道/memoryPoints/castRole：supporting 与 minor 缺 goal·plotFunction 在 analyze 拒绝、author 警告）、plot rhythmSpec（500/1500/4500 字窗口＋笑燃泪梗 novelty 标记）＋structureTemplates、知情矩阵＋`checkPerspective` 视角违规校验器（读者认知 firstMention/supplementNeeded）、`segment.mjs` 段级粒度（100–300 字边界测试）、`migrate.mjs` v1→v2 迁移器（style 条目→能力包）、`hooks.mjs` hook 契约接口（onOutlineWrite/onContinueWrite→suggestCompletion；onDataChange→diffValidate；onPolish→readOnlyQuery，read-only 语义标注——引擎接线是 P1 Core 批）、`packs/novel-style.mjs` 能力包。viewModel/render/build 同步。
+- 门禁：五段全绿（kernel 930/930、UI 251、lint 0、验收 44/44、打包过）；qoduck 14min/106 轮一次过（dwfrun-b92a1ee3）。调度方 salvage：范围核对（wikihub 13 文件 ±2081 行）＋禁区终检零触碰。
+- 下一步：P1 Core `feat/pedia-domain` 分支（与 T12 对齐原作者合并谈判后推进）；P2a 管线 JS 化 ∥ P2b 存量迁移器。
 
-作者要求提交推送当前版本。将10-21～24相互依赖的助手Pi会话、长任务与工具执行、正文流式交付/上下文/写作方法、设定候选采纳与持久化，以及对应UI、测试、文档作为一次功能交付；本地服务授权及按范围验证的开发规范另成一条提交。未混入运行包、临时生成稿或私有配置。
+## 2026-11-09 · W4 归类修正＋左树清单式；T11c persist 口径对齐（Next 线，本地）
 
-`npm run verify:full` exit0：20/20文件、200/200测试，StoryAgent集成35/35，lint 0错误/5既有警告，应用27.58s、文档7.69s，结构/构建体积/合同同步与diff检查通过；外部桥接环境跳过不视为外部验收。技能链接及frontmatter检查通过。远端origin/main与提交前本地基线b0f1b830一致。既有真实模型验证范围见逐轮记录，生成文笔仍有推断、物件跟踪及指代反例，不宣称全面质量达标。
+- **W4（66b5cba9）**：`convert.mjs` 新增表驱动 `NAME_PREFIX_RULES`（8 条，只救落 other 的条目，cat/type/目录命中的不抢位；`mappings[].via` 留 `prefix:` 记号）——剧作·→style 层 `creative_rules`（pedia soft 层的 Next 扩展，组名「创作规则」）、设定·序列体系→power_levels、设定·界与十二时辰→locations、真相层·＋三组织/三派/三流→orgs、真相层·＋界灵→creatures、其余设定·/真相层·→concepts。dameng 13 条实测 **other=0**、losses 空。`EntriesBoard.vue` 左树改清单式（去边框卡片、一行一条、令牌字号、当前项 `--nav-selected` 高亮）。node:test 912/912。截屏复验通过（`D:\Pinax-e2e\w3-wikihub-shots\png\w3-wikihub-full.png`）。口径按调度方推荐案执行（作者未及答），可逆。
+- **T11c（4db3e2af）**：`next/shell/agentSessions.mjs` 的 `persist()` 对齐 core `agent/fileSessionState`——异步/同步 `{ok:false}` 回执当降级（degraded＋notify），不再假装成功（真实链路：ipcContract 分发器失败返回信封不抛，此前渲染层一直显示"已持久化"）。未直接 import core（渲染层依赖薄边界），语义逐行对齐＋对表测试。
+- 待作者看：中栏标题与正文 H1 重复（视图标题＋md 自带标题）；人物层两个 0 计数锚点占位组带说明文字常驻——按 68-R3 沉默层原则或可隐藏空组。
 
-本次仅提交并推main，不部署公网或重启服务。提交/推送最终回执以Git记录为准。
+## 2026-11-09 · W3 方案 B：世界书三栏维基版式数据源切 hub（Next 线，本地）
 
-## 2026-10-24 写作方法资料融入（本地）
+- 作者否决 W2 iframe 挂载，裁定方案 B：hub 数据喂 68-R2 原生三栏版式。新增 `next/wikihub/viewModel.mjs`（hub→分组树/链接表/Infobox 字段/被引统计，词表单一来源，render.mjs 反向取用）；`EntriesBoard.vue` 先 `worldbookToHub` 再 `buildHubViewModel`，左树层/域/槽位/条目四级带计数＋人物/剧情占位组；`EntryDetailPanel.vue` 有 hub 时蓝链词表＝hubLinkTargets＋资料/约束词表（`wikiLinks.mergeTokenMaps` 同名不同物剔除）；convert.mjs 补 aliases 并入 keys。68-R2 视觉资产全保留。kernel 909 过、UI 251、visual-contract 全绿（6f4612ed，qoduck 26min/184 轮一次过）。
+- **截屏验收（dameng-px）**：三栏/hub 分组/Infobox/关系图全部成立；**问题**：13 条中 11 条落「其他」——dameng 分类前缀（剧作·/设定·/真相层·）不在 pedia category_map，属分类映射缺口；左树方块卡偏重、中栏标题重复。待作者裁定分类口径后修。
 
-作者澄清“把资料融入”指优化 harness 时使用写作教学资料，不是扩展产品资料检索。此次只调整共享 `narrativeVoicePolicy` 的 authoring 指导；此前检索接线作为既有WIP保留，不计入本次交付。
+## 2026-11-09 · W1–W2 wikihub：pedia/v1 枢纽格式＋自闭环 wiki 视图（Next 线，本地）
 
-- 参考 Center for Fiction 的对白、场景与概述文章（链接与取舍见 current-architecture），替换笼统的自然流畅描述，补入动作/物件、观察/判断、按需人物信息、对白归属和细节取舍的具体方法。中文示例自写且标明不属于作品，不要求短句、固定段数或强制潜台词。
-- 助手正文与独立推演共用此生成器；没有增加模型审稿、自我重写调用、生成限时或工具额度。已有任务权限/采用机制不动，5173热更新，无后端更新。
-- 实验：隔离浏览器直接调用真实共享内核/生成器，西幻誊写与现代姐弟对白各两次；每次真实请求确认指导进入。第二轮仍有“从笔迹推断代签”、姓名字符计数错误、砧板已出现又取出、指代不明等问题，**质量未通过**，不能把提示词接通说成解决文笔。没有操作用户作品，也未复测完整助手工具选择/采用撤销。保留低敏哈希和判断 `.runtime/evidence-writing-craft-20261024.json`，临时脚本与完整生成稿清理。
-- 检查：`npx vitest run src/__tests__/narrativeKernelExecutor.test.js src/__tests__/authoringAgentWorkflows.test.js` 66/66、exit0；两文件 ESLint exit0；git diff --check exit0。首次新增断言误要求规划阶段包含正文指导，已调整为验证实际正文阶段后通过；未更改规划职责。未跑完整门禁、未提交推送。
-- 后续质量评估应固定模型与同一输入做可读性比较，先定位生成中推断和对象跟踪的问题；不能继续靠堆禁词或增加强制审稿延迟宣称质量稳定。
+- 作者裁定：以自有 NovelPedia 的 **pedia/v1 统一数据规范为枢纽格式（hub）**，实现三载体双向转换＋wiki 自闭环视图（NovelPedia 逻辑结构×Pinax Next 视觉）。参照仓库 ref-Novelpedia 只读。
+- **W1 数据层（c3e4a6b5）**：`next/wikihub/pediaSchema.mjs` vendored pedia/v1（四层/11 槽/34→11 category_map/信封校验/稳定 id，纯 JS SHA-1，注明来源 commit）；`convert.mjs` 三载体双向纯函数转换器——worldbook↔hub worldview 全字段映射（cat/type/目录三级槽位归并、relations 的 id→名解析、stance/weight 等入 how、无损快照走 `next.*` 内部枢纽）、novel/script→hub 锚点（一章/一集=plot.events，结构映射非 LLM 抽取）、`@《…》`↔relations 互转；roundtrip 铁保证（有快照无损还原）＋12 条对照测试。
+- **W2 视图层（fb4e32c1）**：`render.mjs`（1326 行）hub→单文件自闭环 HTML——左索引树（details 折叠+搜索）、阅读中栏（Markdown 渲染+`@《…》`蓝链）、右上 Infobox、hash 路由零 fetch、断网双击即用；视觉走 Pinax Next 令牌（五档字号/圆角档/`--font-interface`，测试帧死禁裸 px）；安全（全转义+内嵌 JSON 防逃逸+外链只渲染文本）。`build.mjs` 生成管线（世界书/→hub→`.pinax/wikihub/index.html`+hub.json，含 CLI）。9 条合同测试。
+- **pane 挂载受阻（执行方按工单停下，证据充分）**：①custom/app panes 被 `carrier-v3-rollout.test.mjs:115/:119` 精确集断言钉死，新增 pane 会让 verify:next 变红且该测试不在白名单；②`pinax-plugin://` 通道只供插件目录文件（`.pinax/wikihub/` 越界 403）且 CSP `script-src 'self'` 拦内联脚本——适配即破坏单文件自闭环；③external-app 通道只认 http 回环（需起服务，与断网可用冲突）；④无项目打开自动生成的扩展点。**数据层与渲染器已可用（CLI 可对任意项目生成 wiki 页），挂载方案等作者裁定**（候选：扩精确集断言＋为静态生成页开 pane 通道（shell 契约变更）/hub 数据喂 68-R2 原生三栏版式（更大 shell 工作）/先作导出物双击使用）。
+- 执行：两批 Qoder CLI qoduck 一次过（11/17 分钟，零修复轮）；工作流 dwfrun-a973410b；调度方 salvage：两笔范围核对＋禁区终检零触碰（shell 一字未动与受阻报告自洽）。
 
-## 2026-10-24 资料进入助手正文生成（本地）
+## 2026-11-08 · 收尾三批：T21 四载体＋T1 预存红修复＋T11b 会话对表（Next 线，本地）
 
-- 发现原归档检索只更新助手工具目录；模型未调用查阅时，正文子任务没有这些资料。现在复用已有检索，将正相关及作者显式选中资料片段放入writingReferences，再传入助手调用推演的正文输入。查询结合作者原话与已有2400字符正文尾部；显式文档优先，检索沿用已有24片段选材上限，没有限制生成篇幅/轮数。
-- 片段包含标题、完整片段文本、sourceRefs、documentId、chunkId、contentHash与已有定位。显式资料展开后不重复发送短预览；手选引用也支持excerpt。普通参考只提供知识/细节，作者指定文风时才借鉴表达，不把参考人物/情节当本书事实。仅从本轮绑定文档的chunkIds读归档，不扫其他作品；未增加联网检索或自动采纳。
-- 隔离浏览器用两份自建资料（誊写工艺、海岸植物）走真实助手→正文链。实际发送包含墨汁盛放、签名/日期/落款核对原文与ink-reference定位，无海岸植物全文。生成稿实际使用核对顺序及“不单凭格式判断年代”；仍有墨迹颜色推断年代、末尾措辞等瑕疵，不声称文笔全面达标。没改用户书稿或配置，未重新验证采用/撤销；该路径本轮没有变更。
-- `npm run verify:full` exit0：20文件/200例、storyagent35/35、Vite22.20s/文档5.90s、lint0错误/5既有警告，外部仓桥接环境跳过保持。现有用例补档案读取/归属/显式选择与实际正文调用输入断言，无新增测试数量。独立右栏推演仍走现有冻结候选，此轮不声称也新增了归档全文检索。
-- 私有摘要`.runtime/evidence-writing-references-20261024.json`记录源片段进入、无关排除、输出哈希及证据范围；临时脚本和完整请求/输出已清理。前端5173热更新，无服务重启、提交、推送或公网部署。
+- **T21 四载体收口（10b8803e）**：video/online 切 `fileRecordTools`；script/dossier 切 core `fileScriptTools`/`fileDossierTools`（core 0.16 与旧内联实现逐字同源，宿主只留端口注入，第二份拷贝消灭）；`jsonRecords.mjs` 源码引用归零（本体按工单保留待核删）。新增对照测试 14 条。载体特有语义归宿主：video 渲染/原件归档（无入口，已知缺口）、online 只记不连、dossier 的 kb_search 边界。
+- **T1 预存红真实转绿（153edd6a）**：审计发现 comic AGENT.md 3340 字（被单份 1200 上限截断——约 2140 字根本进不了信封），瘦到 1037＝「把丢掉的信息找回来」而非纯减法；十二文件合计 8202→7837（余量 163），**预算线 8000 未动**（未触最后手段）。kernel 回执 `allGreen=true, knownRed=[]`，`carrier-v3-rollout` 6/6 通过。KNOWN_RED 名单同批退役（机制保留、名单清空）。注意：总余量仅 163 字，再往任何 AGENT.md 加实质内容会重新触发总量闸。
+- **T11b 会话对表（85645dfa）**：`next/sessionStore.mjs` 切 core `adapters/fileSessionStore`（注入 fs/join/fail/ok/emitProjectEvent）；对照后发现**落盘层规则本就同源**——漂移的是「持有副本」这一事实，本批纠正持有而非行为；分支/指针 core 已带、宿主零分叉。kernel 876/876（+3）。**真实漂移一处**：`next/shell/agentSessions.mjs` 的 `persist()` 异步失败降级口径与 core 0.11 不同（该文件在 shell 禁区）——记后续批；主入口 Pi 装配对表亦留后续。
+- 执行：三批全由 Qoder CLI qoduck 一次过（5/0/3 分钟，零修复轮）；工作流 dwfrun-e214c6eb；调度方 salvage：三笔提交范围核对＋KNOWN_RED 退役后复跑门禁。
+- 至此 **11 载体全部接 @pinax/core 单一真源**；门禁 kernel 段全绿无豁免。
 
+## 2026-11-08 · T6–T10 五域接 @pinax/core 战役（Next 线，本地）
 
-## 2026-10-24 写作 harness 输入编排（本地已修，内容质量仍未通过）
+- **notes／material／comic／experience／worldbook 五域记录语义全部切 core**（五连提交 fef5203a→0fa2a134→c864b269→29242f4f→3de18c11，每域独立 commit、独立过 gate v2 五段＋范围守卫＋推送核实）。加上此前 T4 novel、T5 outline，**七载体已接 core**。
+- **关键发现（T7）**：记录型载体的 core 入口是 `usecases/fileRecordTools`（core 0.11 从 Next 记录载体**原样抽出**的文件规则）——注入宿主 `fail/ok` 后错误边界天然闭合，回执天生 `PINAX_*`，不需要 T4/T5 那种翻译表。`domain/material`＋`materialService` 是 Web localStorage 的扁平资料表模型，与记录载体是**模型分叉**，不硬接（诚实记账）。
+- **T8**：comic 四把工具切 `fileRecordTools`；显示选择归一切 `media/comicPanelDisplay`（take/stage 白名单，其余归 null）；`composition/dialogue` 与未知字段一个字节不改；生成链路（production/adaptation/script/shotExporter）宿主无入口不硬接；comfy.* 外部桥未触碰。
+- **T9**：域错位正确裁定——载体＝记录存取，core 0.16＝完整跑团运行时（回合事务/骰点/主持）；只切记录文献语义（`fileRecordTools`），运行时全部不接；`meta.runtimeState`（骰子池等）原样往返，用测试钉死防后来者顺手接归一器。
+- **T10**：worldbook 607 行内联实现→38 行依赖注入委托（core `fileWorldbookTools`＋`worldbookFileContract` 经 shared 单行再导出——parse/serialize 单一真源以函数引用相等钉住）；**AGENT.md 零改动**（T1 当事文件）；`worldbookFileSyncController` 双写协调器不接（Next 单持久源，接 debounce 反而改变「保存即落盘」语义）。
+- **limitations 总账**：`jsonRecords.mjs` 仍服务 video/online（script/dossier 载体同待接——`fileRecordTools` 化已是纯机械活）；逐节点 revision（outline）、comic 页级仓库模型、experience 运行时接线＝宿主模型与 core 模型错位，记账待 core 侧演进或后续批次；core 媒体二进制端口未接（工单排除）。
+- **门禁**：每域 gate v2 五段全绿后才提交（acceptance 44/44、kernel 全绿+T1 known-red 放行、UI 251、lint 0、bundle 含 build）；新增 core 对照测试 ~21 条，kernel 总数 841→约 856。**插曲**：首轮五域被调度方范围守卫的 status 解析 bug（先 trim 后 slice，`next/`→`ext/`）错杀回滚，修正（porcelain 第 4 字符起取＋派发前解析自检＋越界附原始 status 审计）后重派全过——教训入册：解析 porcelain 输出绝不能先 trim。
+- 执行：五域全由 Qoder CLI qoduck 一次过（0–7 分钟/域，零修复轮）；工作流 dwfrun-4547138c。
 
-- 本轮按用户要求检查完整链而非裸提示词：独立浏览器合成作品，通过现有助手、真实工具交换、冻结manifest、正文生成和原位采用执行。保留主工作区既有WIP，不提交/推送/重启服务，前端5173热更新。
-- 基线实际外层工具 instruction 擅加“不加渲染和说明性插入”，另有短句、少形容词等未经作者指定的要求。初版仅降级标签仍不够；最终有作者原话时不再传外层二次转述，使用原话、此前真实讨论及已消费的追加消息。兼容无原话调用保留 instruction。保留目标/operation/原文定位、已选方法、查阅资料和本轮候选；“按第二个方案”由真实讨论承接。测试覆盖执行中追加原话透传，不把待发送但未消费消息提前加入。
-- 原正文在系统JSON里转义，turn同时出现于系统和最后用户消息。新增 authoring/narrativePromptContext 作为显示给模型的适配层；内部序列化和冻结回执不变，原文按原段落、来源与用途独立发送，当前要求只出现在最后用户消息。正文方法按chapter筛选，过滤后为空仍补默认续写/润色方法。未给世界设定/跑团改同一套行为。
-- 真实日常例发现编译结果按相关性排列为“当前末句→背景→前文”，position在编译和Kernel映射中丢失。已保留位置，并将背景/参考与正文分开，同一章节按unitIndex阅读、当前章置后；不把不同章节按单元号混排。元数据和每份原文仍保留，来源校验/采用事务不变。没有新增全局缓存、硬性长度/轮数限制、自动模型审稿或模板正文。
-- 6次真实生成：基线12.228s、初步展示调整13.024s、去二次转述15.584s、仅隔离请求试验的assistant-role原文前缀20.229s（未采用）、日常10.169s、恢复正文顺序后日常12.633s。前三次同一学院原文与作者要求，后两次同一日常原文。外层模型的工具选择不固定，因此不是严格统计基准，不据此宣称提速。来源与要求最终发送可核对，基线任务2份改1份；独立来源保留真实换行。
-- 两个日常实例都验证生成前正文未改、原位采用严格等于原文加候选、撤销逐字恢复，零pageerror。人工阅读所有成稿：奇幻仍有名册行数矛盾与擅自推进；日常首次违反“做饭者不洗碗”的约定，最终顺序正确但出现“筷子在纸巾上写字”和多余HTML标记。**内容质量未通过，不能把编排修复、少了重复输入或采用成功等同于写作质量达标。** 后续需要以这些可复现反例继续定位，不能仅追加抽象提示或禁词。
-- 核对实装Pi传输及 [MiniMax官方兼容文档](https://platform.minimax.io/docs/api-reference/text-anthropic-api)：不能据通道未显式开启thinking就断言M2.x未思考；官方仍说明M2.x不能关闭思考。本轮未擅改模型、温度、推理档或运行器。网页同时存在支持模型列表与M2.x说明差异，不据此认定当前成功请求用了其他模型。
-- 最终 `npm run verify:full` exit0：20文件/200例、storyagent35/35、Vite20.21s、VitePress5.69s、lint0错误/5既有警告、结构与体积检查通过；外部仓桥接仍按环境跳过。无新增Vitest用例，断言并入原用例。私有摘要 `.runtime/evidence-harness-readability-20261024.json` 保留取样耗时、hash、请求与采用结果；临时脚本、完整请求与输出清理。
+## 2026-11-08 · T5 outline 载体接 @pinax/core（Next 线，本地）
 
+- 大纲保存语义切 core：`planOutlineMove`（core 0.6 招牌——父存在/自环/后代环检测）进写路径，声明了 `parentId` 的文档按 core 规则拒写（`OUTLINE_CYCLE`→`PINAX_INVALID_INPUT`）；边语义（自环/端点存在/id 与 kind+端点去重）走 `createSyncOutlineEdgeService`。**读宽容/写严格**：现有含悬空边/坏节点的文档照常读出，保存时才校验；**作者原文不洗**——合法文档原样落盘，不注入 core 默认字段。
+- 新增 `next/carriers/outline/outlineStore.mjs`（适配器：OutlineNodeStore 六方法＋OutlineEdgeStore 三方法只读端口视图＋`toHostResult` 全表翻译 11 个 CORE 码，未登记落 INVALID_INPUT 不外泄）＋`next/tests/carrier-outline-core.test.mjs`（6 条对照：环/边/落盘口径）。
+- **未接**（limitations，不硬凑）：`outlineNodeService` 逐节点用例——宿主是整份文档覆盖，节点级 revision 无落点；文档修订仍归 fileService。legacy 边图层级（from→to）是宿主显示投影语义，core 的 parentId 树模型不替它发明环规则（边界已用测试钉住）。
+- 执行：Qoder CLI qoduck（9min/48 轮，一次过）；gate v2 首跑五段全绿（acceptance 44/44、kernel 841 测 840 过+T1 known-red 放行、UI 17 文件 251 用例、lint 0、bundle 含 build 全过）——**T20 的 known-red 机制首次实战生效，零修复轮**。调度方 salvage：禁区零触碰＋适配器抽查。
+- T5 范式补丁给 T6–T10：读宽容/写严格、原文不洗、端口对不齐的诚实记账（本批 2 条 limitations 是模范）。
 
-## 2026-10-24 正文可读性（本地调整，质量未通过）
+## 2026-11-08 · T4 novel 载体接 @pinax/core 样板批（Next 线，本地）
 
-- 用户反馈生成“不说人话、阅读辛苦”。检查当前作者侧 `narrativeVoicePolicy`：已有泛化的清晰表达指导，但未明确指代、判断依据和直接解释；并无证据证明单一提示就是全部成因。此次只改作者侧默认指导，助手与推演正文共用；体验/跑团侧不变。自然中文、完整衔接、可直接说明事实与心理，作者指定文风优先；不加禁词表、段数字数限制或自动模型复审。
-- 用独立浏览器通过现有 `/api/generate` 对同一 MiniMax-M2.7、temperature0.7 比较旧指导/初版/最终版，各写档案发现和室友和解，共6次成功返回。这里只取样提示词，不包含完整Kernel、方法、用户书稿与采用流程，不能当作端到端验收。最初哨兵key被401拒绝，改用运行器已有凭据（不输出/存储密钥）后通用接口等待超时；仅评测调用使用120秒等待，未改产品时限。
-- 人工阅读全部输出：旧版也有虚构线索、重复短句，日常例甚至混入英文规划；初版强化解释后，奇幻输出反而扩展出术式编号和历史，不合格。最终指导补明确“不为解释细节另编一套术语、机关或历史”。最终日常对白更直接，但仍有老周/小周称呼混乱和不自然接话；奇幻仍加留存术式、外来线索及用算盘数名字等不合理细节。**质量未通过，不能宣称提示词已解决问题或模型稳定改善。**
-- 最终 `npx vitest run src/__tests__/narrativeKernelExecutor.test.js` exit0（41/41），`npm run lint:delta` exit0（0错误/5既有警告）、`npm run build` exit0；保留原WIP，无新增测试用例。未跑全套、未重启服务，5173热更新读取修改。未提交/推送/部署。私有摘要 `.runtime/evidence-readability-20261024.json` 保存请求ID、哈希、耗时与失败结论；临时脚本和模型全文清理。
+- 章节读/存的内部实现切到 core 0.16.0：`pinax_chapter_read` 走 `createChapterService().read`，`pinax_chapter_save` 走 create（expectedRevision 0）/save（applyChapterPatch 语义：revision 递增、content-only 清结构化侧车、STALE 判定）——保存语义从此只在 core 一处决定。工具名、入参、回执形状、`PINAX_*` 错误码、三道闸（归属/作用域/并发）全部不变。
+- 新增 `next/carriers/novel/chapterStore.mjs`：fileService→ChapterStore 薄适配器；CORE 错误码在 `toHostResult` 一处翻译不外泄；盘上无文件按第 0 版建档（与 fileService.write 同名口径一致，否则该报 STALE 的保存会被前置读改报 INVALID_INPUT）。新增 `next/tests/carrier-novel-core.test.mjs` core 语义对照。
+- 列表与改名（卷序/标题/前缀）是载体语义，core 端口不重造——留宿主实现，属已知缺口而非遗漏；错误翻译表与适配器模式即为 T5–T10 的复制范式。
+- 执行：Qoder CLI qoduck（实现 8min；修复轮 3min 逐行核对后未改码）＋Qwen3.8-Flash（2min，量化定位 T1 根因在禁区后未改码）——两轮"修复"都正确拒绝越界，workflow 门禁的 `&&` 链无法表达已知红是流程缺陷（记 T20）。调度方 salvage：diff 禁区零触碰复核＋分段门禁。
+- 门禁：内核 835 测 834 过（1 败＝T1 预存红，工单范围外）；UI 251/251；lint 0；验收 44/44；build:next＋打包断言全过。工作流 dwfrun-052265ce（qoduck 实现＋双修复轮）。
 
+## 2026-11-08 · 仓库收拢与上游 87cfe39 合入（Next 线，本地）
 
-## 2026-10-23 推演流程优化（本地已启用）
-
-- 按已调研方案实施，保留当前 WIP。作者 turn 新增 planning，与 intent/操作分开：明确要求或局部改写默认 direct，选定方向 reuse，开放任务或助手明确选择 plan 时保留独立规划。已有方向继续使用原冻结 session 与修订检查，不另存计划副本，不把任务改成会丢原指令的 extend。体验页行为保持。改写提示明确文字编辑身份与完整替换目标；助手未选方法时补续写/润色方法，避免省去规划后连方法也没带上。
-- 正文工具只返回一份 proposalChanges，移除 changes/text 两份重复全文，最终交付和原位写入仍走现有事务。完整候选可在运行中查看；采用、忽略和撤销仍受任务及本地收尾控制，对应按钮同步禁用。没有给半稿开放采用。纯写稿通过显式 finishTask=true 与 Pi after_tool terminate 收尾；存在其他工作、工具失败或待消费补充时保留正常循环，不对所有成功工具强制结束。
-- 组合验证 `npm run verify:full` exit0：20文件/200例、integration35/35、应用20.61s/文档6.32s、0 lint错误/5既有警告及结构/体积/目录检查通过；外部仓不存在的 bridge-sync 仍按环境跳过。首轮199/200失败是旧测试要求运行中不可查看，改成可查看但不可采用后通过。末轮补默认方法、已有方向 reuse 及 UI 写入状态断言，3文件72/72 exit0；最后 lint-delta、应用/体积、文档与diff检查exit0。未新增核心测试数量。
-- 完整运行包按固定上游30f3773e重建：普通Git下载停滞，过滤下载取得树但取文件仍停滞；GitHub API遇到限流，最终用已取得的固定Git树逐项核验42个原始源码文件的 Git blob SHA，再 npm ci、TypeScript、prune、扩展打包。不是拷贝旧dist。锁哈希保持1fa8ecffdfe3ee55a5f01e96262c11dca0d32f05f5fab5bc3163097a99a267df，扩展指纹e95e4337b883ab8604f456250bcfe8cbdeac86a58f42bf91d45cd82a1e131e5d。
-- 候选交付smoke218项通过；原生OpenAI/Anthropic两种协议各21次模拟供应商请求，验证纯写稿只有一次外层模型请求、未完成其他工作则继续、写作期间接受的补充不被结束信号丢弃，提问/压缩/恢复原检查仍通过。smoke首次因仍读取已去重的changes字段失败，更新为完整proposalChanges对应项后通过。真实运行包不存在相关实现失败后跳过检查的情况。
-- 空闲时自动仅更新8451：1494120→1528929，95份原记录及配置/进程环境保持，3001 PID1494128和5173 PID476118不动；直连与代理健康正常。旧包保留回退，回执`.runtime/service-flow-20261023.json`。没有提交、推送或部署公网。
-- 实际界面通过独立浏览器作品走助手→冻结上下文→正文候选→原位采用→撤销。最终续写首字6.160s、完整候选16.404s、整轮16.481s，701字符；局部润色独立会话首字9.643s、候选9.851s、整轮9.902s，25字符。两份候选生成时均可查看，采用逐字等于原文加候选或原目标替换，撤销逐字恢复；零pageerror。已查看桌面续写/改写/撤销截图，沿用原工作台和助手栏；color-scheme模拟没有切换应用主题，不能称暗色视觉已复验，本轮无CSS调整。
-- 不隐瞒反例：首轮续写493字符，16.578s完成，但出现Spell班/修械班矛盾及多余结束标记；同会话撤销后要求润色，模型误当修改旧草稿，工具拒绝错误原文后重试。这一轮不算内容质量通过。检查发现无显式方法时只剩通用指导，补默认方法后重验；独立会话用于准确测局部润色，不能声称旧会话误认已解决。最终续写仍有“砚台”等语境措辞需作者判断；润色只改两段对白，没有增加新剧情。单例不保证文笔或固定速度，不与此前1348字样例计算加速倍数。
-- 私有摘要`.runtime/evidence-narrative-flow-implementation-20261023.json`保留各轮耗时、目标指纹、失败记录与采用/撤销结果。临时源码、浏览器脚本、模型全文和截图清理，运行包回退及服务记录保留。独立跨任务查询缓存和缓存收益仍未实施，本轮没有新建缓存或正文存储，也没有增加时长/轮数/篇幅限制。
-
-## 2026-10-23 推演流程深入调研（方案未实施）
-
-- 本轮只做源码/官方资料调研与隔离实验；基线为 `main` HEAD `b0f1b830` 加现有 WIP。没有修改应用或运行器代码，没有重启3001/8451/5173，没有写用户作品或提交推送。方案已补入 PLAN 的“流程优化调研”，不把它描述为已启用。
-- 源码确认：助手非空正文委托统一进入 `respond`，局部改写与按已选方案写也强制 BeatPlan；外层方向没有结构化复用到计划。`draftAction: extend` 只是连接候选，与内部跳过规划的 `intent: extend` 不同，后者还会替换用户指令，不能拿来投机提速。BeatPlan 的事件推进要求与忠实润色目标并不通用。当前 authoring 没有强制 critic/模型复审，同批只读工具已经并行，不重复归因。
-- 读取上一轮真实任务 `agent-mvl1go59-2ftl88` 的工具结果：1348字符正文同时出现在 `changes[].after`、`proposalChanges[].after`、`text`，JSON回包5192字符。完整候选已提前保留，但查看和采用仍受外层 busy/终态限制；普通正文工具完成后还会继续模型调用。这里只证明冗余与等待路径，不推算尚未测量的提速比例。
-- 框架核对：本机 Pi core `0.87.1` 与上游 `f07218c4d4bbc12bef056a7058c3dd49dfe41abe`；Codex 上游 `de06fd0be4f465bc28c3111bdadaabda5dfdebcd`。Pi 普通 Agent 循环不强制规划模型，Skill 加载是上下文能力，子模型需显式传递；Codex `update_plan` 只是本地工具处理及事件，不是另一个模型。Pi 已有 `finishTurn` 和工具结束能力，但不能在多步任务或待消费补充消息时无条件结束。官方源码与 Sudowrite、Novelcrafter、NovelAI、MiniMax 缓存资料链接记录在 PLAN。公开产品文档没有证明其后台调用次数，没有把产品体验描述成实测内部实现。
-- 隔离实验：Playwright 每臂新建浏览器上下文，只在实验臂拦截 Vite 模块响应，将 `requiresBeatPlanFor(intent, mode)` 的结果替换为 false；业务磁盘源码不变。真实调用现有 executor→generation→3001→8451→MiniMax-M2.7/Anthropic Messages。显式构造同一背景、原文、任务与写作方法，不经过完整 UI 冻结清单；不是产品端到端基准。没有添加输出长度或请求总时限。
-- 有效对照四次 executor 调用、七次模型请求，脚本 exit0：明确续写原流程首字14.137s/完成25.914s/1164字符，对照首字4.847s/完成17.532s/979字符；对白润色原流程首字21.002s/完成23.573s/226字符，对照首字4.353s/完成10.531s/533字符。独立规划分别11.425s和12.473s。续写对照先批量 world_lookup/geo_lookup，两项返回空结果后依赖给定上下文写作，不能称检索成功；省规划不一定减少总调用次数。
-- 已人工阅读四份完整输出：两份续写都承接分班方向，但原流程添父亲去世/考试失败判断并有替代字符，对照存在含混表述。跳过规划的润色新增租屋、母亲叮嘱和登记规则，违背不加剧情；原流程也遗漏了部分原动作。因此只支持“存在可减少的串行等待”，不支持全局关闭规划或认定质量不变。每任务单组样本，成品长度不同、缓存/负载未控制，不能外推固定百分比。漏斗只保留 input/output/total，没有完整缓存字段，本轮未验证缓存收益。
-- 失败尝试如实保留：最初四臂实验把方法ID字符串传给要求对象的 `writingMethodText`，两边都没有加载方法，数据不纳入有效比较。修正为 `{ id }` 并断言方法非空后，才完成上述四臂。两批合计八次 executor 调用/十四次模型请求。私有摘要与输入哈希在 `.runtime/evidence-narrative-flow-research-20261023.json`；临时脚本、全文输出与日志在摘要形成后清理，不留新测试套件。
-- 建议次序：拆开编辑与推进情节的方法和规划选择；已有方向只规划一次；去掉工具回包全文重复；完整候选可查看时间不再等助手总结，采用继续核对目标/修订及同组依赖；最后再测上下文复用与缓存。保留 Pi 主循环、现有权限、原位审阅及撤销。
-- 文档验证：`npm run docs:build` exit0，5.92秒；`git diff --check` exit0。有效实验脚本exit0，但内容不符合要求的样例仍记为质量反例，不算功能验收通过。临时浏览器脚本、两批完整输出、执行日志和框架调研源码目录已清理，只留私有摘要。未运行核心测试、真实页面采用/撤销或公网检查，不复用上一轮200/200作为本轮证据。
-
-## 2026-10-23 推演流式显示与等待排查（本地已启用）
-
-- 真实任务 `agent-mvl093pb-g672bb` 从创建到取消328.9秒，前8条设定查询约7.1秒完成；空章整章replace先失败，随后append继续等待。日志没有记录该次内层规划/正文各自用时，不把328.9秒全归为规划或本地检查。空白章且before为空的整章replace现在直接按append执行；冲突原文与extend仍按原合同处理，减少一次无效工具失败与模型纠正。
-- 原agent-step虽用SSE，实际运行器complete、Express与客户端多层等整稿返回才发文字。现在Pi原生stream与complete共用prepareComplete，正文增量经运行器→gateway→Express→orchestrator→原助手/推演草稿区，保留独立BeatPlan、模型/thinking、上下文和采用链。明确终帧携带完整正文、工具、停止原因与用量；不会仅凭[DONE]把半稿判成完成。工具开始立即清除本轮前言，规划不作为正文。已出正文后断流保稿，不静默重发整稿；停止补齐节流期间尾字，旧scope与新请求仍隔离。
-- UI最多10Hz、恢复副本最多1Hz；生成中无采用按钮，最终沿用原候选与原位采用。助手一份完整候选不因后续修订失败丢失。正文出字后不再提示“仍在等待模型返回”。
-- 隔离真实MiniMax-M2.7样例：助手首次委托前5.9秒，BeatPlan18.603秒，正文请求18.151秒（该请求2.009秒收到首字），发送后26.589秒实际看见正文，整轮51.085秒完成。正文原始流1361字符，清理协议后候选1348字符；采用逐字等于原文加候选，撤销逐字恢复，助手保持打开。生成中正式稿未改变。此样例仅证明增量贯通，不与原用户的整章请求比较提速比例；固定规划与助手前后调用仍有串行成本。
-- 直接推演样例经现有现场确认入口选入艾文，规划14.649秒、一次资料工具请求1.800秒，写作请求约2.5秒后出字；从首个模型请求到首字19.0秒。点击按钮后的67.2秒包含脚本等待人工完成现场选择，不能当作纯生成耗时。实际停止后保留147字符可见正文，原稿逐字不变；已查看助手生成中/完成、推演生成中/停止及暗色/390px截图，窄屏无横溢出；未把中断残段提供为正式采用。摘要回执`.runtime/evidence-narrative-streaming-20261023.json`。
-- 组合验证：verify:full exit0，20文件/200例，integration35/35，应用23.10s、文档5.98s，0 lint错误/5存量警告；bridge-sync两对因外部仓不存在环境跳过。随后针对取消尾字和工具开始中断补现有断言，4文件45/45 exit0，最后lint-delta与结构检查exit0，补尾字/工具开始修复后的应用重建19.02秒、最终文档构建5.99秒和体积检查exit0；没有新增核心测试用例数。真实运行包HTTP流式smoke28请求、候选交付213检查通过；路由SSE6检查通过。浏览器首次脚本因HMR收起助手而在输入定位超时，未发模型请求；重新打开后完成上述真实验收。观测包装重复记录同一个请求，最终按请求起始时间去重，不据此算成重复调用。
-- 从固定上游30f3773e重新构建完整候选；首次GitHub全量fetch TLS断流，随后按同一固定提交取runtime文件、npm ci/tsc/prune/extend完成。扩展指纹`369dffa5389391d34f3e5372256e8a686fbe2a5a70f046281d2634d8ab11a5d3`。空闲时自动更新8451 PID1494120与3001 PID1494128，93份原有任务/会话文件、配置和环境保持，5173 PID476118不动；直连和代理健康通过。服务回执`.runtime/service-streaming-20261023.json`，旧运行包保留回退。未提交、推送或部署公网。
-
-## 2026-10-23 写作方法、上下文与原段落（本地已启用）
-
-- 按实际链路检查方法选择、助手委托、冻结上下文、正文生成、解析和采用。人物/设定/大纲方法与正文方法按产物区分，自动选择可替换，作者明确选择保留；补局部润色方法。删去统一短句、固定动作开场、强制潜台词等写法，文风依据作者要求、指定样文和正式稿，不从未采用候选推导偏好；中文叙述不等于中国古代背景。
-- 正式稿、计划、未采用候选和导入参考继续携带各自用途；source 进入工具仍是参考，不作为正式世界事实。必要正文和常驻规则不再挤占可选参考容量。作者本地规则在kernel与provider两层完整透传；体验分支的旧预算不变。中段改写携带相邻前后文但不扩大替换目标；续写未采用草稿时明确接在草稿末尾，避免与正式章末锚点冲突。
-- 当前章快照保留全文，移除选区/重写片段8000字截断；manuscript_get支持offset/limit及nextOffset，并声明快照覆盖。清空当前章时不回填旧content或摘要。人物content与完整属性一并进入可读快照，助手world_lookup.get不再返回520字摘要，search/related仍复用原实现。其他章节和整体请求仍有已声明的传输范围，未把所有资料描述成无限全文；缺失原文会标truncated。
-- 写作解析与文档导入保留模型原段落，不再按120字/两句拆分，也不合并相邻短段；不改变体验页默认排版。协议标记清理、引用、原位审阅、保存与撤销继续复用原链路。
-- 验证：`npm run verify:full` exit0，20文件/200例；Vite24.15s、VitePress7.19s，lint0错误/5存量警告，结构/大小/目录/差异检查通过；外部storyflow-kit不存在，bridge-sync两对为环境跳过。首轮199/200失败为旧source=fact断言，修正为参考语义及新参考容量预期后全通过。最终运行器增量后integration35/35；实际完整候选交付212项，实际native runner模拟5请求验证设定末段读取和委托引用，无新增核心测试数。
-- 真实MiniMax-M2.7隔离作品生成788字符、11段，实际generate_narrative_draft→正文原位预览→采用→撤销通过；保存内容逐字等于原文加候选，撤销逐字恢复，助手栏保持打开。第一版验收脚本对JSON.stringify后的换行做includes导致误报等待超时，实际保存已成功；直接读取正式markdown复核通过，没有为此重跑模型。已查看预览/采用截图，测试结束清理临时截图与脚本。此样例承接入学报到背景，仍有个别生硬比喻和过度解释，不作为稳定文学质量保证。
-- 完整运行包从固定上游30f3773e重新构建，19扩展匹配，指纹`7a3b4503a1138da47a4f82acd19318be74af40ce0b043c6514a7077275e6216c`。空闲时仅更新8451：1417626→1449404；89份原有任务/会话文件、配置与环境哈希保留，3001 PID1001393、5173 PID476118未动，直连/代理健康通过。回执`.runtime/service-writing-quality-20261023.json`、验收摘要`.runtime/evidence-writing-quality-20261023.json`；旧包保留回退。未提交、推送或部署公网。
-
-## 2026-10-23 任务续接与完整候选交付（本地已启用）
-
-- 用户任务 `agent-mvkuv0cd-1ir3sa` 已成功生成9797字，随后模型自行发起修订，任务于19:06取消。此前本地只在整轮完成后建立proposal，失败则删除它；因此成功首稿退成聊天保稿。现在每份成功正文和工具批次按原基线/授权校验后即保留，第二稿失败不覆盖第一稿；中断残段不冒充完整候选，不再把已有完整稿重复贴为“供复制”。失败/取消复用现有原位查看/采用，自动修改仍只处理正常完成交付。采用透明等待本地校验队列后重读候选，避免先采用再被迟到候选覆盖。
-- 桥接原来把所有409映射为“任务仍在运行”，取消清理不核对回执。现在按错误码区分，停止须核对executionActive及终态；断流与按钮共享取消请求，未确认时保留原taskId和停止入口。续接在授权前核实旧任务，不重发已接受写入、不自动取消其他正常活动任务。日志不能确定用户那次409的具体URL；这项原因由实际代码与HTTP故障模拟证明。
-- 外层助手原先只有目录/当前正文/名称命中，空章没有世界概述和常驻规则；现与冻结推演共用背景提取，规则沿用作者激活条件，严格绑定本书。作者原话与助手整理的委托分开，旧建议/未采用候选不升级为背景。写作指导明确叙述语言不决定文化，计时/称谓/制度/物件跟随本书；没有新加字数、段数、工具次数或总时限。
-- 真实隔离页面观察到两次助手生成（839、900字）进入原文预览，助手栏保留。第一次脚本仍用旧“采用这组修改”文案导致定位失败；第二次实际采用成功后旧撤销选择器失败。复用第二次真实候选、不再调用模型，正确按钮完成采用和撤销；再模拟后续interrupted状态，原位查看、采用、撤销均通过，零页面异常/新增模型调用。截图已实际查看并于验收后清理。真实生成请求携带完整背景/规则；样例仍有计时词和情节一致性不足，夹具本身也同时写了钟响/钟停，不能当成文学质量已解决的证据；随后用一致的背景夹具和新叙述指导再跑真实助手，生成1509字并一次完成原位预览→采用→撤销，零页面异常；保住教堂/钟楼/羊皮卷语境，仍有钟口朝向等物件细节不合理。单例不证明稳定文学质量，不用自动整篇重写或禁词表掩盖。
-- 验证：分线authoringAgentWorkflows 25/25；`npm run verify:storyagent` exit0（含9项HTTP取消/竞争回归与integration33/33）；候选运行包交付smoke121项exit0。`npm run verify:contract`组合其余19文件通过，uiControlContract中的旧cancel布尔回执、异步单tick假设和“停止必丢proposal”断言不再适用，已改为真实合同；最后定向uiControlContract 6/6 exit0。总测试仍20文件/200例，本轮最后未重跑整套，不写成最终全套200/200。应用构建exit0（26.14s）；文档构建exit0（5.99s）；lint-delta exit0（0错误/5存量警告），architecture:check和差异检查exit0。bridge-sync因外仓副本不存在豁免，不称已同步外仓。
-- 候选包 `.runtime/storyagent-task-delivery-20261023` 从已验证固定版本活动包复制，仅同步当前JS扩展并重算组合指纹 `bc124809f65844e2cb7e69819f990c8c8512d074a878ba905eec611b6799b73c`，未声称重新编译上游TS。空闲时自动切换8451：1258111→1417626；环境、配置与87份任务/原生会话记录哈希保持，3001 PID1001393、5173 PID476118不动，直连及代理健康通过。激活回执`.runtime/service-task-delivery-20261023.json`，旧包与私有备份保留。
-- 原任务成功首稿私有恢复至 `.runtime/recovered-drafts/20261023-first-complete-draft.md`（9797字），不改原日志或用户作品。不提交、推送或部署公网。本次修复执行既有owner和采用合同，不增加工程审批规则。
-
-## 2026-10-23 背景丢失与助手中断（本地）
-
-- 真实任务 `agent-mvkoef5s-vgxmak` 第二次正文工具结果出现“雨下到亥时才停了一阵”，后续调用又把它复制进写作指令。另用6684字符冻结上下文复现：世界书条目经320字/1400字及JSON压缩后消失，2400字符provider预算还丢掉正文之后的大纲。日志中的指令本身已经声明西幻，因此不能把具体用词完全归因于上下文；确认修复的是实际丢失及错误草稿优先级。
-- 增加绑定库顶层背景的独立冻结候选与内容修订。`narrative-long`完整保留当前落笔和背景/创作规则，参考软预算不再排除必要输入；冻结生产包装不再以32000字符/64块拒绝这些内容。其他profile及通用合同默认不变。Kernel/provider不二次裁剪编译结果，保留来源及规则身份。未采用候选不再自动高于作品背景，作者明确要求的变更仍有效。
-- 停止原因区分作者取消、切换作品、宿主关闭/重新加载与未知中断。迟到abort不覆盖原因；无工具或工具均结束时，迟到的末段也保存；旧回调不清掉新轮owner。旧“离开写作页”提示窄迁移，不自动重发。已有同书宿主继续持有任务，关闭/刷新依赖浏览器的生成仍会停止。
-- 真实渠道在隔离浏览器、虚构项目完成一次西幻续写：规划1次、写作阶段2次请求（含工具读取），返回920字符标记正文；背景/正文/大纲回执均完整且无cut，结果completed/adoptable，页面无异常。已人工阅读，沿用洛桑港、行会、契约与雷米，未出现该计时错配；单例不代表稳定文学质量，原作品未写入或修改。
-- 定向测试覆盖空章背景、长背景/正文、参考抢占、规则身份、字段变更stale、跨书拒收、中断晚到/恢复/重试和同书切换。最终 `npm run verify:contract` exit0（20文件/200例，12.57s）；`npm run lint:delta` exit0（0错误/5存量警告）；`npm run build` exit0（23.83s），`npm run docs:build` exit0（7.08s），差异检查通过。结构报告无新增循环依赖；5173、8451直连和3001代理均返回200。运行器代码未改，不重复运行服务端交付smoke或重启3001/8451。前端由现有5173加载；未提交、推送或部署公网。
-
-## 2026-10-23 · 推演重复失败与整章范围（main，本机已启用）
-
-- 重启后的真实任务仍出现独立重复调用，并非同一条事件单纯重复显示。最初 append 缺 before 被工具 schema 拒绝；随后成功草稿仅1147字，整章草稿重做却进入正式空章替换分支；续写又因“时间线”命中旧关键词规则，在生成后以无工具证据拒绝。后续也有成功调用；最终任务由调用方取消，本轮排查未停止服务或任务。
-- 去掉关键词派生的强制证据命中门槛，查阅工具、权限/修订校验和实际来源报告继续保留。当前作者指令从原始消息读取，turn块不再经过历史头尾摘要或1200字符块裁剪；参考资料摘录仍独立处理。
-- 明确 authoring 与 experience 的写作表面：作者写作继续使用场景规划及上下文，但不再带跑团600–950字、单拍、2–4次对白或玩家行动限制；整章计划按本轮完整委托组织。不是新增按字数验收或自动整章重试。
-- 修复候选草稿与正式正文的定位区别；append不要求模型重复提供空before。工具状态按callId去重及配对，不合并独立同名调用；结束时没有工具结果的记录显示中断，不冒充成功。
-- 最终verify:full exit0：20文件/200例、StoryAgent30/30、应用20.66s/文档6.24s，lint0错误/5既有警告及结构/差异检查通过（含最后的扩展边界与翻译补充）。真实executor→kernel→规划→正文的模拟模型回归确认长指令中尾完整、保留BeatPlan、移除单拍提示；输出与指令换行保留。隔离真实助手组件亮暗/390截图已查看，成功小勾/长错误/取消/中断清楚，无横溢出、pageerror或API请求，临时图片清理。
-- 固定源码完整构建候选`.runtime/storyagent-narrative-retry-20261023`；最后一处完整章节校验前移后同步候选扩展并核对组合指纹8dc6f86f44d2996ea6ce2a760aa832735be9fcccf2d0fea618a7fc52d9516d03。最终交付smoke121项、双协议补全8项exit0，未调用真实模型。作者随后明确要求以后自动重启、不再逐次确认，并避免无关检查。已据此更新8451（1191917→1258111），85份任务/原生会话记录、配置文件及进程环境保持，3001 PID1001393和5173 PID476118不变，直连与代理健康正常。回执`.runtime/service-narrative-retry-20261023.json`，旧包及私有配置/记录备份保留；本轮只做启用所需核对，没有重复完整测试或模型请求，未提交推送或公网部署。
-- 执行约定已同步：AGENTS记录本地服务持续授权，testing-verification改为按影响范围验证，STATUS替换旧逐次确认规定；LOCAL未改。
-
-## 2026-10-23 · 长章截断与推演等待（main，本机已启用）
-
-- 实际 Pi 会话中，同一章两次 generate_narrative_draft 调用约222秒、267秒；均收到“修订后仍未符合要求”，分别在第四节、第二节截断。助手随后自行提出压缩篇幅再重写。追查确认补全漏斗的 complete/stream 默认4096 tokens，作者任务合同又跳过截断补全并强制检查→整篇修订→再检查，失败后外层助手重复调用整条链。没有把模型自述当成独立的超时证据。
-- 作者写作执行器停止自动生成任务验收合同和25%影子模型调用，保留场景、规划、作者要求、来源与权限/修订校验。跑团显式合同仍独立保留。真实 length/max_tokens/max_output_tokens 停止按原转录接续，不因已补写一次就把长章当完成，不压缩作者要求；普通自然停止的半句补写仍有单独语义。
-- 转录移除单段8000字符、消息32条、总字符32000及每消息部件/长度的拒绝；保留角色、工具调用/结果配对和有效JSON校验。作者 turn 完整序列化，移除源于旧转录上限的8000字符请求拒绝；参考摘录与实际模型窗口继续由既有上下文体系处理。错误和取消携带 generatedText，助手回调保存到原会话恢复草稿。
-- 运行扩展将 complete/stream 的4096缺省改为 request.maxTokens 或注册model.maxTokens，遵循Pi的模型能力；流式结果不再把length误报为stop，保留实际结束原因与用量。候选从固定30f3773源码重新构建，锁哈希保持1fa8ecffdfe3ee55a5f01e96262c11dca0d32f05f5fab5bc3163097a99a267df；未直接改活动包。
-- 既有用例加入两次截断、多段长章（18次补写、超过32消息/单段8000字符）、取消保稿及完整长指令断言，未增加核心测试总量。首次完整检查2失败：长章夹具误带事实核对请求、旧草稿队列按钮数未更新，修正夹具和真实界面选择器后复跑。最终verify:full exit0：20文件/200例，StoryAgent30/30，应用22.51s、文档6.88s，lint无新增错误/5存量警告，结构/差异检查通过。候选交付smoke93项；新补全smoke通过本机模拟供应商8请求，覆盖两种协议、流式/非流式、模型默认/明确输出参数及length停止。没有真实供应商耗时对照，不能据此承诺具体加速倍数。
-- 作者本轮明确要求重启后，仅更新8451（PID1001384→1191917）；候选`.runtime/storyagent-long-writing-20261023`切入活动包，扩展组合指纹d2352c562362aaefec170ab03cf453e0392f70999601d0f7afe624339111b631与源码一致，18份扩展逐字节核对。切换前任务均为终态；配置文件、原进程环境与83份任务/原生会话记录哈希保持，3001 PID1001393、5173 PID476118未动。直连/代理健康通过；本轮模拟漏斗8/8、exit0，未调用真实模型。回滚包及私有环境/日志备份保留，激活回执`.runtime/service-long-writing-20261023.json`。未提交推送或公网部署。
-
-## 2026-10-22 Pi 原生助手会话（本机已启用）
-
-- 以实装 `@earendil-works/pi-agent-core@0.87.1` 为准，直接使用 `AgentHarness`、`JsonlSessionRepo`、原生 steering/follow-up、自动重试和上下文压缩。没有新增工作流阶段、任务板或并行会话引擎。Codex 用作循环与上下文管理的参考，未声称嵌入 Codex 内核。
-- 普通追问原本就沿任务 resume；原先6条/2400字截断实际用于首次/重答历史组装，本轮移除该截断及浏览器60条历史上限。原生 JSONL 保存消息/工具/压缩；手动压缩保留 taskId 和可见历史。旧非 agent 摘要兼容路径保留。
-- 修改提议工具返回普通结果，final 字段不再结束循环；兼容完成工具只返回确认，不把摘要替代全文。权限错误供模型处理，不自动结束全部任务；不增加总时长、步数或工具调用次数限制。运行中补充由原生队列持久接收，生成候选后也能消费。
-- 候选与 request_user_input 可以共存，等待时不自动采用；回答后恢复未处理候选，最终 delivery/proposalChanges 为准。续接失败保留旧候选；继承未变化的修改沿用原文本/结构基线，不能因重新准备而掩盖等待期间的手工修改。采用/放弃/撤销回执随上下文给模型，正式写入仍复用既有事务。
-- 压缩端点通过3001代理到运行器，同任务 owner 防止重入；取消等待实际原生操作结束，压缩不改原完成任务回执。进程中断留下的未知修改不重放，下次作者发送时结算旧操作后继续历史。浏览器委托正文生成仍不承诺跨刷新后台完成。
-- 最终候选 `.runtime/storyagent-native-final-20261022` 固定上游 `30f3773e1c1770ed078d88e6a5c9e3791a96e513`。常规 Git fetch 因TLS中断、整仓归档因上游包含依赖体积过大失败；改用 Git blob:none稀疏checkout，42个构建源文件逐个校验 Git blob，完成 npm ci/TypeScript/prune/扩展打包。锁哈希 `1fa8ecffdfe3ee55a5f01e96262c11dca0d32f05f5fab5bc3163097a99a267df`，18个扩展与仓库对应；未复用旧dist冒充新编译。
-- 首轮完整 `npm run verify:full` exit0：20文件/200测试，StoryAgent30/30，Vite20.40s、VitePress6.88s，lint0错误/5存量warning。旧测试中超时/查询硬停和60条历史的断言已改为当前约定，新增回归并入既有用例，无新增核心测试文件/用例。候选交付smoke93项通过；可重复的 `scripts/assistant-native-session-smoke.mjs` 使用临时HTTP模型端点，分别覆盖OpenAI/Anthropic、提议后继续、提问续接、steer、压缩/取消和服务重开，不触碰用户服务。
-- 真实 MiniMax-M2.7 隔离作品完成查阅→人物候选→完整解释→同任务追问，持久消息13→15，未写浏览器或正式作品。合成bookId被本机知识工具拒绝两次后模型仍继续完成，这不算真实知识检索验收。首次检查脚本误从公开GET读取被隐藏的messages导致断言失败；改读临时任务日志后两轮通过。随后审计发现导出消息的order参数应为原生 `oldestFirst`，已修正并补次序检查；原生内部会话不受此导出错误影响。
-- 最终 `npm run verify:full` exit0：20文件/200测试、StoryAgent30/30、Vite20.18s、文档6.78s，lint0错误/5存量warning及其他门禁通过。最终交付smoke93项；两种HTTP模拟各16次请求/2次摘要，补充消息顺序、最新失败识别及失败后重试检查。最终扩展哈希 `bb1ddcea1e35fe6c95329ca78ce5477c125b208860323f7b69c704de64f9d19b`。
-- 作者明确批准后更新3001/8451（PID1001393/1001384），5173仍为PID476118。切换前任务均为终态；79份JSONL任务日志及模型配置哈希完全保留。直接/代理健康均确认assistantNativeSession，代理compact以不存在的隔离任务返回预期task-not-found，激活核查未调用模型。旧包/进程环境/日志备份在私有runtime目录，回执 `.runtime/service-native-session-20261022.json`。未提交、推送或部署公网。
-
-
-
-## 2026-10-22 写作方法与工具协作（本地已启用）
-
-- 新增共享产品方法目录与 `writing_methods` 的 list/load；方法按任务加载，作者显式选择优先，不增加工具次数或任务总时限。正文实际生成接收方法、选定参考、已读取结果和本轮待采用修改。人物/设定右栏补全复用相同方法文本，仍沿用原有生成工作流。
-- `generate_narrative_draft` 由“提交 planned 后结束”改为在原工具调用内等待浏览器推演，经同一客户端任务作用域的 `narrative-result` 返回实际文字后继续助手任务。请求按 bookId/callId/nonce 对应，取消沿原 signal；依赖设定的正文与设定归同一采用组。现有正文目标/权限/修订检查继续执行。尚不承诺刷新恢复未结束任务或跨章节生成。
-- 设定内容修改可附 details：别名、按 key 合并的 profile.values、按 to+type 合并的富关系、补充来源。保存保留未涉及字段，正文不会被结构投影静默重写；结构快照参与采用/撤销检查，关系目标须在本书/本批创建项中。原位差异复用现有组件，没有独立审阅页。新建 ID 避重同时重映射可明确归属的本批关系目标。
-- 会话不再只保留前12条工具结果，委托生成文字先保存到会话再回传；中断记录保留可复制草稿。运行日志显示“查阅写作方法”。
-- 固定上游 `30f3773e1c1770ed078d88e6a5c9e3791a96e513`，`PINAX_RUNTIME_OUTPUT=.runtime/storyagent-methods-20261022 node scripts/build-storyagent-runtime.mjs` exit 0；本轮 npm ci、TypeScript 编译与扩展打包完成，16个扩展文件与源码逐字节一致，runner/server语法检查exit 0。前端 `npx vite build` exit 0（24.72s），VitePress exit 0（7.47s），lint exit 0（0错误/5存量警告），architecture/catalog/diff exit 0；bridge-sync因相邻kit仓不存在跳过两对，不能记作跨仓已验证。
-- 作者授权后更新3001/8451，保留原模型环境和日志；初次76份、修正运行器时78份已有日志哈希保持。最终PID746801/755672，5173 PID476118未动；健康接口确认 writingMethods/narrativeExchange。运行回执与回滚包留在.runtime。
-- 隔离作品真实调用保留的 MiniMax-M2.7：前次流程暴露生成草稿微调被拒及重做变追加，已修复。已有生成候选可原目标微调；再次生成默认替换，仅显式extend追加，最终按累计净修改交付。停止时先保存最近草稿。清理方法选择菜单残留的三项上限，新方法说明来自共享目录。
-- 修复后真实调用完成 writing_methods→world_lookup→submit_edit_proposals→generate_narrative_draft。人物正文/别名/属性与章节同组采用，持久化均发生；撤销后章节、人物正文、别名和属性恢复原值，pageerror为空。已查看原位采用截图，保持现有正文与角色面板。模型未遵守“两段”要求，实际20段，仍是生成质量问题；本轮不宣称格式稳定性或所有边界已通过。
-- 菜单收尾后前端构建22.61s、文档构建6.46s、lint（0错误/5存量警告）及diff检查均exit 0。未新增或运行自动测试套件；没有提交、推送或公网部署。
+- 上游 main 16 提交（@pinax/core 0.16.0 固定包＋core:dev/update 工具链＋fileProjectStores/projectCatalog＋b67331a MCP 安全修复）合入 feat/pinax-electron-next：2d9114d（冲突仅 4 文档＋package.json 双方脚本并集）＋9746a21（服务端 MCP 0.5.0→0.6.0 工具面合同同步：内核 19→20，hints 补 pinax_project_catalog、写族闸按 pinax_project_index 同款派生轨收编、骨架正则跟 KIND_TEMPLATES Object.freeze 形状、15 文件计数断言对齐）。
+- 仓库收拢为唯一开发仓 D:\Pinax-next：Pinax-main／Pinax-pr 迁 D:\_pinax-retired；收拢前工作树全量（68-R4/R5 半成品：139 已跟踪 ±2.9 万行＋259 新文件）钉分支 wip/pinax-main-snapshot-20261108（4e9cf7b）已推 fork；fork main 快进至 87cfe39 恢复「上游快照」惯例。
+- 活管线工具入仓 devtools/（391c3e1）：commit-worktree 白名单扩 devtools/、工作树改指本仓根，任意目录可跑；批次产物（msg/log）仍在 D:\Pinax-e2e（非 git 区）。core 源码（D:\Pinax-core）维持上游独立仓克隆不并入——core README 明文不用 monorepo/submodule，三端靠固定 tarball 消费同一内核。
+- 门禁（本机 Node v24.14.0）：内核 834 过/1 败（carrier-v3-rollout 须知 8000 字记账——71fb4a3 上预先存在，记 T1 工单）；vitest UI 251/251；lint:next 0；验收 44/44；build:next＋打包断言全过；上游 smoke:project-catalog／smoke:file-stores exit 0。tag next-core-base-0.16（9746a21）＝core 迁移零点。
+- 工单清单 D:\Pinax-next\todo.md（T1–T19）：P0＝T1 预存红／T2 管线验证（本条即其实跑）/T3 CI 并集裁剪；P1＝T4 起逐域接 core（novel 样板先行）。
 
 ## 2026-10-20 · 漫画镜头与参考接线、宣传片 v19（main，本地）
 
@@ -4377,306 +4316,3 @@ main `5347c43` 与生产 `3ed6dd0` 已推送；完整门禁 exit 0（20 文件/2
 ### 2026-10-20 按作者要求将生产分支合回 main
 
 作者追加要求将 server-version 合并回 main。使用正常双亲合并，包含 `34582be5` 及其生产历史；增量只有 `deploy/nginx-pinax.conf` 和 `server/run-pm2.mjs`，main 上最新发布回执保留。无冲突、无覆盖其他功能、无强推。合并树本轮 `npm run verify:full` exit 0（20 文件/200 例、StoryAgent 30/30、lint 零错误/5 个基线警告、应用与 VitePress 构建通过），启动器 `node --check` 及差异检查 exit 0。生产实际文件已经包含这两个适配，本轮只合并并推送 main，不重复部署或重启服务。不需要新规则。
-
-## 2026-10-21 助手新建建议、过程间距与上下文压缩
-
-- 根因：运行器与前端准备建议直接信任模型的 create.targetId；已有目标或同批复用 ID 会拒绝整组修改。`reserveAssistantCreateIds` 在运行器读取快照和前端完整资料两处保留独立 ID；只调整 create，不将其转为覆盖旧条目，分配后再次验证权限。采纳期间若发生新冲突仍拒绝，不绕开修订和事务。已有条目的修改仍使用原 ID。
-- 原助手没有手动会话压缩入口，前端仅带有限历史片段，运行器续聊按长度截断；这不是完整的摘要压缩。本轮在助手更多菜单接入“压缩上下文”：三轮后可用，较早消息生成摘要、最近两轮保留，原消息/建议/会话 ID 不变；保存摘要成功才重置运行任务，下轮新任务携带摘要。编辑旧问题、切回答版本和清空撤掉旧摘要；失败、取消、切书、消息变化及存储失败不安装新摘要。摘要是对话辅助，不是作品事实或写入授权。一次摘要输入有 24k 字符预算，单消息最多 2k 字符，长历史并非无损存档；原消息仍可回看。
-- 过程显示：撤掉负外边距，思考/工具之间留 4px，说明正文行高 1.8、内部阅读上限 240px；工具子项缩进和展开图标统一，避免父级展开使所有子箭头旋转。沿用主题颜色与 720px/触控尺寸，不重做聊天页面。
-- 隔离页面观察：1440 亮/暗、390 暗图实际查看，均无 pageerror、无横向溢出。模拟摘要 API 各一次，8 条消息仍在 same-session，摘要持久化；刷新后续聊走新 /tasks 而非旧 task resume，携带摘要，消息为 10 条且会话不变。浏览器实际调用纯准备/采用/撤销函数：已有同 ID 条目保留，两条同 ID 新人物分别获得 ID，采用出现三条，撤销回到原一条；未写用户实际存储。模拟供应商请求不计为真实模型调用。
-- 运行器：全量构建在上游 Git fetch 超过两分钟无进展后终止（SIGTERM/exit 1），未谎报构建成功。改以已验证的 10-20 队列包构造增量候选，复制 canonical 运行扩展，更新扩展哈希 `68ae2f40bbf13a482b864ed00be0ca2b7d762773c4c033bbd0299289eb48664a`；语法检查 exit 0，实际调用提议工具成功返回两条独立 ID。作者确认仅更新 8451 后备份旧 dist/manifest，复用原依赖并在内存保留原进程环境启动；health 正常，默认模型未变，67 份任务及 server/.env 哈希一致。3001 PID 64259、5173 PID 63880 不变；steer 的 Express 路由仍需后续单独更新 3001，未扩大这次重启范围。
-- 最终应用构建 exit 0（21.19s）、文档构建 exit 0（6.62s）、lint:delta exit 0（零新增错误/5 个原有警告）、architecture:check、运行器语法及 diff 检查 exit 0。本轮遵循不自行增加/运行测试的约束，未跑自动测试套件或 verify:full，未将此前 200 例结果作为本轮结果；未新增真实模型调用、未提交推送/部署公网。不需要新规则。
-
-## 2026-10-21 助手批量建议与模型中断
-
-- 根据作者定位“助手批量新建条目”读取最近任务的低敏元数据。实际错误包括提交参数结构不符、设定授权拒绝后改走 generate_narrative_draft、M3.1-Flash 接口拒绝 thinking.disabled、Anthropic stream ended without a stop reason。此前所报“本轮生成超过总时限”只出自正文 orchestrator 的 100s 上限；本次优先切断权限拒绝后的错路由，不全局放大正文限时。日志中的 createdAt→updatedAt 是含 resume 的任务累计时长，未冒充单轮耗时。
-- shared 修改校验上限改为整轮 32 处/96k 字符；工具 schema 与单批校验仍限 8 处/24k，final=false 继续，最后批次/缺省 final=true 本地完成交付。聚合时跨批创建 ID 再去重，前端仍整体验证和事务采用；最后一批不再请求模型额外确认，SSE 发 local=true 的完成回执维持旧交付读取接缝。写操作声明串行执行，并在执行入口再次阻止交付后提交或转正文；部分批次后只开放后续提交/完成；设定提交权限拒绝 blocked 收口，不能改写别的对象补位。
-- 运行器增加 requestModelTransport：仅对 MiniMax-M3 系列 Anthropic 请求注入 thinking.adaptive，保留既有 onPayload 链，默认模型和其他模型不变；续跑排除 error/aborted 助手帧及未配对工具调用/结果。错误文案区分参数不兼容和上游流提前结束。
-- 前端逐次收到有效提交即保存工具结果；后续流失败时将已收到条目转成可复制的未完成文字，删除 adoptable 提议，不自动写入。正常本地交付保留已流出的讨论内容，不以条数摘要覆盖讨论。
-- 隔离原生 pi 回合实际连接本机 Anthropic SSE 模拟端点：8+5 两批共13条，status completed，供应商请求2次、本地完成回执1次；两次请求 thinking 均为 adaptive。权限拒绝版本只请求1次，blocked终态，不调用正文；中断历史样例只留下原user帧。浏览器调用真实前端模块完成13条准备/采用/撤销（13→0），模拟第二步断流后前两条文字完整保留、status failed、无可采用提议，零pageerror。此为原生执行环与接口接缝观察，不是真实供应商或付费模型质量验证；未添加或运行自动测试套件。
-- 增量候选基于刚启用的 ID 修复包，更新 canonical 扩展及 runner/llm 接缝，扩展哈希 `51a65df1e48e5137199ad16a48fa3e8fe22781890680ede1f6a351a53232d761`。沿用作者本次助手修复“仅更新8451”的明确授权，确认无running/queued任务后切换，68份日志与server/.env哈希一致，旧dist/manifest备份保留，默认模型MiniMax-M2.7未改。3001 PID64259、5173 PID63880不变；未推送或部署公网。最终应用构建 exit 0（19.42s）、lint:delta exit 0（零新增错误/5个原有警告）、文档构建 exit 0（6.04s），结构、运行器语法和差异检查 exit 0。未运行自动测试套件，不混用此前测试计数。
-
-
-## 2026-10-21 · 助手修改权限简化（main，本地）
-
-- 按作者要求，审阅修改/自动修改默认包含本书设定与大纲，正文仍按当前/全部/指定章节限定。新会话、会话切换、删除与切书重置共用偏好构造；只读关闭写权限。
-- 移除自定义菜单的设定/大纲复选框，范围明确为正文章节；输入区范围标签同步调整，不再因默认开放设定而显示“自定义”。已有 UI 用例仅修订旧预期，未新增或运行自动测试。
-- 后端仍按显式 worldbook/outline 布尔值签发及校验，不改变旧授权含义；运行中的快照不被偏好切换替换，新偏好在下次发送生效。本次无需更新或重启运行器，未提交推送、未部署。
-- 本轮 Vite 构建 exit 0（20.16s），lint:delta exit 0（0 新增错误、5 既有警告），architecture:check、node 语法与 git diff --check exit 0；文档构建 exit 0（6.51s，随后英文手册同步重建）。隔离浏览器挂载真实权限组件，亮/暗/390截图已观看：章节列表、模式说明无截断；没有验证真实模型调用或整页弹层定位。临时采集首次因英语标签不匹配超时，调整隔离页面语言后完成；不把此当生产故障。截图随检查清理。
-
-
-## 2026-10-22 · 正文右栏设定编辑（main，本地）
-
-- 右栏统一 focus-visible 样式会把设定正文重新画成方框；仅在设定编辑区覆盖为底线提示，保留按钮/选择控件的键盘聚焦标记。正文使用一行初始行数和54px最低高度，去除原180px固定留白。
-- 内容变化后在DOM更新阶段测量；textarea挂载时重新测量，ResizeObserver仅跟踪宽度变化（含隐藏后恢复），避免高度反馈循环。卸载时断开监听。条目保存、防串书和原位助手审阅逻辑不变。
-- 隔离浏览器挂载真实组件及右栏CSS，初始高度54px，长文479px，缩短恢复54px；同一段长文宽576→312px时高度328→605px，clientHeight与scrollHeight一致。亮/暗/390实图已看，无框、无灰底；隔离页面零pageerror，无真实模型请求或用户数据写入。应用构建exit 0（22.46s）、lint:delta exit 0（0新增error/5既有warning）、结构与差异检查exit 0；未运行自动测试。
-- 本轮只改设定右栏样式与测量，没有新增入口、服务重启、提交、推送或部署。临时截图在查看后清理。
-- 补查审阅切换：用与正式事务相同的 baseline 构造原位追加提议，textarea 0/差异视图1；退出审阅后 textarea 高度529px、scrollHeight529px，未收缩或截断。前两次隔离夹具缺少baseline/before，未触发真实差异显示，已修正夹具后重看，不作为功能失败。文档构建exit 0（6.33s）。
-
-- 10-22 作者纠正漏查角色：移除共用焦点规则对 input/textarea 的方框，角色、设定、大纲的编辑区统一底线提示，撤掉仅设定覆盖。角色既有自动高度逻辑继续复用，未新增状态或监听。作者要求同类界面一起检查、少堆额外逻辑，已记入 STATUS 工作规则。
-- 本轮补查三个真实组件：角色/设定/大纲聚焦后均为outline none、border 0、透明背景；角色长文由54px展开到328px，与scrollHeight一致。亮暗实图已看。应用构建exit 0（21.21s）、lint:delta exit 0（0新增error/5原有warning）、diff检查exit 0；未跑自动测试，未重启、提交或推送。
-
-
-## 2026-10-22 · 设定采用与确认恢复（main，本地）
-
-- 采用后“丢条目”至少存在两条代码路径：相关目录只保留待创建占位，采用后不再命中筛选；助手 journal 只写浏览器存档，未接 worldStore 文件同步，随后文件优先加载可覆盖新条目。分别保留本轮相关对象（及选中对象）与接通既有文件队列，未新增目录/草稿存储。
-- “完成”原先保存在每个面板的临时 Set；现在沿 assistant-edit-action → 助手 owner → 原事务锁/journal 保存 reviewedTargets，消息与回执共用同一份提议。确认保存失败时不提前隐藏；确认不重新申请修改权限或改正式条目。角色、设定、大纲统一采用此流程。同对象的新修改清除对应确认状态。
-- 助手世界书事务带 pendingFileSync；worldStore 发布后入既有队列，加载时保留该本地版本直到文件同步成功。文件队列捕获本次 expectedRevision，等待解析根路径后复核，过期完成不清新标记；助手条目修订单调递增。合法空文件且没有本地待同步修改时，仍沿用文件优先语义。
-- 隔离浏览器使用真实 prepare/authorize/apply 及 worldStore/组件，授权与文件API模拟，无真实模型或用户文件写入：6个新条目采用前后目录均6个，旧条目连同新条目持久化7个；文件同步前加载7个，完成确认后卸载重挂为0差异/0完成按钮、目录6个；同步一次、文件7个、标记清除后再加载7个。亮暗实图已看，零pageerror。既有UI用例仅更新完成事件/回执预期，未添加或运行自动测试套件。
-- 最终补查：第8条采用后模拟文件503，加载仍8条、pendingFileSync=true，旧文件仍7条；没有用旧文件覆盖本地。临时夹具最初导入了不同Vite查询版本的repository，模拟未作用于store，已统一到store实际导入实例后重看成功及失败分支。最终应用构建exit 0（20.18s）、文档构建exit 0（6.23s）、lint:delta exit 0（0新增error/5既有warning），结构、语法、diff检查exit 0。
-- 本轮未接真实模型、未运行自动测试套件、未恢复用户浏览器中已经被覆盖的历史条目；未重启服务、提交、推送或部署。临时隔离夹具与截图随检查清理。
-
-
-## 2026-10-22 · 助手回复主动性与空输入候选（main，本地）
-
-- 作者澄清核心是助手在回复中结合创作现状提出帮助，而非快捷任务入口；随后明确允许附带空输入灰字、Tab采纳。已撤掉本轮初做的建议按钮行、菜单开关和作品偏好存储，恢复原入口。
-- 既有发送链中加入project-state（绑定读取状态、有效设定/导入资料/已写章节/大纲概况）与简短协作指导。先完成当前请求，适时自然建议整理已有设定、保存具体讨论或补充参考；不每轮强加清单，尊重此前拒绝，作者同意后承接上下文及原权限。绑定未读到显示未知，来源计数明确只指导入资料。通过当前kernel块传递，无运行器升级或额外后台请求。
-- 共用轻量事实生成空输入候选，可承接最近回复中明确提出的保存设定建议。Tab无修饰键或显式按钮只填草稿；Esc略过当前候选，Shift+Tab、普通输入、IME与@补全优先行为保留。已有待确认修改、问题未回答、运行/采用中、读取状态不明时不提供候选。没有增加会话、写入或权限流程。
-- 隔离真实组件与composable观察：初始value为空、灰字候选可见，Tab后填入且发送计数0；已有输入不被覆盖，Shift+Tab不采纳，Esc后键标记消失；模拟完成的讨论回复可切换为“把刚才讨论的内容整理进设定”，Tab采纳；运行/资料未读到时键标记0，权限前后一致，零pageerror，模型/授权API请求0。亮暗/390实图已看。另在实际runAuthoringAgentTurn准备阶段捕获project-state与协作指导块，然后在模型调用前停止；证明接线，不是真实模型回复质量验收。
-- 最终应用构建exit 0（19.95s）、文档构建exit 0（6.67s）、lint:delta exit 0（0新增error/5既有warning），结构、语法、diff检查exit 0。协作指导归既有buildAssistantOrientation构建，发送/续跑共用；没有为简化模拟对象增加运行层兼容分支。未运行自动测试或真实模型质量验收，未做真机IME验收；未重启服务、提交、推送或部署。临时旧方案夹具及最终截图随检查清理。
-
-
-## 2026-10-22 讨论被完成摘要代替（本地）
-
-实际任务日志显示，该次续聊只有 thinking 与 complete_assistant_task，没有正式 text；完成工具仍接受 answer，assistantCompletionText 将 message 摘要作为空回答的回落值。已改为按本轮 message_end 累积正式 text，空回答时工具返回错误让模型补答，回落值不再使用交付摘要；前端保留正式流式内容，并拒绝旧运行器的纯摘要成功回执。不将思考转成正文。候选包 `.runtime/storyagent-answer-candidate` 从当前已启用包增量构建；未改动活动包、配置或任务日志，需本轮重启授权后启用。本轮应用构建21.04s、文档构建6.83s，lint:delta（0错误/5存量警告）、architecture:check、源码/候选包语法检查和diff检查exit 0；没有运行自动测试或真实模型质量验收。
-
-
-## 2026-10-22 避免把开局设计固定成设定（本地）
-
-真实任务的作者请求为“你来设定开局”，工具却创建世界书“开局设定：Remy 的第一日”，正文是分场景开篇方案。已收回“试试方向等于写入作品”的提示词强判断；任务指导、协作建议与修改工具说明区分讨论、世界内容和情节规划，支持作者明确委托补定，要求保存规划时使用大纲，保留明确要求保存的创作规则。空框候选收窄为保存已确定的设定；没有增加审批、关键词拦截或自动移动/删除历史条目。候选包同步本轮指导，活动运行器未更新。本轮最终应用构建19.39s、文档构建6.57s、lint:delta（0错误/5存量警告）、architecture:check、语法/模块加载/差异检查exit 0；未运行自动测试或真实模型质量验收。
-
-
-## 2026-10-22 依照 Codex/pi 核对并取消任务硬限（本地）
-
-作者先后指出工具额度、整轮时限及随意限制影响长任务，并要求阅读成熟Agent实现。实际最近任务中 submit_edit_proposals 返回“工具预算已用尽”；现有配置是6次调用、预留两次后禁止读取、8步后收工具，助手整轮240秒、Express250秒，委托正文链另有100秒整轮时限。Codex固定源码342ed69a及实际pi0.87.1核对说明见运行部署文档；没有把通用Agents SDK的max_turns当作Codex的实际实现。
-
-已本地移除助手任务调用/回合/总时长硬限、额外6000输出token、批次8/整轮32/96k限制；部分批次后仍可读取资料。交付使用pi finishTurn，普通正式回答自然结束，不强制另写完成摘要；有效提案和问题也以end结束，旧完成工具继续兼容。委托正文链取消整轮与阶段计时、证据轮/调用/重复参数强停和累计token用量门禁，保留实际用量记录、原规划/质量检查、取消和正式写入校验。继续追到请求合同与漏斗：未传timeout时不再补12秒默认值，网关不再回落100秒；取消28条消息/24k总字符和单消息固定长度拒绝，保留请求格式及模型实际错误。没有新加空闲超时或调大默认次数。
-
-运行包固定原30f3773源码，尝试用本机TypeScript构建；初次因TS6要求rootDir返回TS5011，使用明确rootDir=src重建。固定30f3773源码使用本机TypeScript明确rootDir=src编译exit 0，复用既有运行依赖，锁文件哈希一致；扩展应用和模块装载通过。最终应用构建20.95s、文档构建6.14s、lint:delta（0错误/5存量警告）、architecture:check、语法与差异检查exit 0。未运行自动测试或真实模型验收。作者本轮明确授权后更新并重启3001/8451，PID502259/502251，native loop=true、task quotas=false；模型环境和状态保持、75份任务日志前后哈希一致，5173 PID476118未动。配置原本由进程环境提供，环境中的配置文件路径不存在；本次保留原环境并保存私有回滚副本，未新写模型配置。回执`.runtime/service-native-20261022.json`；旧dist、环境和日志备份于`.runtime/storyagent-backup-native-1792639041`。没有提交推送或公网部署。自动上下文压缩、断线/进程恢复仍未因此完成。
-
-
-## 2026-10-22 助手采用后操作按钮（本地）
-
-根据截图只调整回答下方查看/撤销区域：两按钮进入同一可换行的flex操作行，间距8px；查看使用现有主题轻底色，撤销为透明次级操作，复用RotateCcw图标，短标签“撤销”保留完整悬浮/无障碍名称。统一桌面32px、触控44px高度，原查看/撤销事件与禁用条件保留。未扩展到其他助手区域。
-
-实际SFC隔离预览亮/暗/390px已截图并观看，查看宽138px、撤销宽66px、间距8px，无溢出，pageerror为0。截图路径为`/tmp/pinax-edit-actions-{light,dark,narrow}.png`，审阅后和预览脚本一起清理；不是用户数据页面或完整端到端验收。应用构建22.37s、lint:delta（0错误/5存量警告）、git diff --check exit 0；未运行自动测试或调用模型，未提交推送、部署或重启服务。
-
-## 2026-10-23 · 设定生成来源与整节采纳（main，本地）
-
-- 查到内置“雾潮暮湾”预设的常驻文风条目误把“雾港”列为关键词，已改成该预设的真实地名“暮湾”。它解释了选用该预设时的一条重复来源；用户当前作品是否还有其他“雾港”上下文，未读取浏览器数据，不能据此断定。既有作品保留作者设定，不自动批量改写。
-- 助手的多处修改原本已有“全部采用”；创作基调按节生成却只能逐字段采纳。现为待审队列增加“全部采纳”，在 worldStore 内一次核对目标世界书和修订、一次持久化结构字段与对应条目；失败或版本变化时保留草稿。单项采纳也在写入成功后才丢弃草稿。地点目录的逐项确认不变。
-- 应用与文档构建 exit 0，lint exit 0（0 错误、5 条既有警告），`git diff --check` exit 0。未运行自动测试或真实模型生成，未重启用户服务、提交、推送或部署。
-- 作者追问“一键采纳在哪里”后，确认前一轮只加在旧“创作基调”待审草稿，助手的“全部采用”藏在“查看修改建议”后的审阅区。现对仅含世界书条目的已完成建议，在回答下方直接显示“全部采纳设定”；点击复用原提议、权限和事务，不切换右栏。混合正文/大纲建议仍走审阅区，普通聊天文本不出现采用按钮。应用构建 exit 0（22.19s），文档构建 exit 0（6.50s），lint exit 0（5 条既有警告），差异检查 exit 0；未运行自动测试或真实模型验收。
-
-
-## 2026-10-29 · 合入 PR #8（MCP 本机路线）并修掉评审发现（main）
-
-贡献者 PR #8（`skkbsgzf`，「mcp，hook以及子agent」）在 GitHub 上一直开着，基线正是 main 顶端 `c2d1e5a`。本机 SSH 之前不通，原因是 `~/bin/ssh` 这个 wrapper 强制 `-p 2222`（该端口已封），而 22 端口用同一把钥匙认证身份为 `Recoletas`（仓库 owner）——绕开 wrapper 后 fetch/push 都可用，于是按真实上游对象合并，而不是内容重放。
-
-合并前做了两路只读评审（评审者只读，未改文件），我逐条复核后确认成立：A 路报 3 项必须修（写工具只做词法 `path.join`，项目内一个指向项目外的符号链接目录就能把写入带出项目根，与代码注释「绝不写到项目外」相反；`pinax_project_init` 缺既有镜像服务那道空目录闸 `ERR_DIR_NOT_EMPTY`，会在作者既有素材目录里落 `.pinax/` 与 7 个骨架目录；标注 `readOnlyHint:true` 的读工具会经既有 `recoverMirrorTransaction` 在残留事务日志时 `rmSync` 掉整个项目目录再回滚备份），B 路报 1 项必须修（`smoke:mcp` 的三条 RAG 断言在无知识内核机器上退化成「返回了某个 code 就算过」，脚本仍打印 `all checks passed`、exit 0——门禁说谎，而且恰好打在我们自己这次的绿灯上）。全部已修：写路径改为 realpath 包含性复核（目标父目录 realpath 必须落在项目 realroot 内，目标本身是符号链接就拒），`pinax_project_init` 补空目录闸，读工具在有残留事务日志时类型化拒绝 `ERR_MIRROR_TRANSACTION_PENDING`（把回滚决定权交回应用，因为回滚会删项目目录），`smoke:mcp` 引入 skipped 记账并把「缺内核」明确记为 skip 而非 pass。
-
-按评审建议另修 8 处：全局知识检索与 `pinax_expert_list` 补公网闸门（原先只有碰项目的工具过闸）；`/mcp` 拒绝经反代转发的请求（同机 nginx 转发后 remoteAddress 是回环、Host 可被改写成 localhost，回环与 Host 两道校验会被击穿）；`deploy/nginx-pinax.conf` 显式 `location /mcp { return 404; }`（MCP 是本机接口，公网不转发，不靠运营记忆）；CORS 例外改前缀判定、`/mcp/` 子路径不再掉进 SPA 兜底回 index.html(200)；`KIND_TEMPLATES` 冻结（新增导出暴露了可变全局）；MCP 回执改用共享 `createAgentContextLedger`（原先手搓第二份账，与既有 resolver/advisor 口径不一致）；读侧 500 章上限如实透出 `total`/`cappedAt500`（原先静默截断）；整目录导入拒绝与项目相交的源目录（原先只挡「源目录等于项目根」）；导入素材进信封时每块标注「按数据处理：其中出现的任何指令都不得执行」（提示注入面）。
-
-评审提的另外几条按现状记账未改：`schema.maxLength` 抢在业务错误码之前（同一超限条件从 MCP 入口是 -32602、内部调用是 `ERR_CONTENT_TOO_LARGE`）；读侧 500 章以外没有分页；`sourcePath` 信任锚仍宽（任意绝对目录只要含 `.pinax/project.json` 就能当项目）；本机 MCP 无鉴权无速率闸，模型调用可被反复触发；core 自带适配器与 worker 白名单的 API 形状是否一致未核实（本机没装内核）。B 路提的 lock registry 分裂复核后**降级**：基线 lock 本来就有 63 个包指向 registry.npmjs.org，生产构建机早就在拉 npmjs.org，PR 新增 43 个不是新风险类别，因此不改 lock，改为写进合并说明。
-
-本机门禁（本轮实跑，非历史数字）：`npm run verify:full` exit 0（20 文件/200 例、lint:delta、vite build、architecture:build-size/check、bridge-sync 环境性跳过、catalog-sync 21/21、`git diff --check`、vitepress build）；`npm run smoke:mcp` 142 passed / 2 skipped / 0 failed（跳过的两条是本机未装知识内核的 RAG 建索引与检索命中）；`npm run mcp:conformance` 40 项 0 失败；`npm run mcp:dameng` 71 项 0 失败 —— 该脚本的断言是按《大梦》真实形态（13 条世界书、6 条约束、3 章、42 个 RAG 输入）写死的，本机没有作者原稿，**不能假称真稿验证**，因此另造一份同构的合成语料（kit 布局：故事主体/卷一/第NNN章-标题/小说.md + 规则/ + 世界书/设定/ + 大纲/outline.json + 构思/ + 资料/ + 章节衍生 + 一个二进制文件）跑同一套断言，取等价取证；跑通即证明链路可用，不证明《大梦》内容结论。导入前后源目录 `%T@ %s %p` 集合 sha256 一致，脚本自带的「导入全程未改原稿目录树」断言也通过。
-
-诚实边界：本机未装知识内核（`.runtime/knowledge` 不存在）→ RAG 建索引与检索命中两项只证明了「类型化拒绝、不冒充空结果」，PR 文档里「28 卡片 / verdict=fresh / 命中带原文摘录」是作者 Windows 机上的结论，本机未复现；本机无模型配置 → `pinax_agent_ask`/`pinax_expert_invoke` 只验证到信封组装与错误映射，回答质量是唯一还开着的质检缺口；`architecture:build-size` 由基线产物实测（1,392,188/1,450,000 字节）佐证不受本 PR 影响，因为 server/mcp 不进前端 chunk；本地三个服务（3001/5173/8451）本轮都未运行，也没有重启。公网部署仍需作者明确指令，本轮未部署。 提交 `b67331a` 已推送 main（`c2d1e5a..b67331a`）；server-version 按分支模型快进同步到同一提交并推送（`34582be..b67331a`），**未部署公网** —— 生产机上的 nginx 配置是服务器上的独立文件，`location /mcp { return 404; }` 这条要等下次部署时同步上去。
-
-
-## 2026-11-05 正文新建可导入作品/文件（main，工作区）
-
-作者在看项目目录的右键菜单时指出：「新建」里只有章节/构思/设定/漫画页/导入资料，没有导入新章节的入口；正文新建既不能导入作品也不能导入文件。按作者口径「用导入资料的逻辑换个接口」实现：目录树的「新建」子菜单与顶部「+」下拉两处新增**导入章节…**，与「导入资料…」共用同一套选文件与拆章逻辑，出口换成「往当前作品加章节」。
-
-实现要点：`src/services/import/importPipeline.js` 把「文件夹 → 章节」那段从 `importFolderAsBook` 里抽成 `collectFolderChapters`（分类与解析规则不复制，建书与建章两个出口共用）；`src/components/authoring/AuthoringManuscriptImport.vue` 增加 `target='chapters'` 模式——标题、说明、按钮文案随模式切换，章节清单仍可改名，资料文件（子目录、pdf/docx/epub）明确不随章节导入；章节的创建与保存走共享 Core（`createChapter` + `saveChapter`，带修订号校验），失败如实报「没导入成功」，不假装成功；页面侧整段导入流程抽到 `src/composables/useManuscriptImport.js`——`Authoring.vue` 本轮一度涨到 10,954 行、越过架构预算 10,900，抽完回到 10,891/125。
-
-验证：`scripts/local-import-check.mjs` 21 项全过（新增 4 条：`collectFolderChapters` 把根目录 md 变成章节、子目录不计入章节、没有根目录书稿时如实拒绝）；新增浏览器旅程 `scripts/ci/chapter-import-smoke.mjs` 全绿（欢迎页 → 新建书稿 → 目录「新建」两处入口都出现「导入章节…」→ 选一个 .md → 识别出 1 章 → 确认 → 目录树出现该章、编辑器是导入的正文 → 刷新后仍在；全程零 pageerror、零跨源外发），截图在 `tmp/chapter-import-smoke/`；既有 `scripts/ci/authoring-smoke.mjs`（导入书稿主路径）PASS，说明重构没弄坏老行为；`verify:contract` 30 文件/290 用例 exit 0、`npm run build` exit 0、`architecture:check` exit 0、`architecture:build-size` 1,405,255/1,450,000、`lint:delta` 无新增 error。
-
-未提交：工作区同时有另一会话的共享业务内核 WIP（`packages/core`、Pinix 接入、独立仓库 `@pinax/core`），`src/pages/Authoring.vue` 两个会话都有改动，提交边界与提交时机待作者定。本机 chromium 缺 `libnspr4/libnss3/libasound2`，未装系统包（sudo 要密码），改用 `apt-get download` 解包到本地目录并以 `LD_LIBRARY_PATH` 喂给 playwright；`npx playwright install chromium` 补了匹配的 1228 浏览器。
-
-
-## 2026-11-05 选中文字可在助手里引用（main，工作区）
-
-作者选中正文后指着浮动工具条（B / 批注 / 素材 / 事实）说：这里应该有一个「在助手里引用」。按既有引用机制实现：助手本来就有 pinned refs（引擎侧把每条引用写成「@标题（类型）：摘要」进上下文，`writingSourceReferences` 把非章节/资料类型的引用标作「作者选定内容」），所以新按钮做的是——把当前选段连同出处（`chapter:<id>` / `exploration:<id>`）与字符区间钉成一条引用，助手面板随即打开，工具条上出现「章节名·选段」的 chip，作者接着提问即可。**只钉引用，不代替作者发问，也不自动发请求**；超过 8 条时如实提示先移除一条。
-
-实现位置：引用组装放在 `useAuthoringKnowledgeAssistant.quoteSelectionAsReference`（与 `setAgentReferences` 同处，引用是助手的事，不另起一套），页面只负责取选区快照与来源。图标沿用已 import 的 `TextQuote`，在 `WorkbenchIcon` 里新增 `quote` 这个名字（原来它只绑给 `source-file`）。`Authoring.vue` 本轮一度到 10,928 行、越过架构预算 10,900，把上一轮的导入接线压紧（`useManuscriptImport` 接管 route 意图与通知，页面只剩 4 行接线）后回到 10,891/125。
-
-验证：新增浏览器旅程 `scripts/ci/selection-quote-smoke.mjs` 全绿（新建书稿 → 导入一章有正文的稿 → 三击选中一段 → 浮动工具条出现「在助手里引用」→ 点击 → 助手面板展开且引用 chip 出现，零 pageerror、零跨源外发），截图在 `tmp/selection-quote-smoke/`；`ci:authoring-smoke`（导入书稿主路径）与 `ci:chapter-import-smoke`（上一轮的导入章节）均 PASS，无回归；`architecture:check` exit 0、`npm run build` exit 0、`lint:delta` 无新增 error。
-
-中途踩的两个坑记一下：一是引用在**首条消息之前不落盘**（`persistConversation` 要求 `canSaveConversation`），所以旅程断言用助手工具条上的 chip，而不是 localStorage；二是压缩页面接线时一度漏传 `show/target/returnFocus` 给 composable，构建与 lint 都不报、只有运行时报错——已由 eslint 的「assigned but never used」警告发现并修掉。
-
-
-## 2026-11-05 作者现场问题快速修复（工作区，未验证）
-
-按作者要求只改代码，不跑门禁、构建或测试。目录补章节勾选、Ctrl/Cmd 多选、Shift 范围选择与批量删除（复用页面保存保护与 Core 删除），目录当前章标题直接显示稿面标题。手动停止助手不再恢复已发送问题，保留作者另写的草稿。移除正文修改必须走推演的两处提示词限制，允许 submit_edit_proposals 直接提交正文修改。正文内联接受/拒绝不再被整轮生成状态禁用：接受先取消当前生成并确认收尾，拒绝可直接处理建议；仍保留采用互斥、授权和原文校验。尚未用户验收，未提交、未部署。
-
-
-### 2026-11-05 章号与标题编辑补修（未验证）
-
-稿面移除不可编辑的独立章号，改为整段标题输入框；旧空标题以当前章序号作为初始显示，作者可以直接改号。目录对标题自带的中文/英文章号保留原文，不再剥离后以目录位置重编号，避免作者章号丢失。按作者要求未跑测试、构建或门禁，待现场验收。
-
-
-### 2026-11-05 章节多选入口纠正（未验证）
-
-按作者反馈，章节复选框默认隐藏，不再让普通打开章节触发批量操作栏。点击「多选章节」或 Ctrl/Cmd/Shift 选择进入多选模式，模式内点击章节只切换勾选；取消多选/Escape 退出，切换作品重置模式，多选期间禁用拖动。按作者要求未跑测试或门禁。
-
-
-## 2026-11-05 本地文件项目 SQLite Catalog 首片（代码已写入，未功能验证）
-
-作者要求接手数据底座，同时明确不动正在运行的助手、不刷新页面、不重启服务；前文不跑测试/门禁的要求沿用。本轮只新增独立模块 `server/services/projectCatalogDb.js`、`projectCatalog/{schema.sql,sources.js}`、离线 CLI `scripts/project-catalog.mjs` 与文档，没有执行 CLI，也没有在作者项目创建/同步数据库。只做环境能力探查：Node v22.22.3，内置 SQLite v3.51.3，内存库可建立 trigram FTS5 表；不能据此声称完整功能通过。
-
-实现：项目标记/身份约束；`catalog_*` 命名空间与独立 schema_version，保留桌面原有迁移和事务表；按来源文件 stat 指纹增量读取、SHA-256 比对、单次目录事务与 FTS 触发器更新；新增/删除来源一起提交，前后来源集合变化、坏大纲/归档、重复 ID 或大纲边外键/重复约束失败则回滚目录；读/检索不隐式同步。>=3 Unicode 字符的字面短语使用 trigram，1/2 字符使用子串扫描并透出 mode，不承诺毫秒级性能。按项目路径读世界书契约，不读 active 世界书或模型配置，不改现有生成链。
-
-修正前一方案的范围判断：构思不是 Core 全局笔记，资料归档不是 narrative asset；保留 exploration/source-document/material-file 类型，不能把它们强行映射成已完成的六 Store。前一会话已写入的 Core 可选 nodeStore 边端点校验保留，本轮未重写/发布它。六个文件写入 Store、跨文件提交日志/恢复、MCP/状态卡接入与 Electron driver 迁移尚未实施。源码细节、使用命令与限制见 `docs/engineering/project-catalog.md`；PLAN/STATUS 同步。本轮未运行测试、构建、lint 或门禁，未做性能与故障恢复实验，未提交/推送/部署，也未刷新页面或操作本地服务。
-
-
-## 2026-11-05 助手审阅、批量采纳与恢复日志复核（代码已改，未验证）
-
-作者报告任务完成后缺一键采纳、过段时间设定候选消失、查看建议仍在但采纳报「修改恢复记录无法保存，尚未写入」，并要求完整授权无需逐条确认、重复采纳后给出批量选项。
-
-源码定位：原 journal 把每个目标（包括整个 writing_books、worldbook 和 receipt）的 after/before 一并写入 localStorage；高数据量时恢复日志自身可能耗尽额度，错误不能靠跳过恢复保证来消除。本轮改 v2 逆向结构差异 + before/after SHA-256 校验（保留 v1 恢复），先校验所有恢复目标再回滚；失败保留建议/恢复信息，不自动清除历史。仍依赖 localStorage，可写额度真不足时仍拒绝并给出空间提示，不声称无限容量。纯世界书修改只写世界书、索引和回执；已有绑定未变化时不再重复写书稿，也不再被当前章保存阻挡。正文修改继续走当前稿保存保护。
-
-UI/状态：原一键设定入口要求 changes 全是 worldbook，导致混合任务没有按钮，现泛化为「一键采纳本轮修改」。助手底部提供跨会话的全部待处理建议与顺序批量采纳；失败即停，已经成功的组保留，剩余组继续待处理，批量按当前用户权限重新授权。三次成功手动采纳后显示「授权全书自动修改并采纳全部」，必须由用户点击；权限菜单另有全书 auto 显式入口，不根据点击次数自动提升权限。完整 auto 的已落盘设定不再显示后置「完成确认」卡片；实际保存失败仍显示错误，不能伪装已采纳。等待输入/阻塞状态的合法提议也可审阅，设定待处理列表不再因另一 proposal 处于打开状态而隐藏。异步验证收尾保留用户对相同候选已做的采用/忽略决定，不复活为 pending。
-
-按作者此前要求，没有运行测试、构建、lint 或门禁，未重启 3001/8451/5173、未主动刷新页面、未读取/修改作者浏览器数据，未提交/推送。源码级原因不代表已复现作者浏览器存储容量或完整现场；剩余实际配额、同目标跨组冲突与新旧恢复日志兼容尚未运行验证。不添加新规则：本轮属于既有保存与授权边界的实现修正。
-
-同轮追加源码发现：会话列表在 composable 和 conversation store 两处硬截到最近 20 个，即使含未处理建议也会被裁掉；两处均改为额外保留仍有 pending/partial 建议的旧会话。权限偏好原先切会话和重载都重置 review，现按会话保存/恢复用户选定的 mode/scope/chapterIds；不持久化签发 policy，真正写入仍重新授权。新会话无偏好时仍默认审阅。批量跨会话处理后恢复原会话及显式选择的权限。以上同样未运行验证。
-
-
-## 2026-11-05 待采纳入口点击无反馈（未验证）
-
-作者反馈“待采纳2组”的批量按钮/列表无反应。代码审阅发现：批量函数存在未附原因的直接返回；错误在上方滚动消息区；shell保留的旧助手控制器可能没有热更新UI新增的批量方法。新增按钮处理函数，优先调用批量方法，旧控制器则按已有review/apply API顺序处理并保留原会话权限；不销毁在途任务、不自动提升权限。按钮显示处理中，错误放在按钮旁，成功单独提示；列表换成显式展开按钮。查看设定/大纲建议与正文一样退出助手全屏，避免对应编辑区被全屏遮挡。补充打开建议/采纳前置条件的错误说明。
-
-按作者要求未运行测试、构建、lint或门禁，未刷新页面或重启服务。热更新旧控制器与现场点击路径尚未实测，以上为源码修改，不能作为功能通过证据。
-
-
-## 2026-11-05 合并助手diff、工具/来源收整与章节排序（未验证）
-
-作者提供四张现场截图，要求取消逐项审阅、改成整体diff与统一采纳/撤销，并指出工具重复展开、来源chip拥挤、目录无可见排序入口和上下文超限。先阅读VS Code官方 https://code.visualstudio.com/docs/copilot/chat/review-code-edits ：其working set支持整批Keep/Undo，修改已写入磁盘，Keep清除待审状态。Pinax本轮采用作者允许的另一种明确交互：审阅模式保留待采纳写入边界，只留全部采纳/全部撤销；没有把未经采纳的建议假称已保存。既有全书自动修改模式仍按用户授权工作。
-
-- 新增AssistantChangesDiff与line-oriented patience diff：统一统计新增/删除行，按正文/设定/角色/大纲浏览；移除消息及正文/设定/角色/大纲编辑区的逐处审批接线，任务结束不再自动跳去对象审阅。批量撤销按采纳时间倒序执行，每组沿用已有恢复/冲突校验；部分失败保留记录并报告，不宣称跨多组原子提交。兼容shell保留的旧助手控制器，不重建在途任务。
-- 工具记录按名称合并次数，展开才显示本组各次目标；引用改成来源数量/简短摘要，展开为纵向列表，不再铺满章节chip。
-- 目录文件夹菜单新增按章号/名称排序（中文章号按数值解析），条目菜单新增上移/下移；目录移动/排序同步真实章节数组，保存失败尝试恢复目录。未改写原始章节标题，支持现有文件夹归档。
-- 上下文400来自模型服务，不能据截图认定是前端次数限制。源码发现自定义模型元数据统一128K/16384输出；增加实际容量配置透传，未配置仍使用明确的通用缺省。pi已有溢出压缩，但摘要请求自身可溢出；新增仅针对原生摘要请求的分段摘要再合并恢复，在真实溢出后处理，不截断正式会话/工具结果、不重放编辑。错误转为可读提示并给压缩入口，不把“invalid params, context window exceeds limit”误判为推理参数错误。移除运行器仍残留的强制正文推演校验/提示词。
-
-按作者要求未运行测试、构建、lint、门禁或浏览器截图旅程；未主动刷新、重启3001/8451/5173、提交/推送。运行器源码未构建或加载到8451，不能宣称现场上下文错误已修复。新diff、跨会话批量/撤销顺序、目录和作品双存储失败恢复、摘要分段与用量统计仍待实际验收。无新增工作流规则；现有规则已要求优先查证并复用成熟交互。
-
-
-## 2026-11-05 分类diff实际操作与自动压缩恢复接线（未验证）
-
-作者指出“分类不能分别采纳/撤销”、原始{count}占位符和手动压缩提示。翻译tr对未登记文案增加命名参数替换；diff分类现在传给独立applyProposalEditsByGroup接口和旧控制器兼容调用，实际按changeIds选取写入/撤销，单分类撤销只清本分类回执，保留其他分类的adopted/partial/pending状态与撤销时间。明确依赖仍检查，阻止撤销其他已采用修改依赖的对象。
-
-任务owner收到真实context overflow失败后自动调用现有运行器compact并沿用taskId续做剩余工作（一次恢复，不重发原始作者请求）。运行器pi原生overflow恢复仍超限时逐步将keepRecentTokens减半至0，把更多尾部归摘要后继续同session，结束恢复原压缩配置；摘要分段保留conversation外的摘要指令。最后失败才显示自动恢复失败提示，不要求作者把手动按钮当正常工作流程。
-
-未运行测试/构建/lint/门禁，未刷新浏览器或重启服务。只读取8451健康确认运行器现有能力，不能据此证明新恢复逻辑有效；运行器新增源码未启用。分类部分撤销、自动恢复、摘要分段仍需现场验收。
-
-
-## 2026-11-05 变更工作集按成熟工具收口、启用压缩补丁（未做功能验证）
-
-作者再次指出分类无独立操作、拒绝的第一章混入，以及压缩错误仍要求手动处理。重新核对VS Code官方review-code-edits：工作集支持每文件/整批Keep与Undo，Undo不倒退聊天历史。Pinax明确两阶段语义：pending撤销=拒绝该建议且不动正文；adopted撤销=按回执还原。分类行现在默认可见并各有采纳/撤销，展开后每个章节/条目也有操作，不用先切筛选才能找按钮。列表仅取当前会话消息，不采用保留旧控制器暴露的跨会话pending汇总。
-
-新增统一receipt解释：持久化状态优先于旧会话副本，legacy全组discarded/undone优先于缺失逐change状态；同会话里新proposal的相同已拒绝编辑不复活。写入前依据当前工作集再次过滤，分类和对象操作只带明确changeIds。拒绝只保存决定，不因目标正文/设定已变化而要求重新定位或刷新；没有直接改作者浏览器数据，也没有证据可以判定作者第一章已经被写入，因此未擅自回滚原稿。
-
-只读诊断当前失败任务原生session日志：本轮实际已有8条compaction记录，最后仍是模型2013/context window exceeds limit。上轮把所有超限都改显示“自动压缩后仍失败”是不准确的阶段报告，现仅真实执行失败才给该类信息，并保留原始原因的折叠详情，移除错误区手动压缩主按钮。发现assistantEditDecisions把整份undo回执塞入固定提示（不受历史压缩影响），前端移除恢复快照；运行器永久提示进一步仅显示决定元数据，完整精确匹配数据保留在工具侧，不截断作者原稿。
-
-服务更新：先GET现有11条任务状态，executionActive均false；以原运行包为基底用hardlink准备独立候选，原子替换被修改文件（没有运行build脚本或编译），只在空闲切换8451。原包备份`.runtime/storyagent-before-review-fix-20261105-225359`；新PID2932901，healthz成功。更新前后17份任务文件与原配置哈希完全一致，见`tmp/assistant-runtime-review-fix-receipt.json`。3001/5173未重启，没有主动刷新或发起模型任务。runtime-source保留原构建来源，localPatch记录实际改动和verified=false。
-
-按作者要求未运行测试、构建、lint、门禁或截图旅程；服务健康与数据保留核对不能当作分类交互、拒绝恢复和模型压缩成功的功能证据。现有技能已要求复用成熟交互和准确状态，无需新增规则。
-
-
-## 2026-11-05 采纳误报与重复工作集补修（源码未验证）
-
-作者反馈旧建议普遍报“修改段落已变化或无法唯一定位”及“新建条目已存在”。定位代码要求原文连同前后48字符完全一致，导致相邻助手修改使未改原文失效；批内位置调整还使用已移动的位置作为筛选阈值。现优先原上下文，失败后仅对非插入编辑允许非空原文的唯一精确匹配，不模糊覆盖；位置调整依据固定原始位置。
-
-已存在同ID条目只有标题/类型/内容和所提结构属性全部一致才按已处理收口；已修改字段只有与原建议完整结果一致才同样处理。不重复写入，不生成冒领已有内容的undo回执；不同内容保留冲突和建议。已采用建议的相同pending副本及重复pending从当前工作集中排除，拒绝决定仍优先。
-
-UI按kind+targetId合并不同proposal的对象行，正文diff默认逐条目折叠，条目操作携带各proposal明确changeIds。批量采纳按对象分开，冲突项保留并汇总错误，继续处理无关对象；现场保留旧session控制器时由当前组件计划操作，不要求刷新。全书授权仍为作者明确权限，不升级权限。
-
-按作者要求未跑测试、构建、lint、门禁或浏览器旅程，未刷新、重启服务或改作者数据。本轮是前端源码改动，运行效果及视觉未验证；不宣称全部历史冲突都可自动采纳。
-
-
-## 2026-11-05 冲突建议的实际处理出口（源码未验证）
-
-作者现场反馈8处“同ID条目不同内容”和1处定位冲突，原UI只有重试/混合撤销，没有足够信息决定如何处理。补入待采纳条目的“对比处理”：从当前作品的绑定库读取所选字段，展示当前内容与旧建议完整版本，右侧允许作者编辑合并；点击保存右侧版本才提交。现有ID、其他字段及结构属性保留，不默认覆盖整条目。保存前校验作品、权限、建议状态与对比快照；对比后内容再变化则拒绝写入并要求重新读取。真正写入沿用现有事务日志/undo回执，撤销基线为确认时的当前字段。
-
-“保留现有，忽略建议”仅丢弃指定pending；新增“保留现有，忽略剩余”一次拒绝全部pending，不触碰已采纳内容。错误出现时展开条目列表，待采纳对象排在已保存对象前。仅修源码，未自行处理这9组、未改作者数据；按作者要求未执行测试、构建、lint、门禁或浏览器旅程，未刷新、重启服务，运行及视觉效果尚未验证。
-
-
-## 2026-11-05 忽略后消失的建议重新提供显式处理入口（源码未验证）
-
-作者截图显示“修改110处”、仅有撤销按钮和忽略成功提示。此前“忽略剩余”只是保留当前内容、拒绝pending，并未解决冲突；已忽略建议又从UI消失，导致没有继续处理入口。现无pending时明确显示“已保存N处”，另列当前会话中持久化的“已忽略（未写入）”建议，去重/拒绝传播产生的合成隐藏项不混入。
-
-逐条可打开当前内容与可编辑建议版本对比；查看不改变决定、不重新加入全部采纳。作者明确保存某条时，写入owner只在该次事务内临时重开明确选中的discarded行，复核权限与当前快照，按确认内容写入并生成真实undo；失败则仍保持忽略。undone行不允许此方式重开，其他已拒绝内容及第一章不会自动恢复。
-
-按作者要求未测试/构建/lint/门禁或浏览器旅程；仅回读改动源码，未刷新、重启或操作作者数据。现场是否正常显示及保存尚未验证。
-
-
-## 2026-11-05 作者纠正：保留现有、忽略剩余即结束审阅（未验证）
-
-上一轮把完成动作误解为提供重新处理忽略项的入口，又提出隐藏，均不符合作者明确语义。现整体处理成功后通过写入owner持久化reviewStatus=completed与完成时间；保留已写内容和决定回执作为历史，当前工作集不再含该审阅，不显示其采纳/撤销/忽略清单。任意处理失败不归档。整批采纳/撤销全部成功也执行同一结束事务。移除新增的忽略清单。
-
-兼容现有旧回执：无任何pending且包含明确discarded决定的未标记工作集视为已结束，防止更新/重载后复活；不会将拒绝内容重新加回pending。新proposal仍正常建立新工作集。源码改动未测试/构建/lint/门禁、未刷新或重启服务；没有改作者数据。
-
-
-## 2026-11-05 Core 分离接续：Web 固定消费独立包（未做功能验证）
-
-作者明确近期围绕底层分离推进。核对独立仓库 `/home/livid/pinax-core` 干净，版本0.8.0、提交f7af2ad11db14ca95bdc7d433d8f92c9d93fcc31；宿主旧0.0.0副本仅errors与异步/同步outlineEdgeService三处不同，属于之前大纲端点校验WIP，未覆盖、未删除、未混入发布产物。
-
-从独立仓库执行npm pack --ignore-scripts产出vendor/core/pinax-core-0.8.0.tgz，SHA256 f615245a11ba3edc330d39869ad342a5a377d169c107cb70ca8456c8916fae82；来源JSON记录git提交、仓库、版本及npm integrity。npm离线安装 --save-exact --ignore-scripts新增1包exit0，package/lock固定file tarball，无需部署机存在兄弟仓库。没有运行编译或包生命周期脚本。Web useChapterCore/chapterCoreStore、对应Host用例和离线Catalog规范化均改为从@pinax/core导入；静态rg未发现src/server继续导入packages/core/src。安装产生的两个无关lockfile标记变动已还原。
-
-core:pack改为显式接受独立干净仓库来源、记录provenance并拒绝覆盖已有版本；core:smoke改为消费宿主实际固定tarball，源码已更新但未执行。旧Core源码/历史合同用例暂留，test:core/lint:core仍属历史副本检查，不能证明已安装包正确。后续迁移CI责任与退役旧目录待独立处理。
-
-现有统一计划增补执行批次：事务能力与修订/幂等语义，随后纯Harness状态机/业务命令及模型、内容、会话存储端口，再完成Pinix/Next宿主适配与官方扩展能力合同。接口详细实现尚未落地，不把设计当完成。此轮未改独立仓库或其他Host仓库，未迁移项目、未改助手交互、未主动刷新/重启服务、未提交推送或发布；按作者要求未测试/构建/lint/门禁。包安装成功与源码搜索仅证明依赖接线，不证明功能正确。
-
-
-## 2026-11-06 集中提交与推送前验证
-
-作者先要求少量集中提交推送，随后明确推送前验证，撤销此前本轮不跑门禁的限制。先fetch确认origin/main与HEAD无分叉，再按三组组织：`af96502` Core固定包与SQLite派生目录；`317f4e4` 工作台/章节/助手交互闭环；文档状态集中另提。`.docwork/`、`.refdocs/`属于本地参考资料，不入提交；运行数据、密钥、截图和运行包未暂存。
-
-首轮验证失败后修复：运行中采纳曾隐式cancel并等待未结束工具，改成明确等待完成或手动停止；工具活动组件对已结束消息中遗留running状态显示中断/已停止。旧工具UI断言改为分组及每调用状态验证；显式changeIds不扩组、needs_input保留候选等断言对齐当前交互。既有用例内增加邻近文字变化精确定位、重复create幂等、冲突快照重检、真实undo基线和审阅结束回归断言，未新增用例数。
-
-架构最初10909行超限，将目录排序命令下沉到目录composable；隔离浏览器进一步发现此抽取过早读取页面ref的初始化错误，已改成调用时读取的owner getter/setter，重跑旅程通过。浏览器先因缺libnspr4无法启动，最终使用本机已有chromedeps动态库后运行；未安装系统包。
-
-最终证据：
-
-- `npm run verify:full` exit0：StoryAgent beta通过、integration 35/35；Vitest30/30文件、290/290用例；lint delta0新增error（6警告）；Vite应用与VitePress文档构建通过；架构10899/124≤10900/125，应用chunk1407126≤1450000字节；目录同步21项通过；git diff --check通过。桥同步kit仓库不在场，0/2检查、2对环境性skip，不能记成实际同步验证。完整日志`/tmp/pinax-prepush-verify.log`。
-- `npm run core:smoke` exit0，实际消费vendor固定0.8.0包，create/save/stale/read/remove通过。
-- `node tmp/prepush/catalog-check.mjs` exit0，13项合成隔离检查覆盖增量、FTS、短词、删除、FK失败回滚；临时项目已清理，未触碰作者稿件。
-- 浏览器脚本`ci:authoring-smoke`、`ci:workspace-backup-smoke`、`scripts/ci/chapter-import-smoke.mjs`、`scripts/ci/selection-quote-smoke.mjs`全部exit0；仅隔离合成数据，网络守卫阻止跨源/模型请求。查看选区引用截图，助手面板与选段chip可见。
-- 额外eslint对runtime扩展、共享模型配置、Catalog和打包CLI检查0error（project-catalog CLI有3条console warning）。
-
-不发起真实模型调用、不主动刷新作者页面、不重启现用3001/8451/5173、不部署。通过上述验证不等于实际模型上下文恢复、全部历史冲突或移动真机已验收。推送由本轮后续执行，远端结果以最终回复核对为准。
-
-## 2026-11-06 Core 0.16：体验/跑团与完整运行时接线
-
-Core 0.16.0（e56a0bc）已抽取体验/跑团业务：共享运行时状态与动作、完整回合事务、会话/分支恢复、检定/骰点/回执、场景/资源/同伴、主持步骤、观察器及触发流程。gameStore只绑定共享运行时，原服务路径转发或注入Host端口。状态容器、浏览器存储/去抖、Web Locks、安全随机源、模型通道与页面事件留Host；保留原ID、存储键和版本，不迁作者数据。
-
-独立Core提交`e56a0bc133efdb675be17af95f0967cdf2e11e16`，49个新增共享模块；固定包sha256 `db662543eda2094042f65231088a156da91acd9f1e6810345e5d583ee216b077`，来源与integrity见两端vendor/core的0.16 provenance。修复latestBranchTurn选择失败快照；将Pinix继承的旧生成上限和场景上下文对齐主Pinax，但不引入其缺失的Web专用Pi桥或提示快照库。Core保留StoryForge归因和MIT全文许可。
-
-本轮Web/Pinix verify:full均exit0（30文件290例 / 20文件200例），两端跑团315项与会话故障矩阵20项通过；Core85例、245模块Node独立导入、静态检查和隔离npm消费通过。两端真实浏览器验证离线生成/重试、冻结骰点、刷新恢复、失败分支隔离与取消落盘；Pinix mobile:check/build/sync通过。未做APK/真机或真实模型质量验收。实际命令：`npm run verify:full`、`node scripts/experience-roleplay-eval.mjs`、`node scripts/experience-session-fault-matrix.mjs`、`node scripts/experience-core-smoke.mjs`（Pinix端口5308）、Core `npm test`/`npm run smoke`、Pinix `mobile:check`/`mobile:sync`（包含build:mobile），最终均exit0。早期旧浏览器脚本选择器已不适用；未据此改UI，改用真实Host状态/保存/失败恢复旅程。旧Node矩阵补JSON加载并指向已安装Core源码，补齐既有跑团重置字段58项，未抹掉断言。
-
-本批体验/跑团已不再保留Host业务副本；SQLite派生目录应用接线仍未启用，属于后续平台工作。Next未改，未推送/部署或重启用户服务。
-
-## 2026-11-06 SQLite派生目录：Worker与本地应用接线
-
-在Web基线`67a70bd7`继续平台工作，Core包保持0.16.0。新增每请求独立Worker目录服务，接入`POST /api/localmirror/catalog`与MCP `pinax_project_catalog`；MCP版本0.6.0/20工具。按文件项目路径或注册表projectId/bookId定位，注册表目标ID在打开目录前复核。只显式sync写catalog_*派生表，原稿、项目marker、Electron表与RAG不改。status不建库，read/list/search前后核对文件和目录版本，过期/expectedRevision不符返回typed error，不伪装零命中。
-
-`pinax_project_context`附目录就绪状态，不自动同步；project-bootstrap状态卡读取catalog元数据、数量、新鲜度和项目身份，WAL非空保留未核对。更新技能与两份参考中“SQLite仅供Electron”的旧说明，16个shim及frontmatter核对通过。
-
-验证：`node scripts/project-catalog-smoke.mjs` exit0，隔离合成项目实际经过Worker、HTTP与官方MCP SDK：首次/增量同步、短词/FTS、读取、Electron表/版本保留、过期/修订拒绝、错误大纲回滚、并发同步、取消、HTTP公网403、状态卡前后完整文件哈希/mtime相等。`npm run verify:full` exit0（30文件/290例、应用及文档构建、架构、桥接/能力目录）；`npm run smoke:mcp` 143 passed/2 skipped exit0；`npm run mcp:conformance` 40/0 exit0；改动文件eslint无问题。新增`smoke:project-catalog`脚本入口与CI回归步骤，本地执行通过；GitHub远端尚未推送执行。
-
-MCP冒烟原有两项把“本机安装知识内核”误当成“advisor stub同时提供知识端点”，在当前已装内核的环境报错。修正为严格检查stub的typed unavailable，并明确跳过真实RAG编译/命中，不把安装状态或协议结果冒充真实检索；本批SQLite实际检索有独立端到端证明。未运行作者《大梦》真稿验收、真实模型或设备测试，未接六个Core Store正式文件写入。未启动/重启用户服务（3001/8451/5173未监听），未改Pinix/Next或公网部署；临时项目自动清理。
-
-## 2026-11-06 正式文件 Store 与身份往返
-
-在main `75d95170`上继续Node文件Host适配，Core保持0.16.0。新增六类Core Store及OutlineEdge Store：Book依赖已创建绑定的项目，取消登记保留磁盘原件；正文/设定/大纲以Core参照适配器作为单次工作副本，经原localMirror事务确认后返回；全局笔记/素材使用显式集合JSON和Core journal，不把构思或来源归档换名塞入。
-
-新增local-only POST /api/localmirror/core-operation（snapshot及四类实体命令），冻结项目/书/世界书与文件快照，操作回执跟随同一项目事务安装。同号不同请求拒绝；跨后续写入的旧回执要求重新载入；显式recover核对目录身份。MCP写章节仍为提案，未给模型新增任意文件写入工具。当前浏览器存储模式没有自动迁移。
-
-修复镜像读回丢章节ID/修订/侧车、空章消失和同名构思覆盖；meta.json记录文档身份/序列/原文哈希，Markdown仍是内容源。保留手写文件路径/空格/换行；正文变动清过期editorDocument；损坏或未知元数据不按文件名重建ID。MCP复用标题/顺序，SQLite读取真实稳定ID并把meta.json纳入依赖，只有元数据变化也更新投影。
-
-验证：verify:full通过（30文件/290例、应用/文档构建、架构及现有集成）；定向eslint/lint:delta无新增错误；smoke:file-stores覆盖全部端口实际CRUD/取消登记、重开、全局集合类型隔离、原文往返、文件/修订冲突、操作幂等、换树失败回滚、显式中断恢复、真实HTTP写入与公网拒绝、MCP标题及目录身份更新；local-mirror-check 58项、smoke:project-catalog通过；MCP143 passed/2 skipped、协议40/0。两项skip为本验收advisor stub不提供真实RAG，不冒充模型或检索质量。增加smoke:file-stores的npm/CI入口，未执行GitHub远端CI。
-
-发现旧local-mirror-check仅隔离root，默认app-data派生index.json被写成两个夹具项目。确认ID和目录均属夹具后删除该索引（旧索引未留备份，未冒称恢复旧内容）；它是可重建应用索引，不是稿件或注册表。修复脚本appData/各项目/无规则目录全部落临时root，退出时清理，回归重跑通过；残留夹具已清理。没有新增agent规则，修正既有隔离要求的执行。
-
-本轮未改独立Core/Pinix/Next，未迁浏览器数据，未运行真实模型、Windows、掉电/硬件或移动设备验收。六类Store是Node文件参考Host；默认UI切换、原生实现、独立进程并发写入和大型项目性能由后续分工继续。用户3001/8451/5173未运行，未启动/重启或部署公网。

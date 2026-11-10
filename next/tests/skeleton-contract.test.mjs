@@ -1,0 +1,145 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { PROJECT_KINDS, validateRelativePath } from '../kernel/projectSkeleton.mjs'
+import { CAPABILITY_IDS } from '../kernel/capabilities.vocab.mjs'
+import { kernelToolNames } from '../runtime/mcpSurface.mjs'
+import { NOVEL_CARRIER } from '../carriers/novel/manifest.mjs'
+import { OUTLINE_CARRIER } from '../carriers/outline/manifest.mjs'
+import { NOTES_CARRIER } from '../carriers/notes/manifest.mjs'
+import { WORLDBOOK_CARRIER } from '../carriers/worldbook/manifest.mjs'
+import { SCRIPT_CARRIER } from '../carriers/script/manifest.mjs'
+import { DOSSIER_CARRIER } from '../carriers/dossier/manifest.mjs'
+import { MATERIAL_CARRIER } from '../carriers/material/manifest.mjs'
+import { COMIC_CARRIER } from '../carriers/comic/manifest.mjs'
+import { VIDEO_CARRIER } from '../carriers/video/manifest.mjs'
+import { EXPERIENCE_CARRIER } from '../carriers/experience/manifest.mjs'
+import { ONLINE_CARRIER } from '../carriers/online/manifest.mjs'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const repoRoot = resolve(here, '..', '..')
+
+/**
+ * 中文骨架只有一份真源：服务端 KIND_TEMPLATES（已合入主干，MCP 19 工具与 bootstrap skill 都按它写死）。
+ * Next 不 import 服务端模块（避免把 Express 轨拖进内核），所以用源码文本把两边钉死：
+ * 谁改了其中一边，这条测试立刻红。
+ */
+test('Next 的固化骨架与服务端 KIND_TEMPLATES 完全一致', async () => {
+  const source = await readFile(join(repoRoot, 'server', 'services', 'localMirrorService.js'), 'utf-8')
+  const block = /export const KIND_TEMPLATES = Object\.freeze\(\{([\s\S]*?)\n\}\)/.exec(source)
+  assert.ok(block, '服务端 KIND_TEMPLATES 结构变了，Next 骨架对照要同步改')
+  const parsed = {}
+  for (const line of block[1].split('\n')) {
+    const match = /^\s*(\w+):\s*(?:Object\.freeze\()\[([^\]]*)\]\),?\s*$/.exec(line)
+    if (!match) continue
+    parsed[match[1]] = match[2].split(',').map((item) => item.trim().replace(/^'|'$/g, '')).filter(Boolean)
+  }
+  assert.deepEqual(Object.keys(parsed).sort(), Object.keys(PROJECT_KINDS).sort())
+  for (const kind of Object.keys(PROJECT_KINDS)) {
+    assert.deepEqual(parsed[kind], [...PROJECT_KINDS[kind]], `${kind} 的中文目录两边不一致`)
+  }
+})
+
+test('C2 路径规则：中文目录正常，越界与 .pinax 直写全拒', () => {
+  assert.equal(validateRelativePath('正文/第001章.md').ok, true)
+  assert.equal(validateRelativePath('世界书/角色/李二.md').ok, true)
+  const outside = ['../逃逸.md', '/绝对/路径.md', 'C:/Windows/x.md', '.pinax/project.json', '正文/../.pinax/project.json', '..']
+  for (const bad of outside) {
+    const result = validateRelativePath(bad)
+    assert.equal(result.ok, false, `应拒绝：`)
+    assert.equal(result.error.code, 'PINAX_PATH_OUTSIDE_PROJECT', bad)
+  }
+  assert.equal(validateRelativePath('').error.code, 'PINAX_INVALID_INPUT', '空串是输入问题，不是越界')
+  assert.equal(validateRelativePath(null).error.code, 'PINAX_INVALID_INPUT')
+})
+
+/**
+ * M2 门禁口径（替换 M1 的「carriers/ 必须为空」）。
+ * 判据从「不许有插件」换成「插件必须守规矩」，四条都可机读：
+ *   1) 随框架发布的是协议 v1.1-A 的六块（novel / outline / notes / worldbook / setting / reference），且都是 JS 清单——不允许散落 .carrier.json（那会绕过校验器）；
+ *   2) 板块认领的目录互不重叠（C3 一目录一主人），且都落在固化中文骨架的并集里；
+ *   3) 认领的工具名必须是内核 19 里已有的（不许虚增工具面）；载体的自有工具逐条点名，加了要留名；
+ *   4) 每块板块的 dataDirs 与 scopes 必须一一对应——声明了目录却没申请权限，或反过来，都算清单说谎。
+ */
+const CARRIER_OWN_TOOL_ALLOWLIST = Object.freeze([
+  'pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename',
+  'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_outline_save',
+  'pinax_notes_list', 'pinax_notes_save', 'pinax_worldbook_save',
+  'pinax_script_list', 'pinax_script_read', 'pinax_script_save',
+  'pinax_rule_list', 'pinax_rule_save',
+  'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search',
+  // 批次40（M4／M5）：五块记录型载体，每块四条（列／读／写／删）。
+  'pinax_material_list', 'pinax_material_read', 'pinax_material_save', 'pinax_material_remove',
+  'pinax_comic_list', 'pinax_comic_read', 'pinax_comic_save', 'pinax_comic_remove',
+  'pinax_video_list', 'pinax_video_read', 'pinax_video_save', 'pinax_video_remove',
+  'pinax_experience_list', 'pinax_experience_read', 'pinax_experience_save', 'pinax_experience_remove',
+  'pinax_online_list', 'pinax_online_read', 'pinax_online_save', 'pinax_online_remove'
+])
+
+/**
+ * 骨架之外的载体自有目录（批次40 · M4／M5）。
+ *
+ * 为什么没写进 PROJECT_KINDS：那三种骨架与服务端 KIND_TEMPLATES 逐项相等，是「核心骨架只有一份真源」
+ * 的门禁（本文件第一条测试）；素材／漫画／视频／体验／联机是载体自己的地盘，由 createProject 在
+ * 「骨架 ∪ 启用载体的 dataDirs」时按需建出来（next/kernel/projectSkeleton.mjs 的注释与
+ * next/project/createProject.mjs 同一条口径）。把它们塞进 PROJECT_KINDS 会让服务端对照失真，
+ * 所以在这里逐条点名：新增必须留名，不能悄悄多认一块目录。
+ */
+const CARRIER_EXTENSION_DIRS = Object.freeze(['素材', '漫画', '视频', '体验', '联机'])
+
+test('M2 口径：next/carriers 发布十一块载体，目录不重叠且落在中文骨架并集或载体扩展目录里', async () => {
+  const carriersDir = join(repoRoot, 'next', 'carriers')
+  const entries = await readdir(carriersDir)
+  const stray = entries.filter((name) => name.endsWith('.carrier.json') || name === 'manifests.json')
+  assert.deepEqual(stray, [], '清单只允许写在 manifest.mjs 里过校验器，散落 JSON 会绕过 C1–C8')
+  const published = entries.filter((name) => !name.startsWith('.'))
+  assert.deepEqual(published.filter((name) => name.endsWith('.mjs')).sort(), ['index.mjs'], '顶层只允许注册表（jsonRecords.mjs 已退役：记录底座归 fact 引擎 fileRecordTools，2026-11-09 T21 起）')
+  assert.deepEqual(published.filter((name) => !name.includes('.')).sort(), ['comic', 'dossier', 'experience', 'material', 'notes', 'novel', 'online', 'outline', 'script', 'video', 'worldbook'], '批次60：设定与资料合并为 dossier，十一块载体各占一栏')
+
+  const kernel = new Set(kernelToolNames())
+  const skeletonUnion = new Set(Object.values(PROJECT_KINDS).flat())
+  const dirs = new Set()
+  for (const manifest of [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER]) {
+    for (const dir of Object.values(manifest.dataDirs)) {
+      assert.equal(skeletonUnion.has(dir) || CARRIER_EXTENSION_DIRS.includes(dir), true, `${manifest.id} 的目录「${dir}」不在固化骨架里，也没进载体扩展目录名单`)
+      assert.equal(dirs.has(dir), false, `目录「${dir}」被两块板块同时认领（C3 一目录一主人）`)
+      dirs.add(dir)
+      // 工单 C：v2 把文件权限写成对象 { type:'file', dir, mode }；v1 的 scopes 串仍可读。
+      const filePermissions = Array.isArray(manifest.permissions)
+        ? manifest.permissions
+          .filter((item) => typeof item === 'object' && item?.type === 'file')
+          .map((item) => `file:${item.dir}:${item.mode ?? 'r'}`)
+        : []
+      const scope = filePermissions.find((item) => item.startsWith(`file:${dir}:`))
+      assert.ok(scope, `${manifest.id} 认领了「${dir}」却没申请 file:${dir}:r|rw`)
+    }
+    for (const scope of (Array.isArray(manifest.permissions) ? manifest.permissions : [])
+      .filter((item) => typeof item === 'object' && item?.type === 'file')
+      .map((item) => `file:${item.dir}:${item.mode ?? 'r'}`)
+      .filter((item) => item.startsWith('file:'))) {
+      const dir = scope.split(':')[1]
+      assert.ok(Object.values(manifest.dataDirs).includes(dir), `${manifest.id} 申请了未认领的目录权限：${scope}`)
+    }
+    for (const name of manifest.tools) {
+      assert.equal(kernel.has(name) || CARRIER_OWN_TOOL_ALLOWLIST.includes(name), true,
+        `${manifest.id} 声明的工具 ${name} 既不在内核 19 里，也没进「载体自有工具」白名单`)
+    }
+  }
+  // 自有工具（内核没有的新名字）逐条点名：新增必须在这里留名，防止有人偷偷扩面。
+  // 协议 v1.1-A 拆栏不新增工具名，只是把它们分给不同的主人。
+  const own = [NOVEL_CARRIER, OUTLINE_CARRIER, NOTES_CARRIER, WORLDBOOK_CARRIER, SCRIPT_CARRIER, DOSSIER_CARRIER, MATERIAL_CARRIER, COMIC_CARRIER, VIDEO_CARRIER, EXPERIENCE_CARRIER, ONLINE_CARRIER].flatMap((manifest) => manifest.tools.filter((name) => !kernel.has(name)))
+  assert.deepEqual(own, CARRIER_OWN_TOOL_ALLOWLIST, '自有工具逐条留名：十栏旧工具＋批次46A 删／改名两把＋批次40 五块记录载体的二十把（列／读／写／删）')
+})
+
+test('能力词表非空且每条有中文名，闭包才算得动', () => {
+  assert.ok(CAPABILITY_IDS.length >= 10)
+  assert.equal(CAPABILITY_IDS.includes('script.scenes'), true, 'D4 的靶子能力必须在词表里')
+  assert.equal(CAPABILITY_IDS.includes('text.chapters'), true)
+})
+
+test('目录存在性探针自检（工装不误报）', async () => {
+  const info = await stat(repoRoot)
+  assert.equal(info.isDirectory(), true)
+})

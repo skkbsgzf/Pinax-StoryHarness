@@ -1,0 +1,18 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.clasha",
+  "title": "争用甲（与乙抢同一块地盘）",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "clasha.pane", "contextProfile": "clasha" },
+  "dataDirs": { "data": "争用地盘" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:争用地盘:rw"],
+  "contributes": {
+    "panes": [{ "id": "clasha.pane", "slot": "left-dock", "title": "争用甲", "view": "pinax.view.list", "kind": "records-editor" }]
+  }
+}

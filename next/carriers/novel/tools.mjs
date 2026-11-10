@@ -1,0 +1,497 @@
+import { createChapterService } from '@pinax/core/usecases/chapterService'
+import { fail, ok } from '../../kernel/errors.mjs'
+import { createNovelChapterStore, toHostResult } from './chapterStore.mjs'
+import { NOVEL_CARRIER_ID } from './manifest.mjs'
+
+/**
+ * 小说载体的工具实现（M2 · WP5；协议 v1.1-A 起只管 正文/）。
+ * 读盘一律走内核文件服务（next/fs/fileService.mjs）——归属闸、作用域闸、修订并发都在那边，
+ * 载体只负责「按小说的语义把目录讲成人话」，绝不自己 open 文件句柄。
+ * 两个只读工具名是从内核手里认领过来的（pinax_chapter_list / pinax_chapter_read），
+ * pinax_chapter_save 是载体自己的正文写入口：写 正文/ 必须带 expectedRevision，
+ * 与运行时（一级公民）的提案轨彻底分开——提案进 .pinax/proposals/，作者按下去的保存才进正文。
+ *
+ * 协议 v1.1-A（作者裁定）：大纲拆去 pinax.carrier.outline（pinax_outline_read / save 随迁）、
+ * 构思拆去 pinax.carrier.notes（pinax_notes_list / save 随迁）；小说栏只留正文这一棵内容树。
+ *
+ * 提案审阅（工单A）：模型改稿落 .pinax/proposals/（pinax-proposal@1 JSON，或运行时轨的纯文本散件），
+ * 由 pinax_proposal_list / pinax_proposal_read / pinax_proposal_discard 三把读/读/弃承接（内核没有同名工具）。
+ * 采纳不另开写口：作者按下的那一下仍走 pinax_chapter_save——带上当前修订号，成功后把这份提案的
+ * status 写成 adopted（pinax_chapter_save 的可选 proposal 参数，元数据由文件服务原子写回）。
+ *
+ * T4（Core 接线）：读／存／删三把的内部改走 `@pinax/core` 的 createChapterService ＋ ChapterStore；
+ * 保存语义（revision 递增、content-only 清结构化侧车、STALE 判定）只由 Core 的 applyChapterPatch 决定。
+ * 工具名、入参、回执形状、PINAX_* 错误码与三道闸（归属／作用域／并发）全部不变——
+ * 文件服务仍是唯一写盘出口，Core 只是它上面那层「章节该是什么语义」。
+ * 列表与重命名不在 Core 的端口里（卷序／标题／前缀规则是载体语义），继续由本文件实现。
+ */
+export const NOVEL_DIRS = Object.freeze({ manuscript: '正文' })
+
+const MAX_TEXT_CHARS = 200_000
+const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })
+
+export function createNovelTools(context = {}) {
+  const pluginId = context.pluginId ?? NOVEL_CARRIER_ID
+  const fileService = context.fileService ?? null
+
+  function needService() {
+    return fileService
+      ? null
+      : fail('INVALID_INPUT', `载体 ${pluginId} 的工具需要已打开项目的文件服务；空框架下请回落内核工具`, { pluginId })
+  }
+
+  // Core 章节用例惰性建：空框架下 tools({fileService:null}) 只被用来列工具名，不能在这里抛。
+  const bookId = String(context.projectId ?? fileService?.root ?? pluginId)
+  let chapterService = null
+  function chapters() {
+    if (!chapterService) {
+      chapterService = createChapterService({
+        store: createNovelChapterStore({ pluginId, fileService, dir: NOVEL_DIRS.manuscript, listFiles: listManuscript })
+      })
+    }
+    return chapterService
+  }
+
+  /** 读一章：Core 记录里的 fileReceipt 就是文件服务原始回执，sha256／bytes 不另读一次。 */
+  async function readChapter(relative) {
+    const read = await chapters().read(bookId, relative)
+    if (!read.ok) return toHostResult(read)
+    const receipt = read.value.fileReceipt ?? {}
+    return ok({ text: read.value.content, revision: read.value.revision, sha256: receipt.sha256, bytes: receipt.bytes })
+  }
+
+  /** 存一章：新建走 create（expectedRevision 0 的语义不变），改稿走 save（patch 只带 content）。 */
+  async function saveChapter(relative, text, expectedRevision) {
+    const service = chapters()
+    const saved = expectedRevision === 0
+      ? await service.create(bookId, { id: relative, title: chapterTitle(relative), content: text })
+      : await service.save(bookId, relative, { content: text, expectedRevision })
+    const host = toHostResult(saved)
+    if (!host.ok) return host
+    const receipt = host.value.fileReceipt ?? {}
+    return ok({
+      relativePath: typeof receipt.relativePath === 'string' ? receipt.relativePath : `${NOVEL_DIRS.manuscript}/${relative}`,
+      revision: host.value.revision,
+      sha256: receipt.sha256,
+      bytes: receipt.bytes
+    })
+  }
+
+  /**
+   * 正文目录＝章节序列（工单B：卷→章两级）。
+   * 正文/ 下的一级子目录＝卷：卷按目录名排序，卷内的章按文件名排序，每条带 volume＝目录名；
+   * 顶层章（平铺）排在卷后，volume＝null。序号 index 是扁平顺序（读/改都靠 file 定位）。
+   * 只认一级卷（更深的目录不再展开——层级两级封顶，与索引窗的口径一致）。
+   */
+  async function listManuscript() {
+    const missing = needService()
+    if (missing) return missing
+    const listed = await fileService.list({ pluginId, dir: NOVEL_DIRS.manuscript })
+    if (!listed.ok) return listed
+    const entries = listed.value.entries ?? []
+    const volumes = entries
+      .filter((entry) => entry.kind === 'dir')
+      .map((entry) => entry.name)
+      .sort(compareVolumeNames)
+    const chapters = []
+    for (const volume of volumes) {
+      // 子目录的列举走同一份文件服务：file:正文:rw 覆盖 正文/ 及其子目录（工单B 的递归口径）。
+      const nested = await fileService.list({ pluginId, dir: `${NOVEL_DIRS.manuscript}/${volume}` })
+      if (!nested.ok) return nested
+      const names = nested.value.entries
+        .filter((entry) => entry.kind === 'file' && /\.md$/iu.test(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => collator.compare(a, b))
+      for (const name of names) {
+        const relativePath = `${NOVEL_DIRS.manuscript}/${volume}/${name}`
+        chapters.push({
+          index: chapters.length,
+          title: chapterTitle(name),
+          file: relativePath,
+          name,
+          volume,
+          revision: await fileService.revisionOf(relativePath)
+        })
+      }
+    }
+    const loose = entries
+      .filter((entry) => entry.kind === 'file' && /\.md$/iu.test(entry.name))
+      .map((entry) => entry.name)
+      .sort((a, b) => collator.compare(a, b))
+    for (const name of loose) {
+      const relativePath = `${NOVEL_DIRS.manuscript}/${name}`
+      chapters.push({
+        index: chapters.length,
+        title: chapterTitle(name),
+        file: relativePath,
+        name,
+        volume: null,
+        revision: await fileService.revisionOf(relativePath)
+      })
+    }
+    return ok({ chapters, total: chapters.length })
+  }
+
+  return [
+    {
+      name: 'pinax_chapter_list',
+      title: '列出章节（小说载体）',
+      description: '按「正文/」列章节序号、标题、相对路径、卷名（顶层章为 null）与当前修订号：一级子目录＝卷，卷按目录名、卷内按文件名排序，平铺章排在卷后；标题剥掉文件名开头的排序前缀（003-倒带 → 倒带），file 仍是原名。不返回正文，也不谎报没读过的字节数。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          limit: { type: 'integer', minimum: 1, maximum: 500, description: '最多返回多少章，默认 200。' }
+        }
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const all = await listManuscript()
+        if (!all.ok) return all
+        const limit = args.limit === undefined ? 200 : args.limit
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+          return fail('INVALID_INPUT', 'limit 须是 1–500 的整数', { got: args.limit })
+        }
+        return ok({ total: all.value.total, truncated: all.value.total > limit, chapters: all.value.chapters.slice(0, limit) })
+      }
+    },
+    {
+      name: 'pinax_chapter_read',
+      title: '读取章节正文（小说载体）',
+      description: '按 index／title／file 任一定位读一章正文，支持 offset+maxChars 分页；返回修订号，供保存时原样带回做并发校验。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          index: { type: 'integer', minimum: 0, description: '章节序号（从 0 开始），与 title/file 三选一。' },
+          title: { type: 'string', minLength: 1, maxLength: 120, description: '章节标题，先精确后包含匹配。' },
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '相对路径，如「正文/第001章-入场.md」。' },
+          offset: { type: 'integer', minimum: 0, description: '正文字符偏移，默认 0。' },
+          maxChars: { type: 'integer', minimum: 1000, maximum: MAX_TEXT_CHARS, description: `本次最多返回字符数，默认 20000，上限 ${MAX_TEXT_CHARS}。` }
+        }
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        const located = await resolveChapter(args, listManuscript)
+        if (!located.ok) return located
+        const offset = args.offset ?? 0
+        const maxChars = args.maxChars ?? 20_000
+        if (!Number.isSafeInteger(offset) || offset < 0) return fail('INVALID_INPUT', 'offset 须是 ≥0 的整数', { got: args.offset })
+        if (!Number.isSafeInteger(maxChars) || maxChars < 1000 || maxChars > MAX_TEXT_CHARS) {
+          return fail('INVALID_INPUT', `maxChars 须是 1000–${MAX_TEXT_CHARS} 的整数`, { got: args.maxChars })
+        }
+        // 卷下的章在磁盘上是 正文/<卷>/<章>.md：读的 file 必须是相对 正文/ 的整段路径，
+        // 不能拿基名（工单B 之前只列顶层，基名与相对路径恰好相同，所以没暴露）。
+        const relative = toDirRelative(NOVEL_DIRS.manuscript, located.value.file)
+        const read = await readChapter(relative)
+        if (!read.ok) return read
+        const text = read.value.text.slice(offset, offset + maxChars)
+        return ok({
+          chapter: { index: located.value.index, title: located.value.title, file: `${NOVEL_DIRS.manuscript}/${relative}` },
+          matchedBy: located.value.matchedBy,
+          text,
+          offset,
+          maxChars,
+          totalChars: read.value.text.length,
+          truncated: offset + text.length < read.value.text.length,
+          nextOffset: offset + text.length,
+          revision: read.value.revision,
+          sha256: read.value.sha256
+        })
+      }
+    },
+    {
+      name: 'pinax_chapter_save',
+      title: '保存章节正文（小说载体）',
+      description: '作者确认后的正文落盘口：新建传 expectedRevision 0；改稿必须先读到修订号，不符即 PINAX_STALE_REVISION，不覆盖、不合并。写 正文/ 走文件服务三道闸（归属＋file:正文:rw＋并发）。可选 proposal 指认这次写入来自哪份提案：落盘成功后把该提案的 status 标成 adopted（提案文件保留）。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['text', 'expectedRevision'],
+        properties: {
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '目标相对路径（正文/ 下），与 title 二选一。' },
+          title: { type: 'string', minLength: 1, maxLength: 120, description: '新建章节用标题，落成「正文/<标题>.md」。' },
+          text: { type: 'string', minLength: 1, maxLength: MAX_TEXT_CHARS, description: '整章正文内容（覆盖式保存，故必须带修订号）。' },
+          expectedRevision: { type: 'integer', minimum: 0, description: '读取时拿到的修订号；新建传 0。' },
+          proposal: { type: 'string', minLength: 1, maxLength: 240, description: '可选：这次写入来自哪份提案（.pinax/proposals/ 里的 JSON 文件名）。落盘成功后把该提案的 status 写成 adopted；写不进去只回 proposalWarning，不推翻已经落盘的正文。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (typeof args.text !== 'string' || !args.text.length) return fail('INVALID_INPUT', 'text 必填且非空')
+        if (args.text.length > MAX_TEXT_CHARS) return fail('INVALID_INPUT', `text 超出单章上限 ${MAX_TEXT_CHARS} 字符`, { got: args.text.length })
+        if (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 0) {
+          return fail('INVALID_INPUT', 'expectedRevision 必填（新建传 0），改稿请带回 pinax_chapter_read 给的修订号')
+        }
+        if (args.proposal !== undefined && (typeof args.proposal !== 'string' || !args.proposal.trim())) {
+          return fail('INVALID_INPUT', 'proposal 须是 .pinax/proposals/ 里的提案文件名')
+        }
+        const target = args.file ?? chapterFileNameFromTitle(args.title)
+        if (!target) return fail('INVALID_INPUT', '要给 file（正文/ 下的相对路径）或 title（新建章节标题）')
+        const relative = toDirRelative(NOVEL_DIRS.manuscript, target)
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '正文章节文件名必须以 .md 结尾', { file: target })
+
+        const written = await saveChapter(relative, args.text, args.expectedRevision)
+        if (!written.ok) return written
+        const result = {
+          file: written.value.relativePath,
+          revision: written.value.revision,
+          created: args.expectedRevision === 0,
+          sha256: written.value.sha256,
+          bytes: written.value.bytes
+        }
+        // 采纳留痕：正文已经落盘才算数；状态没记上只如实带回一句警告，不把写作翻成失败。
+        if (args.proposal) {
+          const marked = await fileService.markProposalStatus({ name: args.proposal, status: 'adopted' })
+          if (marked.ok) result.proposal = { name: marked.value.name, status: marked.value.status }
+          else result.proposalWarning = `正文已写入，但提案状态没记上：${marked.error.message}`
+        }
+        return ok(result)
+      }
+    },
+    {
+      name: 'pinax_chapter_delete',
+      title: '删除章节（小说载体）',
+      description: '删除一章正文：归属＋file:正文:rw 照旧；删前强制提交一版历史快照（快照失败即中止，磁盘不动）；有 status:"proposed" 的提案指向这一章时拒删并在提示里点名提案文件名。不做回收站——历史快照就是安全网；删除成功后清掉该章的修订号账。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['file'],
+        properties: {
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '要删除的章相对路径，如「正文/第001章-入场.md」（也接受章节标题）。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (typeof args.file !== 'string' || !args.file.trim()) return fail('INVALID_INPUT', 'file 必填：要删除的章相对路径')
+        const relative = toDirRelative(NOVEL_DIRS.manuscript, args.file.trim())
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '要删除的必须是 .md 章节', { file: args.file })
+        // 端口 remove 要 expectedRevision：删除工具没有这个参数，就用刚读到的当前修订号——
+        // 行为与批次46A 一致（删除本身不做并发闸），但适配器对直接调用者仍守 ChapterStore 合同。
+        const service = chapters()
+        const current = await service.read(bookId, relative)
+        if (!current.ok) return toHostResult(current)
+        const deleted = await service.remove(bookId, relative, { expectedRevision: current.value.revision })
+        if (!deleted.ok) return toHostResult(deleted)
+        const projectPath = `${NOVEL_DIRS.manuscript}/${relative}`
+        return ok({ file: projectPath, title: chapterTitle(projectPath), deleted: true })
+      }
+    },
+    {
+      name: 'pinax_chapter_rename',
+      title: '重命名章节（小说载体）',
+      description: '只改同一目录下的章文件名：title 是去掉排序前缀的新标题（如「入场」「雨夜·修订」），工具保留原文件已有的 NNN- 前缀；显式带 001- 这类前缀的 title 一律拒。nextFile 是界面上移／下移专用的整名形式（与 title 二选一）：它要求完整的「前缀-标题.md」文件名，供交换相邻章的前缀；模型侧不用它。不跨目录移动；有未审提案或快照失败即中止。修订号账迁到新文件名。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['file'],
+        properties: {
+          file: { type: 'string', minLength: 1, maxLength: 240, description: '要改名的章相对路径，如「正文/第001章-入场.md」。' },
+          title: { type: 'string', minLength: 1, maxLength: 120, description: '新标题（不带排序前缀；文件名由工具按原前缀规则生成）。与 nextFile 二选一。' },
+          nextFile: { type: 'string', minLength: 1, maxLength: 240, description: '整名形式（界面排序专用）：完整的「NNN-标题.md」新文件名，同目录。与 title 二选一。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, destructiveHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        if (typeof args.file !== 'string' || !args.file.trim()) return fail('INVALID_INPUT', 'file 必填：要改名的章相对路径')
+        const title = typeof args.title === 'string' ? args.title.trim() : ''
+        const nextFile = typeof args.nextFile === 'string' ? args.nextFile.trim() : ''
+        if (title && nextFile) return fail('INVALID_INPUT', 'title 与 nextFile 二选一：前者只给标题，后者给完整文件名')
+        if (!title && !nextFile) return fail('INVALID_INPUT', '要给 title（只写标题）或 nextFile（完整文件名）')
+        if (title && /^\d{1,3}-/u.test(title)) {
+          return fail('INVALID_INPUT', 'title 不要带排序前缀（001-）：序号调整请用上移／下移，这里只换标题', { title })
+        }
+        const relative = toDirRelative(NOVEL_DIRS.manuscript, args.file.trim())
+        if (!/\.md$/iu.test(relative)) return fail('INVALID_INPUT', '要改名的必须是 .md 章节', { file: args.file })
+        let target = nextFile
+        if (!target) {
+          const name = chapterFileNameFromTitle(title)
+          if (!name) return fail('INVALID_INPUT', 'title 清洗后为空，给一个能当文件名的标题', { title })
+          const prefix = /^(\d{1,3})-/u.exec(chapterStem(relative))
+          target = prefix ? `${prefix[1]}-${name}` : name
+        } else {
+          // 整名形式只收同一层的一枚 .md 文件名；路径分隔符与穿越一律拒（本批不做跨目录移动）。
+          if (target.includes('/') || target.includes('\\')) {
+            return fail('INVALID_INPUT', 'nextFile 只收同目录的文件名，不带路径分隔符', { nextFile: target })
+          }
+          if (!/\.md$/iu.test(target)) return fail('INVALID_INPUT', 'nextFile 必须以 .md 结尾', { nextFile: target })
+        }
+        const renamed = await fileService.renameFile({ pluginId, dir: NOVEL_DIRS.manuscript, file: relative, nextFile: target })
+        if (!renamed.ok) return renamed
+        return ok({
+          file: renamed.value.relativePath,
+          previousFile: renamed.value.previousPath,
+          title: chapterTitle(renamed.value.relativePath),
+          revision: renamed.value.revision,
+          renamed: true
+        })
+      }
+    },
+    {
+      name: 'pinax_proposal_list',
+      title: '列出提案（小说载体）',
+      description: '列出 .pinax/proposals/ 里的审阅提案：JSON 提案给出 id／status／目标章／字数／createdAt／note，按 createdAt 降序；坏 JSON 跳过并记进 warnings；运行时轨写下的纯文本散件以 kind:"raw" 只列名字与大小。只读，不改正文。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {}
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      run: async () => {
+        const missing = needService()
+        if (missing) return missing
+        return fileService.listProposals()
+      }
+    },
+    {
+      name: 'pinax_proposal_read',
+      title: '读取提案（小说载体）',
+      description: '按文件名读一份 .pinax/proposals/ 下的 JSON 提案，整份原样返回（target／content／note／status 都在里面）。只接受目录内的一层文件名，带路径分隔符或「..」一律拒。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 240, description: '提案文件名（如 20261028T140000-ch1-abcdef12.json）。' }
+        }
+      },
+      annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        return fileService.readProposal({ name: args.name })
+      }
+    },
+    {
+      name: 'pinax_proposal_discard',
+      title: '弃用提案（小说载体）',
+      description: '弃用一份提案：删掉 .pinax/proposals/ 里对应的文件，正文与修订号一个字都不动。只接受目录内的一层文件名，带路径分隔符或「..」一律拒。',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['name'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 240, description: '提案文件名（如 20261028T140000-ch1-abcdef12.json）。' }
+        }
+      },
+      annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: false },
+      run: async (args = {}) => {
+        const missing = needService()
+        if (missing) return missing
+        return fileService.discardProposal({ name: args.name })
+      }
+    }
+  ]
+}
+
+/** 载体已认领（读）与自有（写/审阅/章节管理）的工具名，供门禁核「认领面只增不减」；提案三把是自有名字。 */
+export const NOVEL_TOOL_NAMES = Object.freeze(['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard'])
+
+/**
+ * 卷名排序（工单B）：中文数字（第一卷／第二卷…）按数值排，阿拉伯数字同理，
+ * 其余按中文 collator。缺了这一步，'第一卷' 与 '第二卷' 会按拼音（di-er < di-yi）倒过来——
+ * 作者看到的第一卷排在第二卷后面就是错的。
+ */
+const CHINESE_DIGITS = Object.freeze({ 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 })
+
+function compareVolumeNames(left, right) {
+  const a = volumeNumber(left)
+  const b = volumeNumber(right)
+  if (a !== null && b !== null && a !== b) return a - b
+  return collator.compare(left, right)
+}
+
+/** 目录名里的第一个数字（中文数字或阿拉伯数字）→ 数值；没有就 null（退回 collator）。
+ *  允许前面带一个非数字前缀（「第一卷」「卷1」「Part 2」都认）。 */
+function volumeNumber(name) {
+  const match = /^[^\d一二两三四五六七八九十百千]*([一二两三四五六七八九十百千]+|\d+)/u.exec(String(name ?? '').trim())
+  if (!match) return null
+  if (/^\d+$/u.test(match[1])) return Number(match[1])
+  let total = 0
+  let current = 0
+  for (const char of match[1]) {
+    if (char === '百') { total += (current || 1) * 100; current = 0 }
+    else if (char === '十') { total += (current || 1) * 10; current = 0 }
+    else if (char === '千') { total += (current || 1) * 1000; current = 0 }
+    else {
+      const value = CHINESE_DIGITS[char]
+      if (!value) return null
+      current = value
+    }
+  }
+  return total + current
+}
+
+async function resolveChapter(args, listManuscript) {
+  const all = await listManuscript()
+  if (!all.ok) return all
+  const chapters = all.value.chapters
+  if (args.file) {
+    const wanted = String(args.file).replaceAll('\\', '/')
+    const hit = chapters.find((item) => item.file === wanted || item.file.endsWith(`/${wanted}`))
+    if (hit) return ok({ ...hit, matchedBy: 'file' })
+    if (!/\.md$/iu.test(wanted)) return fail('INVALID_INPUT', 'file 指向的必须是 .md 章节', { file: args.file })
+    return ok({ index: null, title: chapterTitle(wanted.split('/').pop()), file: wanted, name: toDirRelative(NOVEL_DIRS.manuscript, wanted), matchedBy: 'file' })
+  }
+  if (!chapters.length) return fail('INVALID_INPUT', '「正文/」还没有任何章节，可先用 pinax_chapter_save 新建')
+  if (args.index !== undefined) {
+    if (!Number.isSafeInteger(args.index) || args.index < 0) return fail('INVALID_INPUT', 'index 须是 ≥0 的整数', { got: args.index })
+    const hit = chapters[args.index]
+    return hit ? ok({ ...hit, matchedBy: 'index' }) : fail('INVALID_INPUT', `章节序号 ${args.index} 超出范围（共 ${chapters.length} 章）`)
+  }
+  if (args.title) {
+    // 批次34：title 已剥掉排序前缀；作者仍可能按原文件名（003-倒带）来点，两个名字都认。
+    const exact = chapters.find((item) => item.title === args.title || chapterStem(item.file) === args.title)
+    if (exact) return ok({ ...exact, matchedBy: 'title-exact' })
+    const loose = chapters.filter((item) => item.title.includes(String(args.title)))
+    if (loose.length === 1) return ok({ ...loose[0], matchedBy: 'title-contains' })
+    if (loose.length > 1) {
+      return fail('INVALID_INPUT', `标题「${args.title}」匹配到 ${loose.length} 章，请改用 index 或 file`, {
+        candidates: loose.slice(0, 10).map((item) => item.title)
+      })
+    }
+    return fail('INVALID_INPUT', `找不到标题含「${args.title}」的章节`, { total: chapters.length })
+  }
+  return fail('INVALID_INPUT', 'pinax_chapter_read 需要 index / title / file 任一定位方式')
+}
+
+/** 作者给的是「正文/xxx.md」还是「xxx.md」都接得住：文件服务那侧的入参是板块目录内的相对路径。 */
+function toDirRelative(dir, path) {
+  const normalized = String(path).replaceAll('\\', '/')
+  return normalized.startsWith(`${dir}/`) ? normalized.slice(dir.length + 1) : normalized
+}
+
+/**
+ * 章节标题（批次34 · 真实数据适配）：文件名开头的排序前缀（NNN-）不进标题。
+ * 「003-倒带.md」→「倒带」；只动 title，file 仍是原名——读写定位与排序都靠文件名。
+ * 只认 1–3 位数字＋半角连字符：第001章-入场、001_xxx 这类命名一个字不改。
+ */
+function chapterTitle(name) {
+  return String(name ?? '').replace(/\.md$/iu, '').replace(/^\d{1,3}-/u, '')
+}
+
+/** 文件名（去扩展名、去目录）＝没剥过前缀的原名：title 匹配的第二把钥匙，两种写法都认。 */
+function chapterStem(file) {
+  return String(file ?? '').replaceAll('\\', '/').split('/').pop().replace(/\.md$/iu, '')
+}
+
+/** 标题→文件名：Windows 非法字符与控制字符都换成空格（用 \p{Cc} 而不是 \u0000-\u001F，规则允许前者）。 */
+function chapterFileNameFromTitle(title) {
+  const cleaned = String(title ?? '')
+    .replace(/[\\/:*?"<>|]/gu, ' ')
+    .replace(/\p{Cc}/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .replace(/^\.+/u, '')
+    .slice(0, 120)
+  if (!cleaned) return null
+  return /\.md$/iu.test(cleaned) ? cleaned : `${cleaned}.md`
+}

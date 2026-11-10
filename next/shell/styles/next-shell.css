@@ -1,0 +1,2469 @@
+/* ============================================================================
+ * Next 外壳自己的布局层。
+ *
+ * 颜色 / 字体 / 圆角 / 控件一律走老前端的 token（src/styles/themes/legacy.css）
+ * 与控件词汇（src/styles/workbench-controls.css）：本文件里不许出现硬编码颜色，
+ * 门禁见 next/tests/visual-contract.test.mjs。
+ *
+ * 复用优先（作者口径：「尽可能复用之前的，不是所有的部分都需要重新开发」）：
+ *   - 索引窗的行直接用老版的 .workspace-nav-item 词汇
+ *     （src/styles/workspace-navigation.css:21-75）——行高、悬停、选中、焦点环全是原件；
+ *   - 两级选中色不再抄：老版把公式放在 --nav-* 里（workspace-navigation.css:2-14），
+ *     外壳根节点挂 .app-shell 就能拿到，本文件因此一个 --nav-* 都不许再定义；
+ *   - 这里只负责 Next 自己的东西：Obsidian 三栏的骨架布局、「行按钮」primitive（nx-row）
+ *     与「输入框」primitive（nx-field）。
+ * ============================================================================ */
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+.next-shell {
+  /* 悬浮小工具窗的绝对定位以这一层为坐标系（协议 v1.1-C）：top:16px 即标题栏下 16px。 */
+  position: relative;
+  --nx-section-gap: 18px;
+  /* —— Next 字号刻度：老前端只 token 化了 --fs-sm(12)/--fs-base(14)，
+     中间档（11/13/15/17/19）历史上都是裸 px，这里收进 --nx-* 命名刻度，
+     门禁见 next/tests/visual-contract.test.mjs（裸 px 字号/圆角一律不许再写）。 —— */
+  --nx-fs-2xs: 11px; /* 角注：meta 行、警告、折叠标签 */
+  --nx-fs-md: 13px;  /* 面板正文与按钮 */
+  --nx-fs-lg: 15px;  /* 正文编辑与阅读 */
+  --nx-fs-xl: 17px;  /* 卡片标题 */
+  --nx-fs-2xl: 19px; /* 页面主标题 */
+  --nx-radius-xs: 6px; /* 小号图标按钮（28px 级） */
+  --nx-radius-pill: 999px; /* 〔批次68-R2 任务二〕胶囊档：蓝链 .tag 皮与信息卡徽章共用（圆角也进刻度，不落裸值） */
+  display: flex;
+  /* 标题栏（工单F）是根节点里的第一行；三栏本体吃掉剩下的高度。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  background: var(--surface-workbench-muted);
+  color: var(--archive-ink);
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
+}
+
+/* —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
+   窗口走 titleBarStyle:'hidden' + titleBarOverlay（next/shell/main.mjs 的 TITLEBAR_OVERLAY），
+   这条全宽行就是那层「顶栏」：应用名／页内菜单行（MENU_TEMPLATE 渲染）／项目信息 chip／
+   原生窗控占位。高度 36 与 overlay 的 height 对齐（--nx-titlebar-height 只在本文件用）。
+   整条可拖动窗口；按钮与下拉回到 no-drag，否则点不动。 */
+.nx-shell-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+}
+.nx-titlebar {
+  --nx-titlebar-height: 36px; /* 与 next/shell/main.mjs 的 TITLEBAR_OVERLAY.height 同步 */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 var(--nx-titlebar-height);
+  height: var(--nx-titlebar-height);
+  padding-inline: 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--workbench-chrome);
+  color: var(--archive-ink);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.nx-titlebar-brand {
+  flex: 0 0 auto;
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--archive-ink);
+  white-space: nowrap;
+}
+.nx-menubar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  -webkit-app-region: no-drag;
+}
+.nx-menu {
+  position: relative;
+}
+.nx-titlebar .nx-menu-trigger,
+.nx-titlebar .nx-menu-item {
+  -webkit-app-region: no-drag;
+}
+/* 老版 .control-quiet 的 36px 命中区正好铺满标题栏；字号收回 --nx-fs-md 一档。
+   选择器与 .control-* 的四段同权重、并且后置（legacy.mjs 里 next-shell.css 最后引），
+   不用 !important 也能覆盖。 */
+.theme-legacy .nx-titlebar .nx-menu .nx-menu-trigger {
+  padding: 4px 10px;
+  font-size: var(--nx-fs-md);
+  white-space: nowrap;
+}
+.nx-menu-popup {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: var(--z-popover);
+  min-width: 220px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+  -webkit-app-region: no-drag;
+}
+.theme-legacy .nx-titlebar .nx-menu-popup .nx-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  font-size: var(--nx-fs-md);
+  text-align: left;
+  white-space: nowrap;
+}
+.nx-menu-item:disabled {
+  cursor: not-allowed;
+}
+.nx-menu-label {
+  min-width: 0;
+}
+.nx-menu-accelerator {
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-menu-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--hairline-soft);
+}
+.nx-titlebar-chip {
+  flex: 0 1 auto;
+  max-width: 360px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: color-mix(in srgb, var(--surface-workbench-raised) 55%, transparent);
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 没有项目时 chip 走虚线边：一眼看出「这里以后会有东西」。 */
+.nx-titlebar-chip.is-empty {
+  border-style: dashed;
+}
+/* 沉浸态顶栏退出钮（批次45）：尺寸沿用 .control-quiet，这里只把命中区从拖拽区里摘出来。 */
+.nx-titlebar-immersive-exit {
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+.nx-titlebar-drag {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 24px;
+}
+.nx-titlebar-window-controls {
+  /* 原生窗控 overlay（主进程 titleBarOverlay）约占 138px：这里只留位，不放可点元素。 */
+  flex: 0 0 138px;
+  align-self: stretch;
+  -webkit-app-region: no-drag;
+}
+
+/* —— 行按钮 primitive：清单行与竖条行共用一个形态 ————————————————
+   选它＝看它，所以行本身也是按钮；但行不是「命令」，
+   因此不套 .control-*（那套是命令语义），单独走这一条。
+   行高沿用老版侧栏导航行：--nav-row-height 42px（src/styles/workspace-navigation.css:13）。 */
+.nx-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--nav-row-height);
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--archive-ink-soft);
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.nx-row:hover {
+  background: var(--nav-hover);
+  color: var(--archive-ink);
+}
+.nx-row:active {
+  background: var(--nav-focused);
+}
+.nx-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* —— 输入框 primitive：老版写作面输入的一条边界一个焦点 ——————————— */
+.nx-field {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-input);
+  color: var(--archive-ink);
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
+  line-height: 1.6;
+  resize: vertical;
+
+}
+/* P18：写作面的焦点指示就是光标。必须「显式」关掉——不写这条，Chrome 的
+   :focus-visible 默认环会顶上来，且取 Windows 系统强调色（作者的橙色「黄框」）。
+   visual-contract 钉的是这条 none，不是「不许出现 outline」。 */
+.editor-area:focus-visible {
+  outline: none;
+}
+.nx-field::placeholder {
+  color: var(--text-muted);
+}
+.nx-field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+/* —— 图标竖条：抄老前端 .workspace-activity-bar ————————————————————
+   老版那几条规则写在 SFC 的 scoped 样式里（src/components/workbench/WorkspaceContentGroups.vue:190-196），
+   scoped 样式没法 import，所以这里按同一条度量抄一份；
+   44/46/4/8 这几个数字由 next/tests/visual-contract.test.mjs 直接回老文件核对，抄歪了门禁就红。 */
+.nx-ribbon {
+  display: flex;
+  flex: 0 0 44px;
+  flex-direction: column;
+  align-items: stretch;
+  padding-top: 4px;
+  background: var(--workbench-chrome);
+  border-inline-end: 1px solid transparent;
+}
+.nx-ribbon-item {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 46px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.nx-ribbon-item.is-bottom {
+  margin-top: auto;
+  margin-bottom: 8px;
+}
+.nx-ribbon-item:hover {
+  color: var(--text-primary);
+  background: var(--nav-hover);
+}
+/* 当前板＝强选中：老版竖条用 --workbench-selected，这里走老版给的那枚 token
+   （--nav-primary-selected 就是它，workspace-navigation.css:10）。 */
+.nx-ribbon-item.is-active {
+  color: var(--text-primary);
+  background: var(--nav-primary-selected);
+}
+.nx-ribbon-item:focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: -3px;
+}
+/* 无项目形态（工单F · 反馈③）：载体格保留形状但不可点——压暗一档，悬停不长高亮，
+   让「打开项目后可用」这件事从视觉上就成立。 */
+.nx-ribbon-item.is-disabled,
+.nx-ribbon-item[aria-disabled='true'] {
+  color: var(--text-muted);
+  opacity: 0.45;
+  cursor: default;
+}
+.nx-ribbon-item[aria-disabled='true']:hover {
+  background: transparent;
+  color: var(--text-muted);
+}
+/* 服务状态点（批次49）：8px 圆点，贴竖条格右上角；颜色语义见 next/runtime/serviceLogPool.mjs 头注释。
+   四色只走 token（--success／--signal-warm／--control-danger／--text-muted）；
+   灰点用描边不填充，免得在 chrome 底上跟图标糊成一片。没声明服务／MCP 的载体不出点。 */
+.nx-rail-status-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.nx-rail-status-dot.is-green { background: var(--success); }
+.nx-rail-status-dot.is-orange { background: var(--signal-warm); }
+.nx-rail-status-dot.is-red { background: var(--control-danger); }
+.nx-rail-status-dot.is-gray {
+  background: transparent;
+  border: 1px solid var(--text-muted);
+}
+
+/* —— 索引窗 ————————————————————————————————————————————————
+   行本身用老版的 .workspace-nav-item / --tree 词汇
+   （src/styles/workspace-navigation.css:21-75）：行高 42/36px、悬停、次级选中、
+   焦点环全是原件那份 CSS。这里只补排版与手势，不碰配色。 */
+.nx-index-window {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--nav-surface);
+  color: var(--nav-fg);
+  border-inline-end: 1px solid var(--hairline-soft);
+}
+.nx-index-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  height: 44px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.nx-index-collapse {
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  justify-content: center;
+  border-radius: var(--nx-radius-xs);
+}
+.nx-index-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 8px 16px;
+  scrollbar-width: thin;
+}
+.nx-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.nx-tree-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 骨架目录与归档是只读清单，不是可点的行：压暗一档，别让人以为是能打开的面板。 */
+
+.nx-index-new {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 10px;
+}
+.nx-index-new .nx-field {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+.nx-index-add {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: var(--nx-fs-md);
+}
+.nx-index-empty {
+  margin: 6px 10px;
+  font-size: var(--nx-fs-md);
+  color: var(--text-muted);
+}
+/* 〔批次68-R5〕左栏空态的主操作钮与句子同排（照大纲「新建大纲」的先例，同一控件词汇）。 */
+.nx-index-empty .nx-index-add {
+  margin-inline-start: 6px;
+}
+.nx-index-error {
+  margin: 6px 10px;
+  font-size: var(--nx-fs-md);
+  line-height: 1.6;
+  color: var(--control-danger);
+}
+.nx-index-warn {
+  margin: 8px 10px 0;
+  padding-left: 16px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--signal-warm);
+}
+
+/* —— 三栏骨架 ————————————————————————————————————————————— */
+.col-center {
+  /* 〔批次68-R2 任务1〕悬浮球钉在主面板（中心区）右下角，不再是视口坐标——
+     主面板是它的定位父级（球的锚点跟着中心区走，Agent 右栏永远不被它盖住）。 */
+  position: relative;
+  flex: 1 1 auto;
+  /* 〔批次68-R6 任务一〕占位化闭环：三列同排时中心区必须能缩到 0——缺了 min-width:0，
+     一条不折行的长稿会把本列顶到 min-content 宽，右缘控件跟着溢出列界，
+     Agent 坞（flex: 0 0 auto + 显式宽度）就被挤出可视区、像被浮层「盖住」。
+     加上这条，长内容只会在本列内滚动，坞永远稳稳占着自己那一段版面。 */
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--surface-workbench);
+}
+/* 核心区长文滚动条与索引窗一致走细（索引窗那份在 .nx-index-body）。 */
+.col-center .center {
+  scrollbar-width: thin;
+}
+.col-dock {
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+/* —— 中栏 ——————————————————————————————————————————————— */
+.center {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nx-section-gap);
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 18px 24px 28px;
+  background: var(--surface-workbench);
+  color: var(--archive-ink);
+  overflow: auto;
+}
+/* 批次34：核心区面板头（.center-head）已整块删除——DOM 不在，这条样式规则随之退役。
+   「标题栏放一个标题，其他东西就不用放了」：载体身份在竖条上、项目名在标题栏，
+   文档头只剩文档自己的名字（.doc-title）与底部一行 hint（.doc-meta-hint）。 */
+.center-empty {
+  margin: 0;
+  padding: 0 24px;
+  font-size: var(--nx-fs-md);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* —— 拖拽把手 ————————————————————————————————————————————— */
+.resizer {
+  flex: 0 0 5px;
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  transition: background-color 120ms ease;
+}
+.resizer:hover,
+.next-shell[data-dragging] .resizer {
+  background: var(--workbench-selected);
+}
+
+/* —— 横幅 ——————————————————————————————————————————————— */
+.banner {
+  margin: 0 24px;
+  padding: 10px 14px;
+  border-radius: var(--radius-control);
+  font-size: var(--nx-fs-md);
+  line-height: 1.6;
+}
+.banner.is-error {
+  border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--control-danger) 8%, transparent);
+  color: var(--control-danger);
+}
+.banner.is-warn {
+  border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent);
+  background: color-mix(in srgb, var(--signal-warm) 10%, transparent);
+  color: var(--signal-warm);
+}
+
+/* —— 弹窗内层词汇（工单B0 弹窗化后） ——————————————————————————
+   容器不再是核心区里的 .wizard section：配置一律收进 WorkbenchModal（容器形态
+   （遮罩／圆角面板）在 WorkbenchModal.vue 的 scoped 块里，走 --surface-overlay /
+   --z-modal-backdrop / --radius-surface / --surface-workbench-raised）。
+   这里只留弹窗内层仍在用的布局词汇：说明行、伴生勾选、载体按钮列与空态。 */
+.wizard-note {
+  margin: 0 0 12px;
+  font-size: var(--nx-fs-md);
+  line-height: 1.75;
+  color: var(--text-secondary);
+}
+.wizard-note.is-tight {
+  margin-bottom: 8px;
+}
+/* 〔批次68-R3 指南层〕机制细节永远进 title／这一段「细节」折叠，不进常驻版面。 */
+.nx-note-details {
+  margin: -4px 0 14px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.nx-note-details > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.nx-note-details p {
+  margin: 6px 0 0;
+}
+.nx-note-details code {
+  font-family: var(--font-mono);
+}
+.wizard-companions {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline-soft);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+}
+.wizard-companion {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink-soft);
+  cursor: pointer;
+}
+.wizard-companion input {
+  accent-color: var(--accent);
+}
+.wizard-companion small {
+  color: var(--text-muted);
+}
+.wizard-list,
+.wizard-bare {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wizard-item small {
+  margin-left: 6px;
+  color: var(--text-muted);
+}
+.wizard-empty {
+  margin: 0;
+  font-size: var(--nx-fs-md);
+  line-height: 1.75;
+  color: var(--text-muted);
+}
+
+/* —— 统一设置二级页的内容组件（工单C0 内容组件化） ——————————————————
+   四个 Section（偏好与模型／载体管理／新建项目／主载体选择）住在 next/shell/settings/，
+   这份行栅格、徽标与节标题原样搬自 AppNext.vue 的 scoped 块（批次8①／工单A1 的原话）——
+   颜色与字号本来就全走 token，搬进布局层只为让四节共用同一份词汇。 */
+.prefs-grid { display: flex; flex-direction: column; gap: 14px; }
+.prefs-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prefs-row-label { flex: 0 0 auto; min-width: 88px; font-size: var(--nx-fs-md); color: var(--archive-ink-soft); }
+.prefs-input { flex: 1 1 260px; width: auto; }
+.prefs-zoom { flex: 0 0 96px; width: 96px; }
+.prefs-row-hint { font-size: var(--nx-fs-md); color: var(--text-muted); }
+.prefs-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.prefs-state { margin: 0; padding: 8px 12px; border-radius: var(--radius-control); font-size: var(--nx-fs-md); line-height: 1.7; }
+.prefs-state.is-ready { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); }
+.prefs-state.is-warn { border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent); background: color-mix(in srgb, var(--signal-warm) 10%, transparent); color: var(--signal-warm); }
+.prefs-state.is-error { border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent); background: color-mix(in srgb, var(--control-danger) 8%, transparent); color: var(--control-danger); }
+
+.carriers-list { display: flex; flex-direction: column; gap: 8px; }
+.carriers-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--surface-workbench-muted) 60%, transparent);
+}
+.carriers-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.carriers-title { font-size: var(--nx-fs-md); color: var(--archive-ink); }
+.carriers-badge {
+  display: inline-block; margin-left: 6px; padding: 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--nx-radius-xs);
+  font-size: var(--nx-fs-2xs); color: var(--accent);
+}
+.carriers-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.carriers-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.carriers-hint { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+
+/* 节的标题：老版把「这个项目要创作什么？」放在弹窗头，归一后随主载体节走（SettingsPopup
+   右栏 storage 节也有一块面板内标题，同一做法）。 */
+.settings-panel-heading {
+  margin: 0 0 12px;
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-xl);
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+
+/* —— 右栏：Agent 对话框的宿主 ———————————————————————————————
+   这里只留一个容器：对话框本身的行高、配色、控件全是老版作品资料助手那套
+   （next/shell/AssistantDialog.vue 抄自 src/components/authoring/AuthoringKnowledgeAssistant.vue），
+   右栏不再另配一套样式，也不摆开发者向的说明文字。 */
+.dock {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface-assistant);
+  border-left: 1px solid var(--hairline-soft);
+  overflow: hidden;
+}
+.dock-hint {
+  margin: 0;
+  padding: 0 16px 12px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--signal-warm);
+}
+
+/* —— 载体面板 ————————————————————————————————————————————— */
+.pane {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* 正文是核心区的主角：面板占满剩余高度，编辑面跟着长，不在下面留一块空白。
+     〔批次76-R2 任务1〕这两句（flex＋min-height:0）是高度链上的一环：父级 `.nx-pane-window-body`
+     本批改成 flex 列之后才真正生效——之前 pane 用内容高度自断链，iframe 只剩 150px。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink);
+}
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.pane-empty p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+.pane-hint {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+/* 〔批次68-R3 任务2〕载体空态＝指南层：一句话＋一枚主操作钮（点了真的去）。 */
+.nx-empty-guide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.nx-empty-guide p {
+  margin: 0;
+}
+.pane-note {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+.pane-notice {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  color: var(--accent);
+  line-height: 1.7;
+}
+.pane-error {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--control-danger) 8%, transparent);
+  color: var(--control-danger);
+  line-height: 1.7;
+}
+.pane-warn {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--signal-warm);
+}
+.shelf-head,
+.entries-head,
+.editor-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.row-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-btn {
+  font-size: var(--nx-fs-md);
+}
+/* 面板内的一行小字（提案审阅的两块对照各带自己的字数／版本）：文档头不放 meta（批次33），
+   这里只剩面板内部的度量说明。 */
+.editor-meta {
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.editor-meta em {
+  color: var(--signal-warm);
+  font-style: normal;
+}
+/* 编辑面就是文档本身（批次31 · P18 第 1 条）：正文满幅铺在窗格底色上——
+   没有描边、没有卡片背景、没有圆角，只留呼吸留白（padding）。
+   禁止「中间一个框把内容装进去」：框一出现，作者看到的就是控件，不是稿子。
+   写法说明：textarea 的 UA 描边用 border-style: none 摘掉（P18 门禁要求这一块里
+   不许再出现 border:／border-radius: 的声明——谁把框加回来，那条断言当场红）。
+   批次33：连聚焦时的 outline 也拆了——写作面的焦点指示就是光标，不是一圈蓝框
+   （门禁对 .editor-area 的规则块反向断言「不得出现 outline:」）。 */
+.editor-area {
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 340px;
+  padding: 18px 20px;
+  border-style: none;
+  background: transparent;
+  color: var(--archive-ink);
+  /* 字体单轨制：正文编辑面是「作品」那一面，只许文楷（--font-display）。
+     --font-writing 是等宽栈（Menlo／Consolas），拿它当正文字体与写作偏好里那句承诺相反。 */
+  font-family: var(--font-display);
+  /* 工单B 写作偏好：字号/行高由 AppNext 读到偏好后在根节点写 --writing-*；没写时回退到刻度默认
+     （17px＝--nx-fs-lg、1.9），与 next/runtime/appPreferences.mjs 的 PREFS_DEFAULTS 一致。 */
+  font-size: var(--writing-font-size, var(--nx-fs-lg));
+  line-height: var(--writing-line-height, 1.9);
+  /* 批次46B 排版偏好：首行缩进由偏好写进 --writing-text-indent（em 刻度）。
+     textarea 没有逐段 margin，段距在这里落不下去——阅读态 .doc-reading 的段落才逐段生效。 */
+  text-indent: var(--writing-text-indent, 2em);
+  resize: vertical;
+}
+/* 文档标题（批次33 · P18 头部归一）：头部的展示体与大纲节点标题共用一套字——一行大字，
+   没有底色、没有描边、没有圆角。头部行里它就是文档的名字（章节名／条目名／资料名／剧本名／
+   规则名／提案审阅的文件名），不再叠「正文」「演示之书 · novel」这类身份标签。 */
+.doc-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--nx-fs-xl);
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--archive-ink);
+}
+/* 可编辑的文档标题（大纲节点）：输入框形态，度量随 .doc-title，框一律不画。 */
+input.doc-title {
+  width: 100%;
+  padding: 2px 0;
+  border-style: none;
+  background: transparent;
+}
+.doc-field {
+  width: 100%;
+  padding: 2px 0;
+  border-style: none;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: var(--nx-fs-md);
+  line-height: 1.7;
+  color: var(--text-primary);
+  resize: none;
+}
+.doc-title:focus-visible,
+.doc-field:focus-visible {
+  outline: 0;
+  background: color-mix(in srgb, var(--archive-ink) 4%, transparent);
+}
+/* 文档头（批次33 · P18 头部归一的容器）：只有一行——标题在左（吃掉剩余宽度），
+   右端至多两个 quiet 操作（保存 chip／编辑·取消）。meta 不在头部。 */
+.doc-head {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.doc-head .doc-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-head .nx-pane-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+/* 文档底部 hint（批次33）：路径 · 第 N 版 · N 字（条目再加关键词）——作者说的话
+   「最多在底部放一些提示」。muted 小字，度量走 --nx-fs-2xs 刻度，横向留白与正文同一档。 */
+.doc-meta-hint {
+  margin: 0;
+  padding: 0 20px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.doc-meta-hint em {
+  color: var(--signal-warm);
+  font-style: normal;
+}
+/* 正文分页条（批次55）：只在 text-pages 且多页时出现，quiet 钮＋页码；
+   与底部 hint 同一档小字、同一档横向留白——翻页是读的辅助，不是另一排控件。 */
+.chapter-pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 0 20px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* 条目／资料／剧本的窗格外壳（批次31 · P18 第 1 条）：不再是一张卡片——
+   正文满幅铺在窗格底色上，只留纵向留白（横向留白由 .center 的 24px 给，
+   正文 textarea 自己还有一层 padding，那是呼吸，不是框）。 */
+.entry-body {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.entry-text {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--font-display);
+  font-size: var(--nx-fs-lg);
+  line-height: 1.85;
+  color: var(--archive-ink);
+}
+/* 阅读态与编辑态同一条左边线（P18）：正文的呼吸留白由 .editor-area 的 padding 给，
+   渲染后的 md 阅读面照同一档补上横向留白——切换编辑时文字不会左右跳一下。 */
+.entry-body > .entry-text {
+  padding: 0 20px;
+}
+/* 批次43：正文／构思／大纲／约束四面的阅读态（.doc-reading）摊在 .editor 窗格里。
+   度量照写作面那一档（写作字体＋写作偏好里的字号行高），留白与 .editor-area 对齐，
+   长文自己滚——文档面就该是文档的样子，不是另一个控件。 */
+.doc-reading {
+  padding: 18px 20px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  font-family: var(--font-display);
+  font-size: var(--writing-font-size, var(--nx-fs-lg));
+  line-height: var(--writing-line-height, 1.9);
+}
+
+/* —— 世界书三栏维基阅读版式（批次68-R2 · 任务二，参照作者自有 NovelPedia 版式语言） ————
+   工单死口径：树 : 阅读 : 信息卡 起排 `260px : 1fr : min(46%, 430px)`；
+   不做拖拽分隔（本批不定分隔条语义）；信息卡可一钮收起（收起后阅读列吃满，flex 自然给出）；
+   窄窗口时信息卡折到阅读列下方（见文末 @media）。批次44／60 的两段式（上图表下详情、
+   左肥右窄 detail 320px）随结构翻案退役。 */
+.nx-entries-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.nx-wiki-cols {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+.nx-wiki-tree {
+  flex: 0 0 260px;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.nx-wiki-tree-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.nx-wiki-center {
+  flex: 1 1 auto;
+  /* 〔调度方补刀〕阅读列保底可读宽：信息卡自动收起（EntriesBoard 内 ResizeObserver）后这里
+     拿得到空间；真被挤到底线以下时宁可横向让渡，不再出 53px 竖条。 */
+  min-width: 240px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.nx-wiki-infobox {
+  flex: 0 0 min(46%, 430px);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: color-mix(in srgb, var(--surface-workbench-muted) 45%, transparent);
+}
+.nx-wiki-infobox.is-collapsed {
+  flex: 0 0 auto;
+  padding: 4px;
+}
+/* 〔调度方补刀〕窄容器（主组被对半分屏挤压）下不许任何一栏把行撑爆：
+   树允许压缩到 180px 保底、收起态窄条瘦身——横滚条只在真装不下时出现。 */
+.nx-wiki-cols.is-infobox-collapsed .nx-wiki-tree {
+  flex: 0 1 260px;
+  min-width: 180px;
+}
+.nx-wiki-infobox.is-collapsed .nx-wiki-infobox-expand {
+  font-size: var(--nx-fs-2xs);
+  padding: 4px 6px;
+}
+.nx-wiki-infobox-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.nx-wiki-infobox-caption {
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  color: var(--archive-ink-soft);
+}
+/* 信息卡读数表：左列标签、右列值（缺的字段整行不摆——不编造）。
+   批次 W5 密度：行与行之间用一道发丝线分隔（照 NovelPedia 的 infobox 行），
+   纵向留白收进行内 padding，读数扫描线更稳。 */
+.nx-wiki-infobox-rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0 10px;
+  margin: 0 0 8px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.5;
+}
+.nx-wiki-infobox-rows dt {
+  padding: 4px 0;
+  border-top: 1px solid var(--hairline-soft);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.nx-wiki-infobox-rows dd {
+  padding: 4px 0;
+  border-top: 1px solid var(--hairline-soft);
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.nx-wiki-infobox-rows > dt:first-child,
+.nx-wiki-infobox-rows > dd:nth-child(2) {
+  border-top: 0;
+}
+.nx-wiki-infobox-badge,
+.nx-wiki-infobox-provenance {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--nx-radius-pill);
+  background: color-mix(in srgb, var(--archive-ink) 8%, transparent);
+  color: var(--archive-ink);
+}
+.nx-wiki-infobox-tier {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.nx-wiki-infobox-hint {
+  color: var(--text-muted);
+}
+/* —— 阅读列首「标题区」（批次 W5）：左是条目名，右是关系图卡（图谱从信息卡竖栏搬来） ————
+   卡在文档流里（标题区右侧的浮动格），不 absolute 叠正文：窄了先换行到标题下方；
+   hover 放大以右上角为原点，只向左下扩——不给阅读列造横向滚动条。 */
+.nx-wiki-hero {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+.nx-wiki-hero-lead {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.nx-wiki-corner {
+  flex: 0 1 340px;
+  min-width: min(100%, 300px);
+  max-width: 360px;
+  margin-inline-start: auto;
+}
+.nx-wiki-graph-card {
+  --nx-entry-graph-height: 210px;
+  position: relative;
+  z-index: 1;
+  padding: 6px 8px 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: var(--surface-workbench-raised);
+  transform-origin: top right;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+.nx-wiki-graph-card:hover {
+  z-index: 2;
+  transform: scale(1.12);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-wiki-graph-card:focus-within {
+  z-index: 2;
+  transform: scale(1.12);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-wiki-graph-card.is-collapsed {
+  padding: 4px 8px;
+}
+.nx-wiki-graph-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.nx-wiki-graph-card-title {
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--archive-ink-soft);
+}
+.nx-wiki-graph-card-collapse,
+.nx-wiki-graph-card-expand {
+  font-size: var(--nx-fs-2xs);
+}
+.nx-wiki-graph-card-expand {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+/* —— 层级 dot（统计口径：按被引用次数分档，树行前缀与信息卡共用） ————————— */
+.nx-wiki-lvl-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.nx-wiki-lvl-dot.is-s {
+  background: var(--signal-warm);
+}
+.nx-wiki-lvl-dot.is-a {
+  background: var(--accent);
+}
+.nx-wiki-lvl-dot.is-b {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.nx-wiki-lvl-dot.is-c {
+  background: transparent;
+  border: 1px solid var(--text-muted);
+}
+.nx-wiki-tree .nx-tree-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* —— wiki 阅读皮（批次68-R2 任务二）：mdRender 管线一字不动，只在渲染产物之上加版式 ————
+   全部规则挂在 .entry-text.nx-wiki-article 下——.entry-text 本就在展示体白名单族里（批次68-R1 闸⑯），
+   这里不新增任何 --font-display 声明，衬线阅读由 .entry-text 继承下来。 */
+.nx-wiki-title {
+  font-size: var(--nx-fs-2xl);
+  line-height: 1.35;
+  margin: 0 0 2px;
+  padding-bottom: 0.18em;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+/* 阅读面行距与段距（批次 W5 密度）：NovelPedia 正文是「密一点、段间留一口」，
+   .entry-text 继承的 1.9 行距在这里收一档；段距按 em 跟字号走，不另立刻度。 */
+.entry-text.nx-wiki-article {
+  line-height: 1.78;
+}
+.entry-text.nx-wiki-article p {
+  margin: 0 0 0.72em;
+}
+/* h2 章节底线（NovelPedia 的 sec>h2 版式语言）。 */
+.entry-text.nx-wiki-article h2 {
+  margin-top: 1.5em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+/* 正文里的一级题（多用于同名 H1 去重后的替代题面）与三级题：层次靠字号档位＋字重。 */
+.entry-text.nx-wiki-article h1 {
+  margin: 1.4em 0 0.5em;
+  font-size: var(--nx-fs-2xl);
+  font-weight: 600;
+}
+.entry-text.nx-wiki-article h3 {
+  margin: 1.2em 0 0.4em;
+  font-size: var(--nx-fs-lg);
+  font-weight: 600;
+}
+/* 首段导语：阅读列的第一段抬一档（--nx-fs-xl，刻度内，不是第六档裸字号）。 */
+.entry-text.nx-wiki-article > p:first-of-type {
+  font-size: var(--nx-fs-xl);
+  color: var(--text-primary);
+}
+/* 引用块＝quote 版式（出处若写在引用行里，随原文如实呈现）：
+   竖线与底色取中性墨色——引用是正文的一部分，不抢强调色。 */
+.entry-text.nx-wiki-article blockquote {
+  margin: 1em 0;
+  padding: 8px 14px;
+  border-inline-start: 3px solid var(--archive-ink-soft);
+  border-radius: var(--nx-radius-xs);
+  background: color-mix(in srgb, var(--archive-ink) 4%, transparent);
+  color: var(--text-muted);
+}
+/* 条目间蓝链的胶囊皮见下面 .nx-wikilink 基础规则之后（特异度更高，位置无所谓；
+   放在那里是为了 .nx-wikilink { 这条基础规则保持「文件里第一个同名规则」的读数锚点）。 */
+
+/* —— 窄屏（手机）：桌面那三栏在 390px 上会挤成一团，作者在手机侧要能真试 ——————
+   竖条转成横条、正文占满上半、Agent 对话固定在下半屏，索引窗改成覆盖式抽屉。
+   桌面形态一行没动：这里只是窄屏另走一套排布。 */
+@media (max-width: 860px) {
+  .next-shell {
+    position: relative;
+    flex-direction: column;
+  }
+  .nx-ribbon {
+    flex: 0 0 44px;
+    width: 100%;
+    height: 44px;
+    flex-direction: row;
+    padding-top: 0;
+    border-inline-end: 0;
+    border-bottom: 1px solid var(--hairline-soft);
+  }
+  .nx-ribbon-item {
+    height: 44px;
+  }
+  .nx-ribbon-item.is-bottom {
+    margin-top: 0;
+    margin-bottom: 0;
+    margin-left: auto;
+  }
+  .nx-index-window {
+    position: absolute;
+    z-index: 4;
+    top: 44px;
+    bottom: 52vh;
+    left: 0;
+    width: 78vw !important;
+  }
+  /* 索引窗在窄屏是覆盖式抽屉，桌面那条拖拽把手没有意义。 */
+  .resizer {
+    display: none;
+  }
+  .col-center {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+  }
+  .col-dock {
+    width: 100% !important;
+    flex: 0 0 auto;
+    height: 52vh;
+  }
+  /* 世界书三栏在窄屏翻折：信息卡整段折到阅读列下方（工单②的 @media 语义），
+     树列收窄、阅读列吃掉一行剩余。 */
+  .nx-wiki-cols {
+    flex-wrap: wrap;
+  }
+  .nx-wiki-tree {
+    flex: 0 0 40%;
+    min-width: 180px;
+  }
+  .nx-wiki-center {
+    flex: 1 1 45%;
+    min-height: 140px;
+  }
+  /* 窄屏的关系图卡不再钉 340px：整行折到标题下方，hover 放大也留在列内。 */
+  .nx-wiki-corner {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+    margin-inline-start: 0;
+  }
+  .nx-wiki-infobox {
+    order: 3;
+    flex: 1 1 100%;
+  }
+  .dock {
+    border-left: 0;
+    border-top: 1px solid var(--hairline-soft);
+  }
+}
+
+/* —— 文档窗与页签栏（批次61 · 〔铁律一／四〕）————————————————————
+   中间 doc 区＝页底座：页签栏只回答「哪一页是当前页」，窗口 chrome（标题条＋
+   收起／分屏／×）仍只 PaneWindow 这一份。页态按页组排版（主／侧各半＝原来的分屏），
+   浮窗态才持矩形、可拖标题条移动、四角缩放；收起＝右缘一枚竖排标签。
+   z-index 走页记录的叠序（低于统一二级页）。
+   颜色、字号、圆角一律走 token；尺寸是布局 px（允许）。 */
+.nx-window-layer {
+  position: relative;
+  z-index: 0;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* —— 页组列（批次76-R3 任务1／2 · VS Code 编辑器组模型）————————————————————————
+   作者裁定那一句：「右边半个屏既然跟左边共用分屏，就必须显示出那个窗口的名字」——
+   一组一列，列内**首行**＝本组自己的签行（不再有横跨整屏、两组共用的一条全局条），
+   列内其余＝本组此刻摊开的那一页。空组整列不渲染（〔任务3〕「有条无内容」＝违规态）。
+   列本身一律保持 position: static：一旦给列定位，页态窗拖拽时 parentRect() 量到的「层」
+   就缩水成半个屏，paneSnap 那套吸附分界（拖左缘落主组／拖右缘落侧组）会跟着改判——
+   浮窗那一列因此也只作绝对定位的容器，不占版面宽度，几何基准仍是整块窗口层。 */
+.nx-pane-group {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+/* 焦点不在本组：本组条退一档底色，但**仍亮着自己那一组的当前页**（〔任务2〕互不抢——
+   不是把整列压暗，只是把「哪一组在说话」这一步交给底色；读数走变量，不新开色值）。 */
+.nx-pane-group.is-blurred-group {
+  --nx-tabstrip-surface: color-mix(in srgb, var(--surface-workbench-muted) 55%, transparent);
+}
+.nx-pane-group.is-overlay-group {
+  position: absolute;
+  inset: 0;
+  flex: none;
+  pointer-events: none;
+}
+.nx-pane-window {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--archive-ink) 16%, transparent);
+  overflow: hidden;
+  /* 〔批次76-R3 任务2〕浮窗那一列（.is-overlay-group）不吃指针，窗体自己要吃得回来——
+     写在基座规则上，是为了不去新建一条含 `.nx-pane-window {` 字样的复合选择器：
+     视觉契约里那条 ruleBody(‘.nx-pane-window {’) 取的是**第一条**命中，复合选择器会把它带偏。 */
+  pointer-events: auto;
+}
+/* 页态：不绝对定位、不领阴影——它是所在页组的那一页，铺满由排版决定（〔铁律一〕）。
+   侧页组那一扇加左缘细线，让「对半」有一条可读的分界。 */
+.nx-pane-window.is-page {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  /* 〔批次76-R3 任务2〕页态现在是**组列那一根 flex 列**的子项（列内首行是签行、它排其后）：
+     缺 min-height:0 就等于「内容多长窗多高」，长稿会把整列撑破——守卫⑫那条高度链在这一环断掉。 */
+  min-height: 0;
+  border-radius: 0;
+  border-top: 0;
+  border-bottom: 0;
+  box-shadow: none;
+}
+.nx-pane-window.is-page.is-in-side {
+  border-left: 1px solid var(--hairline-soft);
+}
+.nx-pane-window.is-maximized {
+  border-radius: 0;
+  box-shadow: none;
+}
+.nx-pane-window.is-dragging {
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--archive-ink) 22%, transparent);
+}
+.nx-pane-window.is-resizing {
+  user-select: none;
+}
+.nx-pane-window-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--surface-workbench-muted);
+  color: var(--archive-ink);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.nx-pane-window.is-dragging .nx-pane-window-head {
+  cursor: grabbing;
+}
+.nx-pane-window-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--nx-fs-md);
+  font-weight: 500;
+}
+/* 铁律一：右上角只有三枚钮（收起／分屏／×），不再有每 pane 定制的窗口按钮。 */
+.nx-pane-window-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  margin-left: auto;
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+.nx-pane-window:hover .nx-pane-window-actions,
+.nx-pane-window:focus-within .nx-pane-window-actions {
+  opacity: 1;
+}
+.nx-pane-window-btn {
+  flex: none;
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.nx-pane-window-btn:hover:not(:disabled) {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
+}
+.nx-pane-window-btn.is-active {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
+}
+.nx-pane-window-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+  scrollbar-width: thin;
+  /* 〔批次76-R2 任务1〕高度链：这一行原来只是 block，子节点 `.pane` 那句 `flex:1 1 auto` 落空
+     （flex 属性对 block 容器的子节点无效），于是 pane 用内容高度自断链条、iframe 只剩 150px。
+     改成 flex 列后 pane 吃满窗 body 的可用高度，编辑面与应用面各自长到该长的位置。
+     〔守卫⑫〕这条链上不许出现 `height: auto` 断点。 */
+  display: flex;
+  flex-direction: column;
+}
+/* —— 收起态＝右下角悬浮球（批次76 · 〔裁定B〕）——————————————————————————
+   原来这里是右缘一竖列竖排文字标签（`writing-mode: vertical-rl`），
+   靠 `top: 120 + tabIndex * 36` 硬排——5 扇同时收起就叠成 6 对、后面的点不到（遍历专章）。
+   整段规则连选择器一起删除，收起态不再在屏幕上占一列；呈现与落点统一归 CollapseOrb。
+   层级只用既有档位表里的 `--z-floating-action`（260）：本批不给 --z-* 新增任何一档。 */
+.nx-collapse-orb {
+  /* 〔批次68-R2 任务1〕作者口径「悬浮球悬的应该是主面板右下角，不是 Agent 右下角」：
+     原来是 fixed 视口坐标（right 24 落在 Pi-Agent 右栏上），现钉进 col-center（主面板）
+     的右下角——absolute 相对主面板，球随主面板走；侧组对半时球仍在中心区右下角，
+     不居屏幕中缝。收起态唯一回收入口的语义（守卫①②）不变。 */
+  position: absolute;
+  right: 24px;
+  bottom: 16px; /* 主面板内部贴底留 16px（状态栏在中心区之外，不再需要 54px 让位）。 */
+  z-index: var(--z-floating-action);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+.nx-collapse-orb-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 50%;
+  background: var(--surface-workbench-raised);
+  color: var(--archive-ink);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--archive-ink) 16%, transparent);
+}
+.nx-collapse-orb-button:hover:not(:disabled),
+.nx-collapse-orb-button.is-open {
+  background: var(--workbench-selected);
+}
+.nx-collapse-orb-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: var(--radius-control);
+  background: var(--archive-ink);
+  color: var(--surface-workbench-raised);
+  font-size: var(--nx-fs-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 20px;
+  text-align: center;
+}
+/* 通知是另一档信息：红点＋数字分开画（〔工单任务2〕「红点＝有通知、数字＝收起面板数，两态视觉分开」）。 */
+.nx-collapse-orb-dot {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--control-danger);
+}
+.nx-collapse-orb-panel {
+  width: 300px;
+  max-height: 60vh;
+  overflow: auto;
+  scrollbar-width: thin;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  color: var(--text-secondary);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-collapse-orb-group-title {
+  margin: 0 0 4px;
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+.nx-collapse-orb-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nx-collapse-orb-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+/* 主键整行命中区 ≥44×44（外部审计 H／OD craft 判据的「主键」档）。 */
+.nx-collapse-orb-open {
+  flex: 1 1 auto;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: var(--radius-control);
+  text-align: start;
+  color: var(--text-secondary);
+}
+.nx-collapse-orb-open:hover:not(:disabled) {
+  background: var(--workbench-selected);
+  color: var(--archive-ink);
+}
+.nx-collapse-orb-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-collapse-orb-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.nx-collapse-orb-close {
+  flex: none;
+  width: 24px;
+  min-width: 24px;
+  min-height: 44px;
+  padding: 0;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.nx-collapse-orb-close:hover:not(:disabled) {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
+}
+/* —— 拖拽吸附的预览（批次76 · 〔裁定A〕「拖到侧边可以吸附」）——————————————
+   指针进命中圈才画这一块（无预览不落位＝工单守卫④）；预览只是提示，不参与排版。 */
+.nx-pane-snap-preview {
+  position: absolute;
+  z-index: var(--z-floating-dock);
+  pointer-events: none;
+  border: 2px dashed var(--signal-warm);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--signal-warm) 12%, transparent);
+}
+.nx-pane-snap-preview[data-snap-target="orb"] {
+  border-radius: 50%;
+  border-color: var(--control-danger);
+  background: color-mix(in srgb, var(--control-danger) 14%, transparent);
+}
+.nx-pane-window.is-dragging {
+  cursor: grabbing;
+}
+/* —— 页组的页签栏（批次61 · 〔铁律四〕；批次76-R2 任务2／3 改了它的职责；
+   〔批次76-R3 任务1〕它按页组出，一条只列本组）————————————————————————————————
+   它不是第二套窗口壳：一条横向签列，回答「这一组里哪一页是当前页」＋「这块板还有哪面没开」。
+   签上没有常驻形态钮——形态切换只在右键菜单里（裁定③）。
+   〔批次76-R2 任务2〕页态窗头撤了之后，这一行同时是**标题行与拖拽手柄**：
+   点＝揭示，×＝关页，按住拖＝吸附换形态（起点在这里，判定与预览仍在 PaneWindow），右键＝形态菜单。
+   度量抄的是浏览器／IDE 的常见档：签高 28px，窄屏不折行、超出横向滚。 */
+.nx-page-tabstrip {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  gap: 2px;
+  min-height: 30px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--nx-tabstrip-surface, var(--surface-workbench-muted));
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* 签多了横向滚，但不画那道滚动条（它在签行底下是一条粗灰杠）：竖滚轮在签行上横滚、当前签自动滚入视野，
+     两件都在 PaneTabStrip 里——跟 VS Code 编辑器组的签行同一个手感。 */
+  scrollbar-width: none;
+}
+.nx-page-tabstrip::-webkit-scrollbar {
+  display: none;
+}
+/* 〔批次76-R3 任务2〕侧组条加与 76-R2 同款的左缘分隔：窗体那一条竖线（.nx-pane-window.is-page.is-in-side）
+   只铺到窗体，签行这一段空着——右半屏的「半个屏」分界就得从标题行一直续到内容，两段接上才读得出那一半是谁。 */
+.nx-page-tabstrip.is-group-side {
+  border-left: 1px solid var(--hairline-soft);
+}
+.nx-page-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* 〔批次76-R3 补刀〕签宽按 IDE（VS Code「fit」档）：按内容宽、不挤扁，装不下就整条横滚——
+     原来的浏览器式「一起挤扁到 96px」把半屏里七八枚签全压成「小..00…」这种残桩，一枚都认不出来。
+     上限 240px：再长的文档名才开始省略（先省载体名，见 .nx-page-tab-head）。 */
+  flex: none;
+  max-width: 240px;
+  min-width: 96px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-control) var(--radius-control) 0 0;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-md);
+  cursor: pointer;
+  user-select: none;
+  /* 页签行现在是页态窗口的拖拽起点：不声明 touch-action，指针一按下去浏览器先滚动、拖不动。 */
+  touch-action: none;
+}
+/* 〔批次76-R2 任务2〕页态那一档的签就是标题行，按住它可拖——给一个 grab 的说法。 */
+.nx-page-tab.is-form-page {
+  cursor: grab;
+}
+.nx-page-tab.is-form-page:active {
+  cursor: grabbing;
+}
+/* 〔批次76-R2 任务3〕同载体多面中栏 pane 的「待开签」：那块面还没占页，签上是虚线待填的样子。
+   它不是一支第二行页签条——切换职责并进这一行后，上面那条 nx-center-tabs 整条退役。 */
+.nx-page-tab.is-pending-pane {
+  color: var(--text-muted);
+  border-style: dashed;
+  border-color: var(--hairline-soft);
+  background: transparent;
+  cursor: pointer;
+}
+.nx-page-tab.is-pending-pane:hover {
+  border-style: solid;
+}
+.nx-page-tab:hover {
+  color: var(--archive-ink);
+  background: color-mix(in srgb, var(--surface-workbench-raised) 60%, transparent);
+}
+.nx-page-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.nx-page-tab.is-active {
+  color: var(--archive-ink);
+  border-color: var(--hairline-soft);
+  background: var(--surface-workbench-raised);
+}
+.nx-page-tab-label {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* 签名两段的截断次序：载体名（head）先让，文档名（tail）不参与收缩——只在比整段还长时才被上限截。
+   （按 flex-shrink 比例分摊的写法不行：收缩量按内容宽加权，tail 总会分到零点几像素，亚像素溢出也出省略号。）
+   同一插件两面都以插件名开头，先切 head 才认得出是哪一面。 */
+.nx-page-tab-head {
+  flex: 0 1 auto;
+  min-width: 1.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.nx-page-tab-sep {
+  flex: none;
+  /* 分隔符自己是 flex 项：首尾空白会被当成行首行尾吞掉，「载体·文档」就粘成一串。 */
+  white-space: pre;
+}
+.nx-page-tab-tail {
+  flex: none;
+  max-width: calc(100% - 2.5em);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 浮窗／侧缘标签在签上留一个词——「看得见」要覆盖四种形态，不只页态。 */
+.nx-page-tab-flag {
+  flex: none;
+  padding: 0 4px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  font-size: var(--nx-fs-2xs);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.nx-page-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  /* 〔批次76 任务4-4〕遍历实测这枚「关闭这一页」是 20×36：横向 20px 不够 24 这条线。
+     页签本身有 36px 高（--nav-row-height 那一档），只把宽补到 24、min-height 同步抬到 24。 */
+  width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-muted);
+  opacity: 0;
+}
+.nx-page-tab:hover .nx-page-tab-close,
+.nx-page-tab:focus-within .nx-page-tab-close,
+.nx-page-tab.is-active .nx-page-tab-close {
+  opacity: 1;
+}
+.nx-page-tab-close:hover {
+  color: var(--archive-ink);
+  background: var(--workbench-selected);
+}
+/* 浮窗四角缩放把手：只在浮窗态渲染（分屏／最大化不吃这个手势）。 */
+.nx-pane-window-resize {
+  position: absolute;
+  z-index: 1;
+  width: 12px;
+  height: 12px;
+}
+.nx-pane-window-resize.is-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.nx-pane-window-resize.is-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.nx-pane-window-resize.is-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.nx-pane-window-resize.is-se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+/* 迷你大纲列表：与索引窗同一套行词汇，点一行跳大纲编辑。 */
+.nx-overlay-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.nx-overlay-empty {
+  margin: 0;
+  padding: 6px 4px;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-md);
+  line-height: 1.6;
+}
+.nx-overlay-error {
+  margin: 0;
+  padding: 6px 4px;
+  color: var(--control-danger);
+  font-size: var(--nx-fs-md);
+  line-height: 1.6;
+}
+
+/* —— 右键菜单（索引窗大纲节点／章节）————————————————————————————
+   颜色/字号/圆角全走 token，Esc／点外收起（IndexWindow 自己管）。 */
+.nx-context-menu {
+  position: fixed;
+  z-index: var(--z-popover);
+  min-width: 200px;
+  max-width: 260px;
+  padding: 4px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
+}
+.nx-context-group {
+  margin: 2px 8px 4px;
+  font-size: var(--nx-fs-2xs);
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.nx-context-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: var(--nx-fs-md);
+  text-align: left;
+}
+.nx-context-item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+/* 章节菜单两步删除的说明（批次46A）：与菜单同皮，讲清「删了从哪找回」。 */
+.nx-context-hint {
+  margin: 2px 8px 4px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.nx-context-mark {
+  color: var(--accent);
+}
+.nx-context-empty {
+  margin: 2px 8px 6px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.nx-context-separator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--hairline-soft);
+}
+
+/* —— 富渲染（批次32）：marked 带来的新元素 —————————————————————————————
+   批次26 的手写解析器只出 p/h/ul/ol/pre/blockquote/hr/a/strong/em/del/code；批次32 换成
+   marked 之后表格、图片、任务列表、h4–h6、行内 HTML 白名单标签都会出现——这里只补这些
+   新元素的度量。阅读面的行高与字号（P18 裁定）一个字都不动：正文容器 .nx-rendered-md
+   的基础度量仍由 CarrierPaneHost 的 .entry-text 带。
+   为什么写在布局层：载体阅读面的 scoped 样式已经盖住老元素，新元素是所有阅读面共用的，
+   放进全局层一次到位。
+
+   〔批次68-R1 任务2〕标题与行内代码的**档位**也归这里。原先只有 CarrierPaneHost 的 scoped
+   :deep() 管到了 h1–h6，另外两个共用 .nx-rendered-md 的面（条目详情面板、右栏对话正文）没被覆盖，
+   于是浏览器缺省从 2em／1.5em／.9em 里冒出来——实测同屏多出 30px×2、22.5px×1、13.33px×14。
+   档位取和阅读面同一套（h1=2xl、h2=xl、h3=lg、h4–h6=md、行内代码=md）：三个面读同一本刻度，
+   不是给谁另立一套。 */
+.nx-rendered-md h1 { font-size: var(--nx-fs-2xl); }
+.nx-rendered-md h2 { font-size: var(--nx-fs-xl); }
+.nx-rendered-md h3 { font-size: var(--nx-fs-lg); }
+.nx-rendered-md h4,
+.nx-rendered-md h5,
+.nx-rendered-md h6 { font-size: var(--nx-fs-md); }
+/* 行内 code／kbd／samp：Chrome 的 UA 样式表给这三枚「13.3333px」，不写档位就是第六档。
+   等宽只留给代码本身（字体单轨制），字号仍走刻度。 */
+.nx-rendered-md code,
+.nx-rendered-md samp { font-size: var(--nx-fs-md); }
+.nx-rendered-md table {
+  margin: 0 0 0.9em;
+  border-collapse: collapse;
+  border: 1px solid var(--hairline-soft);
+}
+.nx-rendered-md th,
+.nx-rendered-md td {
+  padding: 6px 10px;
+  border: 1px solid var(--hairline-soft);
+  text-align: start;
+  vertical-align: top;
+}
+.nx-rendered-md th {
+  background: var(--surface-workbench-input);
+  font-weight: 600;
+  color: var(--archive-ink);
+}
+.nx-rendered-md img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--nx-radius-xs);
+}
+/* 任务列表（GFM）：checkbox 是原生控件，条目不再画圆点，缩进与普通列表对齐。 */
+.nx-rendered-md li:has(> input[type='checkbox']) {
+  list-style: none;
+  margin-inline-start: -1.2em;
+}
+.nx-rendered-md input[type='checkbox'] {
+  margin-inline-end: 6px;
+  accent-color: var(--archive-olive);
+}
+/* 行内 HTML 白名单标签（marked 原样透传、sanitize 放行）：只给最小可读性。 */
+.nx-rendered-md mark {
+  background: var(--surface-workbench-input);
+  color: var(--archive-ink);
+}
+.nx-rendered-md kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--nx-radius-xs);
+  background: var(--surface-workbench-input);
+  font-family: var(--font-mono);
+  font-size: var(--nx-fs-md);
+}
+.nx-rendered-md sub,
+.nx-rendered-md sup {
+  font-size: var(--nx-fs-2xs);
+}
+/* 代码块：marked 输出 <pre><code class="language-x">，批次26 的 .md-code 类没有了。
+   CarrierPaneHost 那条 :deep(code) 是行内样式的（scoped 选择器带 data-v，类数多一筹），
+   这里用重复类名＋子选择器（类数相同再比元素数）把块内 code 的 padding／底色／圆角压回来，
+   否则整块代码像一枚大徽章。 */
+.nx-rendered-md.nx-rendered-md pre {
+  margin: 0 0 0.9em;
+  padding: 10px 12px;
+  overflow-x: auto;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-input);
+  white-space: pre;
+}
+.nx-rendered-md.nx-rendered-md pre > code {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--nx-fs-md);
+  line-height: 1.65;
+  white-space: pre;
+}
+
+/* —— Wiki 双链与反向链接（批次38）———————————————————————————————— */
+/* 条目阅读态里其它条目的名字：可点、点开跳那个条目。虚线下划线＝wiki 惯例，hover 才实。 */
+.nx-wikilink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-style: dashed;
+  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  cursor: pointer;
+  /* 〔批次76 任务4-4〕遍历实测「可点链接行」整行只有 19px 高：inline 锚点的可点区就是那一行字。
+     inline 元素的纵向 padding 不改行盒高度（排版不动），但会把命中区向上下各扩 3px——
+     这是唯一能在不打断正文行距的前提下把命中区抬到 ≈25px 的写法。 */
+  padding: 3px 2px;
+  text-underline-offset: 2px;
+}
+.nx-wikilink:hover { text-decoration-style: solid; }
+/* 〔批次68-R2 任务二〕wiki 阅读皮里的蓝链＝胶囊（.tag 版式）：不画下划线、给一层淡底。
+   特异度 (0,3,0) 高于上面基础规则；命中区仍吃 inline padding，纵向 3px 那一档不撤。
+   链的解析与点击一字不动（wikiLinks.mjs 那套），这里只是皮。 */
+.entry-text.nx-wiki-article .nx-wikilink {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--nx-radius-pill);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  text-decoration: none;
+}
+/* 反向链接行：跟 doc-meta-hint 同一档小字，chip 是 quiet 钮（点开跳那条）。 */
+.entry-backlinks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.entry-backlinks-label { color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.entry-backlink { padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: transparent; color: var(--text-secondary); font-size: var(--nx-fs-2xs); cursor: pointer; }
+.entry-backlink:hover { color: var(--text-primary); border-color: var(--workbench-selected); }
+
+/* —— 正文写作动作（批次41）———————————————————————————————————————
+   对齐老前端写作页的「续写／改写」：动作带贴在正文下方，正文一聚焦才浮现（P18 第 2 条：
+   常驻按钮行一律取消）。它不是文档的一部分，所以只给一层极淡的底，不画边框、不圆角——
+   作者看到的那一层仍然是稿子，动作只是脚注。 */
+.nx-writing-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 20px 2px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.nx-writing-action {
+  padding: 3px 8px;
+  color: var(--text-secondary);
+}
+.nx-writing-action:hover:not(:disabled) { color: var(--archive-ink); }
+.nx-writing-ask {
+  flex: 1 1 180px;
+  min-width: 120px;
+  padding: 3px 0;
+  border-style: none;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-writing-ask:focus-visible { outline: 0; border-bottom-color: var(--workbench-selected); }
+.nx-writing-hint,
+.nx-writing-busy { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.nx-writing-busy { color: var(--accent); }
+/* 结果面板：这是「还没落进正文」的一段外来文字，允许有分隔（P18 对面板的豁免），
+   但仍是同一页纸上的淡痕——一条上细线，一个极浅的底。 */
+.nx-writing-result {
+  margin: 4px 20px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.nx-writing-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.nx-writing-result-label { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.nx-writing-text {
+  margin: 8px 0 0;
+  padding: 0;
+  font-family: var(--font-display);
+  font-size: var(--writing-font-size, var(--nx-fs-lg));
+  line-height: var(--writing-line-height, 1.9);
+  color: var(--archive-ink-soft);
+  white-space: pre-wrap;
+}
+.nx-writing-error {
+  margin: 6px 20px 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--signal-warm);
+}
+/* 参考块清单与提示词预览（批次46A）：都用淡痕级字号——它们是这一问的旁注，不是第二份正文。 */
+.nx-writing-refs {
+  margin: 6px 0 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.nx-writing-preview { margin: 4px 0 0; }
+.nx-writing-preview-toggle {
+  padding: 2px 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-preview-toggle:hover { color: var(--archive-ink); }
+.nx-writing-preview-body {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+}
+.nx-writing-preview-label {
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-preview-text {
+  margin: 2px 0 8px;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--archive-ink-soft);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.nx-writing-preview-text:last-child { margin-bottom: 0; }
+.nx-writing-preview-error { margin: 0; }
+.nx-writing-preview-wait {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-writing-review {
+  padding: 3px 8px;
+  color: var(--text-secondary);
+}
+.nx-writing-review:hover:not(:disabled) { color: var(--archive-ink); }
+/* 审查卡片（批次46A）：与写作结果同一档「面板」——一条上细线，正文仍是这页纸的主角。 */
+.nx-review {
+  margin: 4px 20px 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-soft);
+}
+.nx-review-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.nx-review-label { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
+.nx-review-busy { font-size: var(--nx-fs-2xs); color: var(--accent); }
+.nx-review-summary {
+  margin: 6px 0 0;
+  font-size: var(--nx-fs-md);
+  line-height: 1.8;
+  color: var(--archive-ink-soft);
+}
+.nx-review-issues,
+.nx-review-actions {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+.nx-review-issue {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-top: 2px;
+}
+.nx-review-issue-text { flex: 1 1 auto; min-width: 0; }
+.nx-review-severity {
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: var(--radius-control);
+  background: var(--hairline-soft);
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-review-severity.is-high { color: var(--signal-warm); }
+.nx-review-rewrite { flex: 0 0 auto; padding: 0 6px; color: var(--text-secondary); }
+.nx-review-rewrite:hover { color: var(--archive-ink); }
+.nx-review-error { margin-left: 0; }
+
+/* —— 写作工具（批次46B）：编辑面外壳／段落聚焦遮罩／快捷词与取名弹层 ————————————
+   编辑面外壳只负责给遮罩一块定位基准；textarea 自己仍是那页纸（无框、满幅、留白不变）。
+   段落聚焦用上下遮罩近似（textarea 没有段落 DOM）：遮罩用半透明窗格底色压暗——
+   它压的是「画面」，文字仍看得见轮廓；pointer-events: none 保证点哪里都落回正文。 */
+.nx-editor-wrap {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.nx-editor-wrap > .editor-area {
+  flex: 1 1 auto;
+}
+.nx-focus-mask {
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--surface-workbench) 74%, transparent);
+  transition: height 120ms ease;
+}
+.nx-focus-mask.is-top { top: 0; }
+.nx-focus-mask.is-bottom { bottom: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .nx-focus-mask { transition: none; }
+}
+
+/* 快捷词／取名共用一个按需浮现的弹层：入口是文档头的一枚 quiet 钮，
+   弹层贴在它下面右对齐。它是「面板」不是正文（P18 第 5 条豁免），所以有边界与底色。 */
+.nx-tools-anchor {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.nx-tools-toggle {
+  /* 〔批次76 任务4-4〕快捷词入口实测 45×22：宽度够、纵向差 2px。补 min-height 到 24，
+     改 inline-flex 居中让文字位置不变（字号仍走 --nx-fs-2xs，不动刻度）。 */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-secondary);
+}
+.nx-tools-toggle:hover,
+.nx-tools-toggle[aria-expanded="true"] { color: var(--archive-ink); }
+.nx-tools {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 24;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+  max-height: min(60vh, 460px);
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+.nx-tools-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--hairline-soft);
+  padding-bottom: 4px;
+}
+.nx-tools-tab {
+  /* 〔批次76 任务4-4〕弹层里的每一条可点件都过 24 这条线（tab／快捷词 chip／换一批）：
+     实测 chip 45×22、tab 高 20，差的是纵向那 2–4px；宽度由内容撑，不动字号。 */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-tools-tab:hover { color: var(--archive-ink); }
+.nx-tools-tab.is-active {
+  color: var(--archive-ink);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  border-radius: var(--nx-radius-xs);
+}
+.nx-tools-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.nx-tools-search {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: var(--nx-fs-2xs);
+}
+.nx-tools-empty {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+.nx-tools-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nx-tools-group-label {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-tools-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.nx-tools-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--nx-fs-2xs);
+  cursor: pointer;
+}
+.nx-tools-chip:hover {
+  color: var(--archive-ink);
+  border-color: var(--workbench-selected);
+}
+.nx-tools-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.nx-tools-form .nx-field {
+  flex: 1 1 84px;
+  width: auto;
+  min-width: 0;
+  min-height: 28px;
+  padding: 3px 6px;
+  font-size: var(--nx-fs-2xs);
+}
+.nx-tools-roll {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: var(--nx-fs-2xs);
+}
+.nx-tools-names {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.nx-tools-name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: var(--nx-radius-xs);
+}
+.nx-tools-name:hover { background: var(--nav-hover); }
+.nx-tools-name-text {
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-md);
+  color: var(--archive-ink);
+}
+/* 世界书里已有这个名字：摆灰但不藏——作者自己决定用不用（插入禁用，复制仍可）。 */
+.nx-tools-name.is-duplicate .nx-tools-name-text {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--text-muted) 60%, transparent);
+}
+.nx-tools-name-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.nx-tools-name-insert,
+.nx-tools-name-copy {
+  padding: 1px 6px;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-tools-name-insert:hover:not(:disabled),
+.nx-tools-name-copy:hover { color: var(--archive-ink); }
+
+/* —— 弹层与查找条里的命令钮（批次46B） ————————————————————————
+   它们挂在共享词汇上（按钮门禁要求 control-*），但老版命令钮按 36px 的行高做，
+   塞进 340px 弹层与窄查找条会把整条撑爆。老版规则特异性 (0,4,0) 高于 scoped 的
+   (0,2,0)，所以度量与颜色在这里同特异性覆盖；本文件在 legacy.mjs 里最后加载，胜出。 */
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-toggle, .nx-tools-tab, .nx-tools-roll, .nx-tools-chip,
+  .nx-tools-name-insert, .nx-tools-name-copy,
+  .nx-find-submit, .nx-find-step, .nx-find-close, .nx-find-hit,
+  .nx-find-replace, .nx-export-item
+) {
+  min-height: 22px;
+  padding: 2px 6px;
+  border-radius: var(--nx-radius-xs);
+  font-size: var(--nx-fs-2xs);
+  font-weight: 500;
+  line-height: 1.6;
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-chip {
+  padding: 3px 8px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: transparent;
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-find-hit {
+  padding: 3px 6px;
+  border: 0;
+  border-radius: var(--nx-radius-xs);
+  color: var(--text-secondary);
+  background: transparent;
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-toggle, .nx-find-submit, .nx-find-step, .nx-find-close, .nx-find-hit,
+  .nx-export-item
+) {
+  color: var(--text-secondary);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-tab, .nx-tools-name-insert, .nx-tools-name-copy
+) {
+  color: var(--text-muted);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-toggle:hover,
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-toggle[aria-expanded='true'],
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) :is(
+  .nx-tools-tab:hover, .nx-tools-name-insert:hover:not(:disabled), .nx-tools-name-copy:hover,
+  .nx-find-submit:hover:not(:disabled), .nx-find-step:hover:not(:disabled), .nx-find-close:hover
+) {
+  color: var(--archive-ink);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-tab.is-active {
+  color: var(--archive-ink);
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-tools-chip:hover {
+  color: var(--archive-ink);
+  border-color: var(--workbench-selected);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-find-hit:hover,
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-export-item:hover {
+  background: var(--nav-hover);
+  color: var(--archive-ink);
+}
+:is(.theme-legacy, .theme-legacy .app-shell .shell-content) .nx-find-hit.is-active {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--archive-ink);
+}
+
+/* —— 命令面板（批次62 · 任务三）——————————————————————————————————————————
+ * 皮沿用统一二级页那三枚 token：遮罩 --surface-overlay、层级 --z-modal-backdrop／--z-modal、
+ * 圆角 --radius-surface（工单B0 的裁定：弹窗形态只有一套，这里不另起皮）。
+ * 但它不是第二枚「配置弹窗」：里面没有设置项，只有一条输入框与一张能跑的命令表；
+ * 焦点走 focusTrap.mjs 那一份实现（与 SettingsModal 同源），关掉即还给原焦点。
+ * 宽度用 min(560px, 92vw)——窄屏（手机／分屏那一半）不溢出，宽屏不铺满一整面。 */
+.nx-palette {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal-backdrop);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  background: var(--surface-overlay);
+}
+.nx-palette-panel {
+  z-index: var(--z-modal);
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 92vw);
+  max-height: 56vh;
+  overflow: hidden;
+  border: 1px solid var(--hairline-soft);
+  border-radius: var(--radius-surface);
+  background: var(--surface-workbench-raised);
+  box-shadow: 0 18px 44px color-mix(in srgb, var(--archive-ink) 22%, transparent);
+}
+.nx-palette-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline-soft);
+  color: var(--text-muted);
+}
+.nx-palette-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--nx-fs-lg);
+  font-family: inherit;
+}
+.nx-palette-input::placeholder {
+  color: var(--text-muted);
+}
+.nx-palette-count {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-palette-list {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+}
+.nx-palette-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  text-align: left;
+  color: var(--text-secondary);
+  background: transparent;
+  font-size: var(--nx-fs-md);
+}
+.nx-palette-item.is-active {
+  color: var(--text-primary);
+  background: var(--workbench-selected);
+}
+.nx-palette-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-palette-owner {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-palette-accel {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.nx-palette-empty,
+.nx-palette-hint {
+  margin: 0;
+  padding: 10px 14px;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+
+/* —— 老轨导航词汇的字体与档位回收（批次68-R1 任务1②＋任务2）————————————————
+   索引窗的行直接复用老 web 轨的 .workspace-nav-* 词汇（文件头那条复用口径），
+   那份 CSS 里写的是 `var(--font-sans)` ＋ 15/14/12px 裸值——**作用面一路漏到壳层**：
+   实测左栏 19 处文字吃到的是老轨那一套，与壳层刻度断链（调度方报的「Arial 漏」就是这条）。
+   `src/**` 是原件、不许动，所以清它的**壳层作用面**只能在 next-shell.css 里做——
+   legacy.mjs 把本文件排在老轨之后引入，同特异性后置即胜。这里只改「族与档位」两行，
+   行高／悬停／选中／焦点环仍归原件（那是复用，不是本批的面）。 */
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-item,
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-label {
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-lg);
+}
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-item--tree,
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-item--tree .workspace-nav-label {
+  font-size: var(--nx-fs-md);
+}
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-meta,
+.theme-legacy .app-shell .workspace-sidebar .workspace-nav-section {
+  font-family: var(--font-interface);
+  font-size: var(--nx-fs-2xs);
+}

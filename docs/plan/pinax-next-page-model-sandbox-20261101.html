@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pinax.Next 页底座沙盘 · 批次61 工单配套</title>
+<style>
+  :root {
+    --bg: #f7f6f3; --panel: #ffffff; --ink: #1c1b18; --ink-2: #5f5c54; --ink-3: #8d8a82;
+    --line: #dedbd2; --line-2: #c9c5ba; --accent: #2f5d8a; --accent-soft: #e6eef5;
+    --warn: #8a5a1f; --warn-soft: #f6efdf; --good: #2e6b46; --good-soft: #e6f2ea;
+    --shadow: 0 1px 2px rgba(0,0,0,.05), 0 8px 24px rgba(0,0,0,.07);
+  }
+  html[data-theme="dark"] {
+    --bg: #17181a; --panel: #1f2124; --ink: #e8e6e1; --ink-2: #b3b0a8; --ink-3: #85837c;
+    --line: #303337; --line-2: #454950; --accent: #7fb0dd; --accent-soft: #22303c;
+    --warn: #d6a86a; --warn-soft: #332a1c; --good: #85c9a1; --good-soft: #1e2c24;
+    --shadow: 0 1px 2px rgba(0,0,0,.5), 0 10px 28px rgba(0,0,0,.45);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.65 "Noto Sans CJK SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  header.top {
+    padding: 18px 22px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+    display: flex; flex-wrap: wrap; gap: 14px; align-items: baseline; justify-content: space-between;
+  }
+  h1 { font-size: 17px; margin: 0; letter-spacing: .02em; }
+  h1 small { font-weight: 400; color: var(--ink-3); font-size: 12px; margin-left: 10px; }
+  .modes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .mode {
+    border: 1px solid var(--line-2); background: transparent; color: var(--ink-2);
+    padding: 6px 12px; border-radius: 999px; cursor: pointer; font: inherit; font-size: 12.5px;
+  }
+  .mode[aria-checked="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .mode:hover { border-color: var(--ink-3); }
+  .layout { display: grid; grid-template-columns: minmax(0,1fr) 372px; gap: 18px; padding: 18px 22px 40px; align-items: start; }
+  @media (max-width: 1080px) { .layout { grid-template-columns: minmax(0,1fr); } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); }
+  .card > h2 {
+    margin: 0; padding: 11px 14px; border-bottom: 1px solid var(--line);
+    font-size: 12.5px; font-weight: 600; letter-spacing: .06em; color: var(--ink-2); text-transform: none;
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  }
+  .card > h2 span.hint { font-weight: 400; color: var(--ink-3); font-size: 11.5px; letter-spacing: 0; }
+  .sim { overflow: hidden; }
+  /* 外壳：竖条 + 中栏 */
+  .shell { display: grid; grid-template-columns: 52px minmax(0,1fr); min-height: 460px; }
+  .rail { border-right: 1px solid var(--line); padding: 8px 0; display: flex; flex-direction: column; gap: 2px; background: var(--panel); }
+  .rail button {
+    all: unset; cursor: pointer; height: 38px; display: grid; place-items: center; position: relative;
+    color: var(--ink-3); font-size: 11px; text-align: center; border-left: 2px solid transparent;
+  }
+  .rail button b { font-size: 13px; font-weight: 600; }
+  .rail button:hover { color: var(--ink); background: var(--accent-soft); }
+  .rail button.on { color: var(--accent); border-left-color: var(--accent); background: var(--accent-soft); }
+  .center { position: relative; display: flex; flex-direction: column; min-width: 0; }
+  /* 页签栏 */
+  .strip {
+    display: flex; align-items: center; gap: 0; border-bottom: 1px solid var(--line);
+    overflow-x: auto; scrollbar-width: thin; min-height: 32px; background: var(--panel);
+  }
+  .strip.absent { padding: 6px 12px; color: var(--ink-3); font-size: 12px; min-height: 32px; }
+  .tab {
+    all: unset; cursor: pointer; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+    padding: 6px 9px 6px 11px; font-size: 12.5px; color: var(--ink-2); border-right: 1px solid var(--line);
+  }
+  .tab:hover { background: var(--accent-soft); color: var(--ink); }
+  .tab[aria-selected="true"] { color: var(--ink); background: var(--bg); box-shadow: inset 0 -2px 0 var(--accent); }
+  .tab .x { color: var(--ink-3); padding: 0 3px; border-radius: 4px; }
+  .tab .x:hover { background: var(--warn-soft); color: var(--warn); }
+  .tab .pin { font-size: 10px; color: var(--accent); border: 1px solid currentColor; border-radius: 3px; padding: 0 3px; }
+  /* 形态菜单：词汇照仓内 .nx-context-*（next-shell.css:1111-1160），弹层不是 chrome。 */
+  .ctx {
+    position: fixed; z-index: 90; min-width: 200px; max-width: 260px; padding: 4px;
+    background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(0,0,0,.18);
+  }
+  .ctx .ctxgroup { margin: 2px 8px 4px; font-size: 10.5px; letter-spacing: .04em; color: var(--ink-3); }
+  .ctx .ctxitem {
+    all: unset; display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    width: 100%; box-sizing: border-box; min-height: 30px; padding: 5px 10px; cursor: pointer;
+    font-size: 13px; color: var(--ink-2); border-radius: 5px;
+  }
+  .ctx .ctxitem:hover { background: var(--accent-soft); color: var(--ink); }
+  .ctx .ctxitem.danger { color: var(--warn); }
+  .ctx .ctxitem.is-now { opacity: .5; cursor: not-allowed; }
+  .ctx .ctxitem.is-now::after { content: '当前'; font-size: 10.5px; color: var(--ink-3); }
+  .ctx .ctxhint { margin: 4px 8px 2px; font-size: 10.5px; line-height: 1.5; color: var(--ink-3); border-top: 1px solid var(--line); padding-top: 5px; }
+  /* 页组 */
+  .groups { flex: 1; display: flex; min-height: 0; position: relative; }
+  .group { flex: 1 1 50%; min-width: 0; display: flex; flex-direction: column; }
+  .group + .group { border-left: 1px solid var(--line-2); }
+  .group .empty { margin: auto; color: var(--ink-3); font-size: 12.5px; padding: 30px; text-align: center; }
+  .doc { flex: 1; overflow: auto; padding: 16px 20px 22px; min-height: 0; }
+  .doc h3 { margin: 0 0 3px; font-size: 15.5px; }
+  .doc .meta { color: var(--ink-3); font-size: 11.5px; margin-bottom: 12px; letter-spacing: .02em; }
+  .doc p { margin: 0 0 10px; color: var(--ink-2); }
+  .doc a { color: var(--accent); cursor: pointer; text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
+  .doc a:hover { border-bottom-color: var(--accent); }
+  .winhead {
+    display: flex; align-items: center; gap: 8px; padding: 5px 7px 5px 11px;
+    border-bottom: 1px solid var(--line); background: var(--panel); cursor: grab; user-select: none;
+  }
+  .winhead .t { flex: 1; font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .winhead .btns { display: flex; gap: 2px; }
+  .winhead .btns button {
+    all: unset; cursor: pointer; width: 20px; height: 20px; display: grid; place-items: center;
+    border-radius: 4px; color: var(--ink-3); font-size: 12px;
+  }
+  .winhead .btns button:hover { background: var(--accent-soft); color: var(--accent); }
+  .float {
+    position: absolute; background: var(--panel); border: 1px solid var(--line-2); border-radius: 8px;
+    box-shadow: var(--shadow); display: flex; flex-direction: column; overflow: hidden; min-width: 200px; min-height: 120px;
+  }
+  .float .doc { padding: 12px 14px; font-size: 13px; }
+  .float .rz { position: absolute; width: 12px; height: 12px; right: 0; bottom: 0; cursor: nwse-resize; }
+  .edge { position: absolute; right: 0; top: 0; bottom: 0; width: 26px; display: flex; flex-direction: column; gap: 4px; justify-content: flex-start; padding-top: 14px; }
+  .edge button {
+    all: unset; cursor: pointer; writing-mode: vertical-rl; font-size: 11px; padding: 8px 5px;
+    background: var(--panel); border: 1px solid var(--line); border-right: none; border-radius: 6px 0 0 6px; color: var(--ink-2);
+  }
+  .edge button:hover { color: var(--accent); }
+  .badge {
+    display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--ink-2);
+  }
+  .badge.good { background: var(--good-soft); color: var(--good); border-color: transparent; }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+  /* 右栏 */
+  .side { display: grid; gap: 18px; align-content: start; }
+  .body { padding: 12px 14px 14px; }
+  .seg { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .seg button {
+    all: unset; cursor: pointer; border: 1px solid var(--line-2); border-radius: 6px; padding: 5px 9px; font-size: 12px; color: var(--ink-2);
+  }
+  .seg button.on { background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .seg button:hover { color: var(--ink); }
+  .k7 { font: 11.5px/1.5 ui-monospace, Consolas, monospace; color: var(--ink-3); }
+  ol.rules { margin: 0; padding-left: 20px; }
+  ol.rules li { margin-bottom: 8px; color: var(--ink-2); }
+  ol.rules li b { color: var(--ink); font-weight: 600; }
+  ul.notes { margin: 0; padding-left: 18px; color: var(--ink-2); }
+  ul.notes li { margin-bottom: 7px; }
+  .log { max-height: 300px; overflow: auto; padding: 8px 10px 10px; }
+  .log .e { border-left: 2px solid var(--line-2); padding: 3px 0 3px 9px; margin-bottom: 7px; font-size: 12px; }
+  .log .e.act-reveal { border-left-color: var(--accent); }
+  .log .e.act-open { border-left-color: var(--good); }
+  .log .e.act-new-win { border-left-color: var(--warn); }
+  .log .e.act-block { border-left-color: var(--line-2); }
+  .log .e .h { color: var(--ink); }
+  .log .e .d { color: var(--ink-3); font-size: 11.5px; }
+  pre.json {
+    margin: 0; padding: 10px 12px; background: var(--bg); border-top: 1px solid var(--line);
+    font: 11.5px/1.6 ui-monospace, Consolas, monospace; color: var(--ink-2); overflow: auto; max-height: 250px;
+  }
+  footer { padding: 0 22px 40px; color: var(--ink-3); font-size: 12px; }
+  footer code { color: var(--ink-2); }
+  .flow { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .flow .step { flex: 1 1 150px; border: 1px dashed var(--line-2); border-radius: 8px; padding: 8px 10px; font-size: 11.5px; color: var(--ink-2); }
+  .flow .step b { display: block; color: var(--ink); font-size: 12.5px; margin-bottom: 2px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Pinax.Next 页底座沙盘<small>配套 批次61 工单 · 三档落点：切换 → 分屏 → 显式才浮窗</small></h1>
+  <div class="modes" role="radiogroup" aria-label="缺省落点策略">
+    <button class="mode" role="radio" data-mode="legacy" aria-checked="true">今天的实现（v2）</button>
+    <button class="mode" role="radio" data-mode="b61" aria-checked="false">批次61 底座（缺省＝切换）</button>
+    <button class="mode" role="radio" data-mode="dmodel" aria-checked="false">D：每页一份文档（未开工）</button>
+    <button class="mode" data-act="theme">明暗</button>
+  </div>
+</header>
+
+<div class="layout">
+  <section class="card sim" aria-label="沙盘">
+    <h2>中间 doc 区<span class="hint" id="modeDesc"></span></h2>
+    <div class="shell">
+      <nav class="rail" id="rail" aria-label="载体竖条"></nav>
+      <div class="center">
+        <div id="strip" class="strip"></div>
+        <div class="groups" id="groups"></div>
+        <div class="edge" id="edge"></div>
+      </div>
+    </div>
+    <div class="flow" style="padding:0 14px 14px">
+      <div class="step"><b>① 裸激活</b>竖条格／蓝链／素材卡／树行 → 只能揭示或换页</div>
+      <div class="step"><b>② 显式分屏</b>窗右上 split 钮，或右键菜单「移到侧页组」</div>
+      <div class="step"><b>③ 显式浮窗</b>右键菜单「浮出为窗」→ 同一记录换形态；签上不放钮（裁定③）</div>
+      <div class="step"><b>④ 收起／关闭</b>collapse＝侧缘标签，×＝删记录；右键菜单里也各有一项</div>
+    </div>
+  </section>
+
+  <div class="side">
+    <section class="card">
+      <h2>手势试验台<span class="hint">批次62 才实现，这里只演给你看</span></h2>
+      <div class="body">
+        <div class="seg" id="gestureSeg">
+          <button data-g="none" class="on">裸点</button>
+          <button data-g="ctrl">Ctrl＋点</button>
+          <button data-g="ctrlalt">Ctrl＋Alt＋点</button>
+          <button data-g="float">Ctrl＋Alt＋Shift＋点</button>
+        </div>
+        <p class="k7" style="margin:0 0 10px">选一个档位，再点左边竖条或正文蓝链，日志会按 <span style="color:var(--ink-2)">resolveOpenTarget(pane, gesture)</span> 的口径给出落点。深度＝代价：越靠后按得越重，误触越少。</p>
+        <div class="seg">
+          <button data-act="migrate">载入《大梦》真 v2 记录并迁移</button>
+          <button data-act="reset">清空</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>决策日志<span class="hint" id="tally"></span></h2>
+      <div class="log" id="log"></div>
+    </section>
+
+    <section class="card">
+      <h2>工作区状态<span class="hint">v3 记录，实时</span></h2>
+      <pre class="json" id="json"></pre>
+    </section>
+
+    <section class="card">
+      <h2>这版模型的六条铁律</h2>
+      <div class="body">
+        <ol class="rules">
+          <li><b>页是一等对象</b>：状态轴＝页组（main／side）× 页列表 × 每组当前页 × 形态（page／floating／tab 三选一）。</li>
+          <li><b>缺省＝切换</b>：裸激活只揭示或换页，同一资源已开就回到那一页，绝不新建浮窗。</li>
+          <li><b>升档只走显式，显式＝右键</b>：页签与窗头右键出同一份形态菜单，项只出自清单 <span class="k7">forms</span> 声明；<b>不加常驻形态钮</b>（作者裁定③）。本批零修饰键、零中键。</li>
+          <li><b>页签栏不是第二套壳</b>：只回答「哪一页是当前」，不许有拖拽句柄与缩放角。</li>
+          <li><b>页身份只有一处算法</b>：<span class="k7">pageIdOf(paneId, resource)</span>，本批忽略 resource；做 D 时只改这个函数。</li>
+          <li><b>消费一半也如实记</b>：<span class="k7">single</span> 真生效；<span class="k7">keyed/list</span> 暂按 single，测试名不许吹。</li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>外部一手对照<span class="hint">12 家，摘三条共识</span></h2>
+      <div class="body">
+        <ul class="notes">
+          <li>裸激活<b>永不</b>新建容器——Obsidian／Notion／Logseq／Roam／Capacities／VS Code／四家浏览器全同。</li>
+          <li>第二容器<b>只花一个修饰键</b>：Obsidian <span class="k7">Ctrl+Alt</span> 新标签组、VS Code <span class="k7">Ctrl+Enter</span> Open to the Side、Logseq／Roam <span class="k7">Shift</span> 右栏。</li>
+          <li>浮窗是<b>手势最深处</b>：Obsidian 要三键 <span class="k7">Ctrl+Alt+Shift</span>，JetBrains 用 <span class="k7">Shift+F4</span> Detach。查到的家里，没有一家拿它当缺省。</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>沙盘没解决的<span class="hint">诚实标注</span></h2>
+      <div class="body">
+        <ul class="notes">
+          <li>批次61 交付后，<b>同一块 pane 开两页仍是同一份稿子的两半</b>——页身份只到 pane，正文显示哪章仍看全局 <span class="k7">selection</span>。</li>
+          <li>要并排对照两章，得做 D（每页一份文档），那要动 <span class="k7">useBoardData</span> 的单格 selection 与批次43／39 基线。</li>
+          <li>页多到装不下怎么收口（滚动／上限／切换器）本批不擅自动数值，留给 §7 第 4 问。</li>
+        </ul>
+      </div>
+    </section>
+  </div>
+</div>
+
+<footer>
+  这是规格沙盘，不是产品代码；界面样式不进入 Pinax 视觉门禁。事实源：
+  <code>docs/plan/pinax-electron-next-m2-batch61-ticket-20261101.md</code>（工单）与
+  <code>docs/plan/pinax-next-open-target-research-20261101.md</code>（调研）。
+  真实状态轴出自 <code>next/shell/workspace.mjs</code> v2，本页展示的是 v3 提案；<code>migrate</code> 按钮用的是 <code>D:\Projects\大梦\.pinax\workspace.json</code> 里那 5 条真记录。
+</footer>
+
+<script>
+(() => {
+  // forms 一字抄自各载体真清单（next/carriers/*/manifest.mjs）——右键菜单只从这里列项，不凭空长。
+  const CARRIERS = [
+    { id: 'novel',     pane: 'novel.editor',      title: '书稿正文', glyph: '文', multiplicity: 'single', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'], docs: ['第 12 章 风雪夜', '第 13 章 城门一别'] },
+    { id: 'outline',   pane: 'outline.editor',    title: '大纲',     glyph: '纲', multiplicity: 'single', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'], docs: ['卷二 · 起'] },
+    { id: 'notes',     pane: 'notes.editor',      title: '便签',     glyph: '签', multiplicity: 'list',   forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'], docs: ['随手记 01'] },
+    { id: 'worldbook', pane: 'worldbook.entries', title: '世界书',   glyph: '界', multiplicity: 'keyed',  forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'], docs: ['条目 · 北境军报', '条目 · 讲武堂'] },
+    { id: 'dossier',   pane: 'dossier.editor',    title: '设定与资料', glyph: '档', multiplicity: 'single', forms: ['dock', 'split', 'overlay', 'fullscreen', 'immersive'], docs: ['人物 · 魏叔阳'] },
+    { id: 'material',  pane: 'material.gallery',  title: '素材',     glyph: '素', multiplicity: 'keyed',  forms: ['dock', 'split', 'overlay', 'fullscreen'], docs: ['图 · 雪夜城门'] }
+  ];
+  // 词表 → v3 落点。fullscreen／immersive 在 v3 状态轴里没有独立落点（workspace.mjs:146-147 早收成「最大化」），
+  // 所以本批菜单不列它们——§7 待裁 ④。
+  const FORM_ITEMS = [
+    { form: 'dock',    label: '占为页',       act: 'dock' },
+    { form: 'split',   label: '移到侧页组（对半）', act: 'side' },
+    { form: 'overlay', label: '浮出为窗',     act: 'float' }
+  ];
+  const byPane = Object.fromEntries(CARRIERS.map(c => [c.pane, c]));
+
+  const DAMENG_V2 = {
+    'novel.editor#1':      { pane: 'novel.editor',      z: 3, maximized: true,  minimized: 'none', geometry: { x: 48,  y: 48,  w: 760, h: 560 } },
+    'outline.editor#1':    { pane: 'outline.editor',    z: 4, maximized: false, minimized: 'none', geometry: { x: 72,  y: 72,  w: 760, h: 560 } },
+    'notes.editor#1':      { pane: 'notes.editor',      z: 5, maximized: false, minimized: 'none', geometry: { x: 96,  y: 96,  w: 760, h: 560 } },
+    'worldbook.entries#1': { pane: 'worldbook.entries', z: 6, maximized: false, minimized: 'none', geometry: { x: 120, y: 120, w: 760, h: 560 } },
+    'dossier.editor#1':    { pane: 'dossier.editor',    z: 8, maximized: false, minimized: 'none', geometry: { x: 144, y: 144, w: 760, h: 560 } }
+  };
+
+  const S = { mode: 'legacy', gesture: 'none', pages: [], active: { main: null, side: null }, z: 1, docCursor: {}, tally: { reveal: 0, open: 0, win: 0 } };
+  const $ = (s) => document.querySelector(s);
+  const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt != null) n.textContent = txt; return n; };
+  const esc = (s) => String(s).replace(/[&<>]/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m]));
+
+  // ── 唯一口径：页身份 ─────────────────────────────────────────
+  function pageIdOf(pane, resource) {
+    if (S.mode !== 'dmodel') return pane + '#1';        // 批次61：忽略 resource
+    // 只做这一处差异：resource 进身份。状态轴、页签栏、磁盘格式一概不用改。
+    const hit = S.pages.find(p => p.pane === pane && p.key === (resource || 'default'));
+    if (hit) return hit.instance;
+    const used = new Set(S.pages.filter(p => p.pane === pane).map(p => Number(p.instance.split('#')[1])));
+    let i = 1; while (used.has(i)) i++;
+    return pane + '#' + i;
+  }
+
+  // ── 唯一口径：落点决策 ───────────────────────────────────────
+  function resolveOpenTarget(pane, resource) {
+    const instance = pageIdOf(pane, resource);
+    const existing = S.pages.find(p => p.instance === instance);
+    if (S.mode === 'legacy') {
+      // 如实复刻今天的代码：同 pane 再点＝置顶（AppNext.vue:754-755），零窗时第一扇占页（:750），
+      // 换一块载体＝又开一扇浮窗并级联 24px（:751 nextFloatingGeometry）。
+      if (existing) return { action: 'reveal', instance, group: existing.group, why: '今天：同一 pane 再点＝bringToFront 置顶' };
+      if (!S.pages.length) return { action: 'open-page', instance, group: 'main', why: '今天：零窗时第一扇占页（!anyOpenWindow()）' };
+      return { action: 'new-win', instance: pane + '#' + (S.pages.filter(p => p.pane === pane).length + 1), group: 'float', why: '今天：换载体就再开一扇浮窗＋级联 24px——这就是你说的那个"完全不是用户逻辑"' };
+    }
+    const g = S.gesture;
+    if (g === 'float') return { action: 'open-float', instance, group: 'float', why: '显式三键（批次62 才实现）→ 开成浮窗' };
+    if (g === 'ctrlalt') return { action: existing ? 'reveal' : 'open-page', instance, group: existing ? existing.group : 'side', why: '显式两键（批次62）→ 另一侧页组' };
+    if (existing) {
+      const sameContent = !resource || existing.resource === resource;
+      return { action: 'reveal', instance, group: existing.group, why: sameContent ? '同一资源已开 → 回到那一页（老前端 openOrFocus 的语义）' : '该 pane 已有页 → 揭示并就地换内容；页身份只到 pane（本批如实如此）' };
+    }
+    return { action: 'open-page', instance, group: focusedGroup(), why: '缺省 → 进当前页组并置为当前页；无菜单、无级联、不占新窗' };
+  }
+  function focusedGroup() { return S.pages.some(p => p.group === 'side' && p.form === 'page') ? 'side' : 'main'; }
+
+  // ── 动作 ────────────────────────────────────────────────────
+  function openPage(pane, resource) {
+    const d = resolveOpenTarget(pane, resource);
+    let p = S.pages.find(x => x.instance === d.instance);
+    if (!p) {
+      p = makePage(d.instance, pane, resource, d.action === 'new-win' || d.action === 'open-float' ? 'floating' : 'page', d.group);
+      if (p.form === 'floating') p.geometry = cascade();
+      S.pages.push(p);
+      if (p.form === 'floating') S.tally[d.action === 'new-win' ? 'win' : 'open']++;
+      else S.tally.open++;
+    } else {
+      if (p.form === 'tab') p.form = 'page';
+      if (d.action === 'open-page' && p.form === 'page') p.group = d.group;
+      if (p.form === 'floating') { p.z = ++S.z; if (S.gesture === 'none') { p.form = 'page'; p.geometry = null; } }
+      S.tally.reveal++;
+    }
+    if (resource) p.resource = resource;
+    if (p.form !== 'floating') { if (p.group === 'float') p.group = 'main'; setActive(p.group, p.instance); }
+    log(pane, resource, d);
+    render();
+  }
+  function makePage(instance, pane, resource, form, group) {
+    return { instance, pane, key: resource || 'default', resource: resource || byPane[pane].docs[0], title: byPane[pane].title,
+      form, group: group === 'float' ? 'main' : group, order: S.pages.filter(p => p.group === group).length + 1, geometry: null, z: ++S.z };
+  }
+  function cascade() { const n = S.pages.filter(p => p.form === 'floating').length; return { x: 36 + n * 24, y: 30 + n * 24, w: 420, h: 300 }; }
+  function shortDoc(r) { return String(r || '').split(/[ ·]+/).pop() || '默认'; }
+  function setActive(group, instance) { S.active[group] = instance; if (group === 'side') S.active.main = S.active.main || (S.pages.find(p => p.group === 'main' && p.form === 'page') || {}).instance || null; }
+  // 某一组的当前页被搬走／浮走后，这一组必须自己挑一个替补，不能留着指向别组的记录。
+  function repairActive(group) {
+    const cur = S.pages.find(p => p.instance === S.active[group]);
+    if (!cur || cur.group !== group || cur.form !== 'page')
+      S.active[group] = (S.pages.find(p => p.group === group && p.form === 'page') || {}).instance || null;
+  }
+
+  function split(instance) {
+    const p = S.pages.find(x => x.instance === instance); if (!p) return;
+    if (p.form === 'floating') { p.form = 'page'; p.geometry = null; }
+    const from = p.group;
+    p.group = p.group === 'main' ? 'side' : 'main';
+    setActive(p.group, instance);
+    repairActive(from);
+    logRaw('split', `${p.title} → ${p.group === 'side' ? 'side 页组（对半贴）' : '回 main 组'}`, 'act-open');
+    render();
+  }
+  function popout(instance) {
+    const p = S.pages.find(x => x.instance === instance); if (!p) return;
+    if (p.form === 'floating') { p.form = 'page'; p.geometry = null; setActive(p.group, instance); logRaw('收回为页', `${p.title} 同一记录回到 ${p.group} 组`, 'act-reveal'); }
+    else {
+      p.form = 'floating'; p.geometry = cascade(); p.z = ++S.z;
+      repairActive(p.group);
+      logRaw('浮出', `${p.title} 同一记录换形态（不是新开一扇）`, 'act-new-win');
+    }
+    render();
+  }
+  function collapse(instance) {
+    const p = S.pages.find(x => x.instance === instance); if (!p) return;
+    p.form = p.form === 'tab' ? 'page' : 'tab';
+    if (p.form === 'page') setActive(p.group, instance);
+    else repairActive(p.group);
+    logRaw('收起', `${p.title} ${p.form === 'tab' ? '→ 侧缘标签' : '→ 展开回页'}`, 'act-reveal');
+    render();
+  }
+  function closePage(instance) {
+    const i = S.pages.findIndex(x => x.instance === instance); if (i < 0) return;
+    const [p] = S.pages.splice(i, 1);
+    for (const g of ['main', 'side']) repairActive(g);
+    logRaw('关闭', `删记录 ${p.instance}`, 'act-block');
+    render();
+  }
+
+  // ── 形态菜单（作者裁定③：形态切换走右键，不做死按钮）────────────────
+  // 词汇与行为照仓内现成那两套（IndexWindow.vue:1188-1236 大纲节点／章节菜单）：
+  // .ctx = .nx-context-menu 的沙盘替身，点外／Esc 收起，坐标按视口钳住，no-op 项置灰不给假动作。
+  let menuEl = null;
+  function closeMenu() { if (menuEl) { menuEl.remove(); menuEl = null; } }
+  function formItemsFor(p) {
+    const declared = byPane[p.pane].forms || [];
+    const items = FORM_ITEMS.filter(i => declared.includes(i.form)).map(i => ({ ...i }));
+    items.push({ act: 'tab', label: '收成侧缘标签' });                       // v3 自有态，不借词表
+    items.push({ act: 'close', label: '关闭此页（删记录）', danger: true });   // 危险项放末尾
+    return items.map(i => {
+      i.isNow = (i.act === 'dock' && p.form === 'page' && p.group === 'main')
+        || (i.act === 'side' && p.form === 'page' && p.group === 'side')
+        || (i.act === 'float' && p.form === 'floating')
+        || (i.act === 'tab' && p.form === 'tab');
+      return i;
+    });
+  }
+  function openFormMenu(evt, instance) {
+    if (S.mode === 'legacy') { evt.preventDefault(); return; }   // 今天的实现：右键查无此菜单（批次59 铁律五）
+    evt.preventDefault(); evt.stopPropagation();
+    const p = S.pages.find(x => x.instance === instance); if (!p) return;
+    closeMenu();
+    menuEl = el('div', 'ctx'); menuEl.setAttribute('role', 'menu');
+    menuEl.appendChild(el('p', 'ctxgroup', '形态 · ' + p.title));
+    formItemsFor(p).forEach(i => {
+      const b = el('button', 'ctxitem' + (i.danger ? ' danger' : '') + (i.isNow ? ' is-now' : ''), i.label);
+      b.setAttribute('role', 'menuitem'); b.dataset.formAct = i.act; b.dataset.pageInstance = instance;
+      if (i.isNow) b.disabled = true;
+      b.onclick = (e) => { e.stopPropagation(); closeMenu(); applyForm(instance, i.act); };
+      menuEl.appendChild(b);
+    });
+    menuEl.appendChild(el('p', 'ctxhint', '全屏／沉浸：清单声明了，v3 状态轴装不下 → 本批不列（工单 §7 待裁 ④）'));
+    document.body.appendChild(menuEl);
+    menuEl.style.left = Math.max(8, Math.min(evt.clientX, innerWidth - menuEl.offsetWidth - 8)) + 'px';
+    menuEl.style.top = Math.max(8, Math.min(evt.clientY, innerHeight - menuEl.offsetHeight - 8)) + 'px';
+  }
+  function applyForm(instance, act) {
+    const p = S.pages.find(x => x.instance === instance); if (!p) return;
+    if (act === 'close') return closePage(instance);
+    if (act === 'tab') return collapse(instance);
+    if (act === 'float') {
+      p.form = 'floating'; p.geometry = cascade(); p.z = ++S.z; repairActive(p.group);
+      logRaw('形态', `${p.title} 浮出为窗（同一条记录换形态，不是新开一扇）`, 'act-new-win'); return render();
+    }
+    const group = act === 'side' ? 'side' : 'main';
+    if (p.form === 'floating') { p.geometry = null; }
+    const from = p.group; p.form = 'page'; p.group = group;
+    setActive(group, instance); repairActive(from);
+    logRaw('形态', `${p.title} → ${group === 'side' ? 'side 页组（对半贴）' : '占为页（main 组）'}`, 'act-open');
+    render();
+  }
+  addEventListener('pointerdown', (e) => { if (menuEl && !menuEl.contains(e.target)) closeMenu(); }, true);
+  addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+  addEventListener('resize', closeMenu);
+  function migrate() {
+    S.pages = []; S.active = { main: null, side: null }; S.z = 1; S.tally = { reveal: 0, open: 0, win: 0 };
+    const prev = S.mode; S.mode = 'b61';
+    Object.entries(DAMENG_V2).forEach(([inst, e]) => {
+      const form = e.maximized ? 'page' : (S.pages.length === 0 ? 'page' : 'floating');
+      const p = { instance: inst, pane: e.pane, key: 'default', resource: byPane[e.pane].docs[0], title: byPane[e.pane].title,
+        form, group: 'main', order: S.pages.filter(x => x.group === 'main').length + 1, geometry: form === 'floating' ? e.geometry : null, z: e.z };
+      S.pages.push(p);
+      if (form === 'page' && !S.active.main) S.active.main = inst;
+    });
+    logRaw('迁移', 'v2→v3：1 页占页＋4 页浮窗；这四扇从此在页签栏里可见（今天它们叠着看不见）', 'act-open');
+    S.mode = prev; render();
+  }
+
+  // ── 日志 ────────────────────────────────────────────────────
+  function log(pane, resource, d) {
+    const cls = d.action === 'reveal' ? 'act-reveal' : d.action === 'open-page' || d.action === 'open-float' ? 'act-open' : d.action === 'new-win' ? 'act-new-win' : 'act-block';
+    logRaw(`${d.action} · ${d.instance}`, `${byPane[pane].title}${resource ? ' / ' + resource : ''}｜${d.why}`, cls);
+  }
+  function logRaw(h, d, cls) {
+    const box = $('#log'); const e = el('div', 'e ' + (cls || ''));
+    e.appendChild(el('div', 'h', h)); e.appendChild(el('div', 'd', d));
+    box.insertBefore(e, box.firstChild);
+    while (box.children.length > 40) box.removeChild(box.lastChild);
+    $('#tally').textContent = `揭示 ${S.tally.reveal} · 换页 ${S.tally.open} · 新容器 ${S.tally.win}`;
+  }
+
+  // ── 渲染 ────────────────────────────────────────────────────
+  function render() {
+    // 竖条
+    const rail = $('#rail'); rail.innerHTML = '';
+    CARRIERS.forEach(c => {
+      const b = el('button'); const on = S.pages.some(p => p.pane === c.pane && p.form !== 'tab' && S.active[p.group] === p.instance);
+      if (on) b.className = 'on';
+      b.appendChild(el('b', null, c.glyph)); b.appendChild(el('div', null, ''));
+      b.title = `${c.title}（multiplicity=${c.multiplicity}）`;
+      b.onclick = () => openPage(c.pane, currentDoc(c));
+      rail.appendChild(b);
+    });
+    // 页签栏
+    const strip = $('#strip'); strip.innerHTML = '';
+    if (S.mode === 'legacy' && !S.pages.some(p => p.migrated)) {
+      strip.className = 'strip absent';
+      strip.appendChild(el('span', null, '页签栏＝查无此物：开着的窗没有任何列表，叠住的窗只能靠拖标题栏找（这正是批次61 要补的第一件东西）'));
+    } else {
+      strip.className = 'strip';
+      const vis = S.pages.filter(p => p.form !== 'tab');
+      if (!vis.length) strip.appendChild(el('span', 'absent', '没有打开的页。点竖条或正文蓝链——缺省只会换页，不会弹窗。'));
+      vis.forEach(p => {
+        const t = el('button', 'tab'); t.setAttribute('role', 'tab');
+        t.setAttribute('aria-selected', String(S.active[p.group] === p.instance && p.form === 'page'));
+        t.appendChild(el('span', null, p.title + (S.mode === 'dmodel' ? ' · ' + shortDoc(p.resource) : '') + (p.form === 'floating' ? ' ◇' : '')));
+        t.dataset.pageInstance = p.instance;
+        // 作者裁定③：签上不放任何形态钮——形态切换只在右键里（页签与窗头同一份菜单、同一条通路）。
+        t.oncontextmenu = (e) => openFormMenu(e, p.instance);
+        const x = el('span', 'x', '×'); x.onclick = (e) => { e.stopPropagation(); closePage(p.instance); }; t.appendChild(x);
+        t.onclick = () => { if (p.form === 'floating') { p.z = ++S.z; } setActive(p.group, p.instance); logRaw('reveal · ' + p.instance, '页签点击＝置为当前页', 'act-reveal'); render(); };
+        strip.appendChild(t);
+      });
+    }
+    // 页组
+    const groups = $('#groups'); groups.innerHTML = '';
+    const hasSide = S.pages.some(p => p.group === 'side' && p.form === 'page');
+    ['main', 'side'].forEach(g => {
+      if (g === 'side' && !hasSide) return;
+      const box = el('div', 'group');
+      const cur = S.pages.find(p => p.group === g && p.instance === S.active[g] && p.form === 'page') || S.pages.find(p => p.group === g && p.form === 'page');
+      if (!cur) { box.appendChild(el('div', 'empty', g === 'main' ? '当前没有页' : 'side 页组（分屏）')); groups.appendChild(box); return; }
+      box.appendChild(docEl(cur, g)); groups.appendChild(box);
+    });
+    // 浮窗
+    S.pages.filter(p => p.form === 'floating').forEach(p => groups.appendChild(floatEl(p)));
+    // 侧缘标签
+    const edge = $('#edge'); edge.innerHTML = '';
+    S.pages.filter(p => p.form === 'tab').forEach(p => { const b = el('button', null, p.title); b.onclick = () => collapse(p.instance); edge.appendChild(b); });
+    // JSON
+    $('#json').textContent = JSON.stringify({
+      version: S.mode === 'legacy' ? 2 : 3,
+      mode: S.mode, gesture: S.gesture,
+      active: S.active,
+      entries: S.pages.map(p => ({ instance: p.instance, pane: p.pane, group: p.form === 'floating' ? 'float' : p.group, form: p.form, geometry: p.geometry ? [p.geometry.x, p.geometry.y, p.geometry.w, p.geometry.h] : null, z: p.z }))
+    }, null, 2);
+    $('#modeDesc').textContent = {
+      legacy: '今天的实现：首窗占页，此后每一扇落浮窗——缺省落点是浮窗',
+      b61: '批次61：缺省＝切换；升档只能显式，且入口在右键（页签／窗头），不在钮上',
+      dmodel: 'D（未开工）：pageIdOf 吃 resource，于是一 pane 能有多份文档'
+    }[S.mode];
+  }
+  function currentDoc(c) {
+    // 同一块载体再点一次＝换一份文档（模拟你在树里点了另一章／另一条），
+    // 这样「批次61 只换内容」与「D 多出一页」的差别才看得见。
+    const i = (S.docCursor[c.pane] || 0);
+    S.docCursor[c.pane] = (i + 1) % c.docs.length;
+    return c.docs[i];
+  }
+  function docEl(p, g) {
+    const wrap = el('div');
+    const head = el('div', 'winhead');
+    head.appendChild(el('span', 't', `${p.title}${g === 'side' ? ' · side 组' : ''}`));
+    const btns = el('span', 'btns');
+    const mk = (txt, fn, title) => { const b = el('button', null, txt); b.title = title; b.onclick = fn; return b; };
+    btns.appendChild(mk('—', () => collapse(p.instance), '收起为侧缘标签'));
+    btns.appendChild(mk('▌▌', () => split(p.instance), '分屏：搬到另一页组（对半贴）'));
+    btns.appendChild(mk('×', () => closePage(p.instance), '关闭（删记录）'));
+    head.appendChild(btns); wrap.appendChild(head);
+    head.oncontextmenu = (e) => openFormMenu(e, p.instance);
+    wrap.appendChild(docBody(p));
+    return wrap;
+  }
+  function docBody(p) {
+    const doc = el('div', 'doc');
+    doc.appendChild(el('h3', null, p.resource));
+    doc.appendChild(el('div', 'meta', `${p.pane} · multiplicity=${byPane[p.pane].multiplicity} · ${p.form}${p.swapped && p.swapped !== p.resource ? '' : ''}`));
+    const para = el('p');
+    para.innerHTML = `${esc(p.title)}的一页正文。<br>蓝链：<a data-link="${CARRIERS[0].pane}|${CARRIERS[0].docs[1]}">${CARRIERS[0].docs[1]}</a>、<a data-link="${CARRIERS[3].pane}|${CARRIERS[3].docs[1]}">${CARRIERS[3].docs[1]}</a>、<a data-link="${CARRIERS[4].pane}|${CARRIERS[4].docs[0]}">${CARRIERS[4].docs[0]}</a>`;
+    doc.appendChild(para);
+    if (S.mode === 'b61' && byPane[p.pane].multiplicity !== 'single') {
+      const nb = el('p'); nb.innerHTML = `<span class="badge warn">keyed 未落地</span> 本批页身份只到 pane，所以这块 pane 的第二份文档会<b>换掉当前页的内容</b>而不是多出一页——那是 D 的活。`;
+      doc.appendChild(nb);
+    }
+    para.querySelectorAll('a').forEach(a => {
+      a.onclick = () => { const [pane, res] = a.dataset.link.split('|'); openPage(pane, S.mode === 'dmodel' ? res : (byPane[pane].multiplicity === 'single' ? res : res)); };
+    });
+    return doc;
+  }
+  function floatEl(p) {
+    const f = el('div', 'float');
+    f.style.left = p.geometry.x + 'px'; f.style.top = p.geometry.y + 'px';
+    f.style.width = p.geometry.w + 'px'; f.style.height = p.geometry.h + 'px'; f.style.zIndex = p.z;
+    const head = el('div', 'winhead');
+    head.appendChild(el('span', 't', p.title + '（浮窗）'));
+    const btns = el('span', 'btns');
+    const mk = (txt, fn, title) => { const b = el('button', null, txt); b.title = title; b.onclick = fn; return b; };
+    // 三钮照批次59 铁律一原样（collapse／split／×），只改点击后果：浮窗点 split＝收回为页并搬进对面页组。
+    // 「原样收回本页组」这种纯形态切换不在钮上——作者裁定③：走右键。
+    btns.appendChild(mk('▌▌', () => split(p.instance), '分屏：收回为页并搬到另一页组'));
+    btns.appendChild(mk('—', () => collapse(p.instance), '收起为标签'));
+    btns.appendChild(mk('×', () => closePage(p.instance), '关闭'));
+    head.oncontextmenu = (e) => openFormMenu(e, p.instance);
+    head.appendChild(btns);
+    head.onpointerdown = (e) => {
+      if (e.target !== head && e.target.tagName !== 'SPAN') return;
+      const sx = e.clientX - p.geometry.x, sy = e.clientY - p.geometry.y, host = $('#groups').getBoundingClientRect();
+      const move = (ev) => {
+        p.geometry.x = Math.max(0, Math.min(host.width - 80, ev.clientX - sx));
+        p.geometry.y = Math.max(0, Math.min(host.height - 40, ev.clientY - sy));
+        p.z = S.z; render();
+      };
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+      p.z = ++S.z;
+    };
+    f.appendChild(head);
+    f.appendChild(docBody(p));
+    const rz = el('span', 'rz');
+    rz.onpointerdown = (e) => {
+      e.stopPropagation(); e.preventDefault();
+      const sx = e.clientX, sy = e.clientY, w0 = p.geometry.w, h0 = p.geometry.h;
+      const move = (ev) => { p.geometry.w = Math.max(220, w0 + ev.clientX - sx); p.geometry.h = Math.max(120, h0 + ev.clientY - sy); render(); };
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    };
+    f.appendChild(rz);
+    return f;
+  }
+
+  // ── 控制 ────────────────────────────────────────────────────
+  document.querySelectorAll('.mode[data-mode]').forEach(b => {
+    b.onclick = () => {
+      S.mode = b.dataset.mode;
+      document.querySelectorAll('.mode[data-mode]').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+      if (S.mode === 'legacy' && !S.pages.length) openPage('novel.editor', CARRIERS[0].docs[0]);
+      logRaw('模式', { legacy: '切回今天的实现：第一扇占页，第二扇起全是浮窗', b61: '切到批次61：缺省＝切换／揭示，浮窗只能显式要', dmodel: '切到 D：pageIdOf 开始吃 resource，一 pane 多页' }[S.mode], 'act-open');
+      render();
+    };
+  });
+  document.querySelectorAll('#gestureSeg button').forEach(b => {
+    b.onclick = () => {
+      S.gesture = b.dataset.g;
+      document.querySelectorAll('#gestureSeg button').forEach(x => x.classList.toggle('on', x === b));
+      render();
+    };
+  });
+  document.querySelectorAll('[data-act]').forEach(b => {
+    if (b.dataset.act === 'theme') b.onclick = () => { const h = document.documentElement; h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark'; };
+    if (b.dataset.act === 'migrate') b.onclick = migrate;
+    if (b.dataset.act === 'reset') b.onclick = () => { S.pages = []; S.active = { main: null, side: null }; S.tally = { reveal: 0, open: 0, win: 0 }; logRaw('清空', '工作区归零', 'act-block'); render(); };
+  });
+  // 沙盘便利（不是规格）：Esc 先收菜单；菜单不在时才把最上面那扇浮窗收回为页。
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menuEl) { const top = S.pages.filter(p => p.form === 'floating').sort((a, b) => b.z - a.z)[0]; if (top) { popout(top.instance); } } });
+
+  openPage('novel.editor', CARRIERS[0].docs[0]);
+  openPage('worldbook.entries', CARRIERS[3].docs[0]);
+  render();
+})();
+</script>
+</body>
+</html>

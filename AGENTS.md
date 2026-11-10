@@ -26,6 +26,11 @@ If a required tool/skill is unavailable, say so briefly and continue with the re
 - After feature work passes verification on `main`, sync/merge `main` into `server-version` for production adaptation.
 - Do not develop feature work directly on `server-version` unless the user explicitly asks for a production hotfix.
 
+### 2026-10-28 起：Pinax-Electron-Next 为唯一开发底座（作者裁定）
+- 开发分支 `feat/pinax-electron-next`（推作者 fork `skkbsgzf/Pinax-StoryHarness`），基线含 MCP 本地项目线（`feat/agent-mcp-local-projects` 已并入）。
+- 新功能一律进 `next/`，不再往老 web 轨（`src/`、旧 `electron/`）加功能；老轨只收 bugfix。
+- 老代码按 [pinax-electron-next-spec](./docs/plan/pinax-electron-next-spec-20261027.md) 第 8–9 节逐插件迁入 `next/`（manifest → 挂槽位 → 双跑核对），过第 9 节 DoD 判据后才允许删除；废弃＝冻结，不是先删。
+
 ## Local services and verification
 - 已授权的开发维护中，可按需更新或重启相关本地服务（3001 / 8451 / 5173），无需逐次确认；保留原配置和任务数据，尽量在无在途任务时切换。此授权不扩展到公网部署。
 - 按变更范围执行必要验证。启用已验证且未再改动的产物时，只检查相关服务健康及配置、任务数据保留情况，不机械重跑完整门禁。

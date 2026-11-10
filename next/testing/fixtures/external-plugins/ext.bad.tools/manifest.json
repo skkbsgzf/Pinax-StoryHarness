@@ -1,0 +1,18 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.bad.tools",
+  "title": "坏例：声明了工具",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "bad.tools.pane", "contextProfile": "bad.tools" },
+  "dataDirs": { "data": "坏例甲数据" },
+  "capabilities": [],
+  "requires": [],
+  "tools": ["bad.tools.read"],
+  "scopes": ["file:坏例甲数据:r"],
+  "contributes": {
+    "panes": [{ "id": "bad.tools.pane", "slot": "left-dock", "title": "坏例甲", "view": "pinax.view.list", "kind": "records-editor" }]
+  }
+}

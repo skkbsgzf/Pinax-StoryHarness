@@ -1,0 +1,114 @@
+import { forwardComplete } from '../../server/services/kitModelGateway.js'
+import { createInterceptorChain } from './toolInterceptors.mjs'
+
+/**
+ * 模型回合适配（M2.5-A 任务五）。
+ *
+ * 复用的是**传输层**，不是 generation 回合的校验层：
+ *   - `runKitFunnelProviderTurn`（kitModelGateway.js:159）本身已经把 tools 透传给
+ *     `/v1/pinax/complete`、把 toolCalls 翻译回来，但它前面的
+ *     `validateGenerationAgentTurnRequest` 只认 `GENERATION_TOOL_NAMES`（叙事只读工具 +
+ *     节拍规划 + web_search）——`GENERATION_TOOL_NAMES` 是闭集，pinax_* 一把都进不去
+ *     （shared/generationToolContract.js:9-15,160-173）。
+ *   - 所以这里直接调 `forwardComplete(payload)`：与浏览器端 agent-step 发给任务面的是
+ *     **同一个请求体形状**（messages / tools / toolChoice），只是校验归我们自己
+ *     ——工具名取自运行时面、schema 取自 MCP inputSchema、数量由 selectTools 封在 6 把。
+ *
+ * 这是本批唯一一处旧线 import（只读调用，不改 server/**）。将来内化时把这一段搬进本文件，
+ * 形状不变。
+ */
+export const TOOL_TURN_MAX_TOOLS = 6
+
+function toGatewayMessage(message = {}) {
+  const role = String(message.role ?? '')
+  if (role === 'tool') {
+    const part = Array.isArray(message.parts)
+      ? message.parts.find((item) => item?.type === 'tool-result')
+      : null
+    return {
+      role: 'tool',
+      toolCallId: String(message.toolCallId ?? part?.toolCallId ?? ''),
+      toolName: String(message.name ?? part?.toolName ?? ''),
+      output: String(message.content ?? part?.output ?? ''),
+      isError: Boolean(part?.isError)
+    }
+  }
+  if (role === 'assistant') {
+    const calls = (Array.isArray(message.parts) ? message.parts : [])
+      .filter((part) => part?.type === 'tool-call')
+      .map((part) => ({
+        id: String(part.toolCallId ?? ''),
+        name: String(part.toolName ?? ''),
+        arguments: part.input && typeof part.input === 'object' ? part.input : {}
+      }))
+    return {
+      role: 'assistant',
+      content: String(message.content ?? ''),
+      ...(calls.length ? { toolCalls: calls } : {})
+    }
+  }
+  return { role: role || 'user', content: String(message.content ?? '') }
+}
+
+function toGatewayTool(tool) {
+  const name = String(tool?.name ?? '')
+  const schema = tool?.inputSchema && typeof tool.inputSchema === 'object'
+    ? tool.inputSchema
+    : { type: 'object', properties: {} }
+  return {
+    name,
+    description: String(tool?.description ?? tool?.title ?? name),
+    parameters: schema
+  }
+}
+
+/**
+ * @param {object} [input]
+ * @param {Function} [input.complete] 默认 forwardComplete；测试注假函数
+ * @param {number} [input.timeoutMs]
+ * @param {number} [input.maxTools]
+ * @param {object|Array|null} [input.interceptors] 拦截点链（批次50）：回合级 before/after 也走同一条链
+ */
+export function createKitToolTurn({ complete = forwardComplete, timeoutMs = 100_000, maxTools = TOOL_TURN_MAX_TOOLS, interceptors = null } = {}) {
+  const chain = interceptors && typeof interceptors.runBefore === 'function'
+    ? interceptors
+    : Array.isArray(interceptors) && interceptors.length
+      ? createInterceptorChain({ interceptors })
+      : null
+
+  return async function kitToolTurn({ messages = [], tools = [], options = {}, writeMode = null, runId = null } = {}) {
+    if (!Array.isArray(tools) || !tools.length) {
+      throw Object.assign(new Error('工具回合至少要带一把工具'), { code: 'PINAX_TOOL_TURN_NO_TOOLS' })
+    }
+    const payload = {
+      messages: messages.map(toGatewayMessage),
+      tools: tools.slice(0, maxTools).map(toGatewayTool),
+      toolChoice: options.toolChoice ?? 'auto',
+      ...(Number.isFinite(Number(options.maxTokens)) ? { maxTokens: Number(options.maxTokens) } : {})
+    }
+    // 回合级也过链：写族闸按 ctx.kind 自己跳过模型回合，审计环只认以「.」分命名空间的工具名。
+    const ctx = { kind: 'model-turn', tools, options, writeMode, runId }
+    const decided = chain ? await chain.runBefore('model.turn', payload, ctx) : { veto: false, args: payload }
+    if (decided?.veto) {
+      throw Object.assign(new Error(String(decided.reason ?? '模型回合被拦截')), {
+        code: String(decided.code ?? 'TURN_VETOED')
+      })
+    }
+    const result = await complete(decided?.args ?? payload, { timeoutMs })
+    if (chain) await chain.runAfter('model.turn', result, ctx)
+    const calls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((call, index) => ({
+      id: String(call?.id ?? `call_${index + 1}`),
+      name: String(call?.name ?? ''),
+      arguments: call?.arguments && typeof call.arguments === 'object' ? call.arguments : {}
+    })).filter((call) => call.name)
+    return {
+      kind: calls.length ? 'tool_calls' : 'final_ready',
+      calls,
+      text: calls.length ? '' : String(result?.content ?? ''),
+      // 批次77 任务2：上游那份归一化 usage（kitModelGateway.js:225 的 inputTokens/outputTokens/totalTokens）
+      // 原样带回去。这一层不猜、不估、不改名——没有就是 null，由 toolLoop 汇总、由界面如实说「未回报用量」。
+      usage: result?.usage ?? null,
+      finishReason: result?.finishReason ?? null
+    }
+  }
+}

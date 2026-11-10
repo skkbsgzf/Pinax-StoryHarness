@@ -1,0 +1,18 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.implprobe",
+  "title": "带 impl.mjs 的目录：验证声明型装载器绝不执行第三方 JS",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "implprobe.pane", "contextProfile": "implprobe" },
+  "dataDirs": { "data": "探针数据" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:探针数据:r"],
+  "contributes": {
+    "panes": [{ "id": "implprobe.pane", "slot": "left-dock", "title": "探针", "view": "pinax.view.list", "kind": "records-editor" }]
+  }
+}

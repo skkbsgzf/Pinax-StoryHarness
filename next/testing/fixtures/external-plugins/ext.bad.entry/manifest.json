@@ -1,0 +1,19 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.bad.entry",
+  "title": "坏例：声明了自带面板",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "bad.entry.pane", "contextProfile": "bad.entry" },
+  "dataDirs": { "data": "坏例丁数据" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:坏例丁数据:r"],
+  "entry": { "kind": "iframe", "path": "ui/index.html" },
+  "contributes": {
+    "panes": [{ "id": "bad.entry.pane", "slot": "left-dock", "title": "坏例丁", "view": "pinax.view.custom", "kind": "custom-panel" }]
+  }
+}

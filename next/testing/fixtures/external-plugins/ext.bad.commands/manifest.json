@@ -1,0 +1,19 @@
+{
+  "spec": "pinax-carrier@4",
+  "manifestVersion": 4,
+  "id": "ext.bad.commands",
+  "title": "坏例：声明了命令",
+  "version": "0.1.0",
+  "minKernel": "1",
+  "tier": "carrier",
+  "primary": { "projectKind": "generic", "defaultPane": "bad.commands.pane", "contextProfile": "bad.commands" },
+  "dataDirs": { "data": "坏例戊数据" },
+  "capabilities": [],
+  "requires": [],
+  "tools": [],
+  "scopes": ["file:坏例戊数据:r"],
+  "contributes": {
+    "panes": [{ "id": "bad.commands.pane", "slot": "left-dock", "title": "坏例戊", "view": "pinax.view.list", "kind": "records-editor" }],
+    "commands": [{ "id": "bad.run", "title": "跑一下", "run": "doIt" }]
+  }
+}

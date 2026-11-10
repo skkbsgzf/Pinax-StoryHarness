@@ -1,0 +1,247 @@
+{
+  "geometry": {
+    "window": {
+      "innerWidth": 1694,
+      "innerHeight": 1058
+    },
+    "devicePixelRatio": 0.8500000238418579,
+    "rootBox": {
+      "x": 0,
+      "y": 0,
+      "width": 1694.1175537109375,
+      "height": 1058.823486328125
+    },
+    "scroll": {
+      "w": 1694,
+      "h": 1058
+    }
+  },
+  "shots": [
+    {
+      "id": "01-全局-书稿与正文",
+      "caption": "打开《大梦》后的整体三栏：左竖条七块板、索引窗的章节树、中栏正文、右栏 Pi-Agent",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\01-全局-书稿与正文.jpg"
+    },
+    {
+      "id": "03-大纲-大纲树与章节",
+      "caption": "竖条第 2 格「大纲」：索引窗与中栏",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\03-大纲-大纲树与章节.jpg"
+    },
+    {
+      "id": "04-构思-构思清单",
+      "caption": "竖条第 3 格「构思」：索引窗与中栏",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\04-构思-构思清单.jpg"
+    },
+    {
+      "id": "05-世界书-条目树",
+      "caption": "竖条第 4 格「世界书」：索引窗与中栏",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\05-世界书-条目树.jpg"
+    },
+    {
+      "id": "06-设定-约束规则树",
+      "caption": "竖条第 5 格「设定」：索引窗与中栏",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\06-设定-约束规则树.jpg"
+    },
+    {
+      "id": "07-资料-资料文档树",
+      "caption": "竖条第 6 格「资料」：索引窗与中栏",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\07-资料-资料文档树.jpg"
+    },
+    {
+      "id": "08-素材-素材库（空库）",
+      "caption": "竖条第 7 格「素材」：索引窗与中栏",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\08-素材-素材库（空库）.jpg"
+    },
+    {
+      "id": "09-素材-自带面板（协议v3 entry面）",
+      "caption": "载体自带面板：插件自己的页面跑在沙箱 iframe 里（pinax-plugin:// 协议），宿主只给一条只读工具桥",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\09-素材-自带面板（协议v3 entry面）.jpg"
+    },
+    {
+      "id": "10-设置-载体清单与协议v3",
+      "caption": "设置 → 载体：每块板声明了什么（能力／工具／目录／上下文／面板入口）",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\10-设置-载体清单与协议v3.jpg"
+    },
+    {
+      "id": "11-大纲-悬浮小窗与大纲转换入口",
+      "caption": "大纲板声明的 overlay 槽 pane（大纲悬浮小窗）；左侧同时给出「大纲目录是重章节结构（md）时，可在设置 → 大纲转换一键生成节点」的入口",
+      "file": "D:\\Pinax-main\\Pinax-main\\docs\\screenshots\\next-dameng\\2026-10-30\\11-大纲-悬浮小窗与大纲转换入口.jpg"
+    }
+  ],
+  "notes": [
+    {
+      "id": "01-全局-书稿与正文",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "第001章",
+          "第001章",
+          "延迟",
+          "延迟",
+          "倒带",
+          "倒带"
+        ],
+        "centerHeading": "倒带",
+        "centerHint": "",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "03-大纲-大纲树与章节",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "悬浮",
+          "新建大纲"
+        ],
+        "centerHeading": "",
+        "centerHint": "从左边索引窗里选一个大纲节点。",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "04-构思-构思清单",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "项目总览",
+          "项目总览"
+        ],
+        "centerHeading": "项目总览",
+        "centerHint": "",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "05-世界书-条目树",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "表",
+          "编年史·碎界以来（务虚学会秘录）",
+          "编年史·碎界以来（务虚学会秘录）",
+          "人物·柯秒（冷穿越剧版）",
+          "人物·柯秒（冷穿越剧版）",
+          "剧作·插叙结构",
+          "剧作·插叙结构",
+          "剧作·世界观讲述原则",
+          "剧作·世界观讲述原则",
+          "剧作·术语与声线",
+          "剧作·术语与声线",
+          "设定·界与十二时辰",
+          "设定·界与十二时辰",
+          "设定·序列体系"
+        ],
+        "centerHeading": "编年史·碎界以来（务虚学会秘录）",
+        "centerHint": "",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "06-设定-约束规则树",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "00-规则索引",
+          "00-规则索引",
+          "禁用词与禁用句式",
+          "禁用词与禁用句式",
+          "可用skill清单",
+          "可用skill清单",
+          "润笔交付标准",
+          "润笔交付标准",
+          "三件套工作流",
+          "三件套工作流",
+          "文风-大梦",
+          "文风-大梦"
+        ],
+        "centerHeading": "00-规则索引",
+        "centerHint": "",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "07-资料-资料文档树",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "开篇参考-哪吒讲古",
+          "开篇参考-哪吒讲古"
+        ],
+        "centerHeading": "开篇参考-哪吒讲古",
+        "centerHint": "",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "08-素材-素材库（空库）",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "悬浮"
+        ],
+        "centerHeading": "",
+        "centerHint": "从左边索引窗里选一条素材，或在那里新建一条。",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "09-素材-自带面板（协议v3 entry面）",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "悬浮"
+        ],
+        "centerHeading": "",
+        "centerHint": "从左边索引窗里选一条素材，或在那里新建一条。",
+        "panelState": "面板已就绪",
+        "panelFrame": true
+      }
+    },
+    {
+      "id": "10-设置-载体清单与协议v3",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "悬浮"
+        ],
+        "centerHeading": "",
+        "centerHint": "从左边索引窗里选一条素材，或在那里新建一条。",
+        "panelState": "",
+        "panelFrame": false
+      }
+    },
+    {
+      "id": "11-大纲-悬浮小窗与大纲转换入口",
+      "state": {
+        "chip": "大梦 · novel · 第 6 版",
+        "indexSections": [],
+        "indexItems": [
+          "悬浮",
+          "新建大纲"
+        ],
+        "centerHeading": "",
+        "centerHint": "从左边索引窗里选一个大纲节点。",
+        "panelState": "",
+        "panelFrame": false
+      }
+    }
+  ],
+  "consoleErrors": []
+}

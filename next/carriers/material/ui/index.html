@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>素材面板</title>
+    <style>
+      /* 面板页的样式：自成一套（沙箱页面拿不到宿主的 CSS 变量），只求读得清。
+         颜色是中性灰阶，不假装自己属于宿主主题。 */
+      :root { color-scheme: light dark; }
+      body {
+        margin: 0;
+        padding: 10px 12px;
+        font: 13px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+        color: #22262b;
+        background: transparent;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      h1 { margin: 0; font-size: 14px; font-weight: 600; }
+      .meta { font-size: 11px; color: #6b7280; }
+      form { display: flex; gap: 6px; margin-bottom: 8px; }
+      input {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 4px 8px;
+        border: 1px solid #d5d8dc;
+        border-radius: 4px;
+        background: #fff;
+        color: inherit;
+        font: inherit;
+      }
+      button {
+        flex: none;
+        padding: 4px 10px;
+        border: 1px solid #d5d8dc;
+        border-radius: 4px;
+        background: #f5f6f7;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover { background: #eceef0; }
+      ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+      li {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 6px 8px;
+        border: 1px solid #e3e5e8;
+        border-radius: 4px;
+      }
+      .row { display: flex; align-items: baseline; gap: 6px; }
+      .title { font-weight: 500; }
+      .tag {
+        flex: none;
+        padding: 0 5px;
+        border-radius: 3px;
+        background: #eef0f2;
+        font-size: 11px;
+        color: #4b5563;
+      }
+      .excerpt { font-size: 11px; color: #6b7280; }
+      .empty, .error { padding: 10px 0; font-size: 12px; color: #6b7280; }
+      .error { color: #b3261e; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>素材面板</h1>
+      <span class="meta" id="meta">读取中…</span>
+    </header>
+    <form id="filter">
+      <input id="query" type="search" placeholder="按标题或正文检索" aria-label="检索素材" />
+      <button type="submit">检索</button>
+    </form>
+    <ul id="list" aria-label="素材记录"></ul>
+    <p class="empty" id="empty">正在读素材记录…</p>
+
+    <!-- 脚本走外部文件：面板页的 CSP 是 script-src 'self'，不许行内脚本。 -->
+    <script src="./panel.js"></script>
+  </body>
+</html>
