@@ -1519,6 +1519,9 @@ function groupCurrentInstance(group) {
  */
 const centerEmptyNote = computed(() => {
   if (visibleWindows.value.length) return ''
+  // 无项目＝开始页（上面那块带主操作钮）：指路文案只属于有项目无页的形态——
+  // 无项目时竖条上没有可点的板，这句是指向死路的死话（作者 2026-11-11 裁定口径）。
+  if (!project.value) return ''
   return sideTabWindows.value.length
     ? '页都收进悬浮球了，点球放回来。'
     : '还没有页。从竖条或左树开一扇。'
