@@ -15,7 +15,7 @@ import {
 const BUILT_IN_CARRIER_PLUGINS = await loadBuiltInCarrierPlugins()
 import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { IPC_CHANNELS, createIpcDispatcher } from '../shell/ipcContract.mjs'
-import { MENU_TEMPLATE, flattenMenuEntries, flattenMenuIds } from '../shell/menus.mjs'
+import { MENU_TEMPLATE, flattenMenuEntries, flattenMenuIds, RECENT_CLEAR_ID, RECENT_MENU_ID, recentProjectLabel, withRecentProjects } from '../shell/menus.mjs'
 import {
   HOTKEYS_DIR,
   HOTKEYS_FILE,
@@ -629,7 +629,8 @@ test('批次63 单点化：带原生 accelerator 的菜单项不再被总线命�
 test('批次63 收编b：载体命令 id 回到渲染层后有真落点（menu:invoke 不再只是假成功）', async () => {
   const app = await readFile(new URL('AppNext.vue', shellDir), 'utf-8')
   // runMenuAction 的 carrier 回落：数据源是那张命令表，执行通路是面板同一条 resolveCommandRun。
-  assert.match(app, /async function runMenuAction\(id\) \{[\s\S]{0,900}item\.group === 'carrier'[\s\S]{0,200}await resolveCommandRun\(entry\.run, entry\)/u,
+  // （第二参 root 是「最近打开」条目的落点参数——作者 2026-11-10 点单，carrier 回落不吃它。）
+  assert.match(app, /async function runMenuAction\(id, root = null\) \{[\s\S]{0,900}item\.group === 'carrier'[\s\S]{0,200}await resolveCommandRun\(entry\.run, entry\)/u,
     '载体命令 id 必须按命令表里的 run 走面板那条执行通路')
   assert.match(app, /命令「\$\{entry\.title \?\? entry\.id\}」未接线/u, '落点认不出要说得出为什么，与 runPaletteCommand 同一句话')
   // 递归闸：菜单项的 run 是 `menu:<自己的 id>`，回落只认 carrier 分组才不会有死循环。
@@ -644,4 +645,63 @@ test('批次63 收编b：载体命令 id 回到渲染层后有真落点（menu:i
   assert.deepEqual(invoked, ['novel.export-book'])
   const unknown = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: 'novel.self-destruct' })
   assert.equal(unknown.ok, false, '未知 id 照旧拒')
+})
+
+/* —— 最近打开的项目（作者 2026-11-10 点单）———————————————————————————————————— */
+
+test('最近项目 withRecentProjects：空清单原样返回；非空在 project.open 后拼「组头＋条目＋清空」块且不改冻结模板', () => {
+  // 空清单（或没有可用条目）＝模板原样，项目菜单不多一块噪音。
+  assert.equal(withRecentProjects(MENU_TEMPLATE, []), MENU_TEMPLATE)
+  assert.equal(withRecentProjects(MENU_TEMPLATE, [{ name: '没路径的不要' }]), MENU_TEMPLATE)
+
+  const recents = [
+    { path: 'D:/Projects/大梦', name: '大梦', at: '2026-11-10T09:00:00.000Z' },
+    { path: 'D:/books/旧稿', name: null, at: null }
+  ]
+  const spliced = withRecentProjects(MENU_TEMPLATE, recents)
+  assert.notEqual(spliced, MENU_TEMPLATE, '非空清单要返回新数组（MENU_TEMPLATE 冻结，不许原地改）')
+  assert.deepEqual(MENU_TEMPLATE[0].submenu.filter((item) => !item.type).map((item) => item.id), [
+    'project.create', 'project.open', 'project.import', 'project.backup', 'project.history', 'project.reviewProposals', 'project.proposals', 'app.quit'
+  ], '拼装不得污染冻结模板')
+
+  const projectMenu = spliced.find((top) => top.label === '项目')
+  const afterOpen = projectMenu.submenu.slice(projectMenu.submenu.findIndex((item) => item.id === 'project.open') + 1, projectMenu.submenu.findIndex((item) => item.id === 'project.import'))
+  assert.deepEqual(afterOpen.map((item) => item.type ?? item.label), [
+    'separator', '最近打开', 'D:/Projects/大梦', 'D:/books/旧稿', '清除最近打开', 'separator'
+  ], '块的位置＝project.open 之后、导入既有稿之前；名与目录同名（或没名）只摆路径')
+  const recentItems = afterOpen.filter((item) => item.id === RECENT_MENU_ID)
+  assert.equal(recentItems.length, 2)
+  assert.deepEqual(recentItems.map((item) => item.root), ['D:/Projects/大梦', 'D:/books/旧稿'], '每条都带着自己的目录，渲染层打开就吃这一格')
+  assert.deepEqual(recentItems.map((item) => item.title), ['D:/Projects/大梦', 'D:/books/旧稿'], 'title＝完整路径（页内 hover 提示）')
+  const clear = afterOpen.find((item) => item.id === RECENT_CLEAR_ID)
+  assert.equal(clear.label, '清除最近打开')
+
+  // 组头与条目的分工：组头无 id（页内＝禁用行、原生＝灰行），条目有 id 有 root。
+  assert.equal(afterOpen[1].id, undefined)
+  assert.equal(afterOpen[1].enabled, false)
+
+  // 其他组一字不动；recentProjectLabel 的分岔单独钉住。
+  assert.deepEqual(spliced.filter((top) => top.label !== '项目'), MENU_TEMPLATE.filter((top) => top.label !== '项目'))
+  assert.equal(recentProjectLabel({ path: 'D:/Projects/大梦', name: '大梦' }), 'D:/Projects/大梦')
+  assert.equal(recentProjectLabel({ path: 'D:/Projects/大梦', name: '我的大梦' }), '我的大梦 — D:/Projects/大梦')
+  assert.equal(recentProjectLabel(null), '')
+})
+
+test('最近项目 menu:invoke 与 recent-list：recentClear 进接受集、recent-list 未注入回空清单、注入了回真值', async () => {
+  const registry = builtInRegistry()
+  const invoked = []
+  const dispatcher = createIpcDispatcher({ session: sessionWith(registry), onMenuInvoke: async (id) => { invoked.push(id) } })
+
+  const bare = await dispatcher.dispatch(IPC_CHANNELS.projectRecentList, {})
+  assert.equal(bare.ok, true, '没接最近项目服务的会话，「没有记录」是合法答案，不该报缺')
+  assert.deepEqual(bare.value.recents, [])
+
+  const clear = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: RECENT_CLEAR_ID })
+  assert.equal(clear.ok, true, '「清除最近打开」是应用菜单动作：接受集按常量放行（模板里没有静态项）')
+  assert.deepEqual(invoked, [RECENT_CLEAR_ID], '被接受的 id 交给宿主落主进程的清空')
+
+  const wired = createIpcDispatcher({ session: sessionWith(registry), recentProjects: () => [{ path: 'D:/Projects/大梦', name: '大梦', at: null }] })
+  const listed = await wired.dispatch(IPC_CHANNELS.projectRecentList, {})
+  assert.equal(listed.ok, true)
+  assert.equal(listed.value.recents[0].path, 'D:/Projects/大梦')
 })

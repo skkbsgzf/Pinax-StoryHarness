@@ -14,7 +14,7 @@ import { createProposalStore } from '../runtime/proposalStore.mjs'
 import { CARRIER_WRITE_CLASS, KERNEL_WRITE_CLASS } from '../runtime/kernelWriteGuard.mjs'
 import { createInterceptorChain, createWriteAuditInterceptor, createWriteGuardInterceptor } from '../runtime/toolInterceptors.mjs'
 import { emitProjectEvent, projectEventKindForPath, subscribeProjectEventsEffect } from '../runtime/eventBus.mjs'
-import { createAppPreferences } from '../runtime/appPreferences.mjs'
+import { createAppPreferences, mergeRecentProject } from '../runtime/appPreferences.mjs'
 import { createServiceLogPool } from '../runtime/serviceLogPool.mjs'
 import { createHistoryScheduler } from '../runtime/historyScheduler.mjs'
 import { probeModelPlane, applyModelPlaneEndpoint } from '../runtime/modelPlaneProbe.mjs'
@@ -31,7 +31,7 @@ import { createFactHookService } from './factHookService.mjs'
 import { createSkillsService } from '../skills/loadSkills.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
-import { MENU_TEMPLATE } from './menus.mjs'
+import { MENU_TEMPLATE, RECENT_CLEAR_ID, withRecentProjects } from './menus.mjs'
 import { HOTKEYS_DIR, HOTKEYS_FILENAME, createHotkeysFileStore } from './hotkeys.mjs'
 import { PLUGIN_PROTOCOL } from './pluginProtocol.mjs'
 import { createPluginFileHandler } from './pluginFileServer.mjs'
@@ -241,6 +241,8 @@ const EDIT_MENU_COMMANDS = Object.freeze({
 let session = null
 let dispatcher = null
 let window_ = null
+/** 最近打开的项目（应用级偏好的内存镜像）：原生菜单的动态段与推渲染层都读这一份。 */
+let currentRecentProjects = []
 
 /**
  * 宿主级效应的 owner 名（批次51）。它们不是安装型插件，但同样要被「注册即负责拆掉」约束：
@@ -306,13 +308,20 @@ function sendToRenderer(channel, payload) {
 }
 
 function buildMenu() {
-  const template = MENU_TEMPLATE.map((top) => ({
+  // 最近打开的项目（menus.mjs withRecentProjects）：清单为空时返回原模板，动态段原样缺席。
+  const template = withRecentProjects(MENU_TEMPLATE, currentRecentProjects).map((top) => ({
     ...top,
     submenu: top.submenu.map((item) => {
       if (item.role || item.type) return item
       return {
         ...item,
         click: () => {
+          // 最近项目项（item.root 在手）是渲染层落点：打开走既有 pick-dir→project:open 链，
+          // 主进程对「打开哪个目录」没有可代劳的事——只报事件，不进 menuInvoke 分发。
+          if (item.root) {
+            sendToRenderer(IPC_EVENT.menuInvoked, { id: item.id, root: item.root })
+            return
+          }
           sendToRenderer(IPC_EVENT.menuInvoked, { id: item.id })
           // 菜单这一侧不 await：点了就要立刻回，不能让原生菜单等一次 IPC。
           // 但不 await ≠ 不接住——拒绝一律进「服务与通知」池留名（批次69 任务2）。
@@ -477,12 +486,45 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     })
   }
 
-  buildMenu()
-
   // 应用级偏好（批次8①）：启动即读、即生效——模型面端点与界面缩放不再只靠 env。
+  // 最近打开的项目也住在里面：先读再建菜单，首帧原生菜单就带得上「最近打开」段。
   const prefs = createAppPreferences({ file: preferencesFile() })
   const storedPrefs = await prefs.read()
   const stored = storedPrefs.ok ? storedPrefs.value : { modelPlaneEndpoint: null, uiZoom: null, historyIntervalMinutes: 5 }
+  currentRecentProjects = Array.isArray(stored.recentProjects) ? stored.recentProjects : []
+
+  /** 记账/清空后的共同收尾：内存镜像、原生菜单、渲染层推送三处对齐同一份清单。 */
+  function applyRecentProjects(list) {
+    currentRecentProjects = Array.isArray(list) ? list : []
+    buildMenu()
+    sendToRenderer(IPC_PUSH.recentProjectsChanged, { recents: currentRecentProjects })
+  }
+
+  /** 记一次「打开过」：合并进偏好并落盘；失败只进池留名，不挡打开本身。 */
+  async function recordRecentProject(root, name = null) {
+    if (!root || typeof root !== 'string') return
+    const entry = { path: root, name: typeof name === 'string' && name ? name : null, at: new Date().toISOString() }
+    const current = await prefs.read()
+    if (!current.ok) return
+    const written = await prefs.write({ recentProjects: mergeRecentProject(current.value.recentProjects ?? [], entry) })
+    if (!written.ok) {
+      noteShellAccounting('warn', `最近项目记账失败：${written.error?.message ?? '未知原因'}`, { root })
+      return
+    }
+    applyRecentProjects(written.value.recentProjects ?? [])
+  }
+
+  /** 清空最近项目（菜单「清除最近打开」的主进程落点）。 */
+  async function clearRecentProjects() {
+    const written = await prefs.write({ recentProjects: [] })
+    if (!written.ok) {
+      noteShellAccounting('warn', `清除最近项目失败：${written.error?.message ?? '未知原因'}`)
+      return
+    }
+    applyRecentProjects([])
+  }
+
+  buildMenu()
   if (stored.modelPlaneEndpoint) applyModelPlaneEndpoint(stored.modelPlaneEndpoint)
   const uiZoom = resolveUiZoom({ storedZoom: stored.uiZoom })
   // 服务与外部 MCP 的公共池（批次49）：应用级一份，跨项目共用；确认水位随偏好落盘。
@@ -722,6 +764,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     session,
     prefs,
     serviceLogPool,
+    // 最近打开的项目：只读口径（记账/清空都走主进程自己的函数），这里只把内存镜像摊出去。
+    recentProjects: () => currentRecentProjects,
     probeModelPlane: () => probeModelPlane(),
     pickProjectDir: async (input = {}) => {
       // 新项目落点（批次9）：createProject 只吃空目录，Documents 这种会话根永远非空——
@@ -833,13 +877,22 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     onThemeChanged: async (theme) => {
       updateTitleBarOverlay({ theme, zoom: currentUiZoom })
     },
-    // 导入既有稿（E1）：结构动作由作者在向导里显式按两次（计划→执行），与建项目同级走主进程；
-    // dryRun≠false 一律当计划，只有显式 false 才落盘。
-    importProject: ({ sourcePath, targetPath, dryRun }) => (dryRun ? planImport({ sourcePath, targetPath }) : runImport({ sourcePath, targetPath })),
+    // 导入既有稿（E1，向导化后支持逐类多源）：结构动作由作者在向导里显式按两次（计划→执行），
+    // 与建项目同级走主进程；dryRun≠false 一律当计划，只有显式 false 才落盘。
+    importProject: ({ sourcePath, targetPath, dryRun, sources }) => (dryRun ? planImport({ sourcePath, targetPath, sources }) : runImport({ sourcePath, targetPath, sources })),
     // 批次30：大纲转换（散文章节稿 → 大纲/outline.json）。源 md 只读、现有节点不动；
     // dryRun 缺省由通道按 true 传进来，只扫描不写盘。
     outlineImport: (args) => importOutlineChapters(args),
-    onProjectOpened: beginHistory,
+    onProjectOpened: async (info) => {
+      // 最近项目记账（应用级偏好）：凡真打开成功的项目都记一笔——载体启停触发的 refresh
+      // 是同一根，去重置顶无副作用。记账抛错只留名，不挡历史接线。
+      try {
+        await recordRecentProject(info?.root, info?.name ?? null)
+      } catch (error) {
+        noteShellAccounting('warn', `最近项目记账抛错：${String(error?.message ?? error)}`, { root: info?.root ?? null })
+      }
+      await beginHistory(info)
+    },
     // 工单E3：关项目即停历史定时器。session.close 不清 projectRoot，停表只能在外壳这一层做；
     // 不重启窗口也能让「关掉项目后不再有新快照」成立。
     // 批次37/51：项目事件与服务事件推送的宿主效应整栈逆序回卷，并摘掉写入钩子——
@@ -868,6 +921,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     onMenuInvoke: async (id) => {
       // 工单A：「打开提案目录」从「运行时」组并入「项目」组，id 随组改名；处理方式不变。
       if (id === 'project.proposals') sendToRenderer(IPC_EVENT.runtimeProgress, { kind: 'proposals', dir: '.pinax/proposals/' })
+      // 「清除最近打开」（作者 2026-11-10 点单）：清偏好→重建菜单→推渲染层，全在主进程；
+      // 渲染层对这个 id 没有本地落点（runMenuAction 认不出就静默，等推送来改清单）。
+      if (id === RECENT_CLEAR_ID) await clearRecentProjects()
       // 工单A：「编辑」组补了 id，页内菜单行的撤销/剪贴板经这里落到当前窗口的编辑命令。
       // 原生菜单那一半仍是 role（Electron 直办）；窗口可能已经关了，这里判空、不抛。
       const editCommand = EDIT_MENU_COMMANDS[id]
@@ -882,7 +938,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   })
 
   // PINAX_NEXT_ROOT 直开的项目也接历史；IPC 打开/新建的项目走 onProjectOpened。
+  // 直开同样进最近项目记账（这条路径不经 dispatcher 的 notifyProjectOpened）。
   if (session.project?.ok) {
+    await recordRecentProject(session.projectRoot, session.project.value?.document?.name ?? null)
     await beginHistory({ root: session.projectRoot, fileService: session.project.value?.fileService })
   }
 
@@ -906,6 +964,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   window_.on('closed', () => { window_ = null })
   await loadRenderer(window_, env)
   sendToRenderer(IPC_EVENT.viewChanged, shellView(session))
+  // 最近项目清单的开机首推（渲染层挂载后还会经 recent-list 通道拉一次，两条路同一份真值）。
+  sendToRenderer(IPC_PUSH.recentProjectsChanged, { recents: currentRecentProjects })
   return { session, dispatcher, window: window_ }
 }
 

@@ -169,3 +169,97 @@ test('导入既有稿：源＝目标、源是/曾是 Pinax 项目、目标不是
     fs.rmSync(base, { recursive: true, force: true })
   }
 })
+
+/* —— 向导逐类导入（作者 2026-11-11「一种或几种都可以」）：script 类＋多源＋校验闸 ———————— */
+
+test('逐类导入：script 类（剧本一文件一篇目平铺进 剧本/），与单源 auto 识别都能认', () => {
+  const { base, target } = makeWorkspace()
+  const scriptDir = path.join(base, '剧本稿')
+  fs.mkdirSync(scriptDir, { recursive: true })
+  fs.writeFileSync(path.join(scriptDir, '第一集-雨夜.md'), '第一集正文。\n', 'utf-8')
+  fs.mkdirSync(path.join(scriptDir, '第二幕'), { recursive: true })
+  fs.writeFileSync(path.join(scriptDir, '第二幕', '第三集-归途.md'), '第三集正文。\n', 'utf-8')
+
+  // auto 模式：源目录顶层叫 剧本/ 也认 script 类。
+  const autoSource = path.join(base, '自动源')
+  fs.mkdirSync(path.join(autoSource, '剧本'), { recursive: true })
+  fs.writeFileSync(path.join(autoSource, '剧本', '序幕.md'), '序幕。\n', 'utf-8')
+  const autoPlan = planImport({ sourcePath: autoSource, targetPath: target })
+  assert.equal(autoPlan.ok, true)
+  const autoItems = autoPlan.value.items.filter((item) => item.decision === 'script')
+  assert.equal(autoItems.length, 1)
+  assert.equal(autoItems[0].target, '剧本/序幕.md')
+
+  // 逐类模式：sources 强转 script——即使源目录名不叫 剧本/。
+  const planned = planImport({ targetPath: target, sources: [{ category: 'script', path: scriptDir }] })
+  assert.equal(planned.ok, true)
+  const items = planned.value.items.filter((item) => item.decision === 'script')
+  assert.equal(items.length, 2, '两个剧本文件都进计划')
+  assert.deepEqual(items.map((item) => item.target).sort(), ['剧本/第二幕/第三集-归途.md', '剧本/第一集-雨夜.md'].sort(), '保留源内层级，不编集数')
+
+  const applied = runImport({ targetPath: target, sources: [{ category: 'script', path: scriptDir }] })
+  assert.equal(applied.ok, true)
+  assert.equal(applied.value.createdCount, 2)
+  assert.ok(fs.existsSync(path.join(target, '剧本', '第一集-雨夜.md')))
+  assert.ok(fs.existsSync(path.join(target, '剧本', '第二幕', '第三集-归途.md')))
+  // 源目录只读承诺照旧。
+  assert.equal(fs.readFileSync(path.join(scriptDir, '第一集-雨夜.md'), 'utf-8'), '第一集正文。\n')
+})
+
+test('逐类导入：两类两目录各扫各的（一种或几种），同一计划收敛计数', () => {
+  const { base, target } = makeWorkspace()
+  const novelDir = path.join(base, '小说稿')
+  const wbDir = path.join(base, '设定稿')
+  fs.mkdirSync(novelDir, { recursive: true })
+  fs.mkdirSync(wbDir, { recursive: true })
+  fs.writeFileSync(path.join(novelDir, '001-雨夜.md'), '雨夜。\n', 'utf-8')
+  fs.writeFileSync(path.join(novelDir, '002-归途.md'), '归途。\n', 'utf-8')
+  fs.writeFileSync(path.join(wbDir, '沈青.md'), serializeWorldbookEntryFile({ id: 'wb_sq', name: '沈青', kind: 'character', content: '沈青。' }), 'utf-8')
+
+  const planned = planImport({
+    targetPath: target,
+    sources: [{ category: 'chapter', path: novelDir }, { category: 'worldbook', path: wbDir }]
+  })
+  assert.equal(planned.ok, true)
+  assert.equal(planned.value.importable, 3, '两章＋一条世界书')
+  assert.deepEqual(planned.value.decisions, { chapter: 2, worldbook: 1 })
+  // 多源展示名带源目录名前缀，两条同名文件不混淆。
+  assert.ok(planned.value.items.every((item) => item.source.includes('/')), '多源模式下 source 标明来自哪个源目录')
+})
+
+test('逐类导入校验：未知类别、缺路径、源互含、源含 .pinax、源＝目标，全部如实拒', () => {
+  const { base, source, target } = makeWorkspace()
+  const wbDir = path.join(base, '设定稿')
+  fs.mkdirSync(wbDir, { recursive: true })
+  fs.writeFileSync(path.join(wbDir, 'a.md'), 'a\n', 'utf-8')
+
+  const badCategory = planImport({ targetPath: target, sources: [{ category: '漫画稿', path: wbDir }] })
+  assert.equal(badCategory.ok, false)
+  assert.match(badCategory.error.message, /不在可导入类别/)
+
+  const noPath = planImport({ targetPath: target, sources: [{ category: 'script', path: '' }] })
+  assert.equal(noPath.ok, false)
+  assert.match(noPath.error.message, /缺路径/)
+
+  // 互含检查用一对独立的兄弟目录（base 下还有 target，不能用 base 当源父）。
+  const outer = path.join(base, '稿源区')
+  const inner = path.join(outer, '设定稿')
+  fs.mkdirSync(inner, { recursive: true })
+  fs.writeFileSync(path.join(inner, 'b.md'), 'b\n', 'utf-8')
+  const nested = planImport({ targetPath: target, sources: [{ category: 'chapter', path: outer }, { category: 'worldbook', path: inner }] })
+  assert.equal(nested.ok, false, '源互含（base 包含 wbDir）必须拒')
+  assert.match(nested.error.message, /互相套着/)
+
+  const sameDir = planImport({ targetPath: target, sources: [{ category: 'chapter', path: wbDir }, { category: 'worldbook', path: wbDir }] })
+  assert.equal(sameDir.ok, false)
+  assert.match(sameDir.error.message, /同一个目录/)
+
+  fs.mkdirSync(path.join(source, '.pinax'), { recursive: true })
+  const pinaxSource = planImport({ targetPath: target, sources: [{ category: 'worldbook', path: source }] })
+  assert.equal(pinaxSource.ok, false, '源含 .pinax 照旧拒')
+  assert.match(pinaxSource.error.message, /已是或曾是 Pinax 项目/)
+
+  const sourceIsTarget = planImport({ targetPath: target, sources: [{ category: 'worldbook', path: target }] })
+  assert.equal(sourceIsTarget.ok, false)
+  assert.match(sourceIsTarget.error.message, /不能就是项目根/)
+})

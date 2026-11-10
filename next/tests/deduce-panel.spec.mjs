@@ -194,8 +194,8 @@ describe('M1-c · 外壳接线（AppNext 直接挂载，不越界）', () => {
     await wrapper.find('[data-test="deduce-close"]').trigger('click')
     expect(wrapper.find('[data-test="deduce-layer"]').exists()).toBe(false)
 
-    // 推演面板不碰桥：外呼仍只有基线那几条（view／偏好／工作区／服务日志／快捷键）。
-    const allowed = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad]
+    // 推演面板不碰桥：外呼仍只有基线那几条（view／偏好／工作区／服务日志／快捷键／最近项目清单）。
+    const allowed = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad, IPC_CHANNELS.projectRecentList]
     expect(bridge.request.mock.calls.every((call) => allowed.includes(call[0]))).toBe(true)
   })
 })

@@ -24,8 +24,14 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   serviceNoticesAckedAt：null 或 ISO 时间串——服务与外部 MCP 通知的确认水位（批次49）。
  *     只存应用级：确认的是「这台机器上这个应用看过了」，不随项目走、不进 .pinax/；
  *   theme：可选迁移字段（D2）——'light' / 'dark' / null；缺省表示「还没迁过」，
- *     渲染层用老 localStorage 的值兜底并一次性迁入（老前端退役后删掉那条兜底）。
+ *     渲染层用老 localStorage 的值兜底并一次性迁入（老前端退役后删掉那条兜底）；
+ *   recentProjects：最近打开的项目（作者 2026-11-10 点单）——应用级「这台机器开过哪些项目」，
+ *     每条 { path, name, at }：path 必有、name/at 可空；最近打开在最前，最多 RECENT_PROJECTS_LIMIT 条。
+ *     只有主进程写（打开成功自动记、菜单「清除最近打开」清空）；渲染层只经 recent-list 通道读。
  */
+
+/** 最近项目清单上限：菜单里摆得下、偏好文件不至于长成一本书。 */
+export const RECENT_PROJECTS_LIMIT = 8
 
 export const PREFS_DEFAULTS = Object.freeze({
   modelPlaneEndpoint: null,
@@ -42,7 +48,9 @@ export const PREFS_DEFAULTS = Object.freeze({
   writingTypewriter: false,
   writingFocusMode: false,
   // 批次49：服务通知确认水位（应用级；只记时间，不记项目）。
-  serviceNoticesAckedAt: null
+  serviceNoticesAckedAt: null,
+  // 最近打开的项目（应用级）。冻结默认值：谁往里 push 就当场炸——清单只能整份替换。
+  recentProjects: Object.freeze([])
 })
 
 const ZOOM_MIN = 0.5
@@ -199,6 +207,32 @@ export function normalizePrefs(raw) {
     else if (THEMES.has(String(value))) out.theme = String(value)
     else return { ok: false, error: `theme 必须是 light／dark 或 null，收到：${JSON.stringify(value ?? null)}` }
   }
+  if ('recentProjects' in source) {
+    const value = source.recentProjects
+    if (value === null || value === undefined || value === '') {
+      out.recentProjects = []
+    } else if (!Array.isArray(value)) {
+      return { ok: false, error: `recentProjects 必须是数组，收到：${JSON.stringify(value).slice(0, 80)}` }
+    } else {
+      // 清单是体验数据不是账本：没路径的条目丢掉就行，不为它把整份偏好打回默认值。
+      // 同一路径以先出现的为准（记账约定最近打开在最前，先出现的就是最新的那一条）。
+      const seen = new Set()
+      const list = []
+      for (const entry of Array.isArray(value) ? value : []) {
+        const path = typeof entry?.path === 'string' ? entry.path.trim() : ''
+        if (!path || seen.has(path)) continue
+        seen.add(path)
+        const name = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : null
+        let at = null
+        if (entry?.at) {
+          const stamp = new Date(String(entry.at))
+          at = Number.isNaN(stamp.getTime()) ? null : stamp.toISOString()
+        }
+        list.push({ path, name, at })
+      }
+      out.recentProjects = list.slice(0, RECENT_PROJECTS_LIMIT)
+    }
+  }
   return { ok: true, value: out }
 }
 
@@ -242,4 +276,16 @@ export function createAppPreferences({ file } = {}) {
   }
 
   return { read, write, file }
+}
+
+/**
+ * 记一次「打开过」（纯函数）：新条目放最前、同路径去重、超限丢尾部。
+ * 读旧清单、写新清单都不改传入对象——prefs.write 的 normalize 才是落盘的唯一关口。
+ */
+export function mergeRecentProject(list, entry, limit = RECENT_PROJECTS_LIMIT) {
+  const path = typeof entry?.path === 'string' ? entry.path.trim() : ''
+  if (!path) return (Array.isArray(list) ? list : []).slice(0, limit)
+  const rest = (Array.isArray(list) ? list : []).filter((item) => item?.path !== path)
+  const name = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : null
+  return [{ path, name, at: entry?.at ?? null }, ...rest].slice(0, limit)
 }

@@ -4,7 +4,8 @@
  * 本模块只产数据，主进程用 Menu.buildFromTemplate 落；载体不得注入（C5＋保留字 top-menu）。
  *
  * 工单A（作者裁定，2026-10-28）：顶部只留四组——项目／编辑／设置／帮助。
- *   - 「文件」改名「项目」（全是项目级动作）；「最近项目」未实现，删（记账）。
+ *   - 「文件」改名「项目」（全是项目级动作）；「最近项目」当时未实现先删（记账），
+ *     2026-11-10 作者点名补回——见文件尾 withRecentProjects（清单真值在应用级偏好，不在模板里）。
  *   - 「视图」删组：焦点×3 是键盘少数派（记账）；缩放已在偏好节（native zoom 与 zoomFactor
  *     双轨冲突）；DevTools/重载迁入帮助组。
  *   - 「运行时」删组：提问＝右栏输入框、工具面＝右栏折叠；「打开提案目录」并入项目组。
@@ -73,6 +74,59 @@ export function canCarrierInjectMenu(carrierManifest) {
     allowed: false,
     reason: `载体「${carrierManifest?.title ?? '(未命名)'}」不能注入顶层菜单；可注入自己面板的上下文菜单（C5）`
   }
+}
+
+/* —— 最近打开的项目（作者 2026-11-10 点单；工单A 删掉的「最近项目」按事实补回）—————————
+ * 清单本身是应用级偏好（next/runtime/appPreferences.mjs 的 recentProjects 字段）：
+ * 主进程在项目真打开成功后记账、变化后重建原生菜单并整份推给渲染层。
+ * 本文件只管形状：withRecentProjects 把清单拼进「项目」组，原生菜单（main.mjs buildMenu）
+ * 与页内菜单行（AppNext）调的是同一个函数——动态项不另立第二份菜单清单。
+ * 分工钉死：
+ *   · project.recent（某一项）＝渲染层落点：打开走既有 pick-dir→project:open 链（openProjectRoot），
+ *     主进程对「打开哪个目录」没有可代劳的事——不进 dispatcher 接受集、不进命令面板；
+ *   · project.recentClear（清空）＝应用菜单动作，主进程落点（清偏好→重建菜单→推渲染层），
+ *     所以它进 ipcContract 的接受集（按常量加，模板里没有静态项——列表为空时整个块都不渲染）。
+ */
+export const RECENT_MENU_ID = 'project.recent'
+export const RECENT_CLEAR_ID = 'project.recentClear'
+
+/** 一条最近项目的菜单标签：项目名与目录同名（或没记到名）就只摆路径，否则「名 — 路径」。 */
+export function recentProjectLabel(entry) {
+  const path = String(entry?.path ?? '')
+  const name = typeof entry?.name === 'string' ? entry.name.trim() : ''
+  const basename = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? ''
+  if (!name || name === basename) return path
+  return `${name} — ${path}`
+}
+
+/**
+ * 把最近项目清单拼进「项目」组：project.open 之后插入一段（分隔线＋灰色组头＋条目＋清空＋分隔线）。
+ * 清单为空（或没有可用条目）时原样返回——没开过项目就少一块噪音，两个渲染面一致。
+ * 纯函数：返回新数组，从不改动传入模板（MENU_TEMPLATE 冻结，调用方还要复用）。
+ */
+export function withRecentProjects(template = MENU_TEMPLATE, recents = []) {
+  const list = (Array.isArray(recents) ? recents : []).filter((entry) => entry && typeof entry.path === 'string' && entry.path)
+  if (!list.length) return template
+  const block = [
+    { type: 'separator' },
+    // 组头不是动作：enabled:false 让原生菜单与页内菜单行都渲染成灰行（页内＝无 id 的禁用行）。
+    { label: '最近打开', enabled: false },
+    ...list.map((entry) => ({
+      id: RECENT_MENU_ID,
+      label: recentProjectLabel(entry),
+      root: entry.path,
+      // title 给页内菜单行当 hover 提示（长路径截断时看全名）；原生菜单会忽略这个键。
+      title: entry.path
+    })),
+    { id: RECENT_CLEAR_ID, label: '清除最近打开' },
+    { type: 'separator' }
+  ]
+  return template.map((top) => {
+    if (top.label !== '项目' || !Array.isArray(top.submenu)) return top
+    const at = top.submenu.findIndex((item) => item.id === 'project.open')
+    if (at < 0) return top
+    return { ...top, submenu: [...top.submenu.slice(0, at + 1), ...block, ...top.submenu.slice(at + 1)] }
+  })
 }
 
 /** 展平成一维 {id,label}，供主进程分发点击与单测核对。 */

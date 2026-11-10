@@ -15,6 +15,7 @@ import { selectTools } from '../runtime/toolSelect.mjs'
 import { createToolLoop, serializeToolOutput } from '../runtime/toolLoop.mjs'
 import { createAgentRuntime } from '../runtime/agentRuntime.mjs'
 import { validateFactEntry } from '../fact/domain/schema.js'
+import { buildSegmentIndex, normalizeDatasetEntries, leanDatasetEntries } from '../fact/usecases/pipeline/leanEntries.js'
 
 const plugins = await loadBuiltInCarrierPlugins()
 const prose = '阿明推开门，发现桌上有一封信。他收起信，向守门人询问钟楼的方向。守门人告诉他，午夜以后钟楼禁止进入。\n'.repeat(14)
@@ -67,17 +68,88 @@ test('首次建库：单轮联合抽取、三层快照＋基础索引与完整�
   assert.equal(done.adopted, 0)
   assert.equal(done.usage, null)
   const state = JSON.parse(await readFile(join(f.root, done.resultPath), 'utf8'))
+  // P-TRIM Track 1：落盘是 v2 信封＋瘦条目（无 schema/domain/status/fingerprint/sources，events 无 title/segments）
+  assert.equal(state.schema, 'pinax-extraction-dataset/v2')
+  assert.equal(state.current.entriesFormat, 'lean@1')
   assert.equal(state.current.entries.length, run.segments + 2)
   assert.deepEqual(new Set(state.current.entries.map((entry) => entry.layer)), new Set(['plot', 'character', 'worldview']))
-  for (const entry of state.current.entries) assert.equal(validateFactEntry(entry).ok, true)
+  const leanPlot = state.current.entries.find((entry) => entry.layer === 'plot')
+  assert.equal(leanPlot.schema, undefined, 'schema 由信封承载，瘦条目不带')
+  assert.equal(leanPlot.fingerprint, undefined, 'fingerprint 落库侧确定性重建，不落盘')
+  assert.equal(leanPlot.events[0].title, undefined, 'events.title 是 content 的复制，不落盘')
+  assert.ok(Array.isArray(leanPlot.srcs) && leanPlot.srcs.length >= 1, 'sources 瘦成段引用')
   assert.equal(state.current.sources[0].text, undefined, '原稿不进checkpoint')
   assert.equal(await readFile(join(f.root, f.ref.dir, f.ref.file), 'utf8'), prose)
+  // 读时归一：瘦条目经 load 归一后是合法全形状——status view 通道拿到的就是归一产物
   const entries = await f.good('status', { dataset: 'book', view: 'entries' })
+  for (const item of entries.items) assert.ok(item.status, '归一后 status 回填（statusByLayer）')
   const id = entries.items[0].id
   let offset = 0; let json = ''
   do { const part = await f.good('status', { dataset: 'book', view: 'entry', id, offset }); json += part.text; offset = part.nextOffset } while (offset !== null)
-  assert.equal(JSON.parse(json).id, id)
+  const entryView = JSON.parse(json)
+  assert.equal(validateFactEntry(entryView).ok, true, 'view:entry 读到的是归一全形状')
+  assert.equal(entryView.id, id)
   assert.equal((await f.good('finish', { dataset: 'book', runId: run.runId, expectedRevision: 0 })).duplicate, true)
+})
+
+test('P-TRIM Track 1：瘦条目读时归一＝compile 全形状（roundtrip deepEqual，id 零漂移）', async (t) => {
+  const f = await fixture(t)
+  const run = await f.good('prepare', initial(f.ref))
+  await complete(f, run)
+  const done = await f.good('finish', { dataset: 'book', runId: run.runId, expectedRevision: 0 })
+  assert.equal(done.state, 'finished')
+  const raw = JSON.parse(await readFile(join(f.root, done.resultPath), 'utf8'))
+  const envelope = {
+    domain: raw.current.spec.domain, book: raw.current.spec.book, bookId: raw.current.spec.bookId,
+    mode: raw.current.mode, extractor: raw.current.extractor, statusByLayer: raw.current.statusByLayer
+  }
+  const segIndex = buildSegmentIndex(raw.current.sources)
+  // 归一后逐条合法，且与 compile 口径对齐（id 零漂移）
+  const normalized = normalizeDatasetEntries(raw.current.entries, envelope, segIndex)
+  for (const entry of normalized) assert.equal(validateFactEntry(entry).ok, true, JSON.stringify(entry.name))
+  assert.deepEqual(new Set(normalized.map((entry) => entry.id)), new Set(raw.current.entries.map((entry) => entry.id)))
+  assert.equal(normalized.length, run.segments + 2)
+  // 落盘→读取→再落盘：二次 lean 与首次逐字节同形（幂等）
+  const again = leanDatasetEntries(normalized, { ...envelope, statusByLayer: raw.current.statusByLayer })
+  assert.deepEqual(again, raw.current.entries, 'lean 幂等：归一再瘦与首次落盘一致')
+  // 字节缩减读数（对同一份数据：瘦 vs 全形状）
+  const leanBytes = JSON.stringify(raw.current.entries).length
+  const fullBytes = JSON.stringify(normalized).length
+  const saved = Math.round((1 - leanBytes / fullBytes) * 100)
+  assert.ok(saved >= 20, `瘦化至少省 20%（实测 ${saved}%）`)
+})
+
+test('P-TRIM Track 1：v1 旧格式文件照常可读（读时归一兼容存量）', async (t) => {
+  const f = await fixture(t)
+  const run = await f.good('prepare', initial(f.ref))
+  await complete(f, run)
+  const done = await f.good('finish', { dataset: 'book', runId: run.runId, expectedRevision: 0 })
+  const path = join(f.root, done.resultPath)
+  const v2 = JSON.parse(await readFile(path, 'utf8'))
+  // 手工降级成 v1 形状：条目写回全形状、schema 改回 v1——模拟存量数据集
+  const envelope = {
+    domain: v2.current.spec.domain, book: v2.current.spec.book, bookId: v2.current.spec.bookId,
+    mode: v2.current.mode, extractor: v2.current.extractor, statusByLayer: v2.current.statusByLayer
+  }
+  const full = normalizeDatasetEntries(v2.current.entries, envelope, buildSegmentIndex(v2.current.sources))
+  const v1 = { ...v2, schema: 'pinax-extraction-dataset/v1' }
+  v1.current = { ...v2.current, entries: full }
+  delete v1.current.entriesFormat
+  delete v1.current.statusByLayer
+  delete v1.current.mode
+  delete v1.current.extractor
+  const { writeFileAtomic } = await import('../fs/atomicWrite.mjs')
+  await writeFileAtomic(path, JSON.stringify(v1))
+  // v1 读回：服务照常工作（check 走通、status view:entries 有 status）
+  const check = await f.tools.get('pinax_fact_check').tool.run({ dataset: 'book' })
+  assert.equal(check.ok, true, JSON.stringify(check.error))
+  const entries = await f.good('status', { dataset: 'book', view: 'entries' })
+  assert.ok(entries.items.every((item) => item.status))
+  // 下一次真实写入升级回 v2（写时统一升级，不迁移存量）；重复 finish 是早退分支，不落盘
+  await f.good('prepare', { dataset: 'book', requestId: 'upgrade-v2', mode: 'update' })
+  const upgraded = JSON.parse(await readFile(path, 'utf8'))
+  assert.equal(upgraded.schema, 'pinax-extraction-dataset/v2')
+  assert.equal(upgraded.current.entriesFormat, 'lean@1')
 })
 
 test('部分提交/重启续跑/幂等与旧revision：不重新派已完成段', async (t) => {

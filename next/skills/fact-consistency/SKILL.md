@@ -32,6 +32,11 @@ domain: worldbook
 - **`undecidable`（不可判定）**：规则条目只有自由文本、没有结构化 `constraint` 字段。工具**不拿文本猜语义**——要么给规则条目补 `constraint:{key,value}`，要么如实接受「这一条没法机判」。
 - **`hooks`**：伏笔清单（总数＋前 50 条）。只统计不判定：是否该回收由作者决定，工具不替你关伏笔。
 
+## 字段命名与 constraint 作用域（消费方必读）
+
+- 断言对象（conflicts/warnings/undecidable 三处同一命名）的规则标识字段是 **`rule`**，**没有 `code` 字段**——按 `item.rule` 分组/过滤，用 `item.code` 会得到全 `undefined` 的桶（guimi 轮实测踩过）。
+- `constraint` 的作用域默认**条目内**：同一个 key 只在同一条目里查重复；**跨条目同 key 异值的比对只在双方都显式声明 `scope:'world'` 时发生**。通用词 key（「例外」「条件」「前提」）不要声明 world——两条不相干的规则各自的「例外」不是同一个世界变量（guimi 轮实测的唯一 1 条 error 就是这个误报）。
+
 ## 修复优先级
 
 1. 先清 `conflicts`（硬冲突，会污染后续推演与成书）；

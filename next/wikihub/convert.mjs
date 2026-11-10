@@ -841,6 +841,25 @@ export function hubToWorldbook(hubEntry, options = {}) {
   const path = snapshot?.path ? snapshot.path : deriveWorldbookPath(entry)
   entry.path = path
 
+  // X6（guimi E10）：断链目标不再写进世界书文件。links 由 core 的 declaredLinkIds 从 relations
+  // 合成（core 只读不可改），所以在调用侧把解析不到的关系边降级：丢边＋losses 如实记账——
+  // hub 条目本体上的 relations 数据不受影响，只影响这一次导出的文件。
+  // resolvableNames 是当前 hub 的全部可解析名（name＋别名）；不传时行为不变（向后兼容）。
+  if (options.resolvableNames) {
+    const resolvable = options.resolvableNames
+    const isResolvable = (name) => (resolvable instanceof Set ? resolvable.has(name) : resolvable.includes(name))
+    const kept = []
+    for (const relation of Array.isArray(entry.relations) ? entry.relations : []) {
+      const to = str(relation?.to).trim()
+      if (!to || isResolvable(to)) { kept.push(relation); continue }
+      losses.push({ code: 'RELATION_TARGET_UNRESOLVED_DROPPED', field: 'relations', message: `关系目标「${to}」解析不到，导出时丢弃（hub 条目数据保留）` })
+    }
+    entry.relations = kept
+    if (Array.isArray(entry.links)) {
+      entry.links = entry.links.filter((link) => isResolvable(str(link?.to ?? link).trim()))
+    }
+  }
+
   const fileText = serializeWorldbookEntryFile(worldbookFileEntry(entry))
   const meta = buildWorldbookMeta(entry)
   if (!entry.content) {

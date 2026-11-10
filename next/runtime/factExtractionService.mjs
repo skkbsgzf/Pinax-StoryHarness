@@ -8,11 +8,15 @@ import { validateProduces } from '../fact/usecases/skillContract.js'
 import { SKILL_CONTRACTS } from '../skills/contracts.mjs'
 import { sha1Hex } from '../fact/domain/stableId.js'
 import { buildExtractionSource, validateExtractionRows, compileExtractionEntries, EXTRACTION_CHAIN_VERSION } from '../fact/usecases/pipeline/extractionChain.js'
+import { buildEnvelopeFacts, buildSegmentIndex, leanDatasetEntries, normalizeDatasetEntries, LEAN_FORMAT } from '../fact/usecases/pipeline/leanEntries.js'
 import { checkConsistency } from '../fact/usecases/consistency.js'
 
 // 派生数据与作者 FactStore 分开：finish 发布待审快照，不采纳、不写正文/世界书。
 // 一个 dataset 一份原子文件，包含已发布快照和运行断点，避免“两文件只写成一半”。
-const SCHEMA = 'pinax-extraction-dataset/v1'
+// v2 起 current.entries 落瘦条目（P-TRIM Track 1，见 leanEntries.js）：落盘瘦、读时归一，
+// v1 文件（current.entries 全形状）照常可读——不迁移存量，读时归一就是兼容层。
+const SCHEMA = 'pinax-extraction-dataset/v2'
+const LEGACY_SCHEMAS = ['pinax-extraction-dataset/v1']
 const RESULT_CHARS = 6400 // 为 MCP 信封留余量，小于 toolLoop 的 7200 字符传输上限。
 const validKey = (value) => typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/u.test(value)
 const fail = (code, message, details = null) => ({ ok: false, error: { code, message, details } })
@@ -80,9 +84,35 @@ export function createFactExtractionService({ root = null, fileService = null, r
     }
     let state
     try { state = JSON.parse(text) } catch { reject('CHECKPOINT_CORRUPT', '抽取断点不是合法JSON；保留现场，不自动清空重抽。') }
-    if (state?.schema !== SCHEMA || state.dataset !== dataset || !state.runs || !Number.isInteger(state.revision)) {
+    if (!state || ![SCHEMA, ...LEGACY_SCHEMAS].includes(state.schema) || state.dataset !== dataset || !state.runs || !Number.isInteger(state.revision)) {
       reject('CHECKPOINT_CORRUPT', '抽取断点结构不匹配；保留现场。')
     }
+    // 读时归一（P-TRIM Track 1）：v2 的 current.entries 是瘦条目，归一回全形状后进内存——
+    // 本服务内所有消费方（finish 对账／check／status view）拿到的永远是 fact.data/v2 全形状；
+    // v1 文件（条目自带 schema）原样过。归一只在 load 这一层，不散在消费点。
+    if (state.current?.entries) {
+      const envelope = buildEnvelopeFacts(state.current.entries, state.current.spec ?? {}, {
+        mode: state.current.mode, extractor: state.current.extractor
+      })
+      const segIndex = buildSegmentIndex(state.current.sources)
+      state.current.entries = normalizeDatasetEntries(state.current.entries, envelope, segIndex)
+    }
+    return state
+  }
+  function persist(state) {
+    // 落盘前瘦化（write 侧统一出口）：current.entries → lean；信封补 v2 常量段。
+    // prepare/submit 只动 runs；只有 current 存在时才有条目要瘦。
+    if (state.current?.entries) {
+      const envelope = buildEnvelopeFacts(state.current.entries, state.current.spec ?? {}, {
+        mode: 'analyze', extractor: state.current.version ?? EXTRACTION_CHAIN_VERSION
+      })
+      state.current.mode = envelope.mode
+      state.current.extractor = envelope.extractor
+      state.current.statusByLayer = envelope.statusByLayer
+      state.current.entriesFormat = LEAN_FORMAT
+      state.current.entries = leanDatasetEntries(state.current.entries, envelope)
+    }
+    state.schema = SCHEMA
     return state
   }
   async function write(dataset, action) {
@@ -101,7 +131,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
       await lock.writeFile(JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }))
       const state = await load(dataset)
       const result = await action(state)
-      if (result.state) await writeFileAtomic(target, JSON.stringify(result.state))
+      if (result.state) await writeFileAtomic(target, JSON.stringify(persist(result.state)))
       return ok(result.value)
     } finally { await lock.close(); await unlink(lockPath) }
   }
@@ -261,8 +291,9 @@ export function createFactExtractionService({ root = null, fileService = null, r
           publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果。尚未写入作者事实库或自动采纳。' } }
       })
     },
-    /** 一致性检测：对已发布快照整库过一遍（也可指定 runId 用该运行已交的行现场编译）。只读，不写断点。 */
-    async check(args) {
+    /** 一致性检测（工具名 pinax_fact_check）：对已发布快照整库过一遍（也可指定 runId 用该运行已交的行现场编译）。只读，不写断点。
+     * 方法名与工具对齐为 fact_check——旧名 check 从未被任何调用方走过（guimi 轮测试实测：工具一直报「未知抽取操作」）。 */
+    async fact_check(args) {
       const state = await load(args.dataset)
       if (!state) reject('DATASET_NOT_FOUND', '尚未建立该数据集。')
       let entries = state.current?.entries ?? []

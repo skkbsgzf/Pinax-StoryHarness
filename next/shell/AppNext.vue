@@ -9,8 +9,7 @@ import RuntimeDock from './RuntimeDock.vue'
 import SettingsModal from './SettingsModal.vue'
 import PrefsSection from './settings/PrefsSection.vue'
 import CarriersSection from './settings/CarriersSection.vue'
-import NewProjectSection from './settings/NewProjectSection.vue'
-import ImportSection from './settings/ImportSection.vue'
+import ProjectWizardSection from './settings/ProjectWizardSection.vue'
 import OutlineImportSection from './settings/OutlineImportSection.vue'
 import BackupSection from './settings/BackupSection.vue'
 import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
@@ -21,14 +20,13 @@ import WritingPrefsSection from './settings/WritingPrefsSection.vue'
 import ServicesSection from './settings/ServicesSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import CommandPalette from './CommandPalette.vue'
-import StatusBar from './StatusBar.vue'
 import CollapseOrb from './CollapseOrb.vue'
 import DeducePanel from './DeducePanel.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from './ipcContract.mjs'
-import { MENU_TEMPLATE, flattenMenuEntries } from './menus.mjs'
+import { MENU_TEMPLATE, flattenMenuEntries, RECENT_MENU_ID, withRecentProjects } from './menus.mjs'
 import {
   HOTKEY_COLLAPSE_TOP,
   HOTKEY_PALETTE_OPEN,
@@ -521,14 +519,10 @@ function onDeduceReceipt({ level, message, data } = {}) {
 }
 
 /**
- * 状态栏（批次63 任务1）的四要素读数。
- *
- * 一句话：状态栏只转述，不记账——四个数全从既有事实源现取，外壳不留第二份真相。
- *   ① 服务灯＝serviceLogPool 那份快照（与竖条状态点、设置页「服务与通知」同一来源）；
- *   ② 载体＝此刻那块板的标题；页组＝此刻那一页在 main 还是 side 组；
- *   ③「1＋N 的 N」＝在册窗数（工单口径：openWindows，四种形态都算在册）；
- *   ④ 字数＝此刻那一页装载的文档：有草稿读作者手上那份，没草稿读盘上那份的字数。
- * 唯一可点件（服务灯）落的是既有那节：点开设置里的「服务与通知」，不新增任何动作。
+ * 服务灯读数（悬浮球 CollapseOrb 的 notices 在吃这一份）。
+ * 〔作者 2026-11-11 裁定〕全局底部状态栏整体退役（「底部默认在全局范围内不加任何底部栏，
+ * 各宿主需要自己加」）——四要素里只有服务灯还有宿主（悬浮球），其余读数随状态栏一起删。
+ * 一句话：只转述不记账——数从 serviceLogPool 快照现取，与竖条状态点、设置页「服务与通知」同一来源。
  */
 const statusLights = computed(() => (serviceSnapshot.value?.carriers ?? [])
   .filter((carrier) => carrier?.carrierId && carrier?.color)
@@ -538,48 +532,6 @@ const statusLights = computed(() => (serviceSnapshot.value?.carriers ?? [])
     color: carrier.color,
     notices: carrier.unackedNotices ?? 0
   })))
-
-const STATUS_GROUP_LABELS = { main: '主组', side: '侧组' }
-
-/** 此刻站在哪块板（竖条那一格）；没开项目就没板。 */
-const statusCarrier = computed(() => activeBoard.value?.title ?? '')
-
-const statusPageGroup = computed(() => {
-  const instance = focusedInstance()
-  const group = instance ? workspaceSnapshot.value.entries[instance]?.group : null
-  return group ? STATUS_GROUP_LABELS[group] ?? String(group) : ''
-})
-
-/** 「1＋N 的 N」：此刻在册的窗数（页／浮窗／收进悬浮球的那些都算）。 */
-const statusWindows = computed(() => openWindows.value.length)
-
-/**
- * 〔批次76-R2 任务4〕状态栏那一段网址：此刻焦点页是内嵌浏览器才有读数，其余页面是空串（那一段不渲染）。
- * 应用面顶部常驻的 URL 行撤了，「跑的是谁的端口」这个信息不该跟着消失——它挂进**已有**的状态栏，
- * 不新增第五项，也不新开一行 chrome。
- */
-const statusAddress = computed(() => addressOf(focusedInstance()))
-
-/** 编辑面与草稿位的对照：草稿非空就读草稿（作者手上那份），否则读盘上那份的 totalChars。 */
-const STATUS_DOC_FIELDS = [
-  ['chapter', 'draft'], ['entry', 'entryDraft'], ['note', 'noteDraft'], ['rule', 'ruleDraft'],
-  ['document', 'documentDraft'], ['script', 'scriptDraft'], ['record', null]
-]
-
-/** 焦点文档：标题＋字数。没装可计字的文档就 chars=null，状态栏如实留一道破折号。 */
-const statusDoc = computed(() => {
-  const page = pageDataOf(focusedInstance())
-  for (const [key, draftKey] of STATUS_DOC_FIELDS) {
-    const doc = page?.[key]
-    if (!doc) continue
-    const draft = draftKey ? page?.[draftKey] : null
-    if (typeof draft === 'string' && draft) return { title: doc.title ?? doc.name ?? '', chars: draft.length }
-    const chars = Number.isFinite(doc.totalChars) ? doc.totalChars
-      : typeof doc.text === 'string' ? doc.text.length : null
-    return { title: doc.title ?? doc.name ?? '', chars }
-  }
-  return { title: '', chars: null }
-})
 
 /**
  * 载体声明节的内容组件表（工单B · P14 第三步）：键是「声明 id」（不是载体 id）。
@@ -621,8 +573,8 @@ const settingsSections = computed(() => [
   // 项目
   { id: 'carriers', title: '载体管理', group: '项目', keywords: ['板块', '载体', '启用', '停用', '主载体', '权限', '数据目录'], component: CarriersSection, props: { carriers: carriers.value } },
   // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
-  { id: 'import', title: '导入既有稿', group: '项目', keywords: ['带稿上车', '稿子目录', '项目位置', '导入计划', '原文件只新增不修改'], component: ImportSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
-  { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹'], component: NewProjectSection, props: { bridge: props.bridge, primaryCarrierId: primaryCarrierId.value, extraEnabled: extraEnabled.value } },
+  { id: 'import', title: '导入既有稿', group: '项目', keywords: ['带稿上车', '稿子目录', '项目位置', '导入计划', '原文件只新增不修改', '剧本', '世界书'], component: ProjectWizardSection, props: { bridge: props.bridge, mode: 'import', primaryCarriers: primaryCarriers.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
+  { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹', '主载体'], component: ProjectWizardSection, props: { bridge: props.bridge, mode: 'create', primaryCarriers: primaryCarriers.value, extraEnabled: extraEnabled.value } },
   { id: 'primary', title: '主载体选择', group: '项目', keywords: ['这个项目要创作什么', '创作小说还是剧本'], component: PrimaryCarrierSection, props: { carriers: carriers.value, companions: companions.value, extraEnabled: extraEnabled.value } },
   // 文档
   { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
@@ -705,10 +657,19 @@ async function openProjectFolder() {
   if (!props.bridge?.request) return
   const picked = await props.bridge.request(IPC_CHANNELS.projectPickDir, {})
   if (!picked?.ok || !picked.value?.picked || !picked.value.path) return
+  await openProjectRoot(picked.value.path)
+}
+
+/**
+ * 打开一个已知目录（「打开项目文件夹…」选中之后、以及菜单「最近打开」点某一条的共同后半程）。
+ * 桥自身抛错也落到 refresh：外壳照常把最新状态画出来，不白屏。
+ */
+async function openProjectRoot(root) {
+  if (!props.bridge?.request || !root) return
   try {
-    await props.bridge.request(IPC_CHANNELS.projectOpen, { root: picked.value.path })
+    await props.bridge.request(IPC_CHANNELS.projectOpen, { root })
   } catch {
-    // 桥自身抛错也落到 refresh：外壳照常把最新状态画出来，不白屏。
+    // 打开失败不改走别的路：refresh 会把横幅摊出来。
   }
   await refresh()
 }
@@ -722,6 +683,27 @@ const openMenuLabel = ref(null)
 const menubarRoot = ref(null)
 /** 壳层根节点：手势的捕获监听挂在这里（批次62 任务五）。 */
 const shellRoot = ref(null)
+
+/* —— 最近打开的项目（作者 2026-11-10 点单）————————————————————————————————
+ * 真值在主进程（应用级偏好 recentProjects），这里只有一份只读镜像：
+ * 启动经 recent-list 通道拉一次（防首推赶在订阅之前），此后每次变化吃整份推送。
+ * 渲染时与原生菜单走同一个 withRecentProjects——动态段不另立第二份菜单清单。
+ */
+const recentProjects = ref([])
+let offRecentProjects = null
+
+async function loadRecentProjects() {
+  if (!props.bridge?.request) return
+  try {
+    const result = await props.bridge.request(IPC_CHANNELS.projectRecentList, {})
+    if (result?.ok && Array.isArray(result.value?.recents)) recentProjects.value = result.value.recents
+  } catch {
+    // 拉不到就先不显示：菜单里少一块，不代表打开项目不可用。
+  }
+}
+
+/** 菜单行渲染的数据源：静态模板拼上最近项目动态段（清单为空时 withRecentProjects 原样返回）。 */
+const renderedMenu = computed(() => withRecentProjects(MENU_TEMPLATE, recentProjects.value))
 
 /** 模板里的角色项没有 label（原生菜单由 Electron 自己取名），页内菜单行补一份人话。 */
 const ROLE_LABELS = Object.freeze({
@@ -773,10 +755,12 @@ function closeTopMenu() {
   openMenuLabel.value = null
 }
 
-/** 菜单动作的页面内落点：原生菜单事件（menuInvoked）与页内菜单点击共用这一份。 */
+/** 菜单动作的页面内落点：原生菜单事件（menuInvoked）与页内菜单点击共用这一份。
+ * 带 root 的调用是「最近打开」的某一条：打开走 openProjectRoot，主进程对它没有可代劳的事。 */
 const menuActions = {
   'project.create': () => openNewProject(),
   'project.open': () => void openProjectFolder(),
+  [RECENT_MENU_ID]: (root) => void openProjectRoot(root),
   'project.import': () => openImport(),
   'project.backup': () => openBackup(),
   'project.history': () => openHistory(),
@@ -792,10 +776,10 @@ const menuActions = {
  * 现在按命令表里那条 run 走面板同一条执行通路——不新开第二条做事的路，
  * 落点认不出就如实提示，与 runPaletteCommand 用的是同一句话。
  */
-async function runMenuAction(id) {
+async function runMenuAction(id, root = null) {
   const action = menuActions[id]
   if (action) {
-    action()
+    action(root)
     return
   }
   // 只认 carrier 分组：菜单项的 run 是 `menu:<自己的 id>`，回到这里就是死循环。
@@ -809,10 +793,16 @@ async function runMenuAction(id) {
 /**
  * 页内菜单项点击：先落页面内动作，再经 menuInvoke 通道交给主进程分发（与原生菜单同一条路）。
  * 只读角色项（撤销／复制／最小化…）没有 IPC id，按钮本身是禁用态——原生菜单与快捷键照常可用。
+ * 最近项目的具体条目（item.root 在手）是渲染层落点：打开走既有 project:open 链，
+ * 不再发 menuInvoke——主进程对这个 id 没有可代劳的事，发了只会收到一条假失败。
  */
 async function invokeMenu(item) {
   closeTopMenu()
   if (!item?.id) return
+  if (item.root) {
+    void runMenuAction(item.id, item.root)
+    return
+  }
   void runMenuAction(item.id)
   if (!props.bridge?.request) return
   try {
@@ -1529,6 +1519,9 @@ function groupCurrentInstance(group) {
  */
 const centerEmptyNote = computed(() => {
   if (visibleWindows.value.length) return ''
+  // 无项目＝开始页（上面那块带主操作钮）：指路文案只属于有项目无页的形态——
+  // 无项目时竖条上没有可点的板，这句是指向死路的死话（作者 2026-11-11 裁定口径）。
+  if (!project.value) return ''
   return sideTabWindows.value.length
     ? '页都收进悬浮球了，点球放回来。'
     : '还没有页。从竖条或左树开一扇。'
@@ -2307,7 +2300,10 @@ const companions = computed(() => carriers.value.filter((item) => !item.isPrimar
 /** 清单里声明了 primary 的板块才配当主载体：没有就明说空框架，不让作者点一个假的。 */
 const canPickPrimary = computed(() => carriers.value.some((item) => item.primary))
 /** 新建项目载荷里的主载体 id（原 createProject 内联的那一句，提出来给节经 props 注入）。 */
-const primaryCarrierId = computed(() => carriers.value.find((item) => item.primary)?.id ?? null)
+/** 向导第②步的主载体候选（作者 2026-11-11 点单）：声明了 primary 的板块全列（小说／剧本），不再硬编码第一个。 */
+const primaryCarriers = computed(() => carriers.value
+  .filter((item) => item.primary)
+  .map((item) => ({ id: item.id, title: item.title, projectKind: item.primary?.projectKind ?? null })))
 
 async function refresh() {
   if (!props.bridge?.request) return
@@ -2555,7 +2551,14 @@ onMounted(() => {
   })
   // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
   // 工单F：页内菜单行的点击也收敛到同一个 runMenuAction——两条入口，一份落点。
-  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => { void runMenuAction(payload?.id) })
+  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => { void runMenuAction(payload?.id, payload?.root ?? null) })
+  // 最近打开的项目：启动拉一次（防首推赶在订阅之前），此后吃整份推送（退订在 onBeforeUnmount）。
+  void loadRecentProjects()
+  if (typeof props.bridge?.onEvent === 'function') {
+    offRecentProjects = props.bridge.onEvent(IPC_PUSH.recentProjectsChanged, (payload) => {
+      recentProjects.value = Array.isArray(payload?.recents) ? payload.recents : []
+    })
+  }
   // 项目事件（批次39）：同一条桥，只接「有人消费」的 kind；退订在 onBeforeUnmount。
   if (typeof props.bridge?.onEvent === 'function') {
     offProjectEvent = props.bridge.onEvent(IPC_EVENT.projectEvent, onProjectEvent)
@@ -2591,6 +2594,10 @@ onBeforeUnmount(() => {
     offServiceLog()
     offServiceLog = null
   }
+  if (offRecentProjects) {
+    offRecentProjects()
+    offRecentProjects = null
+  }
   if (projectEventTimer) {
     clearTimeout(projectEventTimer)
     projectEventTimer = null
@@ -2624,7 +2631,7 @@ onBeforeUnmount(() => {
       <span class="nx-titlebar-brand">Pinax · Next</span>
 
       <nav ref="menubarRoot" class="nx-menubar" aria-label="应用菜单">
-        <div v-for="(top, topIndex) in MENU_TEMPLATE" :key="`menu-${topIndex}`" class="nx-menu">
+        <div v-for="(top, topIndex) in renderedMenu" :key="`menu-${topIndex}`" class="nx-menu">
           <button
             type="button"
             class="control-quiet nx-menu-trigger"
@@ -2640,14 +2647,16 @@ onBeforeUnmount(() => {
               <li v-if="item.type === 'separator'" class="nx-menu-separator" role="separator"></li>
               <li v-else role="none">
                 <!-- 有 id 的项走 menuInvoke 通道（与原生菜单同一条分发）；只有 role 的项由原生菜单
-                     与快捷键提供，页内渲染成禁用行，不假装点了有用。 -->
+                     与快捷键提供，页内渲染成禁用行，不假装点了有用。「最近打开」的组头（无 id 无 role）
+                     同样是禁用行——它只是分组标签，不是动作。 -->
                 <button
                   type="button"
                   class="control-quiet nx-menu-item"
+                  :class="{ 'is-recent': !!item.root }"
                   :data-menu-id="item.id"
                   role="menuitem"
                   :disabled="!item.id"
-                  :title="item.id ? null : '由系统菜单与快捷键提供'"
+                  :title="item.root ?? (item.role ? '由系统菜单与快捷键提供' : null)"
                   @click="invokeMenu(item)"
                 >
                   <span class="nx-menu-label">{{ menuLabel(item) }}</span>
@@ -2680,7 +2689,6 @@ onBeforeUnmount(() => {
     <div class="next-shell app-shell" :data-dragging="dragging">
       <ActivityRail
         :boards="boards"
-        :carriers="carriers"
         :project="project"
         :active-id="activeBoardId"
         :open-id="indexOpen ? activeBoardId : null"
@@ -2722,7 +2730,21 @@ onBeforeUnmount(() => {
              偏好／载体管理／主载体选择／新建项目全部收进统一的设置二级页（SettingsModal，模板尾部），
              这里不再内嵌任何配置 section。 -->
 
-        <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
+        <!-- 无项目＝开始页（作者 2026-11-11 裁定两连：①「没有项目时左侧很多灰的不可用载体很诡异」
+             ——竖条灰格一并退役；②「项目的新建和导入做成完整的流」）。指南层：一句话＋一个主操作钮；
+             打开/导入作次操作。有项目但没板时保留原句（竖条此刻真的可点）。 -->
+        <div v-if="!boards.length" class="center-empty">
+          <template v-if="!project">
+            <p class="center-empty-main">从一个空文件夹开始你的下一本书。</p>
+            <div class="center-empty-actions">
+              <button type="button" class="control-primary" data-test="empty-new-project" @click="openSection('newProject')">新建项目</button>
+              <button type="button" class="control-secondary" data-test="empty-open-project" @click="void openProjectFolder()">打开项目文件夹…</button>
+              <button type="button" class="control-secondary" data-test="empty-import" @click="openSection('import')">导入既有稿…</button>
+            </div>
+            <p class="center-empty-sub">右栏对话照常可用。</p>
+          </template>
+          <p v-else>当前没有已启用的载体板块。右栏对话照常可用。</p>
+        </div>
 
         <!-- 〔批次76-R3 任务1／2〕页签行归组（VS Code 编辑器组模型）：不再有横跨整屏的全局那一条。
              每个页组一列，列内**首行**＝本组自己的签行，签行只列本组的页；side 列只在侧组真有页时出现
@@ -2912,20 +2934,6 @@ onBeforeUnmount(() => {
 
       <WorkbenchTooltip />
     </div>
-
-    <!-- 批次63 任务1：底栏常驻的状态栏。它是 .nx-shell-root 的最后一段（标题栏 → 三栏 → 状态栏），
-         四个读数全由上面那几格现取，组件自己不认识桥。 -->
-    <StatusBar
-      :lights="statusLights"
-      :carrier="statusCarrier"
-      :page-group="statusPageGroup"
-      :windows="statusWindows"
-      :doc-title="statusDoc.title"
-      :doc-chars="statusDoc.chars"
-      :address="statusAddress.url"
-      :address-note="statusAddress.note"
-      @open-services="openSection('services')"
-    />
   </div>
 </template>
 

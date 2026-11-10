@@ -5,6 +5,7 @@
 import { segmentText } from '../../domain/segment.js'
 import { sha1Hex, stableEntryId } from '../../domain/stableId.js'
 import { validateFactEntry } from '../../domain/schema.js'
+import { createAliasIndex } from '../../domain/aliases.js'
 import { CAST_ROLE_TIERS, FACT_SCHEMA, WORLDVIEW_SLOT_NAMES } from '../../domain/vocabulary.js'
 
 export const EXTRACTION_CHAIN_VERSION = 'fact-chain/v1'
@@ -47,6 +48,12 @@ export const EXTRACTION_ROW_SCHEMA = freezeTree(objectSchema({
     items: objectSchema({
       name: nonempty,
       aliases: strings,
+      /**
+       * 本段原文里对该人物的其它称呼（可选）：模型禁止脑内归一——原文叫什么就抄什么进来，
+       * 跨名合并由工具侧别名组（aliasIndex）确定性完成，canonical 取最早出现名。
+       * 防弱模型归一失败产生「周明瑞/克莱恩」双条目（guimi E1 实测教训）。
+       */
+      alsoKnownAsInSource: strings,
       identity: textSchema,
       traits: strings,
       speech: strings,
@@ -77,13 +84,18 @@ export const EXTRACTION_ROW_SCHEMA = freezeTree(objectSchema({
       aliases: strings,
       /**
        * 结构化约束（可选）：rules／events 槽位的条目给了就能被 gate 机判（否则进 undecidable）。
-       * 形状 [{key, value}]——key 是「约束的是什么」（如「钟声次数」「封印期限」），
-       * value 是约束值。行 schema 只认字符串（校验器没有联合类型），
-       * 数字/布尔请写成 "12" / "true"——落库后由 gate 消费侧按需解释。
+       * 形状 [{key, value, scope?}]——key 是「约束的是什么」（如「钟声次数」「封印期限」），
+       * value 是约束值（string/number/boolean/null 均可——校验器已支持联合类型）。
+       * scope 默认 'entry'（约束只描述本条目，gate 不跨条目比对）；跨条目对齐需显式 scope:'world'。
+       * 防通用词 key（「例外」「条件」）在不同规则间被误判成同一世界变量（guimi E3 实测误报）。
        */
       constraints: {
         type: 'array',
-        items: objectSchema({ key: nonempty, value: { type: 'string' } }, ['key', 'value'])
+        items: objectSchema({
+          key: nonempty,
+          value: { type: ['string', 'number', 'boolean', 'null'] },
+          scope: { type: 'string', enum: ['entry', 'world'] }
+        }, ['key', 'value'])
       }
     }, ['name', 'slot', 'definition'])
   },
@@ -94,7 +106,9 @@ export const EXTRACTION_ROW_SCHEMA = freezeTree(objectSchema({
   },
   knowledge: {
     type: 'array',
-    items: objectSchema({ character: nonempty, learned: nonempty })
+    // source（可选）＝知情来源的实体/物件名（可索引，进 fromEntry）；缺省时回落用 learned 兼容旧形状。
+    // learned 永远是一句话语义——两字段分开，不再逼模型在「可索引的名」与「完整语义」之间二选一（guimi E5）。
+    items: objectSchema({ character: nonempty, source: nonempty, learned: nonempty }, ['character', 'learned'])
   },
   hooks: strings
 }, ['segmentId', 'who', 'when', 'where', 'events', 'notes', 'characters', 'settings']))
@@ -172,8 +186,29 @@ function checkContainer(value, field, details, array = false) {
   return valid
 }
 
+/** 单类型匹配（联合类型的分母）；只支持标量叶子——object/array 联合没法带分支 schema 深校验，明确拒绝。 */
+function matchesScalarType(value, type) {
+  if (type === 'string') return typeof value === 'string'
+  if (type === 'number') return typeof value === 'number' && Number.isFinite(value)
+  if (type === 'integer') return Number.isSafeInteger(value)
+  if (type === 'boolean') return typeof value === 'boolean'
+  if (type === 'null') return value === null
+  return false
+}
+
 /** 本模块所用 JSON schema 子集的明确校验；只克隆合法数据，不强转、不删未知字段。 */
 function validateShape(value, schema, field, details) {
+  // 联合类型（仅标量叶子）：任一分支匹配即通过，值原样保留（不做跨分支归一）。
+  if (Array.isArray(schema.type)) {
+    if (schema.type.some((type) => type === 'object' || type === 'array')) {
+      issue(details, field, '联合类型只支持标量叶子（string/number/integer/boolean/null）')
+      return value
+    }
+    if (!schema.type.some((type) => matchesScalarType(value, type))) {
+      issue(details, field, `必须为 ${schema.type.join('|')} 之一`)
+    }
+    return value
+  }
   if (schema.anyOf) {
     const failures = []
     for (const candidate of schema.anyOf) {
@@ -231,11 +266,32 @@ function segmentId(sourceId, index, hash) {
   return `${sha1Hex(sourceId).slice(0, 10)}:${index}:${hash.slice(0, 8)}`
 }
 
+/**
+ * 从来源 id 解析章号（X7）：优先「第N章」；其次 basename 的 3 位零填充前导段
+ * （仓内章节文件契约 `NNN-标题.md`，'001-绯红.md' → 1）。合成名（'甲.txt'/'正文/1.txt'）
+ * 与中文数字（'第一章'）解析不出 → null，调用方不比对——文件名没有章号是合法形态。
+ */
+export function parseChapterNoFromId(id) {
+  const text = String(id ?? '')
+  const chapterMark = /第\s*(\d{1,4})\s*章/u.exec(text)
+  if (chapterMark) return Number(chapterMark[1])
+  const basename = text.split('/').pop() ?? ''
+  const padded = /^(\d{3})(?!\d)/u.exec(basename)
+  return padded ? Number(padded[1]) : null
+}
+
 export function buildExtractionSource(input = {}) {
   const details = []
   validateShape(input, objectSchema({ id: nonempty, text: nonempty, chapterNo: positiveInteger }), 'source', details)
   if (details.length) fail('INVALID_INPUT', '抽取来源无效', details)
   const { id, text, chapterNo } = input
+  // X7：文件名能解析出章号时必须与传入值一致——不一致在源头拒，防 validity 静默错位（guimi C2）。
+  // 解析不出就不比对：文件名没有章号是合法形态，不逼作者重命名。
+  const parsed = parseChapterNoFromId(id)
+  if (parsed !== null && parsed !== chapterNo) {
+    issue(details, 'chapterNo', `来源「${id}」的文件名解析出章号 ${parsed}，与传入的 ${chapterNo} 不一致`)
+  }
+  if (details.length) fail('INVALID_INPUT', '抽取来源无效', details)
   return {
     id,
     chapterNo,
@@ -320,6 +376,8 @@ function compilePlot(row, evidence, context) {
   const { source, segment } = evidence
   const name = `第${source.chapterNo}章·${source.id}·段${segment.index}`
   const entry = envelope('plot', name, [evidence], context)
+  // X1（guimi A2）：段序号落结构化字段——剧本分集/粒度对齐不再从 name 里正则抠「段N」。
+  entry.provenance.segmentIndex = segment.index
   const plot = {
     ...entry,
     who: [...row.who],
@@ -344,33 +402,58 @@ function compilePlot(row, evidence, context) {
   return plot
 }
 
+/** 称谓式关系目标：不是条目名（没有对应条目），图上是断链节点——compile 时如实告警。 */
+const TITLE_TARGET = /^.{1,12}的(?:父亲|母亲|爸爸|妈妈|哥哥|弟弟|姐姐|妹妹|兄长|儿子|女儿|老师|师父|师傅|上司|下属|主人|仆人|妻子|丈夫|未婚妻|未婚夫)$/u
+
 function compileCharacter(name, records, context, warnings, extras = {}) {
   const entry = envelope('character', name, records.map((record) => record.evidence), context)
   const profiles = records.map((record) => record.item)
-  entry.aliases = unique(profiles.flatMap((item) => (item.aliases ?? []).map((alias) => normalizeName(alias)))).filter((alias) => alias && alias !== name)
-  // 一轮里记录的关系/知情直接落到人物条目；同一行重复的按 to+type 去重，不合并冲突主张。
+  // X3 跨名合并：组员 surface 名与 alsoKnownAsInSource 全部并入别名（排除 canonical 本名）——
+  // 「周明瑞/克莱恩」成一个条目、一个 id，别名组供 aliasIndex 解析与 Track 3 fold 匹配。
+  const memberNames = unique((extras.memberNames ?? []).filter((member) => member && member !== name))
+  entry.aliases = unique([
+    ...profiles.flatMap((item) => (item.aliases ?? []).map((alias) => normalizeName(alias))),
+    ...profiles.flatMap((item) => (item.alsoKnownAsInSource ?? []).map((alias) => normalizeName(alias))),
+    ...memberNames
+  ]).filter((alias) => alias && alias !== name)
+  // 一轮里记录的关系/知情直接落到人物条目。
+  // X5（guimi E9）：反向边归一为「本条目 → 对方」出边（旧实现丢弃 from 产生自指边）；
+  // 自指（from===to）无信息量，丢弃并告警；称谓式目标（「X的父亲」）不是实体名，告警不静默。
   const related = (extras.relations ?? []).filter((item) => item.from === name || item.to === name)
   if (related.length) {
     const seen = new Set()
-    entry.relations = related.filter((item) => {
-      const key = `${item.from}|${item.to}|${item.type}`
-      if (seen.has(key)) return false
+    const edges = []
+    for (const item of related) {
+      const other = item.from === name ? item.to : item.from
+      if (other === name) {
+        warnings.push({ code: 'RELATION_SELF_DROP', entryId: entry.id, name, message: `关系 from/to 都指向「${name}」（自指无信息量），已丢弃` })
+        continue
+      }
+      const key = `${[name, other].slice().sort(compareText).join('|')}|${item.type}`
+      if (seen.has(key)) continue
       seen.add(key)
-      return true
-    }).map((item) => ({ to: item.to, type: item.type, how: item.how }))
+      if (TITLE_TARGET.test(other)) {
+        warnings.push({ code: 'RELATION_TITLE_TARGET', entryId: entry.id, to: other, message: `关系目标是称谓（「${other}」），不是条目名——要么抽成独立实体、要么把称谓写进 how 描述` })
+      }
+      edges.push({ to: other, type: item.type, how: item.how })
+    }
+    if (edges.length) entry.relations = edges
   }
+  // X2（guimi E5）：knowledge 拆双字段——source（实体名，可索引）进 fromEntry；learned（一句话语义）留 note。
+  // source 缺省回落 learned（兼容旧行形状）：这时不写 note，免得 note 与 fromEntry 重复。
   const known = (extras.knowledge ?? []).filter((item) => item.character === name)
   if (known.length) {
     const seen = new Set()
     entry.knowledge = known.filter((item) => {
-      const key = `${item.learned}|${item.evidence.source.chapterNo}`
+      const key = `${item.source}|${item.learned}|${item.evidence.source.chapterNo}`
       if (seen.has(key)) return false
       seen.add(key)
       return true
     }).map((item) => ({
-      fromEntry: item.learned,
+      fromEntry: item.source || item.learned,
       kind: 'event',
-      atSpan: { from: item.evidence.source.chapterNo, to: item.evidence.source.chapterNo }
+      atSpan: { from: item.evidence.source.chapterNo, to: item.evidence.source.chapterNo },
+      ...(item.source && item.learned ? { note: item.learned } : {})
     }))
   }
   entry.identity = joined(profiles.map((item) => item.identity))
@@ -424,7 +507,7 @@ function compileSetting(records, context, warnings) {
 
 /**
  * 汇总一组同名设定记录里的结构化约束：按 key 去重（同 key 取第一条，冲突如实告警）。
- * 形状对齐 gate 的 structuredConstraintsOf：`{key, value}`。
+ * 形状对齐 gate 的 structuredConstraintsOf：`{key, value, scope}`——scope 缺省 'entry'（X0）。
  */
 function collectConstraints(records) {
   const byKey = new Map()
@@ -433,7 +516,11 @@ function collectConstraints(records) {
       if (!raw || typeof raw !== 'object') continue
       const key = String(raw.key ?? '').trim()
       if (!key || byKey.has(key)) continue
-      byKey.set(key, { key, value: Object.prototype.hasOwnProperty.call(raw, 'value') ? raw.value : null })
+      byKey.set(key, {
+        key,
+        value: Object.prototype.hasOwnProperty.call(raw, 'value') ? raw.value : null,
+        scope: raw.scope === 'world' ? 'world' : 'entry'
+      })
     }
   }
   return [...byKey.values()]
@@ -488,18 +575,57 @@ export function compileExtractionEntries({ sources, rows, domain = '', book = ''
   const warnings = []
   const relations = []
   const knowledge = []
+
+  // X3 跨名合并（激进版，作者裁定）：身份联合**只用 alsoKnownAsInSource**——
+  // aliases 是检索别名（可多人共享「小柯」），并进去会把素不相识的人并成一组，所以不参与。
+  // from/to/character 与分组 key 全部归一到 canonical（组内最早注册名，确定性）。
+  // 「周明瑞/克莱恩」在模型显式声明 alsoKnownAsInSource 后一个条目、一个 id——归一不再发生在模型脑子里（guimi E1）。
+  const aliasIndex = createAliasIndex()
+  for (const [id] of bySegment) {
+    const row = rowMap.get(id)
+    if (!row) continue
+    for (const item of row.characters ?? []) {
+      const name = normalizeName(item.name)
+      if (!name) continue
+      aliasIndex.add(name, (item.alsoKnownAsInSource ?? []).map(normalizeName))
+    }
+  }
+  // 两遍走：先全部注册，再按 surface 名归组（登记序＝bySegment 序，canonical 确定）。
+  const memberNames = new Map() // canonical → 本组出现过的 surface 名（按出现序）
+  const canon = (value) => aliasIndex.resolve(value) ?? value
+  for (const [id] of bySegment) {
+    const row = rowMap.get(id)
+    if (!row) continue
+    for (const item of row.characters ?? []) {
+      const surface = normalizeName(item.name)
+      if (!surface) continue
+      const canonical = canon(surface)
+      if (!memberNames.has(canonical)) memberNames.set(canonical, [])
+      if (!memberNames.get(canonical).includes(surface)) memberNames.get(canonical).push(surface)
+    }
+  }
+
   for (const [id, evidence] of bySegment) {
     const row = rowMap.get(id)
     if (!row) continue // 部分提交合法；覆盖率由外层链负责。
     plots.push(compilePlot(row, evidence, context))
     for (const item of row.relations ?? []) {
-      relations.push({ from: normalizeName(item.from), to: normalizeName(item.to), type: item.type, how: item.how ?? '', evidence })
+      relations.push({
+        from: canon(normalizeName(item.from)),
+        to: canon(normalizeName(item.to)),
+        type: item.type, how: item.how ?? '', evidence
+      })
     }
     for (const item of row.knowledge ?? []) {
-      knowledge.push({ character: normalizeName(item.character), learned: normalizeName(item.learned), evidence })
+      knowledge.push({
+        character: canon(normalizeName(item.character)),
+        source: canon(normalizeName(item.source ?? '')),
+        learned: normalizeName(item.learned),
+        evidence
+      })
     }
     for (const [items, target, keyOf] of [
-      [row.characters, characters, (item) => normalizeName(item.name)],
+      [row.characters, characters, (item) => canon(normalizeName(item.name))],
       [row.settings, settings, (item) => JSON.stringify([inferSlot(item), normalizeName(item.name)])]
     ]) {
       for (const item of items) {
@@ -511,9 +637,21 @@ export function compileExtractionEntries({ sources, rows, domain = '', book = ''
     }
   }
   const entities = [
-    ...[...characters].map(([name, records]) => compileCharacter(name, records, context, warnings, { relations, knowledge })),
+    ...[...characters].map(([name, records]) => compileCharacter(name, records, context, warnings, {
+      relations, knowledge, memberNames: memberNames.get(name) ?? []
+    })),
     ...[...settings.values()].map((records) => compileSetting(records, context, warnings))
   ]
+  // 跨名合并的冲突留痕：同一个称呼被两条不同条目声明为 alias/组员 → union-find 会把两组并成一个，
+  // 这是激进版的既定行为，但必须记账（谁和谁被哪个称呼并到一起了），不许静默。
+  for (const conflict of aliasIndex.conflicts()) {
+    warnings.push({
+      code: 'ALIAS_GROUP_CONFLICT',
+      term: conflict.term,
+      claimants: [...conflict.claimants],
+      message: `称呼「${conflict.term}」被多条目声明（${conflict.claimants.join('、')}），跨名合并已将其并为一组——若实为不同人物，请在 alsoKnownAsInSource 里去掉该称呼`
+    })
+  }
   warnAliases(entities, warnings)
   const entries = [...plots, ...entities]
   const entryIds = new Set()
