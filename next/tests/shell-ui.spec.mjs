@@ -132,8 +132,9 @@ describe('空框架外壳', () => {
     // 以及 M2.5-C 的工作区四轴（workspaceLoad／workspaceSave 是唯一落盘点，坐标与形态都走它）。
     // 批次49 起挂载时多一次服务日志池快照读（只读，竖条状态点与设置页共用）。
     // 批次62 起再多一次快捷键表读取（hotkeysLoad，只读：Ctrl+P 那把键得先知道作者改过没有）。
+    // 最近项目清单读取（projectRecentList，只读：页内菜单「项目」组的动态段，作者 2026-11-10 点单）。
     // 它拿不到内核实现，也就没有旁路写盘的可能。
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad]
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad, IPC_CHANNELS.projectRecentList]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -2682,7 +2683,7 @@ describe('载体管理面板（工单A1）', () => {
     // 工作区通道（M2.5-C）随挂载就会走一次读：那是宿主状态，不是项目写入；
     // 服务日志池快照（批次49）同理，只读不写。
     // 快捷键表（批次62）也是只读那一条：hotkeysLoad 不要求项目，hotkeysSave 才要求——这里只可能出现前者。
-    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad]
+    const allowedCalls = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad, IPC_CHANNELS.projectRecentList]
     expect(bridge.request.mock.calls.every((call) => allowedCalls.includes(call[0]))).toBe(true)
     wrapper.unmount()
   })
@@ -3079,6 +3080,66 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
     await flushPromises()
     expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('最近打开的项目（作者 2026-11-10 点单）：项目组拼「组头＋条目＋清空」，点条目走 projectOpen 不发 menuInvoke，点清空发 menuInvoke', async () => {
+    const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
+    const handlers = new Map()
+    const recents = [
+      { path: 'D:/Projects/大梦', name: '大梦', at: '2026-11-10T09:00:00.000Z' },
+      { path: 'D:/books/旧稿', name: null, at: null }
+    ]
+    const open = vi.fn(async () => ({ ok: true, value: {} }))
+    const bridge = {
+      request: vi.fn(async (channel, payload) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: view }
+        if (channel === IPC_CHANNELS.projectRecentList) return { ok: true, value: { recents } }
+        if (channel === IPC_CHANNELS.projectOpen) return open(payload)
+        return { ok: true, value: {} }
+      }),
+      onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    }
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+
+    await wrapper.find('[data-menu="项目"]').trigger('click')
+    await flushPromises()
+    const popupItems = wrapper.findAll('.nx-menu-popup .nx-menu-item')
+    // 组头是禁用行（无 id），两条最近项目在「打开项目文件夹…」之后、「导入既有稿…」之前。
+    expect(popupItems.filter((row) => row.attributes('data-menu-id') === undefined).map((row) => row.text())).toEqual(['最近打开'])
+    expect(popupItems.filter((row) => row.attributes('disabled') !== undefined).map((row) => row.text())).toEqual(['最近打开'])
+    const recentRows = wrapper.findAll('[data-menu-id="project.recent"]')
+    expect(recentRows).toHaveLength(2)
+    expect(recentRows[0].text()).toBe('D:/Projects/大梦')
+    expect(recentRows[0].classes()).toContain('is-recent')
+    expect(recentRows[0].attributes('title')).toBe('D:/Projects/大梦')
+    const menuIds = popupItems.map((row) => row.attributes('data-menu-id'))
+    expect(menuIds.indexOf('project.open')).toBeLessThan(menuIds.indexOf('project.recent'))
+    expect(menuIds.indexOf('project.recent')).toBeLessThan(menuIds.indexOf('project.import'))
+    expect(menuIds).toContain('project.recentClear')
+
+    // 点一条：只走 projectOpen（主进程那条打开链），不发 menuInvoke——主进程对它没有可代劳的事。
+    await recentRows[1].trigger('click')
+    await flushPromises()
+    expect(open).toHaveBeenCalledWith({ root: 'D:/books/旧稿' })
+    expect(bridge.request).not.toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'project.recent' })
+    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+
+    // 清空：走 menuInvoke 交给主进程（清偏好→重建菜单→推渲染层），渲染层自己不动清单。
+    await wrapper.find('[data-menu="项目"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-menu-id="project.recentClear"]').trigger('click')
+    await flushPromises()
+    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'project.recentClear' })
+
+    // 主进程推一份新清单（清空后的空表）：菜单里整块消失，不靠刷新页面。
+    handlers.get(IPC_PUSH.recentProjectsChanged)({ recents: [] })
+    await flushPromises()
+    await wrapper.find('[data-menu="项目"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('[data-menu-id="project.recent"]')).toHaveLength(0)
+    expect(wrapper.findAll('.nx-menu-popup .nx-menu-item').map((row) => row.text())).not.toContain('最近打开')
     wrapper.unmount()
   })
 

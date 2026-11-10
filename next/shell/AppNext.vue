@@ -28,7 +28,7 @@ import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from './ipcContract.mjs'
-import { MENU_TEMPLATE, flattenMenuEntries } from './menus.mjs'
+import { MENU_TEMPLATE, flattenMenuEntries, RECENT_MENU_ID, withRecentProjects } from './menus.mjs'
 import {
   HOTKEY_COLLAPSE_TOP,
   HOTKEY_PALETTE_OPEN,
@@ -705,10 +705,19 @@ async function openProjectFolder() {
   if (!props.bridge?.request) return
   const picked = await props.bridge.request(IPC_CHANNELS.projectPickDir, {})
   if (!picked?.ok || !picked.value?.picked || !picked.value.path) return
+  await openProjectRoot(picked.value.path)
+}
+
+/**
+ * 打开一个已知目录（「打开项目文件夹…」选中之后、以及菜单「最近打开」点某一条的共同后半程）。
+ * 桥自身抛错也落到 refresh：外壳照常把最新状态画出来，不白屏。
+ */
+async function openProjectRoot(root) {
+  if (!props.bridge?.request || !root) return
   try {
-    await props.bridge.request(IPC_CHANNELS.projectOpen, { root: picked.value.path })
+    await props.bridge.request(IPC_CHANNELS.projectOpen, { root })
   } catch {
-    // 桥自身抛错也落到 refresh：外壳照常把最新状态画出来，不白屏。
+    // 打开失败不改走别的路：refresh 会把横幅摊出来。
   }
   await refresh()
 }
@@ -722,6 +731,27 @@ const openMenuLabel = ref(null)
 const menubarRoot = ref(null)
 /** 壳层根节点：手势的捕获监听挂在这里（批次62 任务五）。 */
 const shellRoot = ref(null)
+
+/* —— 最近打开的项目（作者 2026-11-10 点单）————————————————————————————————
+ * 真值在主进程（应用级偏好 recentProjects），这里只有一份只读镜像：
+ * 启动经 recent-list 通道拉一次（防首推赶在订阅之前），此后每次变化吃整份推送。
+ * 渲染时与原生菜单走同一个 withRecentProjects——动态段不另立第二份菜单清单。
+ */
+const recentProjects = ref([])
+let offRecentProjects = null
+
+async function loadRecentProjects() {
+  if (!props.bridge?.request) return
+  try {
+    const result = await props.bridge.request(IPC_CHANNELS.projectRecentList, {})
+    if (result?.ok && Array.isArray(result.value?.recents)) recentProjects.value = result.value.recents
+  } catch {
+    // 拉不到就先不显示：菜单里少一块，不代表打开项目不可用。
+  }
+}
+
+/** 菜单行渲染的数据源：静态模板拼上最近项目动态段（清单为空时 withRecentProjects 原样返回）。 */
+const renderedMenu = computed(() => withRecentProjects(MENU_TEMPLATE, recentProjects.value))
 
 /** 模板里的角色项没有 label（原生菜单由 Electron 自己取名），页内菜单行补一份人话。 */
 const ROLE_LABELS = Object.freeze({
@@ -773,10 +803,12 @@ function closeTopMenu() {
   openMenuLabel.value = null
 }
 
-/** 菜单动作的页面内落点：原生菜单事件（menuInvoked）与页内菜单点击共用这一份。 */
+/** 菜单动作的页面内落点：原生菜单事件（menuInvoked）与页内菜单点击共用这一份。
+ * 带 root 的调用是「最近打开」的某一条：打开走 openProjectRoot，主进程对它没有可代劳的事。 */
 const menuActions = {
   'project.create': () => openNewProject(),
   'project.open': () => void openProjectFolder(),
+  [RECENT_MENU_ID]: (root) => void openProjectRoot(root),
   'project.import': () => openImport(),
   'project.backup': () => openBackup(),
   'project.history': () => openHistory(),
@@ -792,10 +824,10 @@ const menuActions = {
  * 现在按命令表里那条 run 走面板同一条执行通路——不新开第二条做事的路，
  * 落点认不出就如实提示，与 runPaletteCommand 用的是同一句话。
  */
-async function runMenuAction(id) {
+async function runMenuAction(id, root = null) {
   const action = menuActions[id]
   if (action) {
-    action()
+    action(root)
     return
   }
   // 只认 carrier 分组：菜单项的 run 是 `menu:<自己的 id>`，回到这里就是死循环。
@@ -809,10 +841,16 @@ async function runMenuAction(id) {
 /**
  * 页内菜单项点击：先落页面内动作，再经 menuInvoke 通道交给主进程分发（与原生菜单同一条路）。
  * 只读角色项（撤销／复制／最小化…）没有 IPC id，按钮本身是禁用态——原生菜单与快捷键照常可用。
+ * 最近项目的具体条目（item.root 在手）是渲染层落点：打开走既有 project:open 链，
+ * 不再发 menuInvoke——主进程对这个 id 没有可代劳的事，发了只会收到一条假失败。
  */
 async function invokeMenu(item) {
   closeTopMenu()
   if (!item?.id) return
+  if (item.root) {
+    void runMenuAction(item.id, item.root)
+    return
+  }
   void runMenuAction(item.id)
   if (!props.bridge?.request) return
   try {
@@ -2555,7 +2593,14 @@ onMounted(() => {
   })
   // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
   // 工单F：页内菜单行的点击也收敛到同一个 runMenuAction——两条入口，一份落点。
-  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => { void runMenuAction(payload?.id) })
+  props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => { void runMenuAction(payload?.id, payload?.root ?? null) })
+  // 最近打开的项目：启动拉一次（防首推赶在订阅之前），此后吃整份推送（退订在 onBeforeUnmount）。
+  void loadRecentProjects()
+  if (typeof props.bridge?.onEvent === 'function') {
+    offRecentProjects = props.bridge.onEvent(IPC_PUSH.recentProjectsChanged, (payload) => {
+      recentProjects.value = Array.isArray(payload?.recents) ? payload.recents : []
+    })
+  }
   // 项目事件（批次39）：同一条桥，只接「有人消费」的 kind；退订在 onBeforeUnmount。
   if (typeof props.bridge?.onEvent === 'function') {
     offProjectEvent = props.bridge.onEvent(IPC_EVENT.projectEvent, onProjectEvent)
@@ -2591,6 +2636,10 @@ onBeforeUnmount(() => {
     offServiceLog()
     offServiceLog = null
   }
+  if (offRecentProjects) {
+    offRecentProjects()
+    offRecentProjects = null
+  }
   if (projectEventTimer) {
     clearTimeout(projectEventTimer)
     projectEventTimer = null
@@ -2624,7 +2673,7 @@ onBeforeUnmount(() => {
       <span class="nx-titlebar-brand">Pinax · Next</span>
 
       <nav ref="menubarRoot" class="nx-menubar" aria-label="应用菜单">
-        <div v-for="(top, topIndex) in MENU_TEMPLATE" :key="`menu-${topIndex}`" class="nx-menu">
+        <div v-for="(top, topIndex) in renderedMenu" :key="`menu-${topIndex}`" class="nx-menu">
           <button
             type="button"
             class="control-quiet nx-menu-trigger"
@@ -2640,14 +2689,16 @@ onBeforeUnmount(() => {
               <li v-if="item.type === 'separator'" class="nx-menu-separator" role="separator"></li>
               <li v-else role="none">
                 <!-- 有 id 的项走 menuInvoke 通道（与原生菜单同一条分发）；只有 role 的项由原生菜单
-                     与快捷键提供，页内渲染成禁用行，不假装点了有用。 -->
+                     与快捷键提供，页内渲染成禁用行，不假装点了有用。「最近打开」的组头（无 id 无 role）
+                     同样是禁用行——它只是分组标签，不是动作。 -->
                 <button
                   type="button"
                   class="control-quiet nx-menu-item"
+                  :class="{ 'is-recent': !!item.root }"
                   :data-menu-id="item.id"
                   role="menuitem"
                   :disabled="!item.id"
-                  :title="item.id ? null : '由系统菜单与快捷键提供'"
+                  :title="item.root ?? (item.role ? '由系统菜单与快捷键提供' : null)"
                   @click="invokeMenu(item)"
                 >
                   <span class="nx-menu-label">{{ menuLabel(item) }}</span>

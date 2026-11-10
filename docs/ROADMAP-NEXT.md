@@ -27,12 +27,45 @@
 ### P-KIT — Kit 17 卡契约迁移（依赖 kit 仓访问）
 kit 仓侧的 17 卡契约迁移，需先拿到 kit 仓访问与现有卡表。
 
+### P-TRIM — 采集数据缩减与语义精炼（**长期项目**，作者 2026-11-11 立项）
+
+> 作者裁定：第一版（guimi-acceptance / extract-trial 的产出）**只当草稿看**，不当质量基线。两条线长期推进。
+
+**Track 1 · 数据本体缩减（格式层，无语义损失，可排单）**
+实测输入（2026-11-10 对两份真实产物逐字段计字节，均条 1.2–1.5KB）：
+
+| 动作 | 预估省 | 说明 |
+|---|---|---|
+| 文件头 `{schema,domain,book,book_id,extractor,mode}` | ~11% | 全是逐条重复的常量，提到文件头一处 |
+| provenance 瘦身（条目级只留 `quote_hash`） | ~9% | `chapters` 与 `validity` 二选一（留 validity） |
+| `sources` 改段表（条目引下标） | ~10% | 同章 9 段每条重写全路径 |
+| 删 `events[].title` | ~5% | 是 fact 前 20 字截断，纯派生，无人消费 |
+| `fingerprint` 延迟生成 | ~5% | metrics 可由 actinfo 计数推导；`vec` 非空才写 |
+| 空值省略（`aliases:[]` 等） | ~2% | 消费侧已兼容缺省 |
+
+- 合计估省 **35–45%**；落点＝`compileExtractionEntries` 的**落盘序列化层**（`.pinax/extractions/*.json`），
+  内存/单条流通形状不动（补丁通道是单条采纳的）。
+- **红线（C 级，看着冗余不能动）**：`name` 进 `stableEntryId` 哈希——改名＝换 id＝补丁/分支全断链；
+  `quote_hash`（D4 版权裁定）／`validity`（双时间轴）／`refs`（知情账本与视角筛靠它）／`status`（状态机）。
+
+**Track 2 · 语义精炼（设计先行，作者方向性裁定）**
+抽取的内容要区分**文本功能类型**——陈述／描写／目的性刻画是三种不同的东西：
+不同类别在处理时**侧重点、对应的数据类型、挖掘深度都不一样**。
+- 陈述（推进事件）→ plot 事件链，深度＝因果与时间轴；
+- 描写（场景/感官/氛围）→ worldview 槽位与场景质地，深度＝锚定物与时代感，不硬造事件；
+- 目的性刻画（有意图的人物塑造）→ character anchors/memoryPoints/castRole，深度＝行为通道取证。
+- 第一版已实测到的问题（作为 Track 2 的起跑证据）：character 层同一事实四写（identity/personality/trajectory/memoryPoints 同义）、
+  `castRole.goal/plotFunction` 出现元评论（模型自述抽取策略而非角色剧情作用）→ prompt 要按类型收紧；
+  输出 token 是输入的 2 倍（14k/段），大头就是这类散文——精炼同时就是成本优化。
+- 开工前置：先出一份「类型→槽位→深度」的映射设计稿（不写 prompt），作者过目再动。
+
 ### 待作者
 - **诡秘之主实测**（P-LLM 之后）：前几章 wiki 化＋推演续写
 - **R4/R5 目视验收**（`8dd526e` 在线上）：①标题栏「设置」逐区翻 ②关掉所有页签看工作区空态
 - **T12 与原作者**：core 发布渠道／`next/fact` 平移 pinax-core 时点／NovelPedia 引擎归属
 - **风格档案确认**：`next/fact/packs/novel-style-profiles/异兽迷城-彭湃.json` 里的统计量与禁则是否照此使用；
   代表句（samples）刻意未入仓，需语感校准时走 `pickStyleSamples` 在本机语料现取
+- **P-TRIM Track 2 设计稿**：类型→槽位→深度映射（见上），作者过目后才动 prompt
 
 ## 引擎能力现状（供后续排单参考）
 

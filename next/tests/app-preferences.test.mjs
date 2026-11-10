@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { createAppPreferences, normalizePrefs, PREFS_DEFAULTS } from '../runtime/appPreferences.mjs'
+import { createAppPreferences, mergeRecentProject, normalizePrefs, PREFS_DEFAULTS, RECENT_PROJECTS_LIMIT } from '../runtime/appPreferences.mjs'
 
 /**
  * 应用级偏好存储（批次8①＋D1 历史间隔＋工单B 写作偏好）。三条合同：
@@ -47,7 +47,9 @@ test('写入往返：合法端点与缩放落盘并可读回；尾部斜杠归�
     writingTypewriter: false,
     writingFocusMode: false,
     // 批次49：「服务与通知」确认水位（应用级；没确认过＝null）。
-    serviceNoticesAckedAt: null
+    serviceNoticesAckedAt: null,
+    // 最近打开的项目（作者 2026-11-10 点单）：没记过＝空清单。
+    recentProjects: []
   })
   const onDisk = JSON.parse(await readFile(file, 'utf-8'))
   assert.equal(onDisk.modelPlaneEndpoint, 'http://127.0.0.1:8461')
@@ -243,4 +245,59 @@ test('排版偏好（批次46B）：段距 0–2 步进 0.1、缩进 0–2 步�
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('最近打开的项目（作者 2026-11-10 点单）：合法清单往返、去重置顶、超限截断', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'pinax-prefs-'))
+  const file = join(dir, 'next-preferences.json')
+  const prefs = createAppPreferences({ file })
+  try {
+    // 记两笔：新的在前；同名目录去重（重新打开＝置顶，不是第二条）。
+    const first = await prefs.write({ recentProjects: mergeRecentProject([], { path: 'D:/books/旧稿', name: '旧稿', at: '2026-11-09T10:00:00.000Z' }) })
+    assert.equal(first.ok, true)
+    const second = await prefs.write({ recentProjects: mergeRecentProject(first.value.recentProjects, { path: 'D:/Projects/大梦', name: '大梦', at: '2026-11-10T09:00:00.000Z' }) })
+    assert.equal(second.ok, true)
+    const again = await prefs.write({ recentProjects: mergeRecentProject(second.value.recentProjects, { path: 'D:/books/旧稿', name: '旧稿', at: '2026-11-10T10:00:00.000Z' }) })
+    assert.equal(again.ok, true)
+    assert.deepEqual(again.value.recentProjects.map((entry) => entry.path), ['D:/books/旧稿', 'D:/Projects/大梦'], '重新打开的置顶，不重复')
+    assert.equal(again.value.recentProjects[0].at, '2026-11-10T10:00:00.000Z')
+
+    // 落盘可读回（新实例、无缓存）。
+    const reread = await createAppPreferences({ file }).read()
+    assert.deepEqual(reread.value.recentProjects, again.value.recentProjects)
+
+    // 超限丢尾部；mergeRecentProject 是纯函数，不改传入清单。
+    let list = again.value.recentProjects
+    const before = JSON.stringify(list)
+    for (let index = 0; index < RECENT_PROJECTS_LIMIT + 3; index++) {
+      list = mergeRecentProject(list, { path: `D:/books/书${index}`, at: '2026-11-10T00:00:00.000Z' })
+    }
+    assert.equal(list.length, RECENT_PROJECTS_LIMIT, `清单封顶 ${RECENT_PROJECTS_LIMIT} 条`)
+    assert.equal(list[0].path, `D:/books/书${RECENT_PROJECTS_LIMIT + 2}`)
+    assert.equal(JSON.stringify(again.value.recentProjects), before, 'mergeRecentProject 不改传入清单')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('recentProjects 值域：非数组拒绝；坏条目丢弃不整体打回；清空是合法写入', () => {
+  const bad = normalizePrefs({ recentProjects: 'D:/books' })
+  assert.equal(bad.ok, false, '非数组必须整体拒绝（这是类型错误，不是脏数据）')
+  assert.match(bad.error, /recentProjects/)
+
+  const messy = normalizePrefs({ recentProjects: [
+    '字符串条目',
+    { name: '没路径的不要' },
+    { path: '  D:/books/大梦  ', name: ' 大梦 ', at: '不是时间' },
+    { path: 'D:/books/大梦', name: '重复路径以先出现为准' },
+    { path: 'D:/books/空名', name: '   ', at: '2026-11-10T00:00:00.000Z' }
+  ] })
+  assert.equal(messy.ok, true)
+  assert.deepEqual(messy.value.recentProjects, [
+    { path: 'D:/books/大梦', name: '大梦', at: null },
+    { path: 'D:/books/空名', name: null, at: '2026-11-10T00:00:00.000Z' }
+  ], '坏条目丢、好条目归一（trim 路径与名、坏时间戳置 null）')
+
+  const cleared = normalizePrefs({ recentProjects: [] })
+  assert.deepEqual(cleared.value.recentProjects, [], '空数组＝清空，合法')
 })

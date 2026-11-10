@@ -135,6 +135,14 @@ body {
 .nx-menu-label {
   min-width: 0;
 }
+/* 「最近打开」条目（作者 2026-11-10 点单）：路径可能很长，收在与标题栏 chip 同档的宽度里，
+   溢出省略；完整路径在按钮的 title 上（menus.mjs withRecentProjects 拼装时带上）。 */
+.nx-menu-item.is-recent .nx-menu-label {
+  max-width: 360px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .nx-menu-accelerator {
   color: var(--text-muted);
   font-size: var(--nx-fs-2xs);

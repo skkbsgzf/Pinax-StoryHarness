@@ -85,7 +85,9 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   assert.equal(foreign.error.code, NEXT_ERROR_CODES.INVALID_INPUT)
   const known = await dispatcher.dispatch(IPC_CHANNELS.menuInvoke, { id: 'project.proposals' })
   assert.equal(known.ok, true)
-  assert.deepEqual(dispatcher.menuIds.sort(), ids.sort())
+  // 「清除最近打开」（作者 2026-11-10 点单）：是应用菜单动作，但只在清单非空时渲染，
+  // 模板里没有静态项——接受集＝MENU_TEMPLATE ∪ project.recentClear（常量按名放行）。
+  assert.deepEqual(dispatcher.menuIds.sort(), [...ids, 'project.recentClear'].sort())
 })
 
 test('标题栏与页内菜单行（工单F）：overlay 留给原生窗控，可见菜单仍是同一份 MENU_TEMPLATE', async () => {
@@ -109,8 +111,9 @@ test('标题栏与页内菜单行（工单F）：overlay 留给原生窗控，�
   assert.match(appSource, /IPC_CHANNELS\.projectPickDir/, '打开项目必须先经系统目录对话框（project:pick-dir）')
   assert.match(appSource, /IPC_CHANNELS\.projectOpen/, '选中的目录必须经 project:open 打开')
   // 作者反馈②的整条链：pickDir 取消即返回，成功才 projectOpen，最后 refresh。
+  // （最近项目点单后 openProjectFolder 的后半程收敛进 openProjectRoot(root)，载荷仍是 { root }。）
   assert.match(appSource, /picked\.value\?\.picked/, '取消选择时不得继续打开项目')
-  assert.match(appSource, /projectOpen, \{ root: picked\.value\.path \}\)/, 'project:open 的载荷必须带选中的 root')
+  assert.match(appSource, /async function openProjectRoot\(root\) \{[\s\S]{0,400}projectOpen, \{ root \}\)/, 'project:open 的载荷必须带选中的 root（openProjectRoot 是与「最近打开」共用的后半程）')
 
   // 无项目形态（反馈③）：竖条数据来自 registry.list() 的 carriers，而不是已打开项目的 view。
   const railSource = await readFile(new URL('../shell/ActivityRail.vue', import.meta.url), 'utf-8')
@@ -592,7 +595,8 @@ test('主进程历史接线（D1）：建仓＋起表＋关窗兜底＋写入标
   const mainSource = await readFile(new URL('../shell/main.mjs', import.meta.url), 'utf-8')
   assert.match(mainSource, /ensureHistoryRepo\(\{\s*root:\s*projectRoot\s*\}\)/, '项目打开后必须建独立历史仓库')
   assert.match(mainSource, /historyScheduler\.start\(\{\s*root:\s*projectRoot/, '建仓后必须起定时提交')
-  assert.match(mainSource, /onProjectOpened:\s*beginHistory/, '打开/刷新项目必须触发历史接线')
+  // 最近项目点单后 onProjectOpened 变成「先记账再接历史」的 wrapper——历史接线仍在链上。
+  assert.match(mainSource, /onProjectOpened: async \(info\) => \{[\s\S]{0,600}recordRecentProject\(info\?\.root, info\?\.name \?\? null\)[\s\S]{0,200}await beginHistory\(info\)/, '打开/刷新项目必须触发历史接线（最近项目记账排在其前）')
   assert.match(mainSource, /history:\s*\{\s*gitHistory,\s*scheduler:\s*historyScheduler\s*\}/, 'gitHistory/scheduler 必须经 deps 注入分发器')
   assert.match(mainSource, /setOnWrite\(async \(\{ relativePath \}\)/, '标脏钩子必须读 fileService 的 relativePath')
   assert.match(mainSource, /markDirty\(\{\s*root:\s*projectRoot,\s*paths:\s*\[relativePath\]\s*\}\)/, '写成功后按相对路径标脏')
@@ -678,7 +682,8 @@ test('主进程把偏好真正接到网关与窗口：端点 setter、启动即�
   assert.match(mainSource, /createAppPreferences\(/, '主进程必须创建偏好存储')
   assert.match(mainSource, /applyModelPlaneEndpoint\(stored\.modelPlaneEndpoint\)/, '启动时必须应用已存端点')
   // 批次49：服务日志池也在这里注入（分发器读快照／确认都靠它）。
-  assert.match(mainSource, /prefs,\s*\n\s*serviceLogPool,\s*\n\s*probeModelPlane/, '分发器必须注入偏好、服务日志池与探测')
+  // 最近项目点单：recentProjects 的只读口径也经这里进分发器（recent-list 通道，夹在池与探测之间）。
+  assert.match(mainSource, /prefs,\s*\n\s*serviceLogPool,[\s\S]{0,200}recentProjects:[\s\S]{0,200}probeModelPlane/, '分发器必须注入偏好、服务日志池与探测（最近项目清单的只读口径同场）')
   assert.match(mainSource, /onPrefsApplied/, '保存后的生效钩子必须接上')
   assert.match(mainSource, /showOpenDialog/, '选目录必须走系统对话框（批次9：新项目落点）')
   assert.doesNotMatch(mainSource, /\.\.\/\.\.\/server\//, '外壳不得直接 import server/——端点收在 runtime 层（modelPlaneProbe）')

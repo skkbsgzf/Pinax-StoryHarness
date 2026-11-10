@@ -1,5 +1,5 @@
 import { fail, ok, NEXT_ERROR_CODES } from '../kernel/errors.mjs'
-import { MENU_TEMPLATE, flattenMenuEntries } from './menus.mjs'
+import { MENU_TEMPLATE, flattenMenuEntries, RECENT_CLEAR_ID } from './menus.mjs'
 import { HOTKEYS_VERSION, findHotkeyConflicts, normalizeHotkeys } from './hotkeys.mjs'
 import { RESERVED_SLOTS, orderActivityItems } from './slots.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
@@ -33,6 +33,9 @@ export const IPC_CHANNELS = Object.freeze({
   projectCreateBare: 'pinax:agent:project:create-bare',
   projectPickDir: 'pinax:agent:project:pick-dir',
   projectOpen: 'pinax:agent:project:open',
+  // 最近打开的项目（应用级偏好）：只读拉取。记账与清空都不走渲染层——
+  // 打开成功由主进程自动记，「清除最近打开」是菜单动作（project.recentClear）走主进程落点。
+  projectRecentList: 'pinax:agent:project:recent-list',
   projectImportRun: 'pinax:agent:project:import-run',
   // 批次30：大纲转换（散文章节稿 → 大纲/outline.json）。只对当前项目的 大纲/ 操作，
   // 外部稿子先走 E1 拷进来再转换；dryRun=true 只扫描，不写盘。
@@ -153,7 +156,10 @@ export const IPC_PUSH = Object.freeze({
   // 批次49：公共池快照变化（起停、日志、确认）。与 runtimeServiceEvent 分开两条：
   // 后者是「单个服务的一次事件」旧形状，消费方是右栏；这一条是含服务＋外部 MCP＋未确认
   // 通知的全量快照，消费方是竖条状态点与设置页「服务与通知」——混用会让两边互相误解载荷。
-  runtimeServiceLogChanged: 'pinax:agent:runtime:service-log-changed'
+  runtimeServiceLogChanged: 'pinax:agent:runtime:service-log-changed',
+  // 最近打开的项目清单变化（作者 2026-11-10 点单）：整份 `{ recents: [...] }` 推给渲染层，
+  // 页内菜单行的「项目」组据此重画。与 recent-list 拉取通道成对：拉取管启动一拍，推送管此后每一次。
+  recentProjectsChanged: 'pinax:agent:push:recent-projects-changed'
 })
 
 export const IPC_PUSH_EVENTS = Object.freeze(Object.values(IPC_PUSH))
@@ -354,7 +360,7 @@ export function shellView(session) {
  *                       渲染层指定不了 model／cwd／command。不注入时 fact:llm-complete 如实报缺，
  *                       推演面板的戏剧✦层缺席不阻塞必然▮／命运⚙（失败隔离在 fact 消费侧）。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null, factLlm = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, recentProjects = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null, factLlm = null }) {
   // 批次62 任务2：这条通道认的 id 集不再是「MENU_TEMPLATE 的拍平结果」这一份死集合，
   // 而是 MENU_TEMPLATE ∪ registry.commands()，每次现算（载体可被启用／停用）。
   // 见下方 acceptedMenuIds —— 全文件只有那一处口径。
@@ -383,6 +389,9 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
   const menuEntries = flattenMenuEntries(MENU_TEMPLATE)
   function acceptedMenuIds() {
     const set = new Set(menuEntries.map((item) => item.id))
+    // 「清除最近打开」是应用菜单动作，但只在清单非空时才渲染（withRecentProjects 拼块）——
+    // 模板里没有它的静态项，接受集按常量放行；具体条目（project.recent）是渲染层落点，不进集合。
+    set.add(RECENT_CLEAR_ID)
     for (const command of session?.registry?.commands?.() ?? []) set.add(command.id)
     return set
   }
@@ -431,7 +440,8 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
   async function notifyProjectOpened(result) {
     if (!onProjectOpened || !result?.ok) return
     try {
-      await onProjectOpened({ root: session.projectRoot, fileService: result.value?.fileService ?? null })
+      // name 给主进程的最近项目记账用（菜单标签「名 — 路径」）；读不到就空着，标签只摆路径。
+      await onProjectOpened({ root: session.projectRoot, fileService: result.value?.fileService ?? null, name: result.value?.document?.name ?? null })
     } catch {
       // 历史是旁路：probe 会如实显示不可用，项目本身照常可用。
     }
@@ -483,6 +493,10 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         if (opened.ok) await notifyProjectOpened(opened)
         return opened
       }
+      case IPC_CHANNELS.projectRecentList:
+        // 只读拉取：主进程没接（jsdom 验收／裸会话）就如实回空清单——「没有记录」是合法答案，
+        // 不学历史通道那样报缺：菜单少了这一块照常用，不该变成一条错误横幅。
+        return ok({ recents: typeof recentProjects === 'function' ? (recentProjects() ?? []) : [] })
       case IPC_CHANNELS.projectClose: {
         const closed = await session.close()
         // 工单E3：关项目后停历史定时器。session.close 不清 projectRoot（既有语义不动），
