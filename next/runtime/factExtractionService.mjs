@@ -8,6 +8,7 @@ import { validateProduces } from '../fact/usecases/skillContract.js'
 import { SKILL_CONTRACTS } from '../skills/contracts.mjs'
 import { sha1Hex } from '../fact/domain/stableId.js'
 import { buildExtractionSource, validateExtractionRows, compileExtractionEntries, EXTRACTION_CHAIN_VERSION } from '../fact/usecases/pipeline/extractionChain.js'
+import { checkConsistency } from '../fact/usecases/consistency.js'
 
 // 派生数据与作者 FactStore 分开：finish 发布待审快照，不采纳、不写正文/世界书。
 // 一个 dataset 一份原子文件，包含已发布快照和运行断点，避免“两文件只写成一半”。
@@ -31,13 +32,12 @@ function canonical(value) {
 const digest = (value) => sha1Hex(JSON.stringify(canonical(value)))
 const allSegments = (run) => run.sources.flatMap((source) => source.segments)
 const pending = (run) => allSegments(run).filter((segment) => !Object.hasOwn(run.rows, segment.id))
-const unchecked = (run) => allSegments(run).filter((segment) => !run.reviewed.includes(segment.id))
 function summary(state, run) {
   return {
     dataset: state.dataset, datasetRevision: state.revision, runId: run.id, revision: run.revision,
-    state: run.finished ? 'finished' : 'running', phase: pending(run).length ? 'extract' : unchecked(run).length ? 'review' : 'ready',
+    state: run.finished ? 'finished' : 'running', phase: pending(run).length ? 'extract' : 'ready',
     sources: run.sources.length, segments: allSegments(run).length, extracted: Object.keys(run.rows).length,
-    reviewed: run.reviewed.length, reusedSources: run.reusedSources, removedSources: run.removedSources.length,
+    reusedSources: run.reusedSources, removedSources: run.removedSources.length,
     submissions: Object.keys(run.receipts).length, usage: null,
     costNote: '工具内部模型调用为0；外层模型用量由运行时usage报告，不能由工具次数换算。',
     resultPath: `.pinax/extractions/${state.dataset}.json`
@@ -136,9 +136,9 @@ export function createFactExtractionService({ root = null, fileService = null, r
   }
   async function nextTask(state, run) {
     if (run.finished) return { ...summary(state, run), done: true }
-    const left = pending(run)
-    const phase = left.length ? 'extract' : 'review'
-    const candidates = left.length ? left : unchecked(run)
+    // 单轮扫描：只派未抽取的段；抽完即 ready，没有第二轮复核。
+    const candidates = pending(run)
+    const phase = 'extract'
     if (!candidates.length) return { ...summary(state, run), done: true, phase: 'ready' }
     const source = run.sources.find((item) => item.segments.some((unit) => unit.id === candidates[0].id))
     const texts = await verifySources(run, [source.id])
@@ -149,13 +149,6 @@ export function createFactExtractionService({ root = null, fileService = null, r
     for (const meta of source.segments.filter((item) => candidateIds.has(item.id))) {
       if (task.units.length && chars + meta.chars > run.batchChars) break
       const unit = { id: meta.id, index: meta.index, chars: meta.chars, text: segments.find((item) => item.index === meta.index).text }
-      if (phase === 'review') {
-        unit.record = run.rows[meta.id]
-        if (JSON.stringify(unit).length > RESULT_CHARS - 900) {
-          delete unit.record
-          unit.recordRef = { view: 'row', id: meta.id, instruction: '用status按offset读完整JSON，再复核；不是空记录。' }
-        }
-      }
       if (JSON.stringify({ ...task, units: [...task.units, unit] }).length > RESULT_CHARS - 100) break
       task.units.push(unit)
       chars += meta.chars
@@ -192,23 +185,20 @@ export function createFactExtractionService({ root = null, fileService = null, r
         if (new Set(sources.map((source) => source.id)).size !== sources.length) reject('INVALID_INPUT', 'sources含重复路径。')
         const targets = args.sourceIds ?? []
         if (mode === 'repair' && (!targets.length || targets.some((id) => !sources.some((source) => source.id === id)))) reject('INVALID_INPUT', 'repair须点名存在的sourceIds。')
-        const rows = {}; const reviewed = []; let reusedSources = 0
+        const rows = {}; let reusedSources = 0
         for (const source of sources) {
           const old = baseline?.sources.find((item) => item.id === source.id)
           if (mode === 'repair' && !targets.includes(source.id) && (old?.hash !== source.hash || old?.chapterNo !== source.chapterNo)) reject('SOURCE_STALE', '非补抽目标原稿已变化；请用update显式更新整个范围。', { sourceId: source.id })
           if (baseline?.version === EXTRACTION_CHAIN_VERSION && old?.hash === source.hash && old.chapterNo === source.chapterNo && !targets.includes(source.id)) {
             for (const segment of source.segments) {
               const row = baseline.rows[segment.id]
-              if (row) {
-                rows[segment.id] = row
-                if (!args.fromRunId || baseline.reviewed.includes(segment.id)) reviewed.push(segment.id)
-              }
+              if (row) rows[segment.id] = row // 存量复用：单轮模式下已抽行直接沿用，不再等复核
             }
             reusedSources += 1
           }
         }
         const id = randomUUID()
-        const run = { id, requestId, requestHash, version: EXTRACTION_CHAIN_VERSION, revision: 1, baseRevision: state.revision, spec, sources, rows, reviewed, reusedSources,
+        const run = { id, requestId, requestHash, version: EXTRACTION_CHAIN_VERSION, revision: 1, baseRevision: state.revision, spec, sources, rows, reusedSources,
           removedSources: (state.current?.sources ?? []).filter((old) => !sources.some((source) => source.id === old.id)).map((source) => source.id),
           receipts: {}, batchChars: args.batchChars ?? 3600, finished: false }
         state.runs[id] = run
@@ -236,17 +226,12 @@ export function createFactExtractionService({ root = null, fileService = null, r
         const ids = task.units.map((unit) => unit.id)
         const check = validateExtractionRows(args.rows ?? [], allSegments(run).filter((unit) => ids.includes(unit.id)))
         if (!check.ok) reject(check.error.code, check.error.message, check.error.details)
-        const confirmed = args.confirmed ?? []
-        if (!Array.isArray(confirmed) || new Set(confirmed).size !== confirmed.length || confirmed.some((id) => !ids.includes(id))) reject('INVALID_INPUT', 'confirmed必须是不重复的当前任务段ID。')
-        if (task.phase === 'extract' && confirmed.length) reject('INVALID_INPUT', '首轮不能用confirmed跳过抽取。')
         const corrected = check.value.map((row) => row.segmentId)
-        if (confirmed.some((id) => corrected.includes(id))) reject('INVALID_INPUT', '同一段只能交修订行或确认，不能重复声明。')
-        if (!corrected.length && !confirmed.length) reject('EMPTY_SUBMISSION', '未交任何结果，不推进断点。')
+        if (!corrected.length) reject('EMPTY_SUBMISSION', '未交任何结果，不推进断点。')
         // 在保存链路上构造并校验三层产物；非法结果在这里拒绝，不留到finish才爆炸。
         const merged = { ...run.rows, ...Object.fromEntries(check.value.map((row) => [row.segmentId, row])) }
         compile({ sources: run.sources, rows: Object.values(merged), ...run.spec })
         run.rows = merged
-        if (task.phase === 'review') run.reviewed.push(...corrected, ...confirmed)
         run.receipts[args.submissionId] = hash
         run.revision += 1
         return { state, value: summary(state, run) }
@@ -257,7 +242,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
         const run = getRun(state, runId)
         if (run.finished) return { value: { ...summary(state, run), duplicate: true } }
         if (run.revision !== expectedRevision) reject('STALE_REVISION', '断点版本已变化。')
-        if (pending(run).length || unchecked(run).length) reject('INCOMPLETE_COVERAGE', '还有未抽取或未复核的单元；不能用计数自报完整。', { pending: pending(run).length, unchecked: unchecked(run).length })
+        if (pending(run).length) reject('INCOMPLETE_COVERAGE', '还有未抽取的单元；不能用计数自报完整。', { pending: pending(run).length })
         if (state.revision !== run.baseRevision) reject('DATASET_CONFLICT', '另一运行已发布新版；用update重新对齐基线。')
         await verifySources(run)
         const output = compile({ sources: run.sources, rows: Object.values(run.rows), ...run.spec })
@@ -269,12 +254,30 @@ export function createFactExtractionService({ root = null, fileService = null, r
         const removed = oldEntries.filter((entry) => !output.entries.some((item) => item.id === entry.id)).map((entry) => ({ id: entry.id, kind: 'source-removed', action: 'review-only' }))
         state.revision += 1
         state.current = { version: EXTRACTION_CHAIN_VERSION, runId, revision: state.revision, spec: run.spec, sources: run.sources, rows: run.rows,
-          entries: output.entries, warnings: output.warnings, changes: [...changed, ...removed], removedSources: run.removedSources }
+          entries: output.entries, warnings: output.warnings, index: output.index, changes: [...changed, ...removed], removedSources: run.removedSources }
         run.finished = true
         run.revision += 1
-        return { state, value: { ...summary(state, run), entries: output.entries.length, warnings: output.warnings.length, changes: changed.length + removed.length,
+        return { state, value: { ...summary(state, run), entries: output.entries.length, warnings: output.warnings.length, changes: changed.length + removed.length, index: output.index,
           publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果。尚未写入作者事实库或自动采纳。' } }
       })
+    },
+    /** 一致性检测：对已发布快照整库过一遍（也可指定 runId 用该运行已交的行现场编译）。只读，不写断点。 */
+    async check(args) {
+      const state = await load(args.dataset)
+      if (!state) reject('DATASET_NOT_FOUND', '尚未建立该数据集。')
+      let entries = state.current?.entries ?? []
+      if (args.runId) {
+        const run = getRun(state, args.runId)
+        const output = compile({ sources: run.sources, rows: Object.values(run.rows), ...run.spec })
+        entries = output.entries
+      }
+      if (!entries.length) reject('RESULT_NOT_READY', '没有可检测的条目：先 finish 发布快照，或带 runId 检测进行中的已完成行。')
+      const report = checkConsistency(entries)
+      const scope = args.scope ?? 'summary'
+      if (scope === 'summary') {
+        return ok({ dataset: args.dataset, revision: state.revision, runId: args.runId ?? state.current?.runId ?? null, ...report, conflicts: report.conflicts.slice(0, 20), warnings: report.warnings.slice(0, 20) })
+      }
+      return ok({ dataset: args.dataset, revision: state.revision, ...report })
     },
     async status(args) {
       requireProject()
@@ -306,6 +309,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
       if (!current) reject('RESULT_NOT_READY', '尚未finish发布快照；用runId查看断点。')
       if (kind === 'entries') return ok(page(current.entries.map(({ id, layer, name, status }) => ({ id, layer, name, status })), offset, { revision: current.revision }))
       if (kind === 'changes' || kind === 'warnings') return ok(page(current[kind], offset, { revision: current.revision }))
+      if (kind === 'index') return ok({ revision: current.revision, ...current.index })
       reject('INVALID_INPUT', '不支持的status view。')
     }
   }

@@ -133,10 +133,10 @@ try {
   const names = runtime.listTools().map((tool) => tool.name)
   const skillRejected = runtime.surfaceInfo().skills?.rejected?.map((item) => item.code) ?? []
   await runtime.stop()
-  check('d2 运行时面：内核 20 ＋ pinax_skill_read ＋ pinax_service_log_list ＋ fact 抽取链 5（27）', names.length === 27 && names.includes('pinax_skill_read') && names.includes('pinax_service_log_list') && names.includes('pinax_extract_prepare'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
+  check('d2 运行时面：内核 20 ＋ pinax_skill_read ＋ pinax_service_log_list ＋ fact 抽取链 5（28）', names.length === 28 && names.includes('pinax_skill_read') && names.includes('pinax_service_log_list') && names.includes('pinax_extract_prepare'), `toolCount=${names.length}${skillRejected.length ? `；技能装载记账=${skillRejected.join(',')}` : ''}`)
   check('内核版本对外可见：KERNEL_INFO.contractVersion=1', mod.KERNEL_INFO?.contractVersion === '1', mod.NEXT_VERSION ?? '')
 } catch (error) {
-  check('d 产物自足可执行：import 产物后 in-process 列出 27 工具（内核 20 ＋ 技能读取＋服务日志读取＋抽取链）', false, String(error?.message || error).slice(0, 120))
+  check('d 产物自足可执行：import 产物后 in-process 列出 28 工具（内核 20 ＋ 技能读取＋服务日志读取＋抽取链）', false, String(error?.message || error).slice(0, 120))
 }
 
 console.log(`ℹ 原生模块：bundle 文本引用 better-sqlite3 ＝ ${/better-sqlite3/.test(bundle) ? '是' : '否'}；换档脚本在 win32 直接 return，Electron ABI 档要在出包后单独核`)

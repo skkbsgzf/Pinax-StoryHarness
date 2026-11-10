@@ -31,6 +31,12 @@ export const SKILL_CONTRACTS = Object.freeze({
       { layer: 'worldview', asStatus: 'proposed', mode: 'analyze' }
     ]
   }),
+  // 一致性检测：读全库三层投影，产出违规清单（非条目）——不改事实库。
+  'fact-consistency': defineSkillContract({
+    skill: 'fact-consistency',
+    requires: { layers: ['worldview', 'character', 'plot'] },
+    produces: [{ nonEntry: 'consistency-findings', output: 'checklist' }]
+  }),
   /**
    * 章节改写：需要当前章的剧情事件＋前后跨度、在场角色锚点，产出正文增量（plot 草稿）
    * 与「因新设定触发而新增」的世界观提案（proposed，不直写 adopted）。

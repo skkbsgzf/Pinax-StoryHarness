@@ -69,11 +69,11 @@ function character({ name = '柯秒', status = 'proposed', mode = 'author' } = {
   }
 }
 
-const CONTRACT_NAMES = ['chapter-rewrite', 'continuity-check', 'fact-extract', 'outline-restructure', 'scene-expand', 'worldbook-refactor']
+const CONTRACT_NAMES = ['chapter-rewrite', 'continuity-check', 'fact-consistency', 'fact-extract', 'outline-restructure', 'scene-expand', 'worldbook-refactor']
 
 /* ───────────── 1. 五张卡逐项校验 ───────────── */
 
-test('〔P3·五卡〕五份契约都合法，层／槽位／produces 白名单在 fact 词表内', () => {
+test('〔P3·六卡〕六份契约都合法，层／槽位／produces 白名单在 fact 词表内', () => {
   assert.deepEqual(Object.keys(SKILL_CONTRACTS).sort(), CONTRACT_NAMES.slice().sort())
   for (const name of CONTRACT_NAMES) {
     const contract = SKILL_CONTRACTS[name]
@@ -335,18 +335,19 @@ test('〔P3·装载〕合法契约挂到技能上；没登记契约的包照样�
   assert.equal(plain.skills[0].contract, null, '作者导入的包不写契约不为难')
 })
 
-test('〔P3·装载〕随包五卡：装载数不增不减，每张都挂上合法契约', async () => {
+test('〔P3·装载〕随包六卡：装载数不增不减，每张都挂上合法契约', async () => {
   const loaded = await loadSkills({
     dir: DEFAULT_SKILLS_DIR,
     availableTools: [
       'pinax_project_context', 'pinax_chapter_read', 'pinax_chapter_save',
       'pinax_outline_read', 'pinax_outline_save', 'pinax_worldbook_list',
       'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_skill_read',
-      'pinax_extract_prepare', 'pinax_extract_next', 'pinax_extract_submit', 'pinax_extract_status', 'pinax_extract_finish'
+      'pinax_extract_prepare', 'pinax_extract_next', 'pinax_extract_submit', 'pinax_extract_status', 'pinax_extract_finish',
+      'pinax_fact_check'
     ]
   })
   assert.deepEqual(loaded.rejected, [])
-  assert.equal(loaded.skills.length, 6)
+  assert.equal(loaded.skills.length, 7)
   for (const skill of loaded.skills) {
     assert.ok(skill.contract, `${skill.name} 没有挂上契约`)
     assert.equal(validateSkillContract(skill.contract).ok, true)

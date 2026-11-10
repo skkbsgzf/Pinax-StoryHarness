@@ -180,8 +180,10 @@ test('部分提交、空明确事实和全空提交均合法，不凭空制造�
   assert.deepEqual(entries[0].events, [])
   assert.deepEqual(entries[0].sources.map((ref) => ref.segmentId), [built.segments[1].id])
   assertEntries(entries)
-  assert.deepEqual(compile([built], []), { entries: [], warnings: [] })
-  assert.deepEqual(compile([], []), { entries: [], warnings: [] })
+  assert.deepEqual(compile([built], []).entries, [])
+  assert.deepEqual(compile([built], []).warnings, [])
+  assert.deepEqual(compile([], []).entries, [])
+  assert.deepEqual(compile([], []).warnings, [])
   assertEntries(compile([source('短篇', 2, '一字。')], [row(source('短篇', 2, '一字。').segments[0])]).entries)
 })
 

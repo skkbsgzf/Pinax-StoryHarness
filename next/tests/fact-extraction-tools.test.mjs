@@ -50,14 +50,13 @@ async function complete(f, run) {
     assert.ok(serializeToolOutput({ ok: true, value: { payload: { ok: true, ...task } } }).length < 7200)
     if (task.done) return f.good('finish', { dataset: 'book', runId: run.runId, expectedRevision: task.revision })
     const args = { dataset: 'book', runId: run.runId, expectedRevision: task.revision, taskId: task.taskId, submissionId: `step-${task.revision}` }
-    if (task.phase === 'extract') args.rows = task.units.map((unit) => row(unit))
-    else args.confirmed = task.units.map((unit) => unit.id)
+    args.rows = task.units.map((unit) => row(unit))
     await f.good('submit', args)
   }
   assert.fail('测试链未终止')
 }
 
-test('首次建库：联合抽取、复核、三层快照与完整读取，原稿不变', async (t) => {
+test('首次建库：单轮联合抽取、三层快照＋基础索引与完整读取，原稿不变', async (t) => {
   const f = await fixture(t)
   const run = await f.good('prepare', initial(f.ref))
   const task = await f.good('next', { dataset: 'book', runId: run.runId })
@@ -125,7 +124,7 @@ test('更新只重抽变化/新增源，删除只列影响，补抽只针对指�
   assert.equal(await readFile(join(f.root, f.ref.dir, f.ref.file), 'utf8'), prose, '移出范围不删除原文件')
 })
 
-test('源变化拒旧任务；从未完成run更新保留成功行而不伪造复核完成', async (t) => {
+test('源变化拒旧任务；从未完成run更新保留成功行', async (t) => {
   const f = await fixture(t)
   const ref2 = { ...f.ref, file: '第二章.md', chapterNo: 2 }
   await f.fileService.write({ ...ref2, text: prose, expectedRevision: 0 })
@@ -135,7 +134,7 @@ test('源变化拒旧任务；从未完成run更新保留成功行而不伪造�
   await writeFile(join(f.root, ref2.dir, ref2.file), prose + '钟声响了。', 'utf8')
   const updated = await f.good('prepare', { dataset: 'book', requestId: 'from-run', mode: 'update', fromRunId: run.runId })
   assert.equal(updated.extracted, 1)
-  assert.equal(updated.reviewed, 0)
+  assert.equal(updated.phase, 'extract', '单轮模式下未抽段仍待办')
   const latest = await f.good('next', { dataset: 'book', runId: updated.runId })
   await writeFile(join(f.root, f.ref.dir, f.ref.file), prose + '阿明离开。', 'utf8')
   assert.equal((await f.call('submit', { dataset: 'book', runId: updated.runId, expectedRevision: latest.revision, taskId: latest.taskId, submissionId: 'stale', rows: [row(latest.units[0])] })).error.code, 'SOURCE_STALE')
@@ -148,7 +147,7 @@ test('冲突、漏段、假ID和未知字段不会推进断点', async (t) => {
   const args = { dataset: 'book', runId: run.runId, expectedRevision: task.revision, taskId: task.taskId, submissionId: 'bad' }
   assert.equal((await f.call('submit', { ...args, rows: [{ ...row(task.units[0]), segmentId: 'invented' }] })).ok, false)
   assert.equal((await f.call('submit', { ...args, rows: [{ ...row(task.units[0]), confidence: 1 }] })).error.code, 'INVALID_INPUT')
-  assert.equal((await f.call('submit', { ...args, rows: [], confirmed: [task.units[0].id] })).ok, false)
+  assert.equal((await f.call('submit', { ...args, rows: [] })).error.code, 'EMPTY_SUBMISSION')
   assert.equal((await f.good('status', { dataset: 'book', runId: run.runId })).revision, task.revision)
   await complete(f, run)
   const a = await f.good('prepare', { dataset: 'book', requestId: 'a', mode: 'update' })
@@ -184,10 +183,10 @@ test('元数据软链逃逸被拒绝', async (t) => {
   assert.match(result.error.code, /PATH_OUTSIDE_PROJECT/u)
 })
 
-test('review/auto只准非破坏性派生提交；blocked拒写但保留读口；六工具披露完整', async (t) => {
+test('review/auto只准非破坏性派生提交；blocked拒写但保留读口；六工具＋一致性检测披露完整', async (t) => {
   const f = await fixture(t)
   for (const [name, { tool }] of f.tools) {
-    const read = name.endsWith('_next') || name.endsWith('_status')
+    const read = name.endsWith('_next') || name.endsWith('_status') || name === 'pinax_fact_check'
     for (const mode of ['review', 'auto', 'blocked']) {
       const policy = createWritePolicy({ mode })
       const decision = await policy.beforeTool({ name, annotations: tool.annotations, arguments: {} })
@@ -197,10 +196,11 @@ test('review/auto只准非破坏性派生提交；blocked拒写但保留读口�
   const tools = [...f.tools.values()].map(({ tool }) => tool).concat({ name: 'pinax_skill_read' }, { name: 'pinax_project_context' })
   const selected = selectTools({ tools, intent: '从零开抽并更新存量事实' })
   assert.equal(selected.names.length, 6)
-  for (const name of [...EXTRACTION_TOOL_NAMES, 'pinax_skill_read']) assert.ok(selected.names.includes(name))
+  // fact_check 属 fact-consistency 技能，不随「开抽」意图被选中
+  for (const name of [...EXTRACTION_TOOL_NAMES.filter((item) => item !== 'pinax_fact_check'), 'pinax_skill_read']) assert.ok(selected.names.includes(name))
 })
 
-test('真实MCP聚合面装载技能与五工具，错误schema在执行前拒绝', async (t) => {
+test('真实MCP聚合面装载技能与六工具，错误schema在执行前拒绝', async (t) => {
   const f = await fixture(t)
   const runtime = createAgentRuntime({ registry: f.registry, fileService: f.fileService, view: f.view })
   await runtime.start()
@@ -232,7 +232,7 @@ test('真实工具循环使用离线turn完成两轮链，usage未知不编造',
       if (task?.taskId) {
         name = 'pinax_extract_submit'
         args = { ...args, taskId: task.taskId, expectedRevision: task.revision, submissionId: `loop-${step}`,
-          ...(task.phase === 'extract' ? { rows: task.units.map((unit) => row(unit)) } : { confirmed: task.units.map((unit) => unit.id) }) }
+          rows: task.units.map((unit) => row(unit)) }
       } else if (task?.phase === 'ready') { name = 'pinax_extract_finish'; args.expectedRevision = task.revision }
       step += 1
       return { calls: [{ id: `call-${step}`, name, arguments: args }] }

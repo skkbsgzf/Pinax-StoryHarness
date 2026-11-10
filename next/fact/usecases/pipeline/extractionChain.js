@@ -75,8 +75,55 @@ export const EXTRACTION_ROW_SCHEMA = freezeTree(objectSchema({
       definition: nonempty,
       aliases: strings
     })
+  },
+  /** 一轮里一并记录的关系/知情/伏笔：都是可选，模型愿意给就给，不给不判失败。 */
+  relations: {
+    type: 'array',
+    items: objectSchema({ from: nonempty, to: nonempty, type: nonempty, how: textSchema })
+  },
+  knowledge: {
+    type: 'array',
+    items: objectSchema({ character: nonempty, learned: nonempty })
+  },
+  hooks: strings
+}, ['segmentId', 'who', 'when', 'where', 'events', 'notes', 'characters', 'settings']))
+
+/** 名称规范化：全角 ASCII→半角、空白归一、去首尾引号；不做同义改写，只抹表示层噪音。 */
+export function normalizeName(value) {
+  // 全角 ASCII（U+FF01–U+FF5E）与全角空格（U+3000）按码点归一，避免正则里出现不规则空白字面量。
+  let text = ''
+  for (const ch of String(value ?? '')) {
+    const code = ch.codePointAt(0)
+    if (code >= 0xFF01 && code <= 0xFF5E) text += String.fromCharCode(code - 0xFEE0)
+    else if (code === 0x3000) text += ' '
+    else text += ch
   }
-}))
+  return text.replace(/\s+/gu, ' ').trim().replace(/^[「『“"']/gu, '').replace(/[」』”"']$/gu, '').trim()
+}
+
+/** 一轮抽取的映射兜底：槽位只为 other 的条目按名称/别名/定义关键词补标准槽位；不覆盖模型已给的合法槽位。 */
+const SLOT_KEYWORDS = Object.freeze([
+  ['power_levels', ['等级', '境界', '阶位', '序列', '层次', '品阶']],
+  ['abilities', ['能力', '法术', '技能', '仪式', '术法', '秘术']],
+  ['rules', ['规则', '机制', '定律', '禁忌', '契约', '法则']],
+  ['locations', ['之城', '之界', '街', '巷', '山', '河', '殿', '塔', '楼', '门', '院', '厅', '殿', '窟']],
+  ['items', ['之书', '刀', '剑', '符', '令牌', '戒指', '镜', '壶', '灯', '怀表', '卷轴']],
+  ['orgs', ['学会', '教团', '议会', '公会', '商会', '帮', '派', '局', '组织']],
+  ['roles', ['身份', '职业', '学徒', '骑士', '守夜人', '执事', '祭司']],
+  ['creatures', ['之兽', '灵体', '妖', '怪', '种族', '异种']],
+  ['events', ['之变', '之夜', '之战', '纪元', '大灾', '事件']]
+])
+
+/** 槽位兜底推断：命中即用，未命中保持原值（other 也是合法槽位，不强行编造）。 */
+export function inferSlot(item = {}) {
+  const given = String(item.slot ?? '')
+  if (given && given !== 'other' && WORLDVIEW_SLOT_NAMES.includes(given)) return given
+  const hay = [item.name, ...(Array.isArray(item.aliases) ? item.aliases : []), item.definition ?? ''].join(' ')
+  for (const [slot, words] of SLOT_KEYWORDS) {
+    if (words.some((word) => hay.includes(word))) return slot
+  }
+  return given || 'other'
+}
 
 const positiveInteger = { type: 'integer', minimum: 1 }
 const hashSchema = { type: 'string', pattern: '^[0-9a-f]{40}$' }
@@ -262,7 +309,7 @@ function compilePlot(row, evidence, context) {
   const { source, segment } = evidence
   const name = `第${source.chapterNo}章·${source.id}·段${segment.index}`
   const entry = envelope('plot', name, [evidence], context)
-  return {
+  const plot = {
     ...entry,
     who: [...row.who],
     when: { ...row.when },
@@ -281,12 +328,40 @@ function compilePlot(row, evidence, context) {
     })),
     validity: { from: source.chapterNo, to: source.chapterNo }
   }
+  const hooks = unique((row.hooks ?? []).map((text) => String(text ?? '').trim()).filter(Boolean))
+  if (hooks.length) plot.hooks = hooks
+  return plot
 }
 
-function compileCharacter(name, records, context, warnings) {
+function compileCharacter(name, records, context, warnings, extras = {}) {
   const entry = envelope('character', name, records.map((record) => record.evidence), context)
   const profiles = records.map((record) => record.item)
-  entry.aliases = unique(profiles.flatMap((item) => item.aliases))
+  entry.aliases = unique(profiles.flatMap((item) => (item.aliases ?? []).map((alias) => normalizeName(alias)))).filter((alias) => alias && alias !== name)
+  // 一轮里记录的关系/知情直接落到人物条目；同一行重复的按 to+type 去重，不合并冲突主张。
+  const related = (extras.relations ?? []).filter((item) => item.from === name || item.to === name)
+  if (related.length) {
+    const seen = new Set()
+    entry.relations = related.filter((item) => {
+      const key = `${item.from}|${item.to}|${item.type}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).map((item) => ({ to: item.to, type: item.type, how: item.how }))
+  }
+  const known = (extras.knowledge ?? []).filter((item) => item.character === name)
+  if (known.length) {
+    const seen = new Set()
+    entry.knowledge = known.filter((item) => {
+      const key = `${item.learned}|${item.evidence.source.chapterNo}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    }).map((item) => ({
+      fromEntry: item.learned,
+      kind: 'event',
+      atSpan: { from: item.evidence.source.chapterNo, to: item.evidence.source.chapterNo }
+    }))
+  }
   entry.identity = joined(profiles.map((item) => item.identity))
   entry.traits = unique(profiles.flatMap((item) => item.traits))
   entry.personality = joined(entry.traits)
@@ -319,9 +394,10 @@ function compileCharacter(name, records, context, warnings) {
 }
 
 function compileSetting(records, context, warnings) {
-  const { name, slot } = records[0].item
+  const name = normalizeName(records[0].item.name)
+  const slot = inferSlot(records[0].item)
   const entry = envelope('worldview', name, records.map((record) => record.evidence), context, slot)
-  entry.aliases = unique(records.flatMap(({ item }) => item.aliases))
+  entry.aliases = unique(records.flatMap(({ item }) => (item.aliases ?? []).map((alias) => normalizeName(alias)))).filter((alias) => alias && alias !== name)
   entry.definitions = unique(records.map(({ item }) => item.definition))
   entry.definition = entry.definitions.join('\n')
   if (entry.definitions.length > 1) {
@@ -378,23 +454,32 @@ export function compileExtractionEntries({ sources, rows, domain = '', book = ''
   const characters = new Map()
   const settings = new Map()
   const warnings = []
+  const relations = []
+  const knowledge = []
   for (const [id, evidence] of bySegment) {
     const row = rowMap.get(id)
     if (!row) continue // 部分提交合法；覆盖率由外层链负责。
     plots.push(compilePlot(row, evidence, context))
+    for (const item of row.relations ?? []) {
+      relations.push({ from: normalizeName(item.from), to: normalizeName(item.to), type: item.type, how: item.how ?? '', evidence })
+    }
+    for (const item of row.knowledge ?? []) {
+      knowledge.push({ character: normalizeName(item.character), learned: normalizeName(item.learned), evidence })
+    }
     for (const [items, target, keyOf] of [
-      [row.characters, characters, (item) => item.name],
-      [row.settings, settings, (item) => JSON.stringify([item.slot, item.name])]
+      [row.characters, characters, (item) => normalizeName(item.name)],
+      [row.settings, settings, (item) => JSON.stringify([inferSlot(item), normalizeName(item.name)])]
     ]) {
       for (const item of items) {
         const key = keyOf(item)
+        if (!key || key === '""') continue
         if (!target.has(key)) target.set(key, [])
         target.get(key).push({ item, evidence })
       }
     }
   }
   const entities = [
-    ...[...characters].map(([name, records]) => compileCharacter(name, records, context, warnings)),
+    ...[...characters].map(([name, records]) => compileCharacter(name, records, context, warnings, { relations, knowledge })),
     ...[...settings.values()].map((records) => compileSetting(records, context, warnings))
   ]
   warnAliases(entities, warnings)
@@ -408,5 +493,24 @@ export function compileExtractionEntries({ sources, rows, domain = '', book = ''
     for (const warning of result.warnings) warnings.push({ entryId: entry.id, ...warning })
   }
   if (details.length) fail('INVALID_EXTRACTION', '编译结果不符合 fact.data/v2', details)
-  return { entries, warnings }
+  return { entries, warnings, index: buildIndex(entries) }
+}
+
+/** 基础索引：名/别名/槽位/层 → 条目 ID。只留查得到的索引，不做第二份内容副本。 */
+export function buildIndex(entries) {
+  const byName = {}
+  const byAlias = {}
+  const bySlot = {}
+  const byLayer = {}
+  for (const entry of entries) {
+    byName[entry.name] = entry.id
+    byLayer[entry.layer] = (byLayer[entry.layer] ?? 0) + 1
+    if (entry.layer === 'worldview' && entry.slot) (bySlot[entry.slot] ??= []).push(entry.id)
+    for (const alias of entry.aliases ?? []) {
+      const token = normalizeName(alias)
+      if (!token || token === entry.name) continue
+      ;(byAlias[token] ??= []).push(entry.id)
+    }
+  }
+  return { entries: entries.length, byLayer, bySlot, byName, byAlias }
 }

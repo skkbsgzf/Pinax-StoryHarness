@@ -123,8 +123,8 @@ try {
   // ③ 运行时＝内置一级公民：不装插件也起得来
   const runtime = createAgentRuntime({ registry: emptyRegistry })
   const started = await runtime.start()
-  record('运行时进主进程：in-process 列出 27 工具（内核 20 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ fact 抽取链 5；批次49 原生面 +1）',
-    started.ok === true && started.value.toolCount === 27,
+  record('运行时进主进程：in-process 列出 28 工具（内核 20 ＋ 技能读取 1 ＋ 服务日志读取 1 ＋ fact 抽取链 5；批次49 原生面 +1）',
+    started.ok === true && started.value.toolCount === 28,
     `toolCount=${started.value?.toolCount}`)
 
   // ④ 全程零端口：Express 那一层不需要存在
@@ -181,9 +181,9 @@ try {
   const carrierOpened = await openProject({ root: carrierRoot, registry: carrierRegistry })
   const carrierRuntime = createAgentRuntime({ registry: carrierRegistry, fileService: carrierOpened.value.fileService, view: carrierOpened.value.view })
   const carrierStarted = await carrierRuntime.start()
-  record('M2 聚合工具面：25 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 六载体声明＝46，其中 24 个名字由载体服务（5 接管＋19 自有），端口仍为 0（v1.1-A 拆栏不新增工具名：小说 正文写口＋删／改两把＋提案三把；大纲写半边；构思这对；世界书写口；设定与资料六把（约束这对＋资料三把＋检索）；剧本三把。批次46A：章节删除／重命名进面。批次49：pinax_service_log_list 进原生面 +1）',
+  record('M2 聚合工具面：25 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 六载体声明＝47，其中 24 个名字由载体服务（5 接管＋19 自有），端口仍为 0（v1.1-A 拆栏不新增工具名：小说 正文写口＋删／改两把＋提案三把；大纲写半边；构思这对；世界书写口；设定与资料六把（约束这对＋资料三把＋检索）；剧本三把。批次46A：章节删除／重命名进面。批次49：pinax_service_log_list 进原生面 +1）',
     carrierStarted.ok === true
-      && carrierStarted.value.toolCount === 46
+      && carrierStarted.value.toolCount === 47
       && carrierStarted.value.carrierTools === 24
       && [...carrierRuntime.surfaceInfo().carrierToolNames].sort().join() === ['pinax_chapter_list', 'pinax_chapter_read', 'pinax_chapter_save', 'pinax_chapter_delete', 'pinax_chapter_rename', 'pinax_outline_read', 'pinax_outline_save', 'pinax_notes_list', 'pinax_notes_save', 'pinax_proposal_list', 'pinax_proposal_read', 'pinax_proposal_discard', 'pinax_worldbook_list', 'pinax_worldbook_read', 'pinax_worldbook_save', 'pinax_rule_list', 'pinax_rule_save', 'pinax_script_list', 'pinax_script_read', 'pinax_script_save', 'pinax_document_list', 'pinax_document_read', 'pinax_document_save', 'pinax_reference_search'].sort().join()
       && carrierStarted.value.portsOpened === 0,
@@ -325,8 +325,8 @@ try {
   const recordsRuntime = createAgentRuntime({ registry: recordsRegistry, fileService: recordsOpened.value.fileService, view: recordsView })
   const recordsStarted = await recordsRuntime.start()
   const comfyNames = recordsRuntime.listTools().map((tool) => tool.name).filter((name) => name.startsWith('comfy.'))
-  record('M4/M5 聚合工具面：25 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 五块记录载体各四把＋剧本三把＋comfy 桥两把＝52，其中 23 个名字由载体服务、2 把走外部 MCP（批次49 原生面 +1；批次58 提交闸收口 −1）',
-    recordsStarted.ok === true && recordsStarted.value.toolCount === 52 && recordsStarted.value.carrierTools === 23
+  record('M4/M5 聚合工具面：25 内核 ∪ 技能读取 1 ∪ 服务日志读取 1 ∪ 五块记录载体各四把＋剧本三把＋comfy 桥两把＝53，其中 23 个名字由载体服务、2 把走外部 MCP（批次49 原生面 +1；批次58 提交闸收口 −1）',
+    recordsStarted.ok === true && recordsStarted.value.toolCount === 53 && recordsStarted.value.carrierTools === 23
       && recordsStarted.value.externalServers === 1 && recordsStarted.value.externalFailures === 0
       && comfyNames.sort().join() === 'comfy.comfy_result,comfy.comfy_status',
     `toolCount=${recordsStarted.value?.toolCount} carrierTools=${recordsStarted.value?.carrierTools} external=${recordsStarted.value?.externalServers} comfy=${comfyNames.length}`)

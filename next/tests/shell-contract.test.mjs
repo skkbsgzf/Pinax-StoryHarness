@@ -308,7 +308,7 @@ test('空框架：不装任何插件，外壳可进入、可打开项目、可�
     // 这条断言守的是「运行时与载体启停是两回事」，不是「载体不能禁用」。
     assert.equal(view.value.runtime.disableable, false)
     assert.equal(view.value.runtime.ownsSlot, 'right')
-    assert.equal(view.value.runtime.tools.length, 27, '运行时工具面不依附于任何插件（内核 25 ＋ 技能读取 1 ＋ 服务日志读取 1）')
+    assert.equal(view.value.runtime.tools.length, 28, '运行时工具面不依附于任何插件（内核 25 ＋ 技能读取 1 ＋ 服务日志读取 1）')
     assert.equal(view.value.runtime.started, true, '项目没打开成功时运行时也必须活着')
 
     // 「问一句话」在 M1 的如实形态：通道通、预算通，但没有模型运行器 → 明确报缺，不编回答。
