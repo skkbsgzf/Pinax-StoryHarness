@@ -210,7 +210,10 @@ export function structuredConstraintsOf(entry) {
     const key = firstText(item.key, item.name, item.subject)
     if (!key) continue
     const value = Object.prototype.hasOwnProperty.call(item, 'value') ? item.value : null
-    constraints.push({ key, value })
+    // X0（guimi E3）：作用域缺省 'entry'——约束只描述本条目，gate 不跨条目比对；
+    // 跨条目对齐需显式 scope:'world'。防通用词 key（「例外」「条件」）在不同规则间误判成同一世界变量。
+    const scope = str(item.scope) === 'world' ? 'world' : 'entry'
+    constraints.push({ key, value, scope })
   }
   return constraints
 }
@@ -275,7 +278,7 @@ export function checkWorldRules(entries, options = {}) {
         }))
       }
       seenKeys.add(constraint.key)
-      constrained.push({ entry, slot, key: constraint.key, value: constraint.value, validity: entry.validity })
+      constrained.push({ entry, slot, key: constraint.key, value: constraint.value, scope: constraint.scope ?? 'entry', validity: entry.validity })
     }
   }
 
@@ -284,6 +287,9 @@ export function checkWorldRules(entries, options = {}) {
       const left = constrained[leftIndex]
       const right = constrained[rightIndex]
       if (left.key !== right.key) continue
+      // X0（guimi E3）：只有双方都显式声明 scope:'world' 才跨条目比对——
+      // 缺省 'entry' 的约束只描述本条目，两条不相干规则各自的「例外」不再被判成同一变量取值冲突。
+      if (left.scope !== 'world' || right.scope !== 'world') continue
       if (stableStringify(left.value) === stableStringify(right.value)) continue
       const overlap = intersectValidity(validityBounds(left.validity), validityBounds(right.validity))
       if (!overlap) continue

@@ -80,7 +80,7 @@ test('公开 API 与 rows.items schema：所有对象严格、全部行字段必
 test('保留默认 100–300 字分段：边界、短篇、多段均与 segmentText 完全一致', () => {
   for (const size of [1, 99, 100, 299, 300, 301, 620, 2000]) {
     const text = '字'.repeat(size)
-    const built = source(`正文/${size}.txt`, 7, text)
+    const built = source(`正文/长度${size}.txt`, 7, text)
     const original = segmentText(text)
     assert.equal(built.segments.length, original.length)
     if (size >= 100) assert.ok(built.segments.every((segment) => segment.chars >= 100 && segment.chars <= 300))

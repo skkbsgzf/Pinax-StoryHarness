@@ -173,7 +173,7 @@ test('导入既有稿：源＝目标、源是/曾是 Pinax 项目、目标不是
 /* —— 向导逐类导入（作者 2026-11-11「一种或几种都可以」）：script 类＋多源＋校验闸 ———————— */
 
 test('逐类导入：script 类（剧本一文件一篇目平铺进 剧本/），与单源 auto 识别都能认', () => {
-  const { base, source, target } = makeWorkspace()
+  const { base, target } = makeWorkspace()
   const scriptDir = path.join(base, '剧本稿')
   fs.mkdirSync(scriptDir, { recursive: true })
   fs.writeFileSync(path.join(scriptDir, '第一集-雨夜.md'), '第一集正文。\n', 'utf-8')

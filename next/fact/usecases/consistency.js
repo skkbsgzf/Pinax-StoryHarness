@@ -2,7 +2,10 @@
  * 分工：抽取链只负责「记下来」，错判/漏判的判定集中在这一次全文扫描里。
  * 复用 gate 的四类断言（锚点/规则/时间轴/知情），再补抽取态特有的一致性：
  *   关系目标悬空、知情来源悬空、同名跨层冲突、槽位堆积、别名歧义、伏笔未回收统计。
- * 确定性检查先行：可判定的直接给 conflict；不可判定的如实列 undecidable，不拿文本猜语义。 */
+ * 确定性检查先行：可判定的直接给 conflict；不可判定的如实列 undecidable，不拿文本猜语义。
+ * 消费方注意（X9）：conflicts/warnings/undecidable 三处断言对象用 `rule` 字段标规则，没有 `code`——
+ * 按 item.rule 分组，用 item.code 会得到全 undefined 的桶（guimi 轮实测踩过）。
+ * constraint 作用域：缺省条目内（同 key 只在同条目查重），跨条目比对需双方显式 scope:'world'（X0）。 */
 import { runFactGate, FACT_GATE_VERSION } from './gate.js'
 import { normalizeName, buildIndex } from './pipeline/extractionChain.js'
 

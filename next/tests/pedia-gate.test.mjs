@@ -127,30 +127,30 @@ test('U2 角色言行：锚点重复／通道冲突／口头禅未落地／被�
   assert.equal(assertions.find((item) => item.rule === 'CATCHPHRASE_UNANCHORED').details.character, '柯秒')
 })
 
-test('世界规则：结构化约束同 key 不同值 → error；自由文本进 undecidable，不拿文本猜冲突', () => {
+test('世界规则：结构化约束同 key 不同值 → error（仅限 scope:world）；自由文本进 undecidable，不拿文本猜冲突', () => {
   const ruleA = worldviewEntry({
     name: '钟表法则',
     slot: 'rules',
     validity: { from: 1, to: 5 },
-    constraint: { key: 'memory', value: 'stopped' }
+    constraint: { key: 'memory', value: 'stopped', scope: 'world' }
   })
   const ruleB = worldviewEntry({
     name: '记忆恢复',
     slot: 'rules',
     validity: { from: 3, to: 9 },
-    constraint: { key: 'memory', value: 'running' }
+    constraint: { key: 'memory', value: 'running', scope: 'world' }
   })
   const eventC = worldviewEntry({
     name: '钟声事件',
     slot: 'events',
     validity: { from: 2, to: 4 },
-    constraint: { key: 'memory', value: 'running' }
+    constraint: { key: 'memory', value: 'running', scope: 'world' }
   })
   const ruleD = worldviewEntry({
     name: '城中无夜',
     slot: 'rules',
     validity: { from: 6, to: 9 },
-    constraint: { key: 'memory', value: 'running' }
+    constraint: { key: 'memory', value: 'running', scope: 'world' }
   })
   const freeText = worldviewEntry({ name: '无人能离开钟楼', slot: 'rules' })
 
@@ -270,8 +270,8 @@ test('知情一致性：来源未解析／知情早于来源／重复记录 + �
 })
 
 test('汇总出口：conflicts 只收可判定 error，undecidable 单列，空集与脏输入如实记账', () => {
-  const ruleA = worldviewEntry({ name: '钟表法则', slot: 'rules', constraint: { key: 'memory', value: 'stopped' } })
-  const ruleB = worldviewEntry({ name: '记忆恢复', slot: 'rules', constraint: { key: 'memory', value: 'running' } })
+  const ruleA = worldviewEntry({ name: '钟表法则', slot: 'rules', constraint: { key: 'memory', value: 'stopped', scope: 'world' } })
+  const ruleB = worldviewEntry({ name: '记忆恢复', slot: 'rules', constraint: { key: 'memory', value: 'running', scope: 'world' } })
   const freeText = worldviewEntry({ name: '无人能离开钟楼', slot: 'rules' })
 
   const gate = runFactGate([ruleA, ruleB, freeText, null, 'not-an-entry'])
@@ -589,13 +589,19 @@ test('结构化约束让规则条目从 undecidable 转可判定：给了 constr
   // 只有自由文本：读不到结构化约束（gate 会把它列为 undecidable）
   assert.deepEqual(structuredConstraintsOf(base), [])
 
-  // 补上结构化约束：gate 立刻读得到，条目仍是合法 schema 条目
+  // 补上结构化约束：gate 立刻读得到，条目仍是合法 schema 条目；scope 缺省 'entry'
   const structured = { ...base, constraint: [{ key: '钟声次数', value: 12 }] }
-  assert.deepEqual(structuredConstraintsOf(structured), [{ key: '钟声次数', value: 12 }])
+  assert.deepEqual(structuredConstraintsOf(structured), [{ key: '钟声次数', value: 12, scope: 'entry' }])
   assert.equal(validateFactEntry(structured).ok, true, '带 constraint 的条目仍是合法 fact 条目')
 
+  // 显式 scope:'world' 原样透传（跨条目比对由声明者负责）
+  assert.deepEqual(
+    structuredConstraintsOf({ ...base, constraint: [{ key: '封印期限', value: 7, scope: 'world' }] }),
+    [{ key: '封印期限', value: 7, scope: 'world' }]
+  )
+
   // next.constraint 也认（旧写法/宿主注入）
-  assert.deepEqual(structuredConstraintsOf({ ...base, next: { constraint: { key: '封印期限', value: 7 } } }), [{ key: '封印期限', value: 7 }])
+  assert.deepEqual(structuredConstraintsOf({ ...base, next: { constraint: { key: '封印期限', value: 7 } } }), [{ key: '封印期限', value: 7, scope: 'entry' }])
 
   // 缺 key 的约束不算结构化（不猜它约束什么）
   assert.deepEqual(structuredConstraintsOf({ ...base, constraint: [{ value: 12 }] }), [])
@@ -617,7 +623,7 @@ test('抽取链：settings 给了 constraints 就落进条目 constraint，不�
     domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
   })
   const rule = withConstraints.entries.find((entry) => entry.name === '钟楼规则')
-  assert.deepEqual(rule.constraint, [{ key: '钟声次数', value: '12' }], '模型给的约束原样落进条目')
+  assert.deepEqual(rule.constraint, [{ key: '钟声次数', value: '12', scope: 'entry' }], '模型给的约束原样落进条目（scope 缺省 entry）')
 
   const without = compileExtractionEntries({
     sources: [built],
@@ -626,4 +632,73 @@ test('抽取链：settings 给了 constraints 就落进条目 constraint，不�
   })
   const plain = without.entries.find((entry) => entry.name === '钟楼规则2')
   assert.equal(plain.constraint, undefined, '不给就不带该字段（那条仍进 undecidable，如实记账）')
+})
+
+/* ---------- X0（guimi E3）：constraint 作用域——缺省条目内，跨条目需显式 world ---------- */
+
+test('X0：缺省（无 scope）的同 key 异值不再跨条目判冲突；显式 world 才判', async () => {
+  const { checkWorldRules } = await import('../fact/usecases/gate.js')
+  const legacyA = worldviewEntry({ name: '等价交换原则', slot: 'rules', constraint: { key: '例外', value: '不接受无条件帮忙' } })
+  const legacyB = worldviewEntry({ name: '行动限制', slot: 'rules', constraint: { key: '例外', value: '须通知蒙巴顿警官' } })
+  // guimi 实测的原始误报形状：两条不相干规则各自用「例外」——缺省作用域下不再比对
+  const legacy = checkWorldRules([legacyA, legacyB])
+  assert.equal(legacy.assertions.filter((item) => item.rule === 'RULE_RULE_CONFLICT').length, 0, 'legacy 误报已消解')
+
+  const worldA = worldviewEntry({ name: '等价交换原则', slot: 'rules', constraint: { key: '例外', value: '不接受无条件帮忙', scope: 'world' } })
+  const worldB = worldviewEntry({ name: '行动限制', slot: 'rules', constraint: { key: '例外', value: '须通知蒙巴顿警官', scope: 'world' } })
+  const world = checkWorldRules([worldA, worldB])
+  assert.equal(world.assertions.filter((item) => item.rule === 'RULE_RULE_CONFLICT').length, 1, '显式 world 才跨条目比对')
+
+  // 半声明（一方 world 一方缺省）也不比对——对齐是双方承诺
+  const mixed = checkWorldRules([worldA, legacyB])
+  assert.equal(mixed.assertions.filter((item) => item.rule === 'RULE_RULE_CONFLICT').length, 0)
+})
+
+test('X0：scope 同条目内的重复 key 仍走 RULE_CONSTRAINT_DUPLICATE（与作用域无关）', async () => {
+  const { checkWorldRules } = await import('../fact/usecases/gate.js')
+  const entry = worldviewEntry({
+    name: '钟表法则', slot: 'rules',
+    constraint: [{ key: '钟声', value: 12, scope: 'world' }, { key: '钟声', value: 6, scope: 'entry' }]
+  })
+  const { assertions } = checkWorldRules([entry])
+  assert.equal(assertions.filter((item) => item.rule === 'RULE_CONSTRAINT_DUPLICATE').length, 1, '条目内同 key 重复照旧报')
+  assert.equal(assertions.filter((item) => item.rule === 'RULE_RULE_CONFLICT').length, 0, '单条目不产生跨条目冲突')
+})
+
+test('X4：constraints.value 接受联合类型（number/boolean/null/字符串原样），对象数组仍拒', async () => {
+  const { structuredConstraintsOf } = await import('../fact/usecases/gate.js')
+  const { buildExtractionSource, compileExtractionEntries } = await import('../fact/usecases/pipeline/extractionChain.js')
+  const entry = worldviewEntry({
+    name: '钟表法则', slot: 'rules',
+    constraint: [{ key: '钟声次数', value: 12 }, { key: '封印', value: true }, { key: '遗言', value: null }, { key: '口令', value: 'opened' }]
+  })
+  assert.deepEqual(
+    structuredConstraintsOf(entry).map((item) => item.value),
+    [12, true, null, 'opened'],
+    '四种标量都进约束'
+  )
+
+  const built = buildExtractionSource({ id: '正文/001.txt', chapterNo: 1, text: '甲'.repeat(620) })
+  const segment = built.segments[0]
+  const result = compileExtractionEntries({
+    sources: [built],
+    rows: [{
+      segmentId: segment.id, who: [], when: { story_time: '', timeline: '未明示' }, where: '',
+      events: [], notes: '', characters: [],
+      settings: [{ name: '钟楼规则', slot: 'rules', definition: '钟楼每夜多响一声。', aliases: [], constraints: [{ key: '钟声次数', value: 12 }] }]
+    }],
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+  })
+  assert.deepEqual(result.entries.find((item) => item.name === '钟楼规则').constraint, [{ key: '钟声次数', value: 12, scope: 'entry' }], '数字 value 直接过编译（不再逼写 "12"）')
+
+  const bad = buildExtractionSource({ id: '正文/001.txt', chapterNo: 1, text: '乙'.repeat(620) })
+  assert.throws(() => compileExtractionEntries({
+    sources: [bad],
+    rows: [{
+      segmentId: bad.segments[0].id, who: [], when: { story_time: '', timeline: '未明示' }, where: '',
+      events: [], notes: '', characters: [],
+      settings: [{ name: '钟楼规则', slot: 'rules', definition: 'x', aliases: [], constraints: [{ key: 'k', value: { nested: true } }] }]
+    }],
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+  }), (error) => error.code === 'INVALID_EXTRACTION', '容器类型在联合里被明确拒（不支持分支深校验）')
 })
