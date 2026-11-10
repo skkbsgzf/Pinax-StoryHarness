@@ -69,12 +69,23 @@ export const EXTRACTION_ROW_SCHEMA = freezeTree(objectSchema({
   },
   settings: {
     type: 'array',
+    // 只 name/slot/definition 必填：constraints 是可选补强（给了 gate 才能机判，不给不判失败）。
     items: objectSchema({
       name: nonempty,
       slot: { type: 'string', enum: [...WORLDVIEW_SLOT_NAMES] },
       definition: nonempty,
-      aliases: strings
-    })
+      aliases: strings,
+      /**
+       * 结构化约束（可选）：rules／events 槽位的条目给了就能被 gate 机判（否则进 undecidable）。
+       * 形状 [{key, value}]——key 是「约束的是什么」（如「钟声次数」「封印期限」），
+       * value 是约束值。行 schema 只认字符串（校验器没有联合类型），
+       * 数字/布尔请写成 "12" / "true"——落库后由 gate 消费侧按需解释。
+       */
+      constraints: {
+        type: 'array',
+        items: objectSchema({ key: nonempty, value: { type: 'string' } }, ['key', 'value'])
+      }
+    }, ['name', 'slot', 'definition'])
   },
   /** 一轮里一并记录的关系/知情/伏笔：都是可选，模型愿意给就给，不给不判失败。 */
   relations: {
@@ -403,8 +414,29 @@ function compileSetting(records, context, warnings) {
   if (entry.definitions.length > 1) {
     warnings.push({ code: 'DEFINITION_VARIANTS', entryId: entry.id, name, slot, message: '同名设定的定义存在差异，全部保留，未判定覆盖或矛盾' })
   }
+  // 结构化约束（可选）：模型给了就落进 entry.constraint，使 gate 能机判这条规则；
+  // 不给就保持自由文本（那条会进 undecidable，如实记账——不猜语义）。
+  const constraints = collectConstraints(records)
+  if (constraints.length) entry.constraint = constraints
   // rank 并非必填；不把出现次序伪装为等级事实。真实 schema 会给缺 rank 告警。
   return entry
+}
+
+/**
+ * 汇总一组同名设定记录里的结构化约束：按 key 去重（同 key 取第一条，冲突如实告警）。
+ * 形状对齐 gate 的 structuredConstraintsOf：`{key, value}`。
+ */
+function collectConstraints(records) {
+  const byKey = new Map()
+  for (const { item } of records) {
+    for (const raw of Array.isArray(item?.constraints) ? item.constraints : []) {
+      if (!raw || typeof raw !== 'object') continue
+      const key = String(raw.key ?? '').trim()
+      if (!key || byKey.has(key)) continue
+      byKey.set(key, { key, value: Object.prototype.hasOwnProperty.call(raw, 'value') ? raw.value : null })
+    }
+  }
+  return [...byKey.values()]
 }
 
 function warnAliases(entries, warnings) {

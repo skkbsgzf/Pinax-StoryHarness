@@ -286,3 +286,66 @@ test('roundtrip：20 拍会话 → 投影 → P2a extract 拆书 → 主干还�
   assert.equal(foreshadowRecovered, openTotal, '伏笔 open 数还原')
   assert.ok(alternativeRecovered < altTotal, '未选分支如实记为损失（不静默冒充还原）')
 })
+
+/* ---------- 5) P-WIRE：pov/goal 贯穿投影 → chapterize 按视角分章 ---------- */
+
+test('P-WIRE：事件 pov/goal 落进节点，chapterize 按「视角∷目标」分章（多视角重演可分段）', async () => {
+  const { chapterize } = await import('../fact/usecases/render/chapterize.js')
+  const events = [
+    { type: 'settle', seq: 1, round: 1, text: '克莱恩在钟楼听见脚步', source: '必然', pov: '克莱恩', goal: '查清钟声' },
+    { type: 'settle', seq: 2, round: 2, text: '克莱恩跟上那道影子', source: '命运', pov: '克莱恩', goal: '查清钟声' },
+    { type: 'settle', seq: 3, round: 3, text: '奥黛丽在舞会上试探', source: '戏剧', pov: '奥黛丽', goal: '找出内鬼' },
+    { type: 'settle', seq: 4, round: 4, text: '奥黛丽收网', source: '必然', pov: '奥黛丽', goal: '找出内鬼' }
+  ]
+  const { nodes } = projectOutline(events, { domain: DOMAIN })
+  assert.deepEqual(nodes.map((node) => node.pov), ['克莱恩', '克莱恩', '奥黛丽', '奥黛丽'])
+  assert.deepEqual(nodes.map((node) => node.goal), ['查清钟声', '查清钟声', '找出内鬼', '找出内鬼'])
+
+  const grouped = chapterize({ nodes }, { maxBeatsPerChapter: 10 })
+  assert.equal(grouped.chapters.length, 2, '换了视角就该另起一章')
+  assert.equal(grouped.chapters[0].pov, '克莱恩')
+  assert.equal(grouped.chapters[0].goal, '查清钟声')
+  assert.equal(grouped.chapters[0].beatCount, 2)
+  assert.equal(grouped.chapters[1].pov, '奥黛丽')
+  assert.equal(grouped.chapters[1].beatCount, 2)
+})
+
+test('P-WIRE：缺 pov 标记时退回 domain 分组（不伪造视角）', () => {
+  const events = [
+    { type: 'settle', seq: 1, round: 1, text: '无视角标记的一拍', source: '必然' },
+    { type: 'settle', seq: 2, round: 2, text: '另一拍', source: '命运' }
+  ]
+  const { nodes } = projectOutline(events, { domain: DOMAIN })
+  assert.ok(nodes.every((node) => node.pov === undefined), '没有就留空，不编一个视角名')
+  assert.ok(nodes.every((node) => node.goal === undefined))
+})
+
+test('P-WIRE：settle 落的事件带 pov（多视角重演的事件流基础）', async () => {
+  const { openDeduceSession } = await import('../fact/usecases/deduce/opening.js')
+  const { settleChoice, settleInject } = await import('../fact/usecases/deduce/settle.js')
+  const { FACT_SCHEMA } = await import('../fact/domain/vocabulary.js')
+  const { stableEntryId } = await import('../fact/domain/stableId.js')
+  const worldview = {
+    schema: FACT_SCHEMA,
+    id: stableEntryId({ layer: 'worldview', domain: DOMAIN, slot: 'locations', name: '旧钟楼' }),
+    layer: 'worldview', name: '旧钟楼', domain: DOMAIN, slot: 'locations', status: 'adopted',
+    definition: '钟楼。',
+    provenance: { mode: 'author', book: DOMAIN, book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'test/1' }
+  }
+  const person = {
+    schema: FACT_SCHEMA,
+    id: stableEntryId({ layer: 'character', domain: DOMAIN, slot: '', name: POV }),
+    layer: 'character', name: POV, domain: DOMAIN, status: 'adopted',
+    provenance: { mode: 'author', book: DOMAIN, book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'test/1' },
+    fingerprint: { vec: null, metrics: {} }
+  }
+  const { state } = openDeduceSession({ entries: [worldview, person], pov: POV })
+  state.round = 1
+  settleChoice({ state, domain: DOMAIN, candidate: { text: '听见脚步', source: '必然', goal: '查清钟声', refs: ['旧钟楼'] } })
+  settleInject({ state, domain: DOMAIN, name: '深夜来客', definition: '门口出现陌生人' })
+  const settles = state.log.filter((row) => row.kind === 'settle')
+  assert.equal(settles.length, 2)
+  assert.ok(settles.every((row) => row.pov === POV), '每拍都要带视角，M2 投影才有东西可用')
+  assert.equal(settles[0].goal, '查清钟声', '显式目标原样留档')
+  assert.equal(settles[1].goal, undefined, '不带目标就留空，不猜')
+})

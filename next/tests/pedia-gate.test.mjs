@@ -565,3 +565,65 @@ test('round-trip 保真：原文→分段→抽取→hub 条目→convert 反向
   assert.ok(broken.anchors.missing.length > 0, '丢人物即丢锚点，比对必须发现')
   assert.ok(broken.relations.missing.some((pair) => pair.startsWith('柯秒→')))
 })
+
+/* ---------- 小项：undecidable → 可判定（给规则条目补结构化 constraint） ---------- */
+
+test('结构化约束让规则条目从 undecidable 转可判定：给了 constraint 就不再列进不可判定清单', async () => {
+  const { structuredConstraintsOf } = await import('../fact/usecases/gate.js')
+  const { validateFactEntry } = await import('../fact/domain/schema.js')
+  const { FACT_SCHEMA } = await import('../fact/domain/vocabulary.js')
+  const { stableEntryId } = await import('../fact/domain/stableId.js')
+
+  const base = {
+    schema: FACT_SCHEMA,
+    id: stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'rules', name: '钟楼规则' }),
+    layer: 'worldview',
+    name: '钟楼规则',
+    domain: '停摆之城',
+    slot: 'rules',
+    status: 'adopted',
+    definition: '钟楼每夜多响一声。',
+    provenance: { mode: 'author', book: '停摆之城', book_id: 'abcd1234', chapters: [], scenes: [], extractor: 'test/1' }
+  }
+
+  // 只有自由文本：读不到结构化约束（gate 会把它列为 undecidable）
+  assert.deepEqual(structuredConstraintsOf(base), [])
+
+  // 补上结构化约束：gate 立刻读得到，条目仍是合法 schema 条目
+  const structured = { ...base, constraint: [{ key: '钟声次数', value: 12 }] }
+  assert.deepEqual(structuredConstraintsOf(structured), [{ key: '钟声次数', value: 12 }])
+  assert.equal(validateFactEntry(structured).ok, true, '带 constraint 的条目仍是合法 fact 条目')
+
+  // next.constraint 也认（旧写法/宿主注入）
+  assert.deepEqual(structuredConstraintsOf({ ...base, next: { constraint: { key: '封印期限', value: 7 } } }), [{ key: '封印期限', value: 7 }])
+
+  // 缺 key 的约束不算结构化（不猜它约束什么）
+  assert.deepEqual(structuredConstraintsOf({ ...base, constraint: [{ value: 12 }] }), [])
+})
+
+test('抽取链：settings 给了 constraints 就落进条目 constraint，不给则不带该字段', async () => {
+  const { buildExtractionSource, compileExtractionEntries } = await import('../fact/usecases/pipeline/extractionChain.js')
+  const built = buildExtractionSource({ id: '正文/001.txt', chapterNo: 1, text: '甲'.repeat(620) })
+  const segment = built.segments[0]
+  const rowBase = {
+    segmentId: segment.id, who: [], when: { story_time: '', timeline: '未明示' }, where: '',
+    events: [], notes: '', characters: []
+  }
+
+  // compile 在行校验失败时抛错（不静默返回半成品），所以正常路径直接断言产出。
+  const withConstraints = compileExtractionEntries({
+    sources: [built],
+    rows: [{ ...rowBase, settings: [{ name: '钟楼规则', slot: 'rules', definition: '钟楼每夜多响一声。', aliases: [], constraints: [{ key: '钟声次数', value: '12' }] }] }],
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+  })
+  const rule = withConstraints.entries.find((entry) => entry.name === '钟楼规则')
+  assert.deepEqual(rule.constraint, [{ key: '钟声次数', value: '12' }], '模型给的约束原样落进条目')
+
+  const without = compileExtractionEntries({
+    sources: [built],
+    rows: [{ ...rowBase, settings: [{ name: '钟楼规则2', slot: 'rules', definition: '另一条规则。', aliases: [] }] }],
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+  })
+  const plain = without.entries.find((entry) => entry.name === '钟楼规则2')
+  assert.equal(plain.constraint, undefined, '不给就不带该字段（那条仍进 undecidable，如实记账）')
+})

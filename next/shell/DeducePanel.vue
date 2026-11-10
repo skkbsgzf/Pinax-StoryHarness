@@ -13,6 +13,8 @@ import { openDeduceSession } from '../fact/usecases/deduce/opening.js'
 import { presentTurn, applyDirectorAction } from '../fact/usecases/deduce/turn.js'
 import { settleChoice, settleInject, settleHypothesis } from '../fact/usecases/deduce/settle.js'
 import { createSessionStore } from '../fact/usecases/deduce/sessionStore.js'
+import { addKnownExtra } from '../fact/usecases/deduce/sessionState.js'
+import { buildWorldbookPatch } from '../fact/usecases/deduce/patchChannel.js'
 
 /**
  * 推演面板（M1-c · 第一视角）：AppNext 直接挂载的一枚中栏面板，不走新页签、不注册新槽位。
@@ -75,6 +77,22 @@ const known = ref([])
 const relationRows = computed(() => povRelations(frozenEntries.value, session.value?.pov ?? '', known.value))
 const receipts = ref([])
 const snapshot = ref(null)
+/** 本拍局面上下文的知情保真度（P-WIRE）：ledger＝按账本裁；world＝账本为空、降级已记账。 */
+const sceneContextInfo = ref(null)
+/** 知情降级只报一次，别每拍刷一条同样的回执。 */
+const knownDegraded = ref(false)
+/** 威胁前线（P-M4）：从世界书 rules 预埋模板立起；读数与待接世界动作一并透出。 */
+const fronts = computed(() => (state.value?.fronts ?? []).filter((front) => front.status === 'active'))
+const tensionInfo = ref({ level: 'low', heat: 0, active: 0, filled: [] })
+const triggers = computed(() => tensionInfo.value.filled ?? [])
+/** 悬置伏笔（P-WIRE）：plot 里 hypothesis+open 的条目——推演张力来自上一拍没解决的事。 */
+const openHooks = computed(() => sceneContextInfo.value?.openHypotheses ?? [])
+/** P-M5：收束时编出的世界书补丁（proposed，待作者采纳）。 */
+const lastPatch = ref(null)
+/** P-M5：重演源（上一局事件流作固定端点）。 */
+const replaySource = ref(null)
+/** P-M5：重演时选的下一个视角。 */
+const replayPov = ref('')
 
 let store = null
 let seq = 1
@@ -98,7 +116,13 @@ async function openSession() {
     return
   }
   try {
-    const opened = openDeduceSession({ entries: frozenEntries.value, pov: povChoice.value })
+    const opened = openDeduceSession({
+      entries: frozenEntries.value,
+      pov: povChoice.value,
+      // P-M5：有重演源时把它作为固定端点带进开局（端点固定、路径自由）。
+      priorEvents: replaySource.value?.priorEvents ?? [],
+      lineage: replaySource.value ? { parent: replaySource.value.sourceRunId, atSeq: replaySource.value.sourceRound } : null
+    })
     session.value = opened.session
     state.value = opened.state
     runId = opened.session.runId
@@ -111,6 +135,9 @@ async function openSession() {
     snapshot.value = null
     candidates.value = []
     sceneCard.value = null
+    sceneContextInfo.value = null
+    knownDegraded.value = false
+    tensionInfo.value = { level: 'low', heat: 0, active: 0, filled: [] }
     record('opening', { pov: opened.session.pov, worldHash: opened.session.worldHash })
     pushReceipt('info', `开局：世界书已冻结（${worldviewEntries.value.length} 条设定），主视角「${opened.session.pov}」。`, { runId })
     phase.value = 'playing'
@@ -133,6 +160,16 @@ async function refreshTurn() {
     })
     sceneCard.value = turn.sceneCard
     candidates.value = turn.candidates
+    sceneContextInfo.value = turn.sceneContext ?? null
+    // P-M4：张力读数与待接世界动作每拍刷新（导演面板与局面卡读同一份）。
+    if (turn.tension) tensionInfo.value = turn.tension
+    // 知情降级如实上抛一次（每局只报第一次）：账本为空不是错误，但作者要知道视角裁剪没生效。
+    const fidelity = turn.sceneContext?.knowledgeFidelity
+    if (fidelity === 'world' && !knownDegraded.value) {
+      knownDegraded.value = true
+      pushReceipt('warn', turn.sceneContext?.warnings?.find((item) => item.code === 'KNOWLEDGE_LEDGER_EMPTY')?.message
+        ?? '主视角没有知情账本：本局按世界级可见降级，第一视角裁剪未生效。')
+    }
     // 候选明细进事件流（M 系接线批）：M2 投影器吃的是 candidates 数组，
     // 只记 {round,count} 的旧形状喂不饱章纲——明细与来源徽章一并留档，回放/投影同源。
     record('candidates', { round: state.value.round, count: turn.candidates.length, candidates: turn.candidates })
@@ -152,6 +189,9 @@ async function choose(option) {
   for (const name of result.knowledgeDelta.gained) {
     if (name && !known.value.includes(name)) known.value = [...known.value, name]
   }
+  // P-WIRE：知情增量同时落进会话状态——下一拍的可见域从 state.knownExtra 取，
+  // 两处同源才不会「情报面板知道、局面卡不知道」。
+  addKnownExtra(state.value, result.knowledgeDelta.gained)
   record('settle', { text: candidate.text, source: candidate.source })
   record('knowledge-delta', { gained: result.knowledgeDelta.gained })
   pushReceipt('info', `第 ${state.value.round} 拍 · ${candidate.badge} ${candidate.source}：${candidate.text}`, { decidedBy: result.entry.provenance.decidedBy })
@@ -191,6 +231,7 @@ async function injectBeat() {
   record('director-inject', { name })
   record('settle', { text: name, source: '导演注入' })
   if (!known.value.includes(name)) known.value = [...known.value, name]
+  addKnownExtra(state.value, [name])
   pushReceipt('info', `导演注入：${name} —— ${definition || '导演注入'}`)
   injectName.value = ''
   injectDefinition.value = ''
@@ -203,8 +244,45 @@ function finish(reason) {
   record('session-end', { reason })
   const events = store?.listEvents(runId).events ?? []
   snapshot.value = archiveSnapshot({ state: state.value, session: session.value, reason, events })
+  // P-M5 补丁通道：收束时把已确认的拍编成世界书补丁（一律 proposed，作者显式采纳）。
+  // 中断也生成——中断前发生过的事同样是事实；只是不给「已收束」的措辞。
+  try {
+    const patch = buildWorldbookPatch({
+      events,
+      domain: props.worldName || '推演',
+      bookId: session.value?.worldHash?.slice(0, 8) ?? '',
+      existingIds: (props.entries ?? []).map((entry) => String(entry?.id ?? ''))
+    })
+    lastPatch.value = patch
+    if (patch.patches.length) {
+      pushReceipt('info', `本局可回写 ${patch.patches.length} 条已确认事实（proposed，待你采纳）。`, { patches: patch.patches.length })
+    } else if (patch.notes.length) {
+      pushReceipt('info', patch.notes.join('；'))
+    }
+  } catch (err) {
+    lastPatch.value = null
+    pushReceipt('warn', `补丁编不出来（本局留档不受影响）：${err?.message ?? String(err)}`)
+  }
   pushReceipt('info', `${reason === 'interrupt' ? '中断' : '收束'}：本局已留档（第 ${state.value.round} 拍，${snapshot.value.eventCount} 条事件）。`, snapshot.value)
   phase.value = 'archived'
+}
+
+/**
+ * P-M5 换视角重演：用本局事件流作固定端点，换一个视角重开一局。
+ * 端点固定、路径自由——新局只钉住「上一次已确认发生了什么」，不钉住怎么到达。
+ * 实现上不绕路：直接把 priorEvents 交给 openSession 走同一条开局链。
+ */
+function replayAs(otherPov) {
+  const events = store?.listEvents(runId).events ?? []
+  if (!events.length || !otherPov) return
+  // 先抓快照：reset 会清掉 runId 与 store。
+  const source = { priorEvents: [...events], sourceRunId: runId, sourceRound: snapshot.value?.round ?? 0 }
+  const receiptsBefore = receipts.value
+  reset()
+  replaySource.value = source
+  povChoice.value = otherPov
+  receipts.value = receiptsBefore
+  pushReceipt('info', `重演准备：视角「${otherPov}」，把上一局 ${events.filter((event) => event.type === 'settle').length} 拍作为固定端点。点「冻结世界书并开局」开始。`)
 }
 
 function reset() {
@@ -217,6 +295,10 @@ function reset() {
   known.value = []
   receipts.value = []
   snapshot.value = null
+  sceneContextInfo.value = null
+  knownDegraded.value = false
+  tensionInfo.value = { level: 'low', heat: 0, active: 0, filled: [] }
+  lastPatch.value = null
   error.value = ''
   injectName.value = ''
   injectDefinition.value = ''
@@ -224,6 +306,32 @@ function reset() {
   seq = 1
   seed = 1
   runId = ''
+}
+
+async function fireFront(front) {
+  const result = applyDirectorAction({ state: state.value, action: 'fire', frontId: front.id })
+  if (!result.ok) {
+    error.value = result.message ?? '点火失败'
+    return
+  }
+  record('fronts-advance', { frontId: front.id, value: result.value, filled: result.filled, source: 'director' })
+  pushReceipt(result.triggered ? 'warn' : 'info', `导演点火：${front.name} → ${result.value}/${front.clocks.impending.max}${result.triggered ? '（已触发）' : ''}`)
+  if (result.triggered) await refreshTurn()
+}
+
+function touchFrontAction(front) {
+  const result = applyDirectorAction({ state: state.value, action: 'touch', frontId: front.id })
+  if (result.ok) pushReceipt('info', `已标记处理：${front.name}（挂机计数归零）`)
+}
+
+async function resolveFrontAction(front) {
+  const result = applyDirectorAction({ state: state.value, action: 'resolve', frontId: front.id, note: '导演结线' })
+  if (!result.ok) {
+    error.value = '结线失败'
+    return
+  }
+  pushReceipt('info', `结掉前线：${front.name}（这条不再计时）`)
+  await refreshTurn()
 }
 
 /** 已知情报／关系目标点开＝跳世界书条目视图（复用外壳既有的 pinaxOpenKnowledge 蓝链落点）。 */
@@ -289,6 +397,16 @@ function jumpTo(name) {
             <span class="nx-deduce-field-label">{{ field.label }}</span>
             <span class="nx-deduce-field-value">{{ field.value }}</span>
           </div>
+          <p
+            v-if="sceneContextInfo"
+            class="nx-deduce-fidelity"
+            :class="{ 'is-degraded': sceneContextInfo.knowledgeFidelity !== 'ledger' }"
+            data-test="deduce-fidelity"
+          >
+            {{ sceneContextInfo.knowledgeFidelity === 'ledger'
+              ? `第一视角 · 已知 ${sceneContextInfo.known.length} 项`
+              : '知情账本为空 · 本局按世界级可见降级' }}
+          </p>
         </div>
 
         <p class="nx-deduce-legend" data-test="deduce-badge-legend">
@@ -357,6 +475,31 @@ function jumpTo(name) {
           <p v-if="!relationRows.length" class="nx-deduce-hint">本视角暂无可见关系。</p>
         </section>
 
+        <section v-if="openHooks.length" class="nx-deduce-panel" data-test="deduce-open-hooks">
+          <h3 class="nx-deduce-panel-title">悬置伏笔 · {{ openHooks.length }}</h3>
+          <ul class="nx-deduce-list">
+            <li v-for="item in openHooks" :key="item.id" class="nx-deduce-hook">{{ item.definition || item.name }}</li>
+          </ul>
+        </section>
+
+        <section v-if="fronts.length" class="nx-deduce-panel" data-test="deduce-fronts">
+          <h3 class="nx-deduce-panel-title">威胁前线 · {{ tensionInfo.level }}</h3>
+          <ul class="nx-deduce-list">
+            <li v-for="front in fronts" :key="front.id" class="nx-deduce-front" :data-status="front.status">
+              <span class="nx-deduce-front-name">{{ front.name }}</span>
+              <span class="nx-deduce-front-clock">{{ front.clocks.impending.value }}/{{ front.clocks.impending.max }}{{ front.clocks.impending.filled ? ' · 已触发' : '' }}</span>
+              <span v-if="mode === 'director'" class="nx-deduce-front-actions">
+                <button type="button" class="control-quiet" :data-test="`deduce-front-fire-${front.id}`" @click="fireFront(front)">点燃</button>
+                <button type="button" class="control-quiet" :data-test="`deduce-front-touch-${front.id}`" @click="touchFrontAction(front)">已处理</button>
+                <button type="button" class="control-quiet" :data-test="`deduce-front-resolve-${front.id}`" @click="resolveFrontAction(front)">结掉</button>
+              </span>
+            </li>
+          </ul>
+          <p v-for="trigger in triggers" :key="trigger.id" class="nx-deduce-trigger" data-test="deduce-trigger">
+            世界动作待接：{{ trigger.trigger || trigger.name }}
+          </p>
+        </section>
+
         <section class="nx-deduce-panel" data-test="deduce-receipts">
           <h3 class="nx-deduce-panel-title">本局回执</h3>
           <ul class="nx-deduce-list nx-deduce-receipts">
@@ -367,7 +510,7 @@ function jumpTo(name) {
       </aside>
     </div>
 
-    <!-- 收束／中断：快照留档 -->
+    <!-- 收束／中断：快照留档 ＋ 补丁回写 ＋ 换视角重演 -->
     <div v-else class="nx-deduce-archived" data-test="deduce-archived">
       <p class="nx-deduce-lead">{{ snapshot?.reason === 'interrupt' ? '本局已中断' : '本局已收束' }}，快照留档如下。</p>
       <dl class="nx-deduce-archive-grid">
@@ -377,6 +520,37 @@ function jumpTo(name) {
         <div><dt>事件数</dt><dd>{{ snapshot?.eventCount }}</dd></div>
         <div><dt>状态指纹</dt><dd>{{ snapshot?.stateHash }}</dd></div>
       </dl>
+
+      <section v-if="lastPatch" class="nx-deduce-panel" data-test="deduce-patch">
+        <h3 class="nx-deduce-panel-title">世界书补丁 · {{ lastPatch.patches.length }}</h3>
+        <p class="nx-deduce-hint">只收已确认事实，一律 proposed——作者采纳后才进世界书。</p>
+        <ul class="nx-deduce-list">
+          <li v-for="item in lastPatch.patches.slice(0, 8)" :key="item.id" class="nx-deduce-patch">
+            <span class="nx-deduce-patch-name">{{ item.name }}</span>
+            <span class="nx-deduce-patch-status">{{ item.status }}</span>
+          </li>
+        </ul>
+        <p v-if="lastPatch.notes.length" class="nx-deduce-hint">{{ lastPatch.notes.join('；') }}</p>
+      </section>
+
+      <section class="nx-deduce-panel" data-test="deduce-replay">
+        <h3 class="nx-deduce-panel-title">换视角重演</h3>
+        <p class="nx-deduce-hint">本局已确认的 {{ snapshot?.round }} 拍会成为固定端点：换视角重走同一时段，端点不动、路径自由。</p>
+        <div class="nx-deduce-setup-row">
+          <label class="nx-deduce-setup-label" for="deduce-replay-pov">下一局主视角</label>
+          <select id="deduce-replay-pov" v-model="replayPov" class="nx-deduce-select" data-test="deduce-replay-pov">
+            <option v-for="item in characters.filter((entry) => entry.name !== snapshot?.pov)" :key="item.name" :value="item.name">{{ item.name }}</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          class="control-primary nx-deduce-replay-go"
+          data-test="deduce-replay-go"
+          :disabled="!replayPov"
+          @click="replayAs(replayPov)"
+        >以「{{ replayPov || '…' }}」重演</button>
+      </section>
+
       <button type="button" class="control-primary nx-deduce-reopen" data-test="deduce-reopen" @click="reset">重新开局</button>
     </div>
 
@@ -464,6 +638,51 @@ function jumpTo(name) {
   font-size: var(--nx-fs-lg);
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+/* 知情保真度读数：跨两列贴在卡片底部——作者一眼看得出这一局是「按账本裁」还是「降级」。
+   降级用弱化文案而非警示色（不是错误，是数据不全）。 */
+.nx-deduce-fidelity {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-deduce-fidelity.is-degraded {
+  color: var(--text-muted);
+  font-style: italic;
+}
+/* 威胁前线行（P-M4）：名字＋时钟读数＋导演三动。已触发的行加左侧标记，
+   读起来像「这一条已经在动手了」，而不是又一条普通清单。 */
+.nx-deduce-front {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.nx-deduce-front[data-status='active'] .nx-deduce-front-clock {
+  color: var(--accent);
+}
+.nx-deduce-front-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.nx-deduce-front-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: var(--nx-fs-2xs);
+  color: var(--text-muted);
+}
+.nx-deduce-front-actions {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.nx-deduce-trigger {
+  margin: 6px 0 0;
+  font-size: var(--nx-fs-2xs);
+  color: var(--accent);
 }
 .nx-deduce-legend {
   display: flex;

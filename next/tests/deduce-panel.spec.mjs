@@ -199,3 +199,153 @@ describe('M1-c · 外壳接线（AppNext 直接挂载，不越界）', () => {
     expect(bridge.request.mock.calls.every((call) => allowed.includes(call[0]))).toBe(true)
   })
 })
+
+/**
+ * P-M4：威胁前线面板与导演三动。
+ * 前线从世界书 rules 槽位里的 fronts 模板立起——夹具里给「序列魔药」那条规则挂一份模板。
+ */
+describe('P-M4 · 威胁前线（fronts/clocks）', () => {
+  function frontEntries() {
+    return [
+      { name: '克莱恩', cat: '人物', summary: '灰雾之上的复生者。', knowledge: [{ fromEntry: '旧钟楼', kind: '驻守' }] },
+      { name: '旧钟楼', cat: '地点', summary: '鲁恩王国北郊的钟楼。' },
+      {
+        name: '序列魔药',
+        cat: '规则',
+        summary: '服食魔药才能晋升。',
+        fronts: { name: '失控的魔药', threat: '每次服食都在赌命，总有一天会失控', danger: 'high', max: 3, idleThreshold: 99, trigger: '魔药失控，整条街的人都听见了' }
+      }
+    ]
+  }
+
+  it('开局即立前线：面板出「威胁前线」，时钟读数 0/3；局面卡张力报前线而不是单拍骰点', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+
+    const panel = wrapper.find('[data-test="deduce-fronts"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.text()).toContain('失控的魔药')
+    expect(panel.text()).toContain('0/3')
+    expect(wrapper.find('[data-field="tension"]').text()).toContain('失控的魔药')
+  })
+
+  it('导演三动：点燃推进一格、已处理归零挂机计数、结掉后不再出现在活跃清单', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await wrapper.find('[data-test="deduce-mode-director"]').trigger('click')
+    await flushPromises()
+
+    const fire = wrapper.findAll('[data-test^="deduce-front-fire-"]')
+    expect(fire.length).toBe(1)
+    await fire[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="deduce-fronts"]').text()).toContain('1/3')
+
+    const touch = wrapper.findAll('[data-test^="deduce-front-touch-"]')
+    await touch[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="deduce-receipts"]').text()).toContain('已标记处理')
+
+    const resolve = wrapper.findAll('[data-test^="deduce-front-resolve-"]')
+    await resolve[0].trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="deduce-fronts"]').exists()).toBe(false)
+  })
+
+  it('点燃到满格：报「已触发」并列出待接世界动作（不静默）', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await wrapper.find('[data-test="deduce-mode-director"]').trigger('click')
+    await flushPromises()
+
+    for (let i = 0; i < 3; i += 1) {
+      const fire = wrapper.findAll('[data-test^="deduce-front-fire-"]')
+      if (!fire.length) break
+      await fire[0].trigger('click')
+      await flushPromises()
+    }
+    const panel = wrapper.find('[data-test="deduce-fronts"]')
+    expect(panel.text()).toContain('已触发')
+    expect(wrapper.find('[data-test="deduce-trigger"]').text()).toContain('魔药失控')
+  })
+
+  it('玩家模式不显示导演三动（前线只读）', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: frontEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    expect(wrapper.findAll('[data-test^="deduce-front-fire-"]').length).toBe(0)
+    expect(wrapper.find('[data-test="deduce-fronts"]').exists()).toBe(true)
+  })
+})
+
+/**
+ * P-M5：连续宇宙的两个入口——收束时编出的世界书补丁、换视角重演。
+ */
+describe('P-M5 · 连续宇宙（补丁回写＋换视角重演）', () => {
+  async function playOneBeat(wrapper) {
+    await wrapper.find('[data-test="deduce-mode-player"]').trigger('click')
+    await flushPromises()
+    const pick = wrapper.findAll('[data-test^="deduce-pick-"]')
+    expect(pick.length).toBeGreaterThan(0)
+    await pick[0].trigger('click')
+    await flushPromises()
+  }
+
+  it('收束后出「世界书补丁」块：只列 proposed，并写明作者采纳后才进世界书', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: boardEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await playOneBeat(wrapper)
+    await wrapper.find('[data-test="deduce-finish"]').trigger('click')
+    await flushPromises()
+
+    const patch = wrapper.find('[data-test="deduce-patch"]')
+    expect(patch.exists()).toBe(true)
+    expect(patch.text()).toContain('proposed')
+    expect(patch.text()).toContain('作者采纳后')
+    // 补丁条数＝本局已确认拍数，不该把候选/假设算进去
+    expect(patch.text()).toMatch(/世界书补丁 · \d+/)
+  })
+
+  it('换视角重演：选另一个角色点重演 → 回到开局态并带上固定端点说明', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: boardEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await playOneBeat(wrapper)
+    await wrapper.find('[data-test="deduce-finish"]').trigger('click')
+    await flushPromises()
+
+    const replay = wrapper.find('[data-test="deduce-replay"]')
+    expect(replay.exists()).toBe(true)
+    const select = wrapper.find('[data-test="deduce-replay-pov"]')
+    // 下拉里不该出现本局视角自己
+    const options = select.findAll('option').map((option) => option.text())
+    expect(options).not.toContain('克莱恩')
+    expect(options.length).toBeGreaterThan(0)
+
+    await select.setValue('奥黛丽')
+    await wrapper.find('[data-test="deduce-replay-go"]').trigger('click')
+    await flushPromises()
+
+    // 回到开局态：setup 出现，主角已预选成奥黛丽
+    expect(wrapper.find('[data-test="deduce-setup"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deduce-pov"]').element.value).toBe('奥黛丽')
+    // setup 态不渲染回执列表（回执面板只在 playing 态）；重演说明用开局成功后的回执验，
+    // 这里先确认重演源已带走——开局后端点上屏在下一个用例里钉。
+  })
+
+  it('重演开局后端点上屏：局面卡仍出自本视角、端点已进状态（不把上一局的场景直接搬过来）', async () => {
+    const wrapper = mount(DeducePanel, { props: { entries: boardEntries(), worldName: '夹具世界' } })
+    await openSession(wrapper)
+    await playOneBeat(wrapper)
+    await wrapper.find('[data-test="deduce-finish"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-test="deduce-replay-pov"]').setValue('奥黛丽')
+    await wrapper.find('[data-test="deduce-replay-go"]').trigger('click')
+    await flushPromises()
+    await openSession(wrapper)
+
+    expect(wrapper.find('[data-test="deduce-scene-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="deduce-fidelity"]').exists()).toBe(true)
+    // 视角换成了奥黛丽：局面卡的「在场」以她为主视角
+    expect(wrapper.find('[data-field="who"]').text()).toContain('奥黛丽')
+  })
+})

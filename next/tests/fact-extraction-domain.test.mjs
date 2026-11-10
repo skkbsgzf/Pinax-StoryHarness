@@ -203,8 +203,11 @@ test('全部字段必填且类型/枚举严格；嵌套数组不会静默筛掉�
   const valid = row(built.segments[0], {
     events: [{ who: '', channel: 'event', content: '城门关闭。' }], characters: [character()], settings: [setting()]
   })
-  const inspectObject = (targetOf, path) => {
-    for (const key of Object.keys(targetOf(valid))) {
+  const inspectObject = (targetOf, path, requiredKeys = null) => {
+    // requiredKeys 给定时只检这些键：settings[].constraints 是可选补强字段（给了 gate 才能机判，
+    // 不给不算失败），不该被「行里出现即必填」的老口径要求必填。其余对象仍按全键必填检。
+    const keys = requiredKeys ?? Object.keys(targetOf(valid))
+    for (const key of keys) {
       const missing = structuredClone(valid)
       delete targetOf(missing)[key]
       assertInvalid([missing], built.segments, `${path}${key}`)
@@ -217,7 +220,7 @@ test('全部字段必填且类型/枚举严格；嵌套数组不会静默筛掉�
   inspectObject((value) => value.when, 'when.')
   inspectObject((value) => value.events[0], 'events[0].')
   inspectObject((value) => value.characters[0], 'characters[0].')
-  inspectObject((value) => value.settings[0], 'settings[0].')
+  inspectObject((value) => value.settings[0], 'settings[0].', ['name', 'slot', 'definition'])
   for (const mutate of [
     (value) => { value.when.timeline = '过去' },
     (value) => { value.events[0].channel = 'see' },

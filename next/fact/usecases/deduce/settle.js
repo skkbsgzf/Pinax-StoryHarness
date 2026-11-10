@@ -3,6 +3,7 @@
 import { FACT_SCHEMA } from '../../domain/vocabulary.js'
 import { stableEntryId } from '../../domain/stableId.js'
 import { pushLog } from './sessionState.js'
+import { advanceFront } from './fronts.js'
 
 function trunc(text, n) {
   const s = String(text ?? '')
@@ -42,8 +43,20 @@ export function settleChoice({ state, domain, candidate, seedPrompt } = {}) {
   const entry = beatEntry({ state, domain, candidate, decidedBy })
   const gained = [...(candidate.refs ?? []), ...(seedPrompt ? [seedPrompt] : [])].filter((n) => n && n !== state.pov)
   const knowledgeDelta = { pov: state.pov, gained: [...new Set(gained)] }
-  pushLog(state, 'settle', { text: candidate.text, source: candidate.source, decidedBy })
+  // P-WIRE：事件流带 pov/goal——M2 投影器把它落进节点、M3 chapterize 才能按「视角∷目标」分章。
+  // 旧形状只有 text/source/decidedBy，多视角重演时所有拍都退回按 domain 分组＝分不出章。
+  pushLog(state, 'settle', { text: candidate.text, source: candidate.source, decidedBy, pov: state.pov, goal: goalOf(candidate) })
   return { entry, knowledgeDelta }
+}
+
+/**
+ * 拍的目标标记：只认候选显式给的 goal/objective。
+ * 不从 refs 猜——每拍引用不同实体，猜出来的目标每拍都变，chapterize 会按「视角∷目标」
+ * 一拍切一章（M3 的分章语义是「目标确立→转折/了结＝一章」，目标必须跨拍稳定）。
+ * 缺显式目标时留空，分章退回「同视角连续拍 ＋ 拍数上限」，等 M4 的目标弧来填。
+ */
+function goalOf(candidate) {
+  return String(candidate?.goal ?? candidate?.objective ?? '').trim()
 }
 
 /** 导演注入：author 事件直落（命运之笔之外的作者之笔）。 */
@@ -53,11 +66,12 @@ export function settleInject({ state, domain, name, definition }) {
   entry.name = `第${state.round}拍·${trunc(name, 18)}`
   entry.definition = definition ?? '导演注入'
   entry.provenance.source = '导演注入'
-  pushLog(state, 'settle', { text: entry.name, source: '导演注入', decidedBy: 'author' })
+  pushLog(state, 'settle', { text: entry.name, source: '导演注入', decidedBy: 'author', pov: state.pov })
   return { entry, knowledgeDelta: { pov: state.pov, gained: [name] } }
 }
 
-/** 命运受阻 → 假设轨（open 事件：留给后续拍/其他 POV 去解释——叠加微调的钩子）。 */
+/** 命运受阻 → 假设轨（open 事件：留给后续拍/其他 POV 去解释——叠加微调的钩子）。
+ * P-M4：检定受阻也是威胁前线的确定性推进源（世界趁你失手往前挪一步）。 */
 export function settleHypothesis({ state, domain, candidate }) {
   if (!candidate.trace || candidate.trace.success) return null
   const name = `第${state.round}拍·悬而未决`
@@ -76,6 +90,26 @@ export function settleHypothesis({ state, domain, candidate }) {
     },
     trace: candidate.trace
   }
-  pushLog(state, 'hypothesis', { text: candidate.text })
+  pushLog(state, 'hypothesis', { text: candidate.text, pov: state.pov })
+  // 受阻即推进：fronts 存在时给最紧的那条走一格（没有 fronts 就什么都不做，不凭空造压力）。
+  const advanced = advanceTightestFront(state, { round: state.round, source: 'fate-fail', note: '命运检定受阻' })
+  if (advanced) pushLog(state, 'fronts-advance', advanced)
   return entry
+}
+
+/** 推进当前最紧的一条 active front（按 impending 填充率取最大；全零取第一条）。 */
+function advanceTightestFront(state, options) {
+  const list = (Array.isArray(state.fronts) ? state.fronts : []).filter((item) => item?.status === 'active')
+  if (!list.length) return null
+  let target = list[0]
+  let ratio = -1
+  for (const front of list) {
+    const clock = front.clocks?.impending
+    if (!clock || !Number.isFinite(clock.max) || clock.max <= 0) continue
+    const current = (Number(clock.value) || 0) / clock.max
+    if (current > ratio) { ratio = current; target = front }
+  }
+  const result = advanceFront(state.fronts, target.id, options)
+  if (!result.ok) return null
+  return { frontId: target.id, name: target.name, value: result.value, filled: result.filled, triggered: result.triggered, source: options.source }
 }

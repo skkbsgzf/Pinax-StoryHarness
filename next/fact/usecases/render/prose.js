@@ -205,6 +205,9 @@ export function gateProseKnowledge(input = {}) {
 /**
  * 组装本章渲染 prompt（小说叙述目标 + definition 序列 + 知情约束 + 文风 styleSpec）。
  * 纯字符串拼接，确定性；system 另由 renderChapter 取 RENDER_PROSE_SYSTEM_PROMPT。
+ *
+ * P-WIRE：章带上 goal（目标弧）与 openHooks（本章该回收/该继续埋的伏笔）时一并注入——
+ * 否则推演时埋的伏笔在成书这一步静默丢掉，读者看到的是一章没有钩子的平铺。
  */
 export function buildProsePrompt(input = {}) {
   const source = isObj(input) ? input : {}
@@ -215,14 +218,22 @@ export function buildProsePrompt(input = {}) {
   const spec = normalizeStyleSpec(source.styleSpec)
   const known = povKnownNames(entries, pov, atSpan)
   const beats = Array.isArray(chapter.beats) ? chapter.beats : []
+  const goal = firstText(chapter.goal, source.goal)
+  const openHooks = (Array.isArray(chapter.openHooks) ? chapter.openHooks : (Array.isArray(source.openHooks) ? source.openHooks : []))
+    .map((item) => firstText(item?.definition, item?.name, item))
+    .filter(Boolean)
 
   const knownList = known.size ? [...known].join('、') : '（空）'
   const lines = [
     '【叙述目标】',
     RENDER_PROSE_SYSTEM_PROMPT,
     `【本章视角 POV】${pov || '（未指定）'}`,
+    ...(goal ? [`【本章目标弧】${goal}`] : []),
     `【本章拍序（definition 序列）】共 ${beats.length} 拍`,
     ...beats.map((beat, index) => `〔拍${index + 1}〕${str(beat.definition)}`),
+    ...(openHooks.length
+      ? ['【未回收伏笔】下列钩子已埋下，本章可继续加码或按下不表，但不得与之矛盾：', ...openHooks.map((item) => `· ${item}`)]
+      : []),
     '【知情约束】本章只允许涉及下列 POV 已知事实；禁止出现未在该集合中的实体；引用实体一律写成 @《实体名》。',
     `POV 已知集合：${knownList}`,
     '【文风规范 styleSpec】',
@@ -234,6 +245,7 @@ export function buildProsePrompt(input = {}) {
   ]
   return lines.join('\n')
 }
+
 
 /**
  * 章 → 正文渲染用例（LlmPort 注入）。
@@ -254,7 +266,7 @@ export async function renderChapter(input = {}) {
   const llm = source.llm ?? source.llmPort ?? null
   assertLlmPort(llm)
 
-  const prompt = buildProsePrompt({ chapter, entries, pov, atSpan, styleSpec })
+  const prompt = buildProsePrompt({ chapter, entries, pov, atSpan, styleSpec, openHooks: source.openHooks })
   const result = await llm.complete({
     system: RENDER_PROSE_SYSTEM_PROMPT,
     prompt,

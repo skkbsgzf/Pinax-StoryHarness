@@ -49,7 +49,10 @@ function beatOf(node, order) {
     title: str(node.title),
     definition,
     seq: Number.isInteger(node.seq) ? node.seq : null,
-    domain: str(node.domain)
+    domain: str(node.domain),
+    // P-WIRE：把节点上的 pov/goal 带到拍上——renderChapter 逐拍取用时不必回查章纲。
+    ...(firstText(node.pov) ? { pov: firstText(node.pov) } : {}),
+    ...(firstText(node.goal) ? { goal: firstText(node.goal) } : {})
   }
 }
 
@@ -85,6 +88,8 @@ export function chapterize(outline, options = {}) {
         marker: key,
         pov,
         goal,
+        // P-WIRE：章上留下它承载的拍节点 id 与章末伏笔，供 renderChapter 注入 prompt。
+        openHooks: [],
         beats: [],
         fromOrder: null,
         toOrder: null
@@ -93,6 +98,10 @@ export function chapterize(outline, options = {}) {
     }
     beatCounter += 1
     const beat = beatOf(node, beatCounter)
+    // 节点自带的 openHooks（M2 投影器/调用方挂的）并进本章——成书时该回收的钩子不能丢。
+    for (const hook of Array.isArray(node.openHooks) ? node.openHooks : []) {
+      if (hook !== undefined && hook !== null && hook !== '') current.openHooks.push(hook)
+    }
     if (current.fromOrder === null) current.fromOrder = beat.order
     current.toOrder = beat.order
     current.beats.push(beat)

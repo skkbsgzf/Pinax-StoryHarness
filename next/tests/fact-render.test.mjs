@@ -311,3 +311,75 @@ test('双叙述纪律：渲染 prompt 常量 ≠ deduce/candidates 的 prompt �
 
   t.diagnostic(`[双叙述纪律] renderLen=${RENDER_PROSE_SYSTEM_PROMPT.length} playLen=${DEDUCE_DRAMA_SYSTEM_PROMPT.length} notEqual=true`)
 })
+
+/* ---------- 5) P-WIRE：目标弧与未回收伏笔进成书 prompt ---------- */
+
+test('P-WIRE：章带 goal 时 prompt 注入目标弧；不带时不出现该行（不伪造目标）', () => {
+  const entries = [{ id: 'e1', layer: 'worldview', slot: 'locations', name: '旧钟楼', definition: '钟楼。', status: 'adopted' }]
+  const withGoal = buildProsePrompt({
+    chapter: { id: 'chapter-1', index: 1, pov: POV_A, goal: '查清钟声来源', beats: [{ definition: '听见脚步' }] },
+    entries,
+    pov: POV_A,
+    styleSpec: STYLE_A
+  })
+  assert.match(withGoal, /【本章目标弧】查清钟声来源/u)
+
+  const noGoal = buildProsePrompt({
+    chapter: { id: 'chapter-1', index: 1, pov: POV_A, beats: [{ definition: '听见脚步' }] },
+    entries,
+    pov: POV_A,
+    styleSpec: STYLE_A
+  })
+  assert.doesNotMatch(noGoal, /【本章目标弧】/u, '没有目标就不写这一行')
+})
+
+test('P-WIRE：未回收伏笔进 prompt（可继续加码但不得矛盾）；无伏笔时整段缺席', () => {
+  const entries = [{ id: 'e1', layer: 'worldview', slot: 'locations', name: '旧钟楼', definition: '钟楼。', status: 'adopted' }]
+  const withHooks = buildProsePrompt({
+    chapter: { id: 'chapter-1', index: 1, pov: POV_A, beats: [{ definition: '听见脚步' }] },
+    entries,
+    pov: POV_A,
+    styleSpec: STYLE_A,
+    openHooks: [{ name: '第3拍·悬而未决', definition: '钟楼里的脚步声没解释' }, '门口的陌生人']
+  })
+  assert.match(withHooks, /【未回收伏笔】/u)
+  assert.match(withHooks, /钟楼里的脚步声没解释/u)
+  assert.match(withHooks, /门口的陌生人/u, '字符串形状的伏笔也要能注入')
+  assert.match(withHooks, /不得与之矛盾/u)
+
+  const noHooks = buildProsePrompt({
+    chapter: { id: 'chapter-1', index: 1, pov: POV_A, beats: [{ definition: '听见脚步' }] },
+    entries,
+    pov: POV_A,
+    styleSpec: STYLE_A,
+    openHooks: []
+  })
+  assert.doesNotMatch(noHooks, /【未回收伏笔】/u)
+})
+
+test('P-WIRE：chapterize 把节点 openHooks 收进章，renderChapter 透传进 prompt', async () => {
+  const outline = {
+    nodes: [
+      { id: 'beat-1', order: 1, title: '第1拍', definition: '听见脚步', pov: POV_A, goal: '查清钟声', openHooks: ['钟楼的脚步声'] },
+      { id: 'beat-2', order: 2, title: '第2拍', definition: '追上影子', pov: POV_A, goal: '查清钟声' }
+    ]
+  }
+  const grouped = chapterize(outline, { maxBeatsPerChapter: 10 })
+  assert.equal(grouped.chapters.length, 1)
+  assert.deepEqual(grouped.chapters[0].openHooks, ['钟楼的脚步声'])
+  assert.equal(grouped.chapters[0].beats[0].pov, POV_A, '拍上也要带视角')
+  assert.equal(grouped.chapters[0].beats[0].goal, '查清钟声')
+
+  const entries = [{ id: 'e1', layer: 'worldview', slot: 'locations', name: '旧钟楼', definition: '钟楼。', status: 'adopted' }]
+  const seen = {}
+  const result = await renderChapter({
+    chapter: grouped.chapters[0],
+    entries,
+    pov: POV_A,
+    styleSpec: STYLE_A,
+    llm: { complete: async (r) => { seen.prompt = r.prompt; return { text: '钟楼的脚步声还在，他握紧了门框。' } } }
+  })
+  assert.equal(result.ok, true)
+  assert.match(seen.prompt, /【未回收伏笔】/u)
+  assert.match(seen.prompt, /钟楼的脚步声/u)
+})

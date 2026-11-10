@@ -140,7 +140,7 @@ export function normalizeFactEntries(boardEntries) {
     const layer = isCharacter(raw, categories) ? 'character' : 'worldview'
     const slot = layer === 'character' ? '' : slotOf(categories)
     const keys = [...(Array.isArray(raw.keys) ? raw.keys : []), ...(Array.isArray(raw.aliases) ? raw.aliases : [])]
-    out.push({
+    const normalized = {
       schema: FACT_SCHEMA,
       id: trimmed(raw.id) || stableEntryId({ layer, domain: '', slot, name }),
       name,
@@ -152,7 +152,11 @@ export function normalizeFactEntries(boardEntries) {
       aliases: keys.map((item) => trimmed(item)).filter(Boolean),
       relations: normalizeRelations(raw.relations),
       knowledge: normalizeKnowledge(raw.knowledge)
-    })
+    }
+    // P-M4：规则条目上的 fronts 模板要原样透传——丢了它，开局就立不起威胁前线
+    // （面板上「威胁前线」整块不会出现，而作者以为是自己没配）。
+    if (isPlainObject(raw.fronts)) normalized.fronts = { ...raw.fronts }
+    out.push(normalized)
   }
   return out
 }

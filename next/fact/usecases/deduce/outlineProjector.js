@@ -107,6 +107,9 @@ function unadoptedOf(event) {
 /**
  * 一拍一节点：order 是紧凑拍序（1..N，大纲里「第几拍」），seq 是该拍在 M1-b 事件流里的
  * 权威序号（事件溯源 lineage，排序依据＝「seq 即序」）。两者都保留，不互相顶替。
+ *
+ * P-WIRE：事件带 pov/goal 时一并落进节点——M3 chapterize 靠「视角∷目标」分章；
+ * 缺了这两个标记，多视角重演的所有拍会退回按 domain 分组，分不出章。
  */
 function buildBeatNode(event, order, seq, domain) {
   const definition = beatDefinition(event)
@@ -124,6 +127,10 @@ function buildBeatNode(event, order, seq, domain) {
   }
   const source = firstText(event.source)
   if (source) node.source = source
+  const pov = firstText(event.pov)
+  if (pov) node.pov = pov
+  const goal = firstText(event.goal)
+  if (goal) node.goal = goal
   if (authorMarked(event)) node.decidedBy = 'author'
   return node
 }
