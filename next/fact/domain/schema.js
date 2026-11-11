@@ -13,6 +13,7 @@ import {
   KNOWLEDGE_KINDS,
   FACT_LAYERS,
   FACT_SCHEMA,
+  FACT_SCHEMA_LEGACY,
   PLOT_EVENT_TRACKS,
   PROVENANCE_MODES,
   STRUCTURE_TEMPLATE_KINDS,
@@ -387,8 +388,8 @@ export function validateFactEntry(entry) {
     addError('INVALID_ENTRY', 'entry', '条目必须是对象')
     return { ok: false, errors, warnings }
   }
-  if (entry.schema !== FACT_SCHEMA) {
-    addError('SCHEMA_MISMATCH', 'schema', `schema 必须是 ${FACT_SCHEMA}`)
+  if (entry.schema !== FACT_SCHEMA && !FACT_SCHEMA_LEGACY.includes(entry.schema)) {
+    addError('SCHEMA_MISMATCH', 'schema', `schema 必须是 ${FACT_SCHEMA}（或历史版本 ${FACT_SCHEMA_LEGACY.join('/')}）`)
   }
   const layer = str(entry.layer)
   const spec = FACT_LAYERS[layer]

@@ -520,7 +520,7 @@ function envelope(layer, name, evidence, context, slot = '') {
   }
 }
 
-function compilePlot(row, evidence, context) {
+function compilePlot(row, evidence, context, minimal = false) {
   const { source, segment } = evidence
   const name = `第${source.chapterNo}章·${source.id}·段${segment.index}`
   const entry = envelope('plot', name, [evidence], context)
@@ -532,13 +532,16 @@ function compilePlot(row, evidence, context) {
     when: { ...row.when },
     where: row.where,
     notes: row.notes,
-    fact: [...row.events.map((event) => `${event.who ? `${event.who}：` : ''}[${event.channel}] ${event.content}`), row.notes]
-      .filter((value) => value !== '').join('\n'),
+    // v3 瘦编译（minimal）：fact 是 events 的拼接副本，可确定性重建；长篇不必在内存里再存一份。
+    ...(minimal ? {} : {
+  fact: [...row.events.map((event) => `${event.who ? `${event.who}：` : ''}[${event.channel}] ${event.content}`), row.notes]
+  .filter((value) => value !== '').join('\n'),
+    }),
     events: row.events.map((event, index) => ({
       ...event,
       index: index + 1,
       track: 'fact',
-      title: event.content,
+      ...(minimal ? {} : { title: event.content }),
       refs: event.who ? [event.who] : [...row.who],
       segments: [{ index: segment.index, chars: segment.chars }],
       novelty: []
@@ -691,7 +694,7 @@ function warnAliases(entries, warnings) {
 }
 
 /** 编译失败抛带 code/details 的错误；绝不返回部分成功或跳过非法条目。 */
-export function compileExtractionEntries({ sources, rows, domain = '', book = '', bookId = '', policy = undefined } = {}, options = {}) {
+export function compileExtractionEntries({ sources, rows, domain = '', book = '', bookId = '', policy = undefined, minimal = false } = {}, options = {}) {
   const details = []
   const normalizedSources = validateShape(sources, { type: 'array', items: sourceSchema }, 'sources', details)
   const context = validateShape({ domain, book, bookId }, objectSchema({ domain: textSchema, book: textSchema, bookId: textSchema }), 'context', details)
@@ -756,7 +759,7 @@ export function compileExtractionEntries({ sources, rows, domain = '', book = ''
   for (const [id, evidence] of bySegment) {
     const row = rowMap.get(id)
     if (!row) continue // 部分提交合法；覆盖率由外层链负责。
-    plots.push(compilePlot(row, evidence, context))
+    plots.push(compilePlot(row, evidence, context, minimal))
     for (const item of row.relations ?? []) {
       relations.push({
         from: canon(normalizeName(item.from)),

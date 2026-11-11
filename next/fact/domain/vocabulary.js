@@ -10,7 +10,18 @@
 
 import { sha1Hex } from './stableId.js'
 
-export const FACT_SCHEMA = 'fact.data/v2'
+/**
+ * 条目契约版本。
+ *
+ * v3（作者 2026-11-11 裁定「肯定是要升的」）相对 v2 的差异**只做减法**，不改 id 输入、不改分层：
+ *   · `fact` 不再是条目必生成字段（events 的拼接副本，可确定性重建；旧读方按 events 回退）；
+ *   · `events[].title` 同理不再生成（≡ content）。
+ * 两者都由编译档位 `minimal` 控制；v2 条目照常可读（读时按 events 重建），不迁移存量。
+ */
+export const FACT_SCHEMA = 'fact.data/v3'
+
+/** 读兼容：校验器接受这些历史版本（v2 条目读进来按 events 重建缺失字段）。 */
+export const FACT_SCHEMA_LEGACY = Object.freeze(['fact.data/v2'])
 
 export const FACT_SOURCE = Object.freeze({
   repository: 'NovelPedia (pedia/v1 vendored) + pinax pedia-v2 ADR',

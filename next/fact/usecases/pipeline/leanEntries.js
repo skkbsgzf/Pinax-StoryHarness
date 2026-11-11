@@ -181,7 +181,8 @@ export function fromLeanEntry(lean, envelope, segIndex) {
       const segmentChars = ownSegment && ownSegment.index === segmentIndex ? ownSegment.chars : null
       out.events = lean.events.map((event) => ({
         ...event,
-        title: event.content ?? '',
+        // v3 瘦条目本就没有 title（≢ 读时重建的字段）；只在原始事件确实带 title 时保留。
+        ...(event.title !== undefined ? { title: event.title } : {}),
         novelty: Array.isArray(event.novelty) ? event.novelty : [],
         ...(segmentIndex !== null && segmentChars !== null ? { segments: [{ index: segmentIndex, chars: segmentChars }] } : {})
       }))

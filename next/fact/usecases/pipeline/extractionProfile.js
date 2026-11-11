@@ -37,7 +37,11 @@ export const PROFILE_PARAM_NOTES = Object.freeze({
   'cache.flushChapters': 'working 层覆盖多少章触发下沉',
   'cache.flushChars': 'working 层字数上限',
   'cache.retrieveLimit': '从 archive 检索时最多取几条',
-  'cache.retrieveChars': '从 archive 检索的总字数预算'
+  'cache.retrieveChars': '从 archive 检索的总字数预算',
+  'scale.expectedChars': '预估总字数（短篇 2 万 / 长篇百万）。只用于自动选规模档，不改变数据形状',
+  'scale.expectedChapters': '估算章节数；null＝由源清单推出',
+  'scale.compileStrategy': "编译策略：'full' 每次全量重算（短篇够用）；'incremental' 只编译本批新增（长篇必须）",
+  'scale.fullRecompileEvery': '增量编译时每 N 次 submit 做一次全量校正，防漂移累积'
 })
 
 /**
@@ -69,6 +73,35 @@ export const DEFAULT_EXTRACTION_PROFILE = Object.freeze({
   cache: Object.freeze({
     flushEntries: 120, flushChapters: 4, flushChars: 60_000,
     retrieveLimit: 12, retrieveChars: 2_400
+  }),
+  /**
+   * 规模档（作者 2026-11-11：「实际在拆的时候，可能会有短篇，差不多是到 2 万字；
+   * 也有可能会有长篇，很多万字」）。
+   *
+   * 规模不只是「跑得久」，它改变的是**数据结构的行为**：
+   *   · 短篇（≤3 万字）：一次 compile 几十毫秒，全量重算无感；条目数少，working 层能全装下，
+   *     根本不该触发 flush（否则接续上下文全靠检索，反而变差）；
+   *   · 长篇（≥50 万字）：compile 全量重算会随段数线性涨（实测 4000 段≈533ms/次，
+   *     300+ 次 submit 累计 ≈178 秒纯 CPU）——必须走**增量编译**；
+   *     条目数上万，working 层必须严格限流。
+   *
+   * 这些量决定三件事的默认值：flush 水位、compile 策略、检索预算。
+   * scale 是**声明式标签**，实际行为仍由上面的具体数字决定（不搞两套真源）。
+   */
+  scale: Object.freeze({
+    /** 预估总字数（作者可给，也可由 prepare 时 sources 字数累加得到）。 */
+    expectedChars: null,
+    /** 估算章节数（null＝由源清单推出）。 */
+    expectedChapters: null,
+    /**
+     * compile 策略：
+     *   · 'full'      每次 submit 全量重算（短篇/中篇足够，最简单、无状态）；
+     *   · 'incremental' 只编译本批新增段＋受影响的聚合层（长篇必须，否则 O(n²)）。
+     * 默认 'full'——作者不声明规模就不改变既有行为。
+     */
+    compileStrategy: 'full',
+    /** 增量编译时，多少次 submit 做一次全量校正（防增量漂移累积）。 */
+    fullRecompileEvery: 20
   })
 })
 
@@ -105,6 +138,39 @@ export const EXTRACTION_PROFILE_PRESETS = Object.freeze({
       characterEntryFloor: 3.0,
       worldviewEntryFloor: 1.0
     })
+  }),
+  /**
+   * 规模预设（作者 2026-11-11：短篇约 2 万字、长篇很多万字）。
+   * 用法：`prepare({ profile: 'short' })`，或只覆写某一项。
+   */
+  /** 短篇 ≤3 万字：全量重算无感，working 层不设限（接续上下文不该靠检索）。 */
+  short: Object.freeze({
+    ...DEFAULT_EXTRACTION_PROFILE,
+    name: 'short',
+    description: '短篇（≤3 万字）：一次 compile 几十毫秒，working 层全装下不 flush',
+    scale: Object.freeze({
+      expectedChars: 20_000, expectedChapters: 10,
+      compileStrategy: 'full', fullRecompileEvery: 20
+    }),
+    cache: Object.freeze({
+      // 短篇的「整本书」就是接续上下文，绝不能因为条数/章数把它推进 archive。
+      flushEntries: 100_000, flushChapters: 1000, flushChars: 10_000_000,
+      retrieveLimit: 24, retrieveChars: 4_800
+    })
+  }),
+  /** 长篇 ≥50 万字：compile 全量重算变成 O(n²)，必须走增量。 */
+  long: Object.freeze({
+    ...DEFAULT_EXTRACTION_PROFILE,
+    name: 'long',
+    description: '长篇（≥50 万字）：增量编译（每 20 批全量校正一次），working 层严格限流',
+    scale: Object.freeze({
+      expectedChars: 1_000_000, expectedChapters: 400,
+      compileStrategy: 'incremental', fullRecompileEvery: 20
+    }),
+    cache: Object.freeze({
+      flushEntries: 120, flushChapters: 4, flushChars: 60_000,
+      retrieveLimit: 12, retrieveChars: 2_400
+    })
   })
 })
 
@@ -140,6 +206,11 @@ function validateProfile(profile, issues) {
   check('cache.flushChars', profile.cache?.flushChars, positiveInt, '正整数')
   check('cache.retrieveLimit', profile.cache?.retrieveLimit, positiveInt, '正整数')
   check('cache.retrieveChars', profile.cache?.retrieveChars, positiveInt, '正整数')
+  // 规模档：expectedChars/Chapters 允许 null（＝未声明），声明了就必须是正整数。
+  check('scale.expectedChars', profile.scale?.expectedChars, (value) => value === null || positiveInt(value), '正整数或 null')
+  check('scale.expectedChapters', profile.scale?.expectedChapters, (value) => value === null || positiveInt(value), '正整数或 null')
+  check('scale.compileStrategy', profile.scale?.compileStrategy, (value) => ['full', 'incremental'].includes(value), "'full' 或 'incremental'")
+  check('scale.fullRecompileEvery', profile.scale?.fullRecompileEvery, positiveInt, '正整数')
 }
 
 /**
@@ -167,7 +238,8 @@ export function normalizeExtractionProfile(input = {}) {
     blocks: { ...DEFAULT_EXTRACTION_PROFILE.blocks, ...(isPlainObject(override.blocks) ? override.blocks : {}) },
     bind: { ...DEFAULT_EXTRACTION_PROFILE.bind, ...(isPlainObject(override.bind) ? override.bind : {}) },
     salience: { ...DEFAULT_EXTRACTION_PROFILE.salience, ...(isPlainObject(override.salience) ? override.salience : {}) },
-    cache: { ...DEFAULT_EXTRACTION_PROFILE.cache, ...(isPlainObject(override.cache) ? override.cache : {}) }
+    cache: { ...DEFAULT_EXTRACTION_PROFILE.cache, ...(isPlainObject(override.cache) ? override.cache : {}) },
+    scale: { ...DEFAULT_EXTRACTION_PROFILE.scale, ...(isPlainObject(override.scale) ? override.scale : {}) }
   }
   const issues = []
   validateProfile(merged, issues)

@@ -32,7 +32,9 @@ const fail = (code, message, details = null) => ({ ok: false, error: { code, mes
 const ok = (value) => ({ ok: true, value })
 const reject = (code, message, details) => { throw Object.assign(new Error(message), { code, details }) }
 function compile(input) {
-  const output = compileExtractionEntries({ ...input, sources: input.sources.map(({ id, chapterNo, hash, segments }) => ({ id, chapterNo, hash, segments })) })
+  // v3 瘦编译（作者 2026-11-11 裁定升 v3）：只做减法——不生成 fact / events[].title
+  // （两者都能从 events 确定性重建）。v3 契约一律 minimal，读方按 events 回退。
+  const output = compileExtractionEntries({ ...input, minimal: true, sources: input.sources.map(({ id, chapterNo, hash, segments }) => ({ id, chapterNo, hash, segments })) })
   const checked = validateProduces(SKILL_CONTRACTS['fact-extract'], output.entries)
   if (!checked.ok) reject('INVALID_EXTRACTION', '抽取产物未通过Skill契约。', checked.errors)
   return output
@@ -193,7 +195,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
     const task = {
       dataset: state.dataset, runId: run.id, revision: run.revision, phase,
       taskId: '', source: { id: source.id, chapterNo: source.chapterNo },
-      units: [], knownNames: knownNames.slice(0, 200)
+      units: [], knownNames: []
     }
     const candidateIds = new Set(candidates.map((item) => item.id))
     let chars = 0
@@ -209,6 +211,13 @@ export function createFactExtractionService({ root = null, fileService = null, r
       task.units.push(unit)
       chars += meta.chars
     }
+    // B1 预筛（ADR §5.2）：名表不下发全量——只下发**在本批段文本里字面出现**的名字。
+    // 长篇名表可能上千，全量下发既挤爆预算也稀释注意力；而模型绑定只需要「这一段里可能的人」。
+    // 命中数上限仍保留（防极端长段），但那是防御性上限，不是规模开关。
+    const batchText = task.units.map((unit) => unit.text).join('\n')
+    task.knownNames = knownNames
+      .filter((name) => name && batchText.includes(name))
+      .slice(0, 60)
     if (!task.units.length) reject('RESULT_TOO_LARGE', '当前单元超出回包上限，未截断、未标成已读。')
     task.taskId = digest({ runId: run.id, revision: run.revision, phase, ids: task.units.map((item) => item.id) })
     return task
@@ -386,7 +395,19 @@ export function createFactExtractionService({ root = null, fileService = null, r
         if (!corrected.length) reject('EMPTY_SUBMISSION', '未交任何结果，不推进断点。')
         // 在保存链路上构造并校验三层产物；非法结果在这里拒绝，不留到finish才爆炸。
         const merged = { ...run.rows, ...Object.fromEntries(check.value.map((row) => [row.segmentId, row])) }
-        compile({ sources: run.sources, rows: Object.values(merged), ...run.spec, policy: saliencePolicyOf(run.spec.profile) })
+        // 编译策略（作者 2026-11-11 规模裁定）：
+        //   full       —— 每次 submit 全量重算（短篇/中篇足够；最简单、无状态）；
+        //   incremental —— 只在「周期性校正」与 finish 时全量算，平时跳过。
+        // 长篇全量重算的成本实测是线性的：4000 段 ≈533ms/次 × 334 次 submit ≈178 秒纯 CPU。
+        // 跳过是安全的：行级校验已在上面做完，编译产物只在 finish 发布时被消费；
+        // 中途 status(view:entries) 读的是上一次快照（如实标注，不假装实时）。
+        const compileStrategy = run.spec.profile?.scale?.compileStrategy ?? 'full'
+        const every = run.spec.profile?.scale?.fullRecompileEvery ?? 20
+        run.submitCount = (run.submitCount ?? 0) + 1
+        const mustCompile = compileStrategy === 'full' || run.submitCount % every === 0
+        if (mustCompile) {
+          compile({ sources: run.sources, rows: Object.values(merged), ...run.spec, policy: saliencePolicyOf(run.spec.profile) })
+        }
         run.rows = merged
         run.receipts[args.submissionId] = hash
         // P-3：跨批名表累积（只增名，不带证据）——下一批的切块器能立刻用它找说话人。

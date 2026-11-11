@@ -88,6 +88,17 @@ bindings: [{
 - 权限拒绝、额度耗尽、认证失败、取消或传输错误时停止重试，报告 `dataset/runId`；恢复时 next 续跑。不声称全书完成，不自动发起无上限循环。
 - 只报告外层运行时实际回报的 usage；工具次数不是模型次数。
 
+## 规模与档位
+
+`prepare(profile)` 决定采集节奏，一次定死、同 dataset 不可改（改档＝换口径，另建 dataset）：
+
+- `profile: 'short'` —— 短篇（≤3 万字）：working 层不 flush（整本书就是接续上下文），全量编译；
+- `profile: 'long'` —— 长篇（≥50 万字）：增量编译（每 20 批校正一次），working 严格限流；
+- 也可只覆写某一项：`profile: { bind: { batchChars: 6000 } }`，其余继承默认。
+
+`status(view:summary)` 的 `profile.overrides` 只列与默认不同的项，可据此确认覆写真的生效。
+
 ## 数据契约
 
-`next/skills/contracts.mjs` 登记三层 analyze 模式产物：plot 为 draft，character/worldview 为 proposed。原文从受控项目文件引用读取，不以事实包投影替代原文。确定性提交工具负责构造和校验 `fact.data/v2`，每条保留源单元哈希；`relations/knowledge/hooks` 是可选增量，给了就编译进条目，不给不判失败。
+
+`next/skills/contracts.mjs` 登记三层 analyze 模式产物：plot 为 draft，character/worldview 为 proposed。原文从受控项目文件引用读取，不以事实包投影替代原文。确定性提交工具负责构造和校验 `fact.data/v3`，每条保留源单元哈希；`relations/knowledge/hooks` 是可选增量，给了就编译进条目，不给不判失败。
