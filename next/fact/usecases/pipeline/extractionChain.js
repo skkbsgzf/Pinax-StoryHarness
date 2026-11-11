@@ -6,7 +6,7 @@ import { segmentText } from '../../domain/segment.js'
 import { sha1Hex, stableEntryId } from '../../domain/stableId.js'
 import { validateFactEntry } from '../../domain/schema.js'
 import { createAliasIndex } from '../../domain/aliases.js'
-import { CAST_ROLE_TIERS, FACT_SCHEMA, WORLDVIEW_SLOT_NAMES } from '../../domain/vocabulary.js'
+import { CAST_ROLE_TIERS, CATEGORY_MAP, FACT_SCHEMA, OTHER_SLOT, WORLDVIEW_SLOT_NAMES } from '../../domain/vocabulary.js'
 import {
   characterSalience, decideCharacter, fieldsForTier,
   normalizeSaliencePolicy, summarizePruning, worldviewSalience
@@ -83,7 +83,12 @@ export const EXTRACTION_ROW_SCHEMA = freezeTree(objectSchema({
     // 只 name/slot/definition 必填：constraints 是可选补强（给了 gate 才能机判，不给不判失败）。
     items: objectSchema({
       name: nonempty,
-      slot: { type: 'string', enum: [...WORLDVIEW_SLOT_NAMES] },
+      // 模型天然给中文分类名（「物品」「现象」「地点」）——枚举必须同时接受中文分类名与标准槽位，
+      // 否则整段作废（guimi 真模型实测：21/22 段全因 slot 是中文被拒，模型输出质量其实很好）。
+      // 行 schema **不校验** slot 取值：模型自由造词（「道具设定」「氛围设定」「科技/时代设定」），
+      // 穷举枚举只会整段作废（guimi 真模型实测：273 次 slot 报错 = 110/115 段全灭）。
+      // 归一是 inferSlot 的职责：标准槽位原样用、中文分类走 CATEGORY_MAP、其余关键词兜底到 other。
+      slot: nonempty,
       definition: nonempty,
       aliases: strings,
       /**
@@ -145,13 +150,19 @@ const SLOT_KEYWORDS = Object.freeze([
 
 /** 槽位兜底推断：命中即用，未命中保持原值（other 也是合法槽位，不强行编造）。 */
 export function inferSlot(item = {}) {
-  const given = String(item.slot ?? '')
-  if (given && given !== 'other' && WORLDVIEW_SLOT_NAMES.includes(given)) return given
+  const given = String(item.slot ?? '').trim()
+  // 1) 已是标准槽位 → 原样用
+  if (given && given !== OTHER_SLOT && WORLDVIEW_SLOT_NAMES.includes(given)) return given
+  // 2) 中文分类名 → 走 CATEGORY_MAP 官方 34→11 归并表（模型天然给「物品」「现象」「地点」）
+  if (given && CATEGORY_MAP[given]) return CATEGORY_MAP[given]
+  // 3) 关键词兜底（按名称/别名/定义推断）
   const hay = [item.name, ...(Array.isArray(item.aliases) ? item.aliases : []), item.definition ?? ''].join(' ')
   for (const [slot, words] of SLOT_KEYWORDS) {
     if (words.some((word) => hay.includes(word))) return slot
   }
-  return given || 'other'
+  // 4) 都归不出 → other（**不能返回原词**：fact.data/v2 的 slot 是闭集枚举，
+  //    原词（「道具设定」「氛围设定」）会让 validateFactEntry 报 UNKNOWN_SLOT 整条作废）
+  return OTHER_SLOT
 }
 
 const positiveInteger = { type: 'integer', minimum: 1 }
