@@ -2584,27 +2584,27 @@ describe('载体管理面板（工单A1）', () => {
     const bridge = carriersBridge({ handlers, view })
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
-    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="库设置（模块管理）"]').exists()).toBe(false)
 
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
     await flushPromises()
-    const panel = wrapper.find('[aria-label="载体管理"]')
+    const panel = wrapper.find('[aria-label="库设置（模块管理）"]')
     expect(panel.exists()).toBe(true)
 
     const rows = panel.findAll('.carriers-row')
     expect(rows).toHaveLength(2)
     // 主载体徽标 + 清单摊开：dataDirs／scopes／工具数都是 view 里的原话。
     expect(rows[0].text()).toContain('小说（夹具）')
-    expect(rows[0].text()).toContain('主载体')
+    expect(rows[0].text()).toContain('主模块')
     expect(rows[0].text()).toContain('正文')
     expect(rows[0].text()).toContain('正文:rw')
     expect(rows[0].find('.carriers-tools').text()).toBe('工具 2')
     // 主载体行不可停用自己：按钮禁用并说明原因。
     expect(rows[0].find('.carriers-toggle').attributes('disabled')).toBeDefined()
-    expect(rows[0].find('.carriers-hint').text()).toBe('主载体不可停用')
+    expect(rows[0].find('.carriers-hint').text()).toBe('主模块不可停用')
     expect(rows[0].find('.carriers-set-primary').exists()).toBe(false)
 
-    // 非主载体且声明了 primary：既有「停用」也有「设为主载体」。
+    // 非主载体且声明了 primary：既有「停用」也有「设为主模块」。
     expect(rows[1].find('.carriers-toggle').text()).toBe('停用')
     expect(rows[1].find('.carriers-set-primary').exists()).toBe(true)
 
@@ -2643,13 +2643,13 @@ describe('载体管理面板（工单A1）', () => {
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
     await flushPromises()
 
-    let rows = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
+    let rows = wrapper.find('[aria-label="库设置（模块管理）"]').findAll('.carriers-row')
     await rows[1].find('.carriers-set-primary').trigger('click')
     await flushPromises()
     expect(setPrimary).toHaveBeenCalledWith({ pluginId: 'fixture.script', expectedRevision: 6 })
 
     // 停用走同一条闸：refresh 后重新取行，修订号仍是账上那份 6（夹具的 view 不换版）。
-    rows = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
+    rows = wrapper.find('[aria-label="库设置（模块管理）"]').findAll('.carriers-row')
     await rows[1].find('.carriers-toggle').trigger('click')
     await flushPromises()
     expect(setEnabled).toHaveBeenCalledWith({ pluginId: 'fixture.script', enabled: false, expectedRevision: 6 })
@@ -2668,7 +2668,7 @@ describe('载体管理面板（工单A1）', () => {
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
     await flushPromises()
 
-    const rows = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row')
+    const rows = wrapper.find('[aria-label="库设置（模块管理）"]').findAll('.carriers-row')
     // 主载体行的钮是禁用的：点了也不发通道。
     await rows[0].find('.carriers-toggle').trigger('click')
     await flushPromises()
@@ -2689,7 +2689,7 @@ describe('载体管理面板（工单A1）', () => {
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
     await flushPromises()
     // 没有 project 就没有面板：carrierSetEnabled/carrierSetPrimary 在通道层同样要求先有项目。
-    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="库设置（模块管理）"]').exists()).toBe(false)
     // 工作区通道（M2.5-C）随挂载就会走一次读：那是宿主状态，不是项目写入；
     // 服务日志池快照（批次49）同理，只读不写。
     // 快捷键表（批次62）也是只读那一条：hotkeysLoad 不要求项目，hotkeysSave 才要求——这里只可能出现前者。
@@ -3246,14 +3246,14 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
     await flushPromises()
     // settings.carriers → activeSection='carriers'；别的节不渲染。
-    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="库设置（模块管理）"]').exists()).toBe(true)
     expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(false)
 
     // 左栏目录：点「偏好与模型」即切到偏好节，载体管理面板卸下。
     await wrapper.find('[data-test="settings-tab-prefs"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
-    expect(wrapper.find('[aria-label="载体管理"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="库设置（模块管理）"]').exists()).toBe(false)
     // 选中的目录项标出当前节（老版 settings-tab.active）。
     expect(wrapper.find('[data-test="settings-tab-prefs"]').classes()).toContain('active')
     expect(wrapper.find('[data-test="settings-tab-carriers"]').classes()).not.toContain('active')
@@ -3397,7 +3397,7 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     // 内置节按组序排列：应用（偏好与模型/备份与恢复/服务与通知）→ 文档（文档历史…）；「载体管理」随 PR-3 迁模块管理。
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
     // 「载体管理」暂留原组（PR-3 迁模块管理——前端工单 A-7），单节组拍平不出组头。
-    expect(tabs.slice(0, 4)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '载体管理'])
+    expect(tabs.slice(0, 4)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '库设置（模块管理）'])
     // 〔批次68-R4 任务1·实测发现1〕组头是纯视觉层：不是 tab、不可聚焦、不参与方向键换节。
     const headers = wrapper.findAll('.settings-navigation .settings-group-label')
     expect(headers).toHaveLength(2)
@@ -3474,7 +3474,7 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await flushPromises()
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
     // 前端工单 B-1：四节迁出后清单收敛。
-    expect(tabs.slice(0, 4)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '载体管理'])
+    expect(tabs.slice(0, 4)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '库设置（模块管理）'])
     expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
     wrapper.unmount()
   })
@@ -4485,7 +4485,7 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
 
       handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.carriers' })
       await flushPromises()
-      const outlineRow = wrapper.find('[aria-label="载体管理"]').findAll('.carriers-row').find((row) => row.text().includes('大纲'))
+      const outlineRow = wrapper.find('[aria-label="库设置（模块管理）"]').findAll('.carriers-row').find((row) => row.text().includes('大纲'))
       expect(outlineRow, '载体管理里应有非主载体大纲').toBeTruthy()
       await outlineRow.find('.carriers-toggle').trigger('click')
       await flushPromises()
@@ -5800,7 +5800,7 @@ describe('故障隔离：全部载体停用（批次63 任务2）', () => {
     palette.find('[data-test="palette-input"]').element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
     await flushPromises()
     expect(wrapper.find('[data-test="command-palette"]').exists(), '执行完就收面板').toBe(false)
-    expect(wrapper.find('[aria-label="载体管理"]').exists(), '应用菜单动作必须真执行：这里就是打开载体管理节').toBe(true)
+    expect(wrapper.find('[aria-label="库设置（模块管理）"]').exists(), '应用菜单动作必须真执行：这里就是打开载体管理节').toBe(true)
     expect(wrapper.text()).not.toContain('未接线')
     wrapper.unmount()
   })

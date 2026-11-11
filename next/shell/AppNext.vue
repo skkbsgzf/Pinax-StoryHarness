@@ -8,7 +8,7 @@ import MaterialGallery from './MaterialGallery.vue'
 import RuntimeDock from './RuntimeDock.vue'
 import SettingsModal from './SettingsModal.vue'
 import PrefsSection from './settings/PrefsSection.vue'
-import CarriersSection from './settings/CarriersSection.vue'
+import LibrarySettings from './library/LibrarySettings.vue'
 import OutlineImportSection from './settings/OutlineImportSection.vue'
 import BackupSection from './settings/BackupSection.vue'
 import HistorySection from './settings/HistorySection.vue'
@@ -570,7 +570,8 @@ const settingsSections = computed(() => [
   // 批次49：服务与通知（公共池）。一行一个声明的服务／外部 MCP：状态、日志尾巴、重启与确认。
   { id: 'services', title: '服务与通知', group: '应用', keywords: ['服务', '外部 MCP', '端口', '日志', '通知', '重启', '状态', 'comfy'], component: ServicesSection, props: { bridge: props.bridge, snapshot: serviceSnapshot.value, reload: loadServiceSnapshot } },
   // 项目
-  { id: 'carriers', title: '载体管理', group: '项目', keywords: ['板块', '载体', '启用', '停用', '主载体', '权限', '数据目录'], component: CarriersSection, props: { carriers: carriers.value } },
+  // 前端工单 A-7：载体管理迁库设置（措辞按术语表改模块）；「项目」组只剩这一节，组头拍平。
+  { id: 'carriers', title: '库设置（模块管理）', group: '项目', keywords: ['模块', '启用', '停用', '主模块', '权限', '数据目录'], component: LibrarySettings, props: { carriers: carriers.value, primaryCarriers: primaryCarriers.value } },
   // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
   // 文档
   { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
