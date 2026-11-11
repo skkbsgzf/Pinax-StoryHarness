@@ -56,7 +56,7 @@ export function buildBindPrompt(input = {}) {
   })
 
   return [
-    `【段】${segment.id}（第 ${segment.index} 段，${segment.chars} 字）`,
+    `=== ${segment.id} | 第 ${segment.index} 段 | ${segment.chars} 字 ===`,
     `【本段已切好的块】共 ${blocks.length} 块，逐块给 who 与 ch：`,
     ...blockLines,
     '',
@@ -97,9 +97,10 @@ export function buildBatchBindPrompt(input = {}) {
       return `  [${block.id}] (${block.channelHint}${hint}) ${block.text}`
     })
     return [
-      `【段 ${segment.id}｜第 ${segment.index} 段｜${segment.chars} 字】`,
+      // id 单独一行且**不加任何前缀**：实测带「段 」前缀时模型会把前缀抄进回包的 id。
+      `=== ${segment.id} | 第 ${segment.index} 段 | ${segment.chars} 字 ===`,
       ...blockLines,
-      '  【增量】settings: [{name,slot,definition}] / knowledge: [{character,source,learned}] / hooks: [一句话] / aka: [[称呼,称呼]]'
+      '  【增量】settings:[{name,slot,definition}] knowledge:[{character,source,learned}] hooks:[一句话] aka:[[称呼,称呼]]'
     ].join('\n')
   })
 

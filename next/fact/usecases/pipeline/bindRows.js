@@ -14,6 +14,39 @@
 
 import { BIND_CHANNELS } from './bindPrompt.mjs'
 
+/**
+ * 段 id 容错对齐：模型会以三种**可确定性还原**的方式改写 id（实测各占一批）：
+ *   1) 精确相等；
+ *   2) 抄了提示词的排版前缀或括号（"段 xxx:1:yyy"、"【xxx】"）→ 剥装饰后相等；
+ *   3) 截断成首个哈希段（"3b133e6c97"）→ 唯一前缀认领；
+ *   4) 改用序号（"第6段" / "6" / "seg:6"）→ 按段序号对齐。
+ * 四条都对不上就返回 null（交给规则兜底），绝不猜。
+ * @param {string} rawId 模型回的 id
+ * @param {string[]|Array<{id:string,index?:number}>} candidates 真 id 列表，或带 index 的单元列表
+ */
+export function resolveSegmentId(rawId, candidates) {
+  const raw = String(rawId ?? '').trim()
+  if (!raw) return null
+  const list = Array.isArray(candidates) ? candidates : []
+  const ids = list.map((item) => (typeof item === 'string' ? item : String(item?.id ?? ''))).filter(Boolean)
+  if (ids.includes(raw)) return raw
+  const cleaned = raw.replace(/^[【\s]*段?[\s:：]*/u, '').replace(/[】\s]+$/u, '').trim()
+  if (cleaned && ids.includes(cleaned)) return cleaned
+  // 3) 唯一前缀截断
+  if (cleaned.length >= 8) {
+    const prefixed = ids.filter((id) => id.startsWith(cleaned))
+    if (prefixed.length === 1) return prefixed[0]
+  }
+  // 4) 序号形态：只认「第N段 / N / seg:N / 段N」这几种明确写法，且该序号在候选里唯一。
+  const ordinal = /^(?:第\s*)?(\d{1,5})\s*段?$/u.exec(cleaned) ?? /^seg:?(\d{1,5})$/iu.exec(cleaned)
+  if (ordinal) {
+    const wanted = Number(ordinal[1])
+    const byIndex = list.filter((item) => typeof item === 'object' && Number(item?.index) === wanted)
+    if (byIndex.length === 1) return String(byIndex[0].id)
+  }
+  return null
+}
+
 export const BIND_ROWS_VERSION = 'fact-bind-rows/v1'
 
 /** 默认的段级时间地点（模型不给例外时用它；比「让模型每段判一次」便宜 46 字/段）。 */
@@ -31,18 +64,35 @@ function explainWho(value, haystack, knownNames) {
   return { name: '', reason: 'hallucinated' }
 }
 
+/** 段级 when/where 例外：只收模型明确给出的字段，其余保持 undefined（由 run 默认继承）。 */
+function normalizeTimeException(binding) {
+  const when = binding?.when
+  const out = {}
+  if (when && typeof when === 'object' && !Array.isArray(when)) {
+    if (str(when.story_time)) out.story_time = str(when.story_time)
+    if (['顺叙', '倒叙', '插叙', '未明示'].includes(str(when.timeline))) out.timeline = str(when.timeline)
+  }
+  return out
+}
+
 /**
  * 单段：blocks + binding → 行。
  * @param {{id:string,index:number,chars:number,text:string,blocks:Array}} segment
- * @param {{blocks?:Array, settings?:Array, knowledge?:Array, hooks?:Array}} binding
+ * @param {{blocks?:Array, settings?:Array, knowledge?:Array, hooks?:Array, aka?:Array, when?:Object, where?:string}} binding
  * @param {{knownNames?:string[], when?:Object, where?:string}} [options]
  * @returns {{row:Object, stats:Object}}
  */
 export function bindSegment(segment, binding = {}, options = {}) {
   const blocks = Array.isArray(segment?.blocks) ? segment.blocks : []
   const knownNames = Array.isArray(options.knownNames) ? options.knownNames.filter(Boolean) : []
-  const when = { ...DEFAULT_WHEN, ...(options.when ?? {}) }
-  const where = str(options.where) || DEFAULT_WHERE
+  // P-4：段级例外优先于 run 级默认值。模型只在「这一段真的不在默认时空」时才给 when/where，
+  // 其余由代码继承——这是把 when/where 从「每段必答」降级成「只在异常时答」的关键。
+  const when = {
+    ...DEFAULT_WHEN,
+    ...(options.when ?? {}),
+    ...normalizeTimeException(binding)
+  }
+  const where = str(binding?.where) || str(options.where) || DEFAULT_WHERE
 
   const byId = new Map()
   for (const item of binding?.blocks ?? []) {
@@ -158,9 +208,10 @@ export function bindSegment(segment, binding = {}, options = {}) {
 /** 多段批量绑定 → 行数组（顺序与入参一致）。 */
 export function bindSegments(segments, bindings = [], options = {}) {
   const list = Array.isArray(segments) ? segments : []
+  const ids = list.map((segment) => str(segment?.id)).filter(Boolean)
   const map = new Map()
   for (const item of Array.isArray(bindings) ? bindings : []) {
-    const id = str(item?.id)
+    const id = resolveSegmentId(item?.id, ids)
     if (id) map.set(id, item)
   }
   const rows = []
@@ -196,7 +247,9 @@ export function normalizeBindReply(value) {
           settings: Array.isArray(item.settings) ? item.settings : [],
           knowledge: Array.isArray(item.knowledge) ? item.knowledge : [],
           hooks: Array.isArray(item.hooks) ? item.hooks : [],
-          aka: Array.isArray(item.aka) ? item.aka : []
+          aka: Array.isArray(item.aka) ? item.aka : [],
+          when: item.when && typeof item.when === 'object' ? item.when : undefined,
+          where: str(item.where) || undefined
         }))
     }
   }
@@ -209,7 +262,9 @@ export function normalizeBindReply(value) {
         settings: Array.isArray(value.settings) ? value.settings : [],
         knowledge: Array.isArray(value.knowledge) ? value.knowledge : [],
         hooks: Array.isArray(value.hooks) ? value.hooks : [],
-        aka: Array.isArray(value.aka) ? value.aka : []
+        aka: Array.isArray(value.aka) ? value.aka : [],
+        when: value.when && typeof value.when === 'object' ? value.when : undefined,
+        where: str(value.where) || undefined
       }]
     }
   }

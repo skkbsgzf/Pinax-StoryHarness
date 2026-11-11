@@ -7,12 +7,34 @@ const key = { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$' }
 const integer = { type: 'integer', minimum: 0 }
 const object = (properties, required = []) => ({ type: 'object', additionalProperties: false, properties, required })
 const source = object({ pluginId: text, dir: text, file: text, chapterNo: { type: 'integer', minimum: 1 } }, ['pluginId', 'dir', 'file', 'chapterNo'])
+/** 窄绑定（P-1 三段式）：模型只交 {id,who,ch}，事件正文由服务端取块原文。 */
+const bindingBlock = object({ id: text, who: { type: 'string' }, ch: { type: 'string' } }, ['id'])
+// 绑定是模型产物，会带各种多余字段（name/reason/content…）：**宽容接收**，服务端只用 id/who/ch。
+// 严格拒绝未知字段在这里只会把「模型多写一个字」放大成整批作废——与本链路目标相反。
+bindingBlock.additionalProperties = true
+const binding = object({
+  id: text,
+  blocks: { type: 'array', items: bindingBlock },
+  settings: { type: 'array' },
+  knowledge: { type: 'array' },
+  hooks: { type: 'array' },
+  aka: { type: 'array' },
+  when: object({ story_time: { type: 'string' }, timeline: { enum: ['顺叙', '倒叙', '插叙', '未明示'] } }),
+  where: { type: 'string' }
+}, ['id'])
+/** run 级时间地点默认值（P-4）：不传就是「未明示＋顺叙」，段级可覆盖。 */
+const timeDefaults = object({
+  when: object({ story_time: { type: 'string' }, timeline: { enum: ['顺叙', '倒叙', '插叙', '未明示'] } }),
+  where: { type: 'string' }
+})
 const schemas = {
   prepare: object({ dataset: key, requestId: key, fromRunId: key, mode: { enum: ['initialize', 'update', 'repair'] }, domain: text, book: text, bookId: text,
-    sources: { type: 'array', minItems: 1, items: source }, sourceIds: { type: 'array', minItems: 1, items: text }, batchChars: { type: 'integer', minimum: 300, maximum: 12000 } }, ['dataset', 'requestId']),
+    sources: { type: 'array', minItems: 1, items: source }, sourceIds: { type: 'array', minItems: 1, items: text },
+    batchChars: { type: 'integer', minimum: 300, maximum: 12000 }, timeDefaults }, ['dataset', 'requestId']),
   next: object({ dataset: key, runId: key }, ['dataset', 'runId']),
   submit: object({ dataset: key, runId: key, expectedRevision: integer, taskId: text, submissionId: key,
-    rows: { type: 'array', items: EXTRACTION_ROW_SCHEMA } }, ['dataset', 'runId', 'expectedRevision', 'taskId', 'submissionId']),
+    rows: { type: 'array', items: EXTRACTION_ROW_SCHEMA },
+    bindings: { type: 'array', items: binding } }, ['dataset', 'runId', 'expectedRevision', 'taskId', 'submissionId']),
   status: object({ dataset: key, runId: key, view: { enum: ['summary', 'sources', 'manifest', 'entries', 'entry', 'row', 'changes', 'warnings', 'index', 'archive'] }, pluginId: text, dir: text, id: text, offset: integer }),
   finish: object({
     dataset: key, runId: key, expectedRevision: integer,
@@ -30,8 +52,8 @@ const schemas = {
 }
 const descriptions = {
   prepare: '准备产品抽取运行：initialize首次、update存量、repair定向补抽。sources是完整项目文件范围（省略沿用基线），不传正文。保留100–300字单元并批量派发。只建派生断点，不调用模型、不改原稿。requestId保证重放幂等；恢复直接next旧runId。',
-  next: '读取未抽取的下一批原文。单轮扫描：一次同时抽剧情、人物、设定、关系、知情与伏笔，抽完即ready，没有复核轮。相同断点重读不耗推理；done且phase:ready才能finish。',
-  submit: '提交当前批的结构化结果，必须带taskId、expectedRevision与稳定submissionId。可只交合法部分，遗漏段仍待办。rows是该段完整记录；工具自动校验、归并、生成ID/来源并原子保存；不填写usage或自造provenance。',
+  next: '读取未抽取的下一批，**原文已切好块**（零模型）：每个 unit 带 blocks[{id,kind,text,hint,speakerHint}]，模型只需逐块给 {id,who,ch} 绑定，不必自己切句或写事件文本。单轮扫描：一次同时抽剧情、人物、设定、关系、知情与伏笔。相同断点重读不耗推理；done且phase:ready才能finish。',
+  submit: '提交当前批结果，必须带taskId、expectedRevision与稳定submissionId。两种形态：bindings（推荐，窄绑定 {id,blocks:[{id,who,ch}],settings,knowledge,hooks,aka}，服务端按块原文回组装事件正文并校验幻觉 who）或 rows（完整行，兼容旧用法）。可只交合法部分，遗漏段仍待办；工具自动校验、归并、生成ID/来源并原子保存。',
   status: '读取断点、源目录及成果。sources不需dataset：先列已启用板块，再带pluginId/dir列文件。summary列runId；manifest列范围；entries列三层条目；entry/row按id和offset读JSON分片，拼到nextOffset:null；changes/warnings列影响清单。分页沿用同一快照版本。',
   finish: '覆盖检查通过后发布draft/proposed三层快照＋基础索引及差异清单。原稿变更、漏段或并发基线冲突会拒绝。不会自动采纳，不会覆盖作者已adopted/superseded事实；成果用status读取，后续作者采纳另走事实库入口。',
   fact_check: '整库一致性检测（只读，不写断点、不改条目）：锚点/规则/时间轴/知情四类断言＋关系与知情引用悬空、同名跨层、槽位堆积、伏笔统计。可判定项进 conflicts（error）与 warnings；不可判定项如实列 undecidable。全书拆解完成或改编改写前过一遍；不带 runId 检测已发布快照，带 runId 检测进行中已交的行。'
@@ -57,6 +79,9 @@ function validate(value, schema, path = 'arguments') {
   if (schema.type === 'array') {
     if (!Array.isArray(value)) return `${path}须为数组`
     if (schema.minItems !== undefined && value.length < schema.minItems) return `${path}条数不足`
+    // 只校验形状、不校验元素时（约定为「省略 items」），元素照原样交给服务层做业务校验。
+    // 之前这里对没写 items 的 schema 会解引用 undefined 直接崩（P-1 真跑撞到）。
+    if (!schema.items) return null
     for (let index = 0; index < value.length; index += 1) {
       const error = validate(value[index], schema.items, `${path}[${index}]`)
       if (error) return error

@@ -439,6 +439,10 @@ test('P-TRIM Track 4：缓存池 flush——达水位时折进 archive，working
   assert.equal(done2.cacheTier.level.entries, 0, 'working 彻底换新（清空）')
   assert.ok(done2.cacheTier.archive > 0, 'archive 有内容了')
   assert.ok(done2.cacheTier.flush.knowledgeMap > 0, '产出知识映射')
+  // 回执的 entries 必须是**总量**并拆开：只报 working 会让 10 章发布看起来只有十几条（真跑撞到过）。
+  assert.equal(done2.entries, (done2.entriesWorking ?? 0) + (done2.entriesArchive ?? 0), 'entries＝working＋archive')
+  assert.equal(done2.entriesWorking, 0)
+  assert.equal(done2.entriesArchive, done2.cacheTier.archive)
   const archive2 = await f.good('status', { dataset: 'book', view: 'archive' })
   assert.ok(archive2.total > 0, 'archive 分页可读')
   assert.ok(archive2.knowledgeMap > 0)

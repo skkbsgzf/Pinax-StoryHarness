@@ -14,6 +14,8 @@ import {
   CACHE_TIER_VERSION, buildKnowledgeMap, normalizeFlushPolicy, planFlush, workingLevel
 } from '../fact/usecases/pipeline/cacheTier.js'
 import { checkConsistency } from '../fact/usecases/consistency.js'
+import { segmentBlocks } from '../fact/usecases/pipeline/blocks.js'
+import { bindSegment, resolveSegmentId } from '../fact/usecases/pipeline/bindRows.js'
 
 // 派生数据与作者 FactStore 分开：finish 发布待审快照，不采纳、不写正文/世界书。
 // 一个 dataset 一份原子文件，包含已发布快照和运行断点，避免“两文件只写成一半”。
@@ -177,12 +179,24 @@ export function createFactExtractionService({ root = null, fileService = null, r
     const source = run.sources.find((item) => item.segments.some((unit) => unit.id === candidates[0].id))
     const texts = await verifySources(run, [source.id])
     const segments = segmentText(texts.get(source.id))
-    const task = { dataset: state.dataset, runId: run.id, revision: run.revision, phase, taskId: '', source: { id: source.id, chapterNo: source.chapterNo }, units: [] }
+    // P-1：下一批直接**带上切好的块**（零模型），模型只需给 {id,who,ch} 绑定。
+    // 这就是「LLM 只做机械流水线」在产品链路上的落点：agent 不再自己判批、自己切句、自己写事件文本。
+    const knownNames = Array.isArray(run.nameTable) ? run.nameTable : []
+    const task = {
+      dataset: state.dataset, runId: run.id, revision: run.revision, phase,
+      taskId: '', source: { id: source.id, chapterNo: source.chapterNo },
+      units: [], knownNames: knownNames.slice(0, 200)
+    }
     const candidateIds = new Set(candidates.map((item) => item.id))
     let chars = 0
     for (const meta of source.segments.filter((item) => candidateIds.has(item.id))) {
       if (task.units.length && chars + meta.chars > run.batchChars) break
-      const unit = { id: meta.id, index: meta.index, chars: meta.chars, text: segments.find((item) => item.index === meta.index).text }
+      const text = segments.find((item) => item.index === meta.index).text
+      const { blocks } = segmentBlocks(text, { knownNames })
+      const unit = { id: meta.id, index: meta.index, chars: meta.chars, text, blocks: blocks.map((block) => ({
+        id: block.id, kind: block.kind, text: block.text,
+        hint: block.channelHint, speakerHint: block.speakerHint ?? null
+      })) }
       if (JSON.stringify({ ...task, units: [...task.units, unit] }).length > RESULT_CHARS - 100) break
       task.units.push(unit)
       chars += meta.chars
@@ -234,7 +248,10 @@ export function createFactExtractionService({ root = null, fileService = null, r
         const id = randomUUID()
         const run = { id, requestId, requestHash, version: EXTRACTION_CHAIN_VERSION, revision: 1, baseRevision: state.revision, spec, sources, rows, reusedSources,
           removedSources: (state.current?.sources ?? []).filter((old) => !sources.some((source) => source.id === old.id)).map((source) => source.id),
-          receipts: {}, batchChars: args.batchChars ?? 3600, finished: false }
+          receipts: {}, batchChars: args.batchChars ?? 3600, finished: false,
+          // P-3/P-4：跨批累积名表（供切块器找说话人）与 run 级时间地点默认值（段级可覆盖）。
+          nameTable: [],
+          timeDefaults: { when: args.timeDefaults?.when ?? null, where: args.timeDefaults?.where ?? null } }
         state.runs[id] = run
         return { state, value: summary(state, run) }
       })
@@ -258,7 +275,54 @@ export function createFactExtractionService({ root = null, fileService = null, r
         const task = await nextTask(state, run)
         if (task.done || task.taskId !== args.taskId) reject('TASK_STALE', 'taskId不属于当前批次。')
         const ids = task.units.map((unit) => unit.id)
-        const check = validateExtractionRows(args.rows ?? [], allSegments(run).filter((unit) => ids.includes(unit.id)))
+        // 双形态提交（P-1）：rows＝完整行（兼容既有用法）；bindings＝窄绑定（服务端零模型回组装）。
+        // 两者可同时给：bindings 先按段回组装，rows 再覆盖同段（便于「绑定没好的一两段手工补」）。
+        const hasBindings = Array.isArray(args.bindings) && args.bindings.length > 0
+        if (!hasBindings && !Array.isArray(args.rows)) reject('INVALID_INPUT', 'submit需要rows或bindings之一。')
+        const assembled = []
+        const bindStats = { segments: 0, blocks: 0, bound: 0, hallucinated: 0, ruleFallback: 0, unknownChannel: 0, akaPairs: 0 }
+        if (hasBindings) {
+          // 段 id 容错对齐：模型会改写 id（排版前缀／唯一前缀截断／改用「第N段」序号）。
+          // 四种可确定性还原的形态在 resolveSegmentId 里抹平；对不上才走规则兜底。
+          const matchable = task.units.map((unit) => ({ id: unit.id, index: unit.index }))
+          const byId = new Map()
+          let unmatchedBindings = 0
+          for (const item of args.bindings) {
+            if (!item || typeof item !== 'object') continue
+            const resolved = resolveSegmentId(item.id, matchable)
+            if (resolved) byId.set(resolved, item)
+            else unmatchedBindings += 1
+          }
+          for (const unit of task.units) {
+            const { row, stats } = bindSegment(unit, byId.get(unit.id) ?? {}, {
+              knownNames: [...(task.knownNames ?? []), ...run.nameTable ?? []],
+              when: run.timeDefaults?.when,
+              where: run.timeDefaults?.where
+            })
+            assembled.push(row)
+            bindStats.segments += 1
+            bindStats.blocks += stats.blocks
+            bindStats.bound += stats.bound
+            bindStats.hallucinated += stats.hallucinated
+            bindStats.ruleFallback += stats.ruleFallback
+            bindStats.unknownChannel += stats.unknownChannel
+            bindStats.akaPairs += stats.akaPairs
+          }
+          // 对齐失败的绑定数要暴露出来——静默降级会让「模型没回绑定」看起来像「抽了但没主体」。
+          bindStats.unmatchedBindings = unmatchedBindings
+          if (!assembled.length) reject('EMPTY_SUBMISSION', 'bindings里没有可对齐的段。')
+        }
+        // rows 显式覆盖同段：先按段号合并（bindings 产物在前、rows 在后），再交校验——
+        // 否则同一段两份行会让校验如实报「重复段」，而用户的意图明明是「这段我手工补」。
+        const submitted = new Map()
+        for (const row of assembled) submitted.set(row.segmentId, row)
+        for (const row of Array.isArray(args.rows) ? args.rows : []) {
+          const id = row && typeof row === 'object' ? row.segmentId : null
+          if (typeof id === 'string') submitted.set(id, row)
+          else submitted.set(`__unkeyed_${submitted.size}`, row) // 无段号的行交回校验如实拒
+        }
+        const check = validateExtractionRows([...submitted.values()],
+          allSegments(run).filter((unit) => ids.includes(unit.id)))
         if (!check.ok) reject(check.error.code, check.error.message, check.error.details)
         const corrected = check.value.map((row) => row.segmentId)
         if (!corrected.length) reject('EMPTY_SUBMISSION', '未交任何结果，不推进断点。')
@@ -267,8 +331,12 @@ export function createFactExtractionService({ root = null, fileService = null, r
         compile({ sources: run.sources, rows: Object.values(merged), ...run.spec })
         run.rows = merged
         run.receipts[args.submissionId] = hash
+        // P-3：跨批名表累积（只增名，不带证据）——下一批的切块器能立刻用它找说话人。
+        if (hasBindings) {
+          run.nameTable = [...new Set([...(run.nameTable ?? []), ...corrected.flatMap((id) => merged[id]?.who ?? [])])]
+        }
         run.revision += 1
-        return { state, value: summary(state, run) }
+        return { state, value: { ...summary(state, run), ...(hasBindings ? { bindStats } : {}) } }
       })
     },
     async finish({ dataset, runId, expectedRevision, flushPolicy }) {
@@ -366,8 +434,14 @@ export function createFactExtractionService({ root = null, fileService = null, r
         state.cacheTier = { version: CACHE_TIER_VERSION, working: workingLevel(working, lockPolicy), archive: archiveAfter.length }
         run.finished = true
         run.revision += 1
-        return { state, value: { ...summary(state, run), entries: working.length, warnings: fold.warnings.length, changes: changed.length + mergedRecords.length + removed.length, index: buildIndex(working),
-          consolidation: { ...fold.stats, version: fold.version }, cacheTier: { level: workingLevel(working, lockPolicy), archive: archiveAfter.length, flush: flushReport }, publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果。尚未写入作者事实库或自动采纳。' } }
+        // entries 报**总量**（working＋archive）并拆开写清：只报 working 会让 10 章发布看起来
+        // 只有 18 条（其余 137 条是达水位折进 archive 的，不是丢了）。
+        return { state, value: { ...summary(state, run),
+          entries: working.length + archiveAfter.length,
+          entriesWorking: working.length,
+          entriesArchive: archiveAfter.length,
+          warnings: fold.warnings.length, changes: changed.length + mergedRecords.length + removed.length, index: buildIndex(working),
+          consolidation: { ...fold.stats, version: fold.version }, cacheTier: { level: workingLevel(working, lockPolicy), archive: archiveAfter.length, flush: flushReport }, publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果；working 层是快层（进 prompt），archive 层是冷层（按检索取）。尚未写入作者事实库或自动采纳。' } }
       })
     },
     /** 一致性检测（工具名 pinax_fact_check）：对已发布快照整库过一遍（也可指定 runId 用该运行已交的行现场编译）。只读，不写断点。
