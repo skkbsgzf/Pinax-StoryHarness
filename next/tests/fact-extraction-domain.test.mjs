@@ -28,7 +28,9 @@ const row = (segment, overrides = {}) => ({
   who: [], when: { story_time: '', timeline: '未明示' }, where: '',
   events: [], notes: '', characters: [], settings: [], ...overrides
 })
-const compile = (sources, rows, context = CONTEXT) => compileExtractionEntries({ sources, rows, ...context })
+// 域层关注点是 schema／合并／槽位／别名，不是显著度剪枝——本文件统一关掉剪枝（floor=0），
+// 剪枝行为在 fact-salience.test.mjs 里单独钉死。
+const compile = (sources, rows, context = CONTEXT) => compileExtractionEntries({ sources, rows, policy: { characterEntryFloor: 0, worldviewEntryFloor: 0 }, ...context })
 
 function assertEntries(entries) {
   for (const entry of entries) {
@@ -345,7 +347,9 @@ test('别名碰撞只告警：别名对别名、别名对正式名、跨槽位�
 
 test('castRole 跨段同 tier 合并目标，不同 tier 全部带出处保留并告警，不伪造枚举', () => {
   const built = source()
+  // 每段带 do 事件给足显著度（要验 castRoles 合并，不是剪枝；剪枝另有专测）
   const rows = built.segments.map((segment, index) => row(segment, {
+    events: [{ who: '柯秒', channel: 'do', content: `动作${index}` }],
     characters: [character({ castRole: { tier: index === 2 ? 'minor' : 'supporting', goal: `目标${index}`, plotFunction: `作用${index}` } })]
   }))
   const same = compile([built], rows.slice(0, 2)).entries.find((entry) => entry.layer === 'character')

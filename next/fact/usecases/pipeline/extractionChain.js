@@ -7,6 +7,10 @@ import { sha1Hex, stableEntryId } from '../../domain/stableId.js'
 import { validateFactEntry } from '../../domain/schema.js'
 import { createAliasIndex } from '../../domain/aliases.js'
 import { CAST_ROLE_TIERS, FACT_SCHEMA, WORLDVIEW_SLOT_NAMES } from '../../domain/vocabulary.js'
+import {
+  characterSalience, decideCharacter, fieldsForTier,
+  normalizeSaliencePolicy, summarizePruning, worldviewSalience
+} from './salience.js'
 
 export const EXTRACTION_CHAIN_VERSION = 'fact-chain/v1'
 
@@ -543,7 +547,7 @@ function warnAliases(entries, warnings) {
 }
 
 /** 编译失败抛带 code/details 的错误；绝不返回部分成功或跳过非法条目。 */
-export function compileExtractionEntries({ sources, rows, domain = '', book = '', bookId = '' } = {}) {
+export function compileExtractionEntries({ sources, rows, domain = '', book = '', bookId = '', policy = undefined } = {}, options = {}) {
   const details = []
   const normalizedSources = validateShape(sources, { type: 'array', items: sourceSchema }, 'sources', details)
   const context = validateShape({ domain, book, bookId }, objectSchema({ domain: textSchema, book: textSchema, bookId: textSchema }), 'context', details)
@@ -636,12 +640,81 @@ export function compileExtractionEntries({ sources, rows, domain = '', book = ''
       }
     }
   }
+  // 显著度剪枝（T-2 前置件，作者 2026-11-11 裁定）：权重不够的角色**不建条目**——
+  // 「经理」这类只被顺口一提、无台词无动作的角色只作为提及名登记（index.mentions），不占世界书。
+  // 权重只看可数证据（出场段/台词/动作/跨章/关系/知情/剧作档），阈值从 options.policy 注入，全可配。
+  const saliencePolicy = normalizeSaliencePolicy(policy ?? options.policy)
+  const pruningDecisions = []
+  const prunedNames = []
+  const characterRecords = [...characters].map(([name, records]) => {
+    const evidence = records.map((record) => record.evidence)
+    const chapterSet = new Set(evidence.map(({ source }) => source.chapterNo))
+    const tiers = records.map(({ item }) => item?.castRole?.tier).filter(Boolean)
+    const castTier = tiers.includes('protagonist') ? 'protagonist' : tiers.includes('supporting') ? 'supporting' : tiers.length ? 'minor' : null
+    // 行为通道计数：从本 run 的行里数（同一段内该角色做/说了几次）
+    let sayings = 0
+    let actings = 0
+    let perceivings = 0
+    for (const row of validation.value) {
+      for (const event of row.events ?? []) {
+        if (canon(normalizeName(event.who)) !== name) continue
+        if (event.channel === 'say') sayings += 1
+        else if (event.channel === 'do') actings += 1
+        else if (['see', 'hear', 'feel', 'think', 'perceive', 'state', 'recall'].includes(event.channel)) perceivings += 1
+      }
+    }
+    const salience = characterSalience({
+      segments: new Set(evidence.map(({ segment }) => segment.id)).size,
+      chapters: chapterSet.size,
+      sayings, actings, perceivings,
+      relations: relations.filter((edge) => edge.from === name || edge.to === name).length,
+      knowledge: knowledge.filter((record) => record.character === name).length,
+      castTier
+    }, policy)
+    const decision = decideCharacter(salience.score, policy)
+    pruningDecisions.push({ name, decision: { ...decision, breakdown: salience.breakdown } })
+    if (!decision.keep) prunedNames.push(name)
+    return { name, records, decision }
+  })
+  const keptCharacters = characterRecords.filter((item) => item.decision.keep)
+  // 剪掉的角色的关系/知情一并剪（否则被剪的名字会以关系目标形态漏进别的条目）
+  const prunedSet = new Set(prunedNames)
+  const keptRelations = relations.filter((edge) => !prunedSet.has(edge.from) && !prunedSet.has(edge.to))
+  const keptKnowledge = knowledge.filter((record) => !prunedSet.has(record.character))
+
   const entities = [
-    ...[...characters].map(([name, records]) => compileCharacter(name, records, context, warnings, {
-      relations, knowledge, memberNames: memberNames.get(name) ?? []
-    })),
-    ...[...settings.values()].map((records) => compileSetting(records, context, warnings))
+    ...keptCharacters.map(({ name, records, decision }) => {
+      const entry = compileCharacter(name, records, context, warnings, {
+        relations: keptRelations, knowledge: keptKnowledge, memberNames: memberNames.get(name) ?? []
+      })
+      // 深度分层：按档裁剪字段组（minimal 只留身份；brief 砍记忆点/剧作功能/知情；full 全留）
+      const allowed = new Set(fieldsForTier(decision.tier))
+      for (const key of ['personality', 'traits', 'anchors', 'castRole', 'castRoles', 'knowledge', 'relations', 'memoryPoints']) {
+        if (!allowed.has(key) && entry[key] !== undefined) delete entry[key]
+      }
+      if (decision.tier !== 'full') entry.salienceTier = decision.tier
+      return entry
+    }),
+    ...[...settings.values()].map((records) => {
+      const draft = compileSetting(records, context, warnings)
+      const definitionChars = typeof draft.definition === 'string' ? draft.definition.length : 0
+      const segments = new Set(records.map((record) => record.evidence.segment.id)).size
+      return { draft, verdict: worldviewSalience({ definitionChars, segments }, saliencePolicy) }
+    }).filter(({ draft, verdict }) => {
+      if (verdict.keep) return true
+      warnings.push({ code: 'WORLDVIEW_PRUNED', entryId: draft.id, name: draft.name, message: verdict.reason })
+      return false
+    }).map(({ draft }) => draft)
   ]
+  const pruning = summarizePruning(pruningDecisions)
+  if (pruning.pruned) {
+    warnings.push({
+      code: 'SALIENCE_PRUNED',
+      count: pruning.pruned,
+      names: pruning.prunedNames,
+      message: `${pruning.pruned} 个角色显著度低于门槛，未建条目（只作提及名登记）：${pruning.prunedNames.join('、')}`
+    })
+  }
   // 跨名合并的冲突留痕：同一个称呼被两条不同条目声明为 alias/组员 → union-find 会把两组并成一个，
   // 这是激进版的既定行为，但必须记账（谁和谁被哪个称呼并到一起了），不许静默。
   for (const conflict of aliasIndex.conflicts()) {
@@ -663,15 +736,27 @@ export function compileExtractionEntries({ sources, rows, domain = '', book = ''
     for (const warning of result.warnings) warnings.push({ entryId: entry.id, ...warning })
   }
   if (details.length) fail('INVALID_EXTRACTION', '编译结果不符合 fact.data/v2', details)
-  return { entries, warnings, index: buildIndex(entries) }
+  return {
+    entries, warnings, pruning,
+    index: buildIndex(entries, {
+      mentions: prunedNames,
+      pruning: { version: saliencePolicy.version, kept: pruning.kept, pruned: pruning.pruned, byTier: pruning.byTier, prunedNames: pruning.prunedNames }
+    })
+  }
 }
 
 /** 基础索引：名/别名/槽位/层 → 条目 ID。只留查得到的索引，不做第二份内容副本。 */
-export function buildIndex(entries) {
+export function buildIndex(entries, options = {}) {
   const byName = {}
   const byAlias = {}
   const bySlot = {}
   const byLayer = {}
+  const mentions = {}
+  // 剪掉的提及名：名字确实存在过、只是没建条目。引用解析据此区分「悬空（数据错）」与「剪枝（正常）」。
+  for (const name of Array.isArray(options.mentions) ? options.mentions : []) {
+    const token = normalizeName(name)
+    if (token) mentions[token] = 'pruned'
+  }
   for (const entry of entries) {
     byName[entry.name] = entry.id
     byLayer[entry.layer] = (byLayer[entry.layer] ?? 0) + 1
@@ -682,5 +767,9 @@ export function buildIndex(entries) {
       ;(byAlias[token] ??= []).push(entry.id)
     }
   }
-  return { entries: entries.length, byLayer, bySlot, byName, byAlias }
+  return {
+    entries: entries.length, byLayer, bySlot, byName, byAlias,
+    ...(Object.keys(mentions).length ? { mentions } : {}),
+    ...(options.pruning ? { pruning: options.pruning } : {})
+  }
 }

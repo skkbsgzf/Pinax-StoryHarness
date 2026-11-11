@@ -620,7 +620,8 @@ test('抽取链：settings 给了 constraints 就落进条目 constraint，不�
   const withConstraints = compileExtractionEntries({
     sources: [built],
     rows: [{ ...rowBase, settings: [{ name: '钟楼规则', slot: 'rules', definition: '钟楼每夜多响一声。', aliases: [], constraints: [{ key: '钟声次数', value: '12' }] }] }],
-    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234',
+    policy: { characterEntryFloor: 0, worldviewEntryFloor: 0 }
   })
   const rule = withConstraints.entries.find((entry) => entry.name === '钟楼规则')
   assert.deepEqual(rule.constraint, [{ key: '钟声次数', value: '12', scope: 'entry' }], '模型给的约束原样落进条目（scope 缺省 entry）')
@@ -628,7 +629,8 @@ test('抽取链：settings 给了 constraints 就落进条目 constraint，不�
   const without = compileExtractionEntries({
     sources: [built],
     rows: [{ ...rowBase, settings: [{ name: '钟楼规则2', slot: 'rules', definition: '另一条规则。', aliases: [] }] }],
-    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234',
+    policy: { characterEntryFloor: 0, worldviewEntryFloor: 0 }
   })
   const plain = without.entries.find((entry) => entry.name === '钟楼规则2')
   assert.equal(plain.constraint, undefined, '不给就不带该字段（那条仍进 undecidable，如实记账）')
@@ -687,7 +689,8 @@ test('X4：constraints.value 接受联合类型（number/boolean/null/字符串�
       events: [], notes: '', characters: [],
       settings: [{ name: '钟楼规则', slot: 'rules', definition: '钟楼每夜多响一声。', aliases: [], constraints: [{ key: '钟声次数', value: 12 }] }]
     }],
-    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234',
+    policy: { characterEntryFloor: 0, worldviewEntryFloor: 0 }
   })
   assert.deepEqual(result.entries.find((item) => item.name === '钟楼规则').constraint, [{ key: '钟声次数', value: 12, scope: 'entry' }], '数字 value 直接过编译（不再逼写 "12"）')
 
@@ -699,6 +702,7 @@ test('X4：constraints.value 接受联合类型（number/boolean/null/字符串�
       events: [], notes: '', characters: [],
       settings: [{ name: '钟楼规则', slot: 'rules', definition: 'x', aliases: [], constraints: [{ key: 'k', value: { nested: true } }] }]
     }],
-    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234'
+    domain: '停摆之城', book: '停摆之城', bookId: 'abcd1234',
+    policy: { characterEntryFloor: 0, worldviewEntryFloor: 0 }
   }), (error) => error.code === 'INVALID_EXTRACTION', '容器类型在联合里被明确拒（不支持分支深校验）')
 })
