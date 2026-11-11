@@ -103,6 +103,91 @@ async function neutralCwd() {
  * @param {{prompt:string, model?:string, timeoutMs?:number, signal?:AbortSignal, command?:string, cwd?:string, effort?:string}} request
  * @returns {Promise<{text:string, usage:{promptTokens:number|null, completionTokens:number|null}, model:string, durationMs:number|null, numTurns:number|null}>}
  */
+/**
+ * Pi 任务面通道（P-LLM 作者裁定：本地有 Pi 真实环境，走库上代码，不起 CLI 子进程）。
+ *
+ * 契约与 CLI 通道完全一致（{prompt, model, timeoutMs, signal} → {text, usage, model, durationMs}），
+ * 所以 createFactLlmService 的 dispatch 注入点不用改：换通道＝换一个函数。
+ *
+ * 为什么单独放这一层而不是直接 import forwardComplete：
+ *   · forwardComplete 在 server/**（旧轨），fact 通道必须能在 next/ 侧独立测试（注入假 fetch）；
+ *   · 这里只依赖一个 fetchImpl（默认真 fetch），于是单测零网络；
+ *   · 端点从 env PINAX_ADAPTER_ENDPOINT 或 shared/kitTaskPlane 的默认值取，与既有网关同一口径。
+ *
+ * Pi 任务面端点（storyflow-kit/storyharness，npm run serve:pinax）：
+ *   GET  /healthz  探活
+ *   POST /v1/pinax/complete  { systemPrompt?, messages|prompt, maxTokens? } → { ok, content, usage, model }
+ */
+export async function dispatchPiCompletion({
+  prompt,
+  model = null,
+  timeoutMs = 180_000,
+  signal,
+  endpoint = process.env.PINAX_ADAPTER_ENDPOINT || 'http://127.0.0.1:8451',
+  fetchImpl = fetch
+} = {}) {
+  if (signal?.aborted) {
+    throw Object.assign(new Error('推演补全在发起前已被取消'), { code: 'FACT_LLM_ABORTED' })
+  }
+  const startedAt = Date.now()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const onAbort = () => controller.abort(signal?.reason)
+  if (signal) {
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  try {
+    const response = await fetchImpl(new URL('/v1/pinax/complete', endpoint), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        messages: [{ role: 'user', content: String(prompt ?? '') }],
+        ...(model ? { model } : {})
+      }),
+      signal: controller.signal
+    })
+    const body = await response.json().catch(() => null)
+    if (!response.ok || body?.ok !== true) {
+      throw Object.assign(
+        new Error(`Pi 任务面拒绝补全（${response.status}）：${String(body?.message ?? '').slice(0, 300)}`),
+        { code: 'FACT_LLM_UPSTREAM_FAILED', status: response.status }
+      )
+    }
+    const text = String(body?.content ?? '')
+    // 静默失败显式化：任务面在模型层失败时会回 ok:true + 空 content + finishReason:"error"，
+    // 若只看空串就报「空补全」，根因（缺 API key / 鉴权失败 / 上游 5xx）会被埋掉。
+    // 这里按 finishReason 分级如实报，缺什么说什么。
+    if (!text.trim()) {
+      const reason = String(body?.finishReason ?? '')
+      const hint = reason === 'error'
+        ? '任务面自报 finishReason=error——通常是模型凭据缺失或上游鉴权失败（检查 Pi 任务面的 ZAI_API_KEY / .external/pinax-adapter.json）'
+        : reason === 'empty'
+          ? '模型返回了空内容'
+          : '任务面没有说明原因'
+      throw Object.assign(
+        new Error(`Pi 任务面交回了空补全（finishReason=${reason || '未给'}）：${hint}。这次不编任何文字`),
+        { code: reason === 'error' ? 'FACT_LLM_UPSTREAM_ERROR' : 'FACT_LLM_EMPTY', finishReason: reason || null }
+      )
+    }
+    return {
+      text,
+      usage: body?.usage ?? null,
+      model: String(body?.model ?? model ?? 'pi'),
+      durationMs: Number.isFinite(body?.durationMs) ? body.durationMs : (Date.now() - startedAt),
+      numTurns: null
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw Object.assign(new Error(`推演补全超时（${timeoutMs}ms）：Pi 任务面没有在时限内交回结果`), { code: 'FACT_LLM_TIMEOUT' })
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
 export async function dispatchCodebuddyCompletion({ prompt, model = FACT_LLM_DEFAULT_MODEL, timeoutMs = 180_000, signal, command = 'codebuddy', cwd = null, effort = null } = {}) {
   if (signal?.aborted) {
     throw Object.assign(new Error('推演补全在发起前已被取消'), { code: 'FACT_LLM_ABORTED' })
