@@ -437,9 +437,14 @@ test('hub → 世界书（没有 next 快照）：损失逐条标注，type/cat 
   const again = worldbookToHub([{ ...orderedBack.entry, contract: true }], { book: '停摆之城' })
   assert.equal(again.entries[0].rank, 3, 'hub → 世界书 → hub 保住 rank')
 
-  const wrongLayer = hubToWorldbook({ ...native, layer: 'character' })
+  // SCRIPT-1（A3）：character 层已放开（人物卡导出）；plot 层没有世界书对应物，仍然拒。
+  const characterCard = hubToWorldbook({ ...native, layer: 'character', slot: '', definition: undefined, identity: '钟表匠。' })
+  assert.equal(characterCard.ok, true, 'character 层可导出人物卡')
+  assert.equal(characterCard.entry.kind, 'character')
+  const wrongLayer = hubToWorldbook({ ...native, layer: 'plot' })
   assert.equal(wrongLayer.ok, false)
   assert.equal(wrongLayer.error.code, 'WRONG_LAYER')
+  assert.match(wrongLayer.error.message, /plot/u)
 })
 
 test('stripContent：正文剥离并记账，反向用调用方正文重建', () => {
