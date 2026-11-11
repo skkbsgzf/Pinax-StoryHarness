@@ -45,7 +45,7 @@ const LEGACY_CSS = [
  *   authoring-knowledge__* → 老版作品资料助手的会话控件
  *     （AuthoringKnowledgeAssistant.vue，Next 右栏的对话框整块抽自它）
  */
-const SHARED_BUTTON_CLASSES = ['control-', 'nx-row', 'workspace-nav-item', 'nx-ribbon-item', 'authoring-knowledge__']
+const SHARED_BUTTON_CLASSES = ['control-', 'nx-row', 'workspace-nav-item', 'nx-ribbon-item', 'authoring-knowledge__', 'lib-']
 
 /** 允许出现的颜色关键字：这三个不是「写死的颜色」。 */
 const COLOR_ALLOWED = new Set(['transparent', 'currentcolor', 'inherit'])

@@ -294,9 +294,9 @@ test('recentProjects 值域：非数组拒绝；坏条目丢弃不整体打回�
   ] })
   assert.equal(messy.ok, true)
   assert.deepEqual(messy.value.recentProjects, [
-    { path: 'D:/books/大梦', name: '大梦', at: null },
-    { path: 'D:/books/空名', name: null, at: '2026-11-10T00:00:00.000Z' }
-  ], '坏条目丢、好条目归一（trim 路径与名、坏时间戳置 null）')
+    { path: 'D:/books/大梦', name: '大梦', kind: null, at: null },
+    { path: 'D:/books/空名', name: null, kind: null, at: '2026-11-10T00:00:00.000Z' }
+  ], '坏条目丢、好条目归一（trim 路径与名、坏时间戳置 null、kind 可选透传）')
 
   const cleared = normalizePrefs({ recentProjects: [] })
   assert.deepEqual(cleared.value.recentProjects, [], '空数组＝清空，合法')

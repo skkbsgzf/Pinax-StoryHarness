@@ -599,7 +599,8 @@ test('主进程历史接线（D1）：建仓＋起表＋关窗兜底＋写入标
   assert.match(mainSource, /ensureHistoryRepo\(\{\s*root:\s*projectRoot\s*\}\)/, '项目打开后必须建独立历史仓库')
   assert.match(mainSource, /historyScheduler\.start\(\{\s*root:\s*projectRoot/, '建仓后必须起定时提交')
   // 最近项目点单后 onProjectOpened 变成「先记账再接历史」的 wrapper——历史接线仍在链上。
-  assert.match(mainSource, /onProjectOpened: async \(info\) => \{[\s\S]{0,600}recordRecentProject\(info\?\.root, info\?\.name \?\? null\)[\s\S]{0,200}await beginHistory\(info\)/, '打开/刷新项目必须触发历史接线（最近项目记账排在其前）')
+  // （前端工单 A：wrapper 再加 kind 第三参——库卡片的类型胶囊吃这一格。）
+  assert.match(mainSource, /onProjectOpened: async \(info\) => \{[\s\S]{0,600}recordRecentProject\(info\?\.root, info\?\.name \?\? null, info\?\.kind \?\? null\)[\s\S]{0,200}await beginHistory\(info\)/, '打开/刷新项目必须触发历史接线（最近项目记账排在其前）')
   assert.match(mainSource, /history:\s*\{\s*gitHistory,\s*scheduler:\s*historyScheduler\s*\}/, 'gitHistory/scheduler 必须经 deps 注入分发器')
   assert.match(mainSource, /setOnWrite\(async \(\{ relativePath \}\)/, '标脏钩子必须读 fileService 的 relativePath')
   assert.match(mainSource, /markDirty\(\{\s*root:\s*projectRoot,\s*paths:\s*\[relativePath\]\s*\}\)/, '写成功后按相对路径标脏')
@@ -685,8 +686,8 @@ test('主进程把偏好真正接到网关与窗口：端点 setter、启动即�
   assert.match(mainSource, /createAppPreferences\(/, '主进程必须创建偏好存储')
   assert.match(mainSource, /applyModelPlaneEndpoint\(stored\.modelPlaneEndpoint\)/, '启动时必须应用已存端点')
   // 批次49：服务日志池也在这里注入（分发器读快照／确认都靠它）。
-  // 最近项目点单：recentProjects 的只读口径也经这里进分发器（recent-list 通道，夹在池与探测之间）。
-  assert.match(mainSource, /prefs,\s*\n\s*serviceLogPool,[\s\S]{0,200}recentProjects:[\s\S]{0,200}probeModelPlane/, '分发器必须注入偏好、服务日志池与探测（最近项目清单的只读口径同场）')
+  // 最近项目点单：recentProjects 的只读口径也经这里进分发器；前端工单 A 再加 reveal/remove 两注入（窗口区间放宽）。
+  assert.match(mainSource, /prefs,\s*\n\s*serviceLogPool,[\s\S]{0,400}recentProjects:[\s\S]{0,1400}probeModelPlane/, '分发器必须注入偏好、服务日志池与探测（最近项目清单与 reveal/remove 同场）')
   assert.match(mainSource, /onPrefsApplied/, '保存后的生效钩子必须接上')
   assert.match(mainSource, /showOpenDialog/, '选目录必须走系统对话框（批次9：新项目落点）')
   assert.doesNotMatch(mainSource, /\.\.\/\.\.\/server\//, '外壳不得直接 import server/——端点收在 runtime 层（modelPlaneProbe）')
@@ -817,3 +818,27 @@ function harness() {
   }
   return { session, dispatcher: createIpcDispatcher({ session }) }
 }
+
+test('库管理器两通道（前端工单 A-3）：reveal 只认最近清单内的路径；recent-remove 只改记录不删盘（未注入如实报缺）', async () => {
+  const { session, dispatcher } = harness()
+  for (const channel of [IPC_CHANNELS.projectReveal, IPC_CHANNELS.projectRecentRemove]) {
+    const missing = await dispatcher.dispatch(channel, { path: 'D:/x' })
+    assert.equal(missing.ok, false, channel)
+    assert.equal(missing.error.code, NEXT_ERROR_CODES.INVALID_INPUT, channel)
+    assert.match(missing.error.message, /未接入|未注入/, channel)
+  }
+
+  const revealed = []
+  const removed = []
+  const wired = createIpcDispatcher({
+    session,
+    projectReveal: (input) => { revealed.push(input.path); return ok({ shown: true }) },
+    projectRecentRemove: (input) => { removed.push(input.path); return ok({ removed: true, recents: [] }) }
+  })
+  const shown = await wired.dispatch(IPC_CHANNELS.projectReveal, { path: 'D:/books/大梦' })
+  assert.equal(shown.ok, true)
+  assert.deepEqual(revealed, ['D:/books/大梦'])
+  const removedResult = await wired.dispatch(IPC_CHANNELS.projectRecentRemove, { path: 'D:/books/大梦' })
+  assert.equal(removedResult.ok, true)
+  assert.deepEqual(removed, ['D:/books/大梦'])
+})

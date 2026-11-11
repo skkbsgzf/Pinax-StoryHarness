@@ -30,8 +30,8 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *     只有主进程写（打开成功自动记、菜单「清除最近打开」清空）；渲染层只经 recent-list 通道读。
  */
 
-/** 最近项目清单上限：菜单里摆得下、偏好文件不至于长成一本书。 */
-export const RECENT_PROJECTS_LIMIT = 8
+/** 最近项目清单上限：库管理器列表摆得下（工单 A-2：8 → 20）、偏好文件不至于长成一本书。 */
+export const RECENT_PROJECTS_LIMIT = 20
 
 export const PREFS_DEFAULTS = Object.freeze({
   modelPlaneEndpoint: null,
@@ -223,12 +223,14 @@ export function normalizePrefs(raw) {
         if (!path || seen.has(path)) continue
         seen.add(path)
         const name = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : null
+        // kind＝项目类型（novel/script/…，工单 A-2 可选字段）：旧数据没有就留空，不为显示类型去扫盘。
+        const kind = typeof entry?.kind === 'string' && entry.kind.trim() ? entry.kind.trim() : null
         let at = null
         if (entry?.at) {
           const stamp = new Date(String(entry.at))
           at = Number.isNaN(stamp.getTime()) ? null : stamp.toISOString()
         }
-        list.push({ path, name, at })
+        list.push({ path, name, kind, at })
       }
       out.recentProjects = list.slice(0, RECENT_PROJECTS_LIMIT)
     }
@@ -287,5 +289,6 @@ export function mergeRecentProject(list, entry, limit = RECENT_PROJECTS_LIMIT) {
   if (!path) return (Array.isArray(list) ? list : []).slice(0, limit)
   const rest = (Array.isArray(list) ? list : []).filter((item) => item?.path !== path)
   const name = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : null
-  return [{ path, name, at: entry?.at ?? null }, ...rest].slice(0, limit)
+  const kind = typeof entry?.kind === 'string' && entry.kind.trim() ? entry.kind.trim() : null
+  return [{ path, name, kind, at: entry?.at ?? null }, ...rest].slice(0, limit)
 }

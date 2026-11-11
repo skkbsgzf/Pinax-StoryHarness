@@ -32,6 +32,7 @@ body {
   --nx-fs-lg: 15px;  /* 正文编辑与阅读 */
   --nx-fs-xl: 17px;  /* 卡片标题 */
   --nx-fs-2xl: 19px; /* 页面主标题 */
+  --nx-fs-hero: 28px; /* 库管理器等一级视图的页面标题（前端工单 C-2：28/1.2） */
   --nx-radius-xs: 6px; /* 小号图标按钮（28px 级） */
   --nx-radius-pill: 999px; /* 〔批次68-R2 任务二〕胶囊档：蓝链 .tag 皮与信息卡徽章共用（圆角也进刻度，不落裸值） */
   display: flex;

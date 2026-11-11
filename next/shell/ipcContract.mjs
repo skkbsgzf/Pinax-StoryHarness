@@ -36,6 +36,9 @@ export const IPC_CHANNELS = Object.freeze({
   // 最近打开的项目（应用级偏好）：只读拉取。记账与清空都不走渲染层——
   // 打开成功由主进程自动记，「清除最近打开」是菜单动作（project.recentClear）走主进程落点。
   projectRecentList: 'pinax:agent:project:recent-list',
+  // 库管理器（工单 A-3）：卡片「更多」菜单的两个动作——都只碰记录与文件管理器，不碰库内容。
+  projectReveal: 'pinax:agent:project:reveal',
+  projectRecentRemove: 'pinax:agent:project:recent-remove',
   projectImportRun: 'pinax:agent:project:import-run',
   // 批次30：大纲转换（散文章节稿 → 大纲/outline.json）。只对当前项目的 大纲/ 操作，
   // 外部稿子先走 E1 拷进来再转换；dryRun=true 只扫描，不写盘。
@@ -360,7 +363,7 @@ export function shellView(session) {
  *                       渲染层指定不了 model／cwd／command。不注入时 fact:llm-complete 如实报缺，
  *                       推演面板的戏剧✦层缺席不阻塞必然▮／命运⚙（失败隔离在 fact 消费侧）。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, recentProjects = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null, factLlm = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, recentProjects = null, projectReveal = null, projectRecentRemove = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null, factLlm = null }) {
   // 批次62 任务2：这条通道认的 id 集不再是「MENU_TEMPLATE 的拍平结果」这一份死集合，
   // 而是 MENU_TEMPLATE ∪ registry.commands()，每次现算（载体可被启用／停用）。
   // 见下方 acceptedMenuIds —— 全文件只有那一处口径。
@@ -441,7 +444,7 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
     if (!onProjectOpened || !result?.ok) return
     try {
       // name 给主进程的最近项目记账用（菜单标签「名 — 路径」）；读不到就空着，标签只摆路径。
-      await onProjectOpened({ root: session.projectRoot, fileService: result.value?.fileService ?? null, name: result.value?.document?.name ?? null })
+      await onProjectOpened({ root: session.projectRoot, fileService: result.value?.fileService ?? null, name: result.value?.document?.name ?? null, kind: result.value?.document?.kind ?? null })
     } catch {
       // 历史是旁路：probe 会如实显示不可用，项目本身照常可用。
     }
@@ -503,7 +506,19 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         // 只读拉取：主进程没接（jsdom 验收／裸会话）就如实回空清单——「没有记录」是合法答案，
         // 不学历史通道那样报缺：菜单少了这一块照常用，不该变成一条错误横幅。
         return ok({ recents: typeof recentProjects === 'function' ? (recentProjects() ?? []) : [] })
-      case IPC_CHANNELS.projectClose: {
+
+      case IPC_CHANNELS.projectReveal:
+        // 只请主进程在文件管理器里显示该目录：渲染层不碰 shell，路径由主进程校验在案（最近清单内）。
+        return projectReveal
+          ? projectReveal(input)
+          : fail('INVALID_INPUT', '文件管理器未接入（主进程未注入 reveal 入口）：这条通道现在只报缺')
+      case IPC_CHANNELS.projectRecentRemove: {
+        // 只移除最近清单里的记录，不删磁盘目录（工单 A-3 明文）；主进程按路径过滤后整份重写偏好。
+        const removed = typeof projectRecentRemove === 'function'
+          ? projectRecentRemove(input)
+          : fail('INVALID_INPUT', '最近清单服务未接入（主进程未注入移除入口）：这条通道现在只报缺')
+        return removed
+      }      case IPC_CHANNELS.projectClose: {
         const closed = await session.close()
         // 工单E3：关项目后停历史定时器。session.close 不清 projectRoot（既有语义不动），
         // 停表只能由外壳做；回调是旁路——抛错也不把「已关闭」翻成失败（probe 会如实显示不可用）。

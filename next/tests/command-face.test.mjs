@@ -661,8 +661,8 @@ test('最近项目 withRecentProjects：空清单原样返回；非空在 projec
   const spliced = withRecentProjects(MENU_TEMPLATE, recents)
   assert.notEqual(spliced, MENU_TEMPLATE, '非空清单要返回新数组（MENU_TEMPLATE 冻结，不许原地改）')
   assert.deepEqual(MENU_TEMPLATE[0].submenu.filter((item) => !item.type).map((item) => item.id), [
-    'project.create', 'project.open', 'project.import', 'project.backup', 'project.history', 'project.reviewProposals', 'project.proposals', 'app.quit'
-  ], '拼装不得污染冻结模板')
+    'project.create', 'project.open', 'project.import', 'project.backup', 'project.history', 'project.reviewProposals', 'project.proposals', 'project.library', 'app.quit'
+  ], '拼装不得污染冻结模板（「我的库…」随前端工单 A-1 收在项目组末尾）')
 
   const projectMenu = spliced.find((top) => top.label === '项目')
   const afterOpen = projectMenu.submenu.slice(projectMenu.submenu.findIndex((item) => item.id === 'project.open') + 1, projectMenu.submenu.findIndex((item) => item.id === 'project.import'))

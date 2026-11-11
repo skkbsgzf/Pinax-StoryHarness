@@ -31,6 +31,8 @@ export const MENU_TEMPLATE = Object.freeze([
       { id: 'project.reviewProposals', label: '提案审阅…', accelerator: 'CmdOrCtrl+Shift+R' },
       // 工单A：从「运行时」组迁来（那个组整体删了）。主进程收到后给渲染层发提案目录提示。
       { id: 'project.proposals', label: '打开提案目录' },
+      // 库管理器（前端工单 A-1）：有项目时点它＝关闭当前项目回到「我的库」（关闭通道已存在）。
+      { id: 'project.library', label: '我的库…' },
       { type: 'separator' },
       { id: 'app.quit', label: '退出', accelerator: 'CmdOrCtrl+Q', role: 'quit' }
     ]

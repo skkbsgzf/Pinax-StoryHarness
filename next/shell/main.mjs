@@ -501,9 +501,9 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   }
 
   /** 记一次「打开过」：合并进偏好并落盘；失败只进池留名，不挡打开本身。 */
-  async function recordRecentProject(root, name = null) {
+  async function recordRecentProject(root, name = null, kind = null) {
     if (!root || typeof root !== 'string') return
-    const entry = { path: root, name: typeof name === 'string' && name ? name : null, at: new Date().toISOString() }
+    const entry = { path: root, name: typeof name === 'string' && name ? name : null, kind: typeof kind === 'string' && kind ? kind : null, at: new Date().toISOString() }
     const current = await prefs.read()
     if (!current.ok) return
     const written = await prefs.write({ recentProjects: mergeRecentProject(current.value.recentProjects ?? [], entry) })
@@ -766,6 +766,30 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     serviceLogPool,
     // 最近打开的项目：只读口径（记账/清空都走主进程自己的函数），这里只把内存镜像摊出去。
     recentProjects: () => currentRecentProjects,
+    // 库管理器「更多」菜单：reveal 用 shell 打文件管理器（路径必须在本机最近清单里，防任意路径探测）；
+    // remove 只改偏好记录（整份重写走 normalizePrefs），磁盘目录原样。
+    projectReveal: (input = {}) => {
+      const target = String(input?.path ?? '')
+      if (!currentRecentProjects.some((entry) => entry.path === target)) {
+        return fail('INVALID_INPUT', '只显示最近清单里登记过的目录：不在清单里的路径不给看（防任意路径探测）。')
+      }
+      const shown = shell.showItemInFolder(target)
+      return shown ? { ok: true, shown: true } : fail('IO_FAILED', `目录不存在或无法打开：${target}`)
+    },
+    projectRecentRemove: async (input = {}) => {
+      const target = String(input?.path ?? '')
+      if (!target) return fail('INVALID_INPUT', '请带上要移除的库路径（path）。')
+      const current = await prefs.read()
+      if (!current.ok) return current
+      const kept = (current.value.recentProjects ?? []).filter((entry) => entry.path !== target)
+      const written = await prefs.write({ recentProjects: kept })
+      if (!written.ok) {
+        noteShellAccounting('warn', `移除最近记录失败：${written.error?.message ?? '未知原因'}`, { path: target })
+        return written
+      }
+      applyRecentProjects(written.value.recentProjects ?? [])
+      return { ok: true, removed: target !== '' && kept.length !== (current.value.recentProjects ?? []).length, recents: written.value.recentProjects ?? [] }
+    },
     probeModelPlane: () => probeModelPlane(),
     pickProjectDir: async (input = {}) => {
       // 新项目落点（批次9）：createProject 只吃空目录，Documents 这种会话根永远非空——
@@ -887,7 +911,7 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
       // 最近项目记账（应用级偏好）：凡真打开成功的项目都记一笔——载体启停触发的 refresh
       // 是同一根，去重置顶无副作用。记账抛错只留名，不挡历史接线。
       try {
-        await recordRecentProject(info?.root, info?.name ?? null)
+        await recordRecentProject(info?.root, info?.name ?? null, info?.kind ?? null)
       } catch (error) {
         noteShellAccounting('warn', `最近项目记账抛错：${String(error?.message ?? error)}`, { root: info?.root ?? null })
       }
@@ -940,7 +964,7 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
   // PINAX_NEXT_ROOT 直开的项目也接历史；IPC 打开/新建的项目走 onProjectOpened。
   // 直开同样进最近项目记账（这条路径不经 dispatcher 的 notifyProjectOpened）。
   if (session.project?.ok) {
-    await recordRecentProject(session.projectRoot, session.project.value?.document?.name ?? null)
+    await recordRecentProject(session.projectRoot, session.project.value?.document?.name ?? null, session.project.value?.document?.kind ?? null)
     await beginHistory({ root: session.projectRoot, fileService: session.project.value?.fileService })
   }
 

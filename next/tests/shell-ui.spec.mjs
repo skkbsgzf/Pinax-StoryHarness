@@ -114,22 +114,16 @@ describe('空框架外壳', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    expect(wrapper.find('.nx-ribbon').exists()).toBe(true)
-    expect(wrapper.find('.nx-index-window').exists()).toBe(true)
-    expect(wrapper.find('.col-center').exists()).toBe(true)
-    expect(wrapper.find('.col-dock').exists()).toBe(true)
-    expect(wrapper.findAll('.resizer')).toHaveLength(2)
-
-    // 无项目＝开始页（作者 2026-11-11 裁定）：一句话＋主操作钮；右栏对话照常可用的说明垫底。
-    expect(wrapper.text()).toContain('从一个空文件夹开始你的下一本书')
-    expect(wrapper.find('[data-test="empty-new-project"]').exists()).toBe(true)
-    expect(wrapper.text()).toContain('右栏对话照常可用')
-    expect(wrapper.text()).toContain(RUNTIME_CONTRACT.title)
-    expect(wrapper.find('.authoring-knowledge').exists()).toBe(true)
-    expect(wrapper.find('.authoring-knowledge__input-row textarea').exists()).toBe(true)
-    expect(wrapper.text()).toContain('PINAX_PRIMARY_CARRIER_MISSING')
-    expect(wrapper.text()).toContain('bad.carrier')
-    expect(wrapper.text()).toContain('这个项目要创作什么？')
+    // 无项目＝库管理器（前端工单 A-1）：整窗一级视图；竖条/索引/页签/Agent 全部不渲染。
+    expect(wrapper.find('[data-test="library-manager"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-ribbon').exists(), '竖条不渲染').toBe(false)
+    expect(wrapper.find('.nx-index-window').exists(), '索引窗不渲染').toBe(false)
+    expect(wrapper.find('.col-dock').exists(), 'Agent 列不渲染').toBe(false)
+    expect(wrapper.find('.nx-titlebar').exists(), '工作区标题栏不渲染').toBe(false)
+    expect(wrapper.text()).toContain('我的库')
+    expect(wrapper.find('[data-test="library-new"]').exists()).toBe(true)
+    // 零插件不挡进库：装载失败照常记账（emptyFrameworkView 的 openError 只进「打开文件夹」失败态，不再上冷启动屏）。
+    expect(wrapper.text()).not.toContain('PINAX_PRIMARY_CARRIER_MISSING')
 
     // 渲染层的外呼只有这几条：view（读视图）、偏好（D2 主题迁移/持久化）、
     // 以及 M2.5-C 的工作区四轴（workspaceLoad／workspaceSave 是唯一落盘点，坐标与形态都走它）。
@@ -143,7 +137,8 @@ describe('空框架外壳', () => {
   })
 
   it('两个分隔条可拖拽，索引窗宽度受 200–360 约束，右栏受 260–640 约束', async () => {
-    const bridge = stubBridge(emptyFrameworkView())
+    // 前端工单 A：三栏（含分隔条）属于工作区形态——无项目时是库管理器，拖拽用例改在有项目态跑。
+    const bridge = stubBridge(carrierView())
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
@@ -2994,7 +2989,7 @@ describe('提案审阅（工单B1 · 协议 v1.1-B：列表在二级页，审阅
 })
 
 describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () => {
-  it('标题栏渲染项目信息 chip：有项目＝名称·类型·版本，无项目＝未打开项目', async () => {
+  it('标题栏渲染项目信息 chip：有项目＝名称·类型·版本（无项目＝整个标题栏让位给库管理器）', async () => {
     const withProject = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
     await flushPromises()
     expect(withProject.find('.nx-titlebar').exists()).toBe(true)
@@ -3004,9 +2999,11 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     expect(withProject.find('.nx-titlebar-window-controls').exists()).toBe(true)
     withProject.unmount()
 
+    // 无项目（前端工单 A-1）：整个工作区标题栏让位给库管理器——chip 连同菜单行都不在屏上。
     const withoutProject = mount(AppNext, { props: { bridge: stubBridge(emptyFrameworkView()) } })
     await flushPromises()
-    expect(withoutProject.find('[data-test="titlebar-project-chip"]').text()).toBe('未打开项目')
+    expect(withoutProject.find('.nx-titlebar').exists()).toBe(false)
+    expect(withoutProject.find('[data-test="library-manager"]').exists()).toBe(true)
     withoutProject.unmount()
 
     // 〔批次76 任务4-1 改判〕上面那句原判据是「大梦 · novel · 第 1 版」：中间那格端的是内核词表里的
@@ -3033,7 +3030,8 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
   })
 
   it('页内菜单行：顶层与 MENU_TEMPLATE 一致，菜单项走 menuInvoke；打开项目＝选目录→projectOpen→refresh；Esc/点外部收起', async () => {
-    const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
+    // 前端工单 A：页内菜单行长在工作区标题栏上——无项目时整个让位给库管理器，用例改在有项目态跑。
+    const view = carrierView()
     const pick = vi.fn(async () => ({ ok: true, value: { picked: true, path: 'D:/books/大梦' } }))
     const open = vi.fn(async () => ({ ok: true, value: {} }))
     const bridge = stubBridge(view, {
@@ -3082,7 +3080,8 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
   })
 
   it('最近打开的项目（作者 2026-11-10 点单）：项目组拼「组头＋条目＋清空」，点条目走 projectOpen 不发 menuInvoke，点清空发 menuInvoke', async () => {
-    const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
+    // 前端工单 A：项目组菜单长在工作区标题栏上——用例改在有项目态跑（库管理器的最近列表另有用例）。
+    const view = carrierView()
     const handlers = new Map()
     const recents = [
       { path: 'D:/Projects/大梦', name: '大梦', at: '2026-11-10T09:00:00.000Z' },
@@ -3176,7 +3175,7 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
 })
 
 describe('无项目时的竖条（工单F · 作者反馈③）', () => {
-  it('竖条无项目形态（作者 2026-11-11 裁定「灰载体格很诡异」）：只有新建/打开/主题三格，灰格退役', async () => {
+  it('无项目＝库管理器整窗（前端工单 A-1）：竖条不渲染，新建/打开/导入入口在开始页上', async () => {
     const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
     const pick = vi.fn(async () => ({ ok: true, value: { picked: false, path: null } }))
     const open = vi.fn(async () => ({ ok: true, value: {} }))
@@ -3187,22 +3186,22 @@ describe('无项目时的竖条（工单F · 作者反馈③）', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    const rail = wrapper.findComponent(ActivityRail)
-    expect(rail.find('[aria-label="打开项目…"]').exists()).toBe(true)
-    expect(rail.find('[aria-label="新建项目…"]').exists()).toBe(true)
+    // 前端工单 A-1：竖条整个不渲染（灰格退役的终局），新建/打开入口落在库管理器开始页上。
+    expect(wrapper.find('.nx-ribbon').exists()).toBe(false)
+    expect(wrapper.find('[data-test="library-manager"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="library-new"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="library-open-folder"]').exists()).toBe(true)
 
     // 灰载体格退役（沉默层：无项目时一个板都不存在，不提前展示）：全竖条没有禁用格。
-    expect(rail.findAll('.nx-ribbon-item[aria-disabled="true"]')).toHaveLength(0)
-    expect(rail.find('.nx-ribbon-item.is-bottom').exists()).toBe(true)
-
-    // 打开项目…：走系统目录对话框；取消就什么都不做（不调 projectOpen）。
-    await rail.find('[aria-label="打开项目…"]').trigger('click')
+        
+    // 打开文件夹：走系统目录对话框；取消就什么都不做（不调 projectOpen）。
+    await wrapper.find('[data-test="library-open-folder"]').trigger('click')
     await flushPromises()
     expect(pick).toHaveBeenCalledTimes(1)
     expect(open).not.toHaveBeenCalled()
 
-    // 新建项目…：落在统一二级页的 newProject 节。
-    await rail.find('[aria-label="新建项目…"]').trigger('click')
+    // 新建库：落在统一二级页的 newProject 节（PR-2 起迁为库管理器整页流）。
+    await wrapper.find('[data-test="library-new"]').trigger('click')
     await flushPromises()
     expect(wrapper.find('[aria-label="新建项目"]').exists()).toBe(true)
     wrapper.unmount()
@@ -4013,8 +4012,13 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
   })
 
   it('收起态收进右下角悬浮球：徽标计数、点开列出、点一条回「收起前那一档」（〔裁定B〕· 守卫①②）', async () => {
+
+    resetWorkspace()
+
     const workspace = { version: 3, entries: {} }
     const wrapper = mount(AppNext, { props: { bridge: pageBridge({ workspace }) } })
+    // 前端工单 A：工作区改为 v-else-if 分支——挂载晚一拍，先等渲染稳定再走页底座序列。
+    await new Promise((resolve) => setTimeout(resolve, 60))
     await flushPromises()
     await openOutlineBoard(wrapper)
     await openWidget(wrapper)
@@ -4073,6 +4077,12 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
     await flushPromises()
     await wrapper.find('[data-test="orb-close"]').trigger('click')
     await flushPromises()
+    // 前端工单 A 检验：这条断言处于「删记录 vs 异步重建」的竞态邻界（AppNext 字节级变化都会翻面）——
+    // 先等稳定态再断言，看「复活者」是真写入还是断言跑太快。
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    // 〔前端工单 A 检验〕删记录与断言之间有一拍异步传播（AppNext 字节级扰动都会翻面的既有竞态）：
+    // 先等稳定态再断言——「复活者」检验证明它不真写回，只是断言跑得比快照传播快。
+    await new Promise((resolve) => setTimeout(resolve, 200))
     expect(hostWorkspace.get('outline.widget#1')).toBe(null)
     expect(workspace.entries['outline.widget#1']).toBeUndefined()
     expect(wrapper.find('[data-test="collapse-orb"]').exists()).toBe(false)

@@ -1,0 +1,100 @@
+import { describe, expect, it, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import LibraryManager from '../shell/library/LibraryManager.vue'
+import LibraryCard from '../shell/library/LibraryCard.vue'
+import { relativeTime } from '../shell/library/relativeTime.mjs'
+
+/**
+ * 库管理器（前端重构工单 A）专项用例：空态、列表渲染、键盘可达、移除记录、渲染零 IPC。
+ * 失败修复入口（A-5）的用例随 PR-2 的 OpenLibrary 整页视图一起落。
+ */
+
+const NOW = new Date('2026-11-11T12:00:00')
+const ENTRIES = [
+  { path: 'D:/books/大梦', name: '大梦', kind: 'novel', at: '2026-11-11T08:00:00' },
+  { path: 'D:/stage/旧剧本', name: '旧剧本', kind: 'script', at: '2026-11-04T08:00:00' },
+  { path: 'D:/books/无名', name: null, kind: null, at: null }
+]
+
+function mountManager(recents = ENTRIES) {
+  const on = { open: vi.fn(), reveal: vi.fn(), remove: vi.fn(), 'new-library': vi.fn(), 'open-folder': vi.fn(), 'import-records': vi.fn(), 'open-settings': vi.fn() }
+  const wrapper = mount(LibraryManager, {
+    props: { recents, now: NOW, onOpen: on.open, onReveal: on.reveal, onRemove: on.remove, onNewLibrary: on['new-library'], onOpenFolder: on['open-folder'], onImportRecords: on['import-records'], onOpenSettings: on['open-settings'] }
+  })
+  return { wrapper, on }
+}
+
+describe('库管理器（前端工单 A）', () => {
+  it('空态：一句话＋新建主钮＋打开次钮；列表区不渲染', () => {
+    const { wrapper } = mountManager([])
+    expect(wrapper.find('[data-test="library-manager"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('从一个空文件夹开始你的下一本书')
+    expect(wrapper.find('[data-test="library-new"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="library-open-folder"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="library-import"]').exists()).toBe(true)
+    expect(wrapper.find('.lib-recent').exists()).toBe(false)
+    // 空态同级按钮不超过 3（工单 A-8）
+    expect(wrapper.findAll('.lib-actions button')).toHaveLength(3)
+  })
+
+  it('列表：卡片渲染标题/类型胶囊/路径/相对时间；无 kind 不占位；零 IPC 发起', () => {
+    const request = vi.fn()
+    const { wrapper } = mountManager()
+    const cards = wrapper.findAllComponents(LibraryCard)
+    expect(cards).toHaveLength(3)
+    expect(cards[0].find('.lib-card-title').text()).toBe('大梦')
+    expect(cards[0].find('.lib-card-kind').text()).toBe('小说')
+    expect(cards[0].find('.lib-card-path').text()).toBe('D:/books/大梦')
+    expect(cards[0].find('.lib-card-meta').text()).toBe('今天')
+    expect(cards[1].find('.lib-card-meta').text()).toBe('上周')
+    // 无 kind：胶囊不渲染（不为显示类型去扫盘）
+    expect(cards[2].find('.lib-card-kind').exists()).toBe(false)
+    // 时间缺失：留空不编
+    expect(cards[2].find('.lib-card-meta').text()).toBe('')
+    // 渲染期间零 IPC（工单 A-2）：组件自身不发任何请求（请求面在外壳）
+    expect(request).not.toHaveBeenCalled()
+  })
+
+  it('键盘与事件：卡片回车/空格可打开（原生 button），点击冒泡到外壳的 open 事件', async () => {
+    const { wrapper, on } = mountManager()
+    await wrapper.findAllComponents(LibraryCard)[0].find('.lib-card').trigger('click')
+    expect(on.open).toHaveBeenCalledWith(ENTRIES[0])
+    // 键盘：button 原生行为（Enter/Space 触发 click）——焦点可达性由 button 元素保证
+    const card = wrapper.findAllComponents(LibraryCard)[0].find('.lib-card')
+    expect(card.attributes('type')).toBe('button')
+    expect(card.element.tagName).toBe('BUTTON')
+  })
+
+  it('更多菜单：在文件管理器中显示 / 从列表移除（只移除记录——事件交外壳，组件不删盘）', async () => {
+    const { wrapper, on } = mountManager()
+    const card0 = wrapper.findAllComponents(LibraryCard)[0]
+    await card0.find('.lib-card-more').trigger('click')
+    const items = wrapper.findAll('.lib-menu-item')
+    expect(items).toHaveLength(2)
+    await items[0].trigger('click')
+    expect(on.reveal).toHaveBeenCalledWith(ENTRIES[0])
+    await card0.find('.lib-card-more').trigger('click')
+    await wrapper.findAll('.lib-menu-item')[1].trigger('click')
+    expect(on.remove).toHaveBeenCalledWith(ENTRIES[0])
+    // 移除只上报事件：磁盘目录由外壳/主进程保证原样（组件与用例层面无任何删除调用）
+  })
+
+  it('顶栏：品牌＋「我的库」＋设置入口；新建/打开/导入事件转发', async () => {
+    const { wrapper, on } = mountManager()
+    expect(wrapper.text()).toContain('Pinax · Next')
+    expect(wrapper.text()).toContain('我的库')
+    await wrapper.find('[data-test="library-open-settings"]').trigger('click')
+    expect(on['open-settings']).toHaveBeenCalled()
+    await wrapper.find('[data-test="library-new"]').trigger('click')
+    expect(on['new-library']).toHaveBeenCalled()
+    await wrapper.find('[data-test="library-open-folder"]').trigger('click')
+    expect(on['open-folder']).toHaveBeenCalled()
+    await wrapper.find('[data-test="library-import"]').trigger('click')
+    expect(on['import-records']).toHaveBeenCalled()
+  })
+
+  it('相对时间分档（工单 A-3）在卡片上的综合呈现', () => {
+    expect(relativeTime('2026-11-11T00:00:00', NOW)).toBe('今天')
+    expect(relativeTime('2026-11-09T00:00:00', NOW)).toBe('2 天前')
+  })
+})

@@ -155,8 +155,9 @@ describe('M1-c · 外壳接线（AppNext 直接挂载，不越界）', () => {
   function emptyFrameworkView() {
     return {
       kernel: { contractVersion: '1', kinds: ['novel'] },
-      project: null,
-      needsPrimary: true,
+      // 前端工单 A：推演开关长在工作区标题栏上——无项目时让位给库管理器，本 describe 改用有项目形态。
+      project: { root: 'D:/books/推演夹具', name: '推演夹具', kind: 'novel' },
+      needsPrimary: false,
       openError: { code: 'PINAX_PRIMARY_CARRIER_MISSING', message: '《空框架项目》还没有主载体——请先选择「创作小说还是剧本」' },
       left: [], center: [], primary: null, carriers: [],
       skeletonDirs: [], ownedDirs: [],
@@ -195,7 +196,9 @@ describe('M1-c · 外壳接线（AppNext 直接挂载，不越界）', () => {
     expect(wrapper.find('[data-test="deduce-layer"]').exists()).toBe(false)
 
     // 推演面板不碰桥：外呼仍只有基线那几条（view／偏好／工作区／服务日志／快捷键／最近项目清单）。
-    const allowed = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad, IPC_CHANNELS.projectRecentList]
+    // 前端工单 A：project 到位后多了「有项目形态」的合法外呼——工具面树（runtimeToolCall 的章节清单）
+    // 与会话隔离加载/保存（sessions：project 到位即挂上该根的会话账）。
+    const allowed = [IPC_CHANNELS.view, IPC_CHANNELS.prefsGet, IPC_CHANNELS.prefsSet, IPC_CHANNELS.workspaceLoad, IPC_CHANNELS.workspaceSave, IPC_CHANNELS.runtimeServiceLog, IPC_CHANNELS.hotkeysLoad, IPC_CHANNELS.projectRecentList, IPC_CHANNELS.runtimeToolCall, IPC_CHANNELS.sessionsLoad, IPC_CHANNELS.sessionsSave]
     expect(bridge.request.mock.calls.every((call) => allowed.includes(call[0]))).toBe(true)
   })
 })

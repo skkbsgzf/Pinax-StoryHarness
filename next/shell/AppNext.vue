@@ -21,6 +21,7 @@ import ServicesSection from './settings/ServicesSection.vue'
 import WorkbenchTooltip from '../../src/components/workbench/WorkbenchTooltip.vue'
 import CommandPalette from './CommandPalette.vue'
 import CollapseOrb from './CollapseOrb.vue'
+import LibraryManager from './library/LibraryManager.vue'
 import DeducePanel from './DeducePanel.vue'
 import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
@@ -664,6 +665,31 @@ async function openProjectFolder() {
  * 打开一个已知目录（「打开项目文件夹…」选中之后、以及菜单「最近打开」点某一条的共同后半程）。
  * 桥自身抛错也落到 refresh：外壳照常把最新状态画出来，不白屏。
  */
+/** 「我的库…」（前端工单 A-1）：关闭当前项目回到库管理器（关闭通道已存在，项目事件照常收尾）。 */
+async function closeToLibrary() {
+  if (!props.bridge?.request) return
+  try { await props.bridge.request(IPC_CHANNELS.projectClose, {}) } catch { /* 关闭失败由横幅如实摊开 */ }
+  await refresh()
+}
+
+/* —— 库管理器（前端工单 A）事件转发：通道调用与错误处理都留在壳层，组件只 emit。 ———— */
+/** 库卡片点开：复用「打开项目文件夹」的既有后半程（project:open → refresh）。 */
+function onLibraryOpen(entry) {
+  if (entry?.path) void openProjectRoot(entry.path)
+}
+
+/** 在文件管理器中显示：新通道 project:reveal，路径由主进程按最近清单校验。 */
+async function onLibraryReveal(entry) {
+  if (!entry?.path || !props.bridge?.request) return
+  try { await props.bridge.request(IPC_CHANNELS.projectReveal, { path: entry.path }) } catch { /* 主进程会记账 */ }
+}
+
+/** 从列表移除（只移除记录，不删盘）：偏好整份重写后由 recent-projects-changed 推送回来。 */
+async function onLibraryRemove(entry) {
+  if (!entry?.path || !props.bridge?.request) return
+  try { await props.bridge.request(IPC_CHANNELS.projectRecentRemove, { path: entry.path }) } catch { /* 主进程会记账 */ }
+}
+
 async function openProjectRoot(root) {
   if (!props.bridge?.request || !root) return
   try {
@@ -760,6 +786,7 @@ function closeTopMenu() {
 const menuActions = {
   'project.create': () => openNewProject(),
   'project.open': () => void openProjectFolder(),
+  'project.library': () => void closeToLibrary(),
   [RECENT_MENU_ID]: (root) => void openProjectRoot(root),
   'project.import': () => openImport(),
   'project.backup': () => openBackup(),
@@ -2627,6 +2654,19 @@ onBeforeUnmount(() => {
          中间项目信息 chip，右侧给原生窗控 overlay 留空（主进程 titleBarOverlay，约 138px）。
          整条可拖动窗口（-webkit-app-region:drag）；只有按钮与下拉回到 no-drag（样式见
          next-shell.css 的标题栏段）。 -->
+    <!-- 无项目＝库管理器（一级整窗视图，前端工单 A-1）：竖条/索引/页签/Agent 全部不渲染。 -->
+    <LibraryManager
+      v-if="!project"
+      :recents="recentProjects"
+      @open="onLibraryOpen"
+      @reveal="onLibraryReveal"
+      @remove="onLibraryRemove"
+      @new-library="openSection('newProject')"
+      @open-folder="openProjectFolder()"
+      @import-records="openSection('import')"
+      @open-settings="openSection('prefs')"
+    />
+    <template v-else>
     <header class="nx-titlebar">
       <span class="nx-titlebar-brand">Pinax · Next</span>
 
@@ -2718,6 +2758,16 @@ onBeforeUnmount(() => {
       </template>
 
       <div class="col-center">
+        <!-- M1-c 推演面板：中栏覆盖层，AppNext 直接挂载（不注册页签／槽位／新通道）。
+             数据取基座世界书面条目（与列表／图谱同源，不新增工具调用）；回执并入既有 serviceSnapshot。 -->
+        <DeducePanel
+          v-if="deduceOpen"
+          :entries="indexData?.entries?.length ? indexData.entries : data.entries"
+          :world-name="project?.name ?? ''"
+          :llm-port="deduceLlmPort"
+          @close="closeDeduce"
+          @receipt="onDeduceReceipt"
+        />
         <div v-if="openError" class="banner is-error">
           <strong>{{ openError.code }}</strong>
           <span>{{ openError.message }}</span>
@@ -2730,21 +2780,8 @@ onBeforeUnmount(() => {
              偏好／载体管理／主载体选择／新建项目全部收进统一的设置二级页（SettingsModal，模板尾部），
              这里不再内嵌任何配置 section。 -->
 
-        <!-- 无项目＝开始页（作者 2026-11-11 裁定两连：①「没有项目时左侧很多灰的不可用载体很诡异」
-             ——竖条灰格一并退役；②「项目的新建和导入做成完整的流」）。指南层：一句话＋一个主操作钮；
-             打开/导入作次操作。有项目但没板时保留原句（竖条此刻真的可点）。 -->
-        <div v-if="!boards.length" class="center-empty">
-          <template v-if="!project">
-            <p class="center-empty-main">从一个空文件夹开始你的下一本书。</p>
-            <div class="center-empty-actions">
-              <button type="button" class="control-primary" data-test="empty-new-project" @click="openSection('newProject')">新建项目</button>
-              <button type="button" class="control-secondary" data-test="empty-open-project" @click="void openProjectFolder()">打开项目文件夹…</button>
-              <button type="button" class="control-secondary" data-test="empty-import" @click="openSection('import')">导入既有稿…</button>
-            </div>
-            <p class="center-empty-sub">右栏对话照常可用。</p>
-          </template>
-          <p v-else>当前没有已启用的载体板块。右栏对话照常可用。</p>
-        </div>
+        <!-- 有项目但没板：状态层一句（无项目时整个三栏让位给库管理器，见模板顶部的分流）。 -->
+        <p v-if="!boards.length" class="center-empty">当前没有已启用的载体板块。右栏对话照常可用。</p>
 
         <!-- 〔批次76-R3 任务1／2〕页签行归组（VS Code 编辑器组模型）：不再有横跨整屏的全局那一条。
              每个页组一列，列内**首行**＝本组自己的签行，签行只列本组的页；side 列只在侧组真有页时出现
@@ -2856,31 +2893,8 @@ onBeforeUnmount(() => {
           @action="applyFormAction(formMenuTarget.instance, $event)"
           @dismiss="closeFormMenu"
         />
-        <!-- 右下角悬浮球（批次76 · 〔裁定B〕）：收起态不再在右缘排一竖列文字标签，
-             所有 form:'tab' 的页统一在这颗球里管；通知那一节只转述状态栏服务灯那份读数，
-             点开的落点是设置里既有的两节——球不产生通知，也不另记一份未读账。
-             〔批次68-R3 调度方补刀〕组件**常驻挂载**，显隐由组件内部的 v-if 管（沉默层判据⑰看的是
-             那颗球节点）——不能在组件上挂 v-if：挂上后组件晚于宿主的 onWindowKeydown 注册，
-             Esc 分层（stopImmediatePropagation）会失效，面板开着按 Esc 身后窗口照样被收。 -->
-        <CollapseOrb
-          :items="collapsedOrbItems"
-          :notices="statusLights"
-          :proposal-count="orbProposalCount"
-          @expand="expandWindow"
-          @close="closeWindow"
-          @open-services="openSection('services')"
-          @open-proposals="openSection('proposals')"
-        />
-        <!-- M1-c 推演面板：中栏覆盖层，AppNext 直接挂载（不注册页签／槽位／新通道）。
-             数据取基座世界书面条目（与列表／图谱同源，不新增工具调用）；回执并入既有 serviceSnapshot。 -->
-        <DeducePanel
-          v-if="deduceOpen"
-          :entries="indexData?.entries?.length ? indexData.entries : data.entries"
-          :world-name="project?.name ?? ''"
-          :llm-port="deduceLlmPort"
-          @close="closeDeduce"
-          @receipt="onDeduceReceipt"
-        />
+
+
       </div>
 
       <div
@@ -2900,6 +2914,39 @@ onBeforeUnmount(() => {
           :suspend-esc="settingsOpen"
         />
       </div>
+
+      <!-- 批次62 任务三：命令面板（Ctrl+P）。它不是「第二枚弹窗」的例外——
+           焦点走与 SettingsModal 同一份 focusTrap.mjs，条目表走 command:list 同一条口径。 -->
+      <CommandPalette
+        :open="paletteOpen"
+        :entries="commandEntries"
+        placeholder="输入命令名…（应用菜单／载体命令／当前页动作）"
+        @close="closePalette"
+        @run="runPaletteCommand"
+      />
+
+      <WorkbenchTooltip />
+    </div>
+    </template>
+
+        <!-- 悬浮球与推演面板必须常驻分流之外（守卫⑰④挂载处禁 v-if）：
+             挂上条件分支会让组件晚于宿主 onWindowKeydown 注册，Esc 分层失效（批次68-R3 修过的回归）。
+             沉默层语义不受影响：无项目时 collapsedOrbItems 恒空，球整颗不渲染。 -->
+        <!-- 右下角悬浮球（批次76 · 〔裁定B〕）：收起态不再在右缘排一竖列文字标签，
+             所有 form:'tab' 的页统一在这颗球里管；通知那一节只转述状态栏服务灯那份读数，
+             点开的落点是设置里既有的两节——球不产生通知，也不另记一份未读账。
+             〔批次68-R3 调度方补刀〕组件**常驻挂载**，显隐由组件内部的 v-if 管（沉默层判据⑰看的是
+             那颗球节点）——不能在组件上挂 v-if：挂上后组件晚于宿主的 onWindowKeydown 注册，
+             Esc 分层（stopImmediatePropagation）会失效，面板开着按 Esc 身后窗口照样被收。 -->
+        <CollapseOrb
+          :items="collapsedOrbItems"
+          :notices="statusLights"
+          :proposal-count="orbProposalCount"
+          @expand="expandWindow"
+          @close="closeWindow"
+          @open-services="openSection('services')"
+          @open-proposals="openSection('proposals')"
+        />
 
       <!-- —— 统一设置二级页（工单C0 · U13）：一枚弹窗＝左栏目录＋右栏设置项 ——————————
            各节都登记在上面的目录表里（工单B 起按「应用／项目／文档」分组，载体占位节由弹窗补）；
@@ -2922,18 +2969,6 @@ onBeforeUnmount(() => {
         @update:active-section="activeSection = $event"
       />
 
-      <!-- 批次62 任务三：命令面板（Ctrl+P）。它不是「第二枚弹窗」的例外——
-           焦点走与 SettingsModal 同一份 focusTrap.mjs，条目表走 command:list 同一条口径。 -->
-      <CommandPalette
-        :open="paletteOpen"
-        :entries="commandEntries"
-        placeholder="输入命令名…（应用菜单／载体命令／当前页动作）"
-        @close="closePalette"
-        @run="runPaletteCommand"
-      />
-
-      <WorkbenchTooltip />
-    </div>
   </div>
 </template>
 
