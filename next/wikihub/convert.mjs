@@ -773,6 +773,102 @@ function deriveWorldbookEntry(hubEntry, options, losses) {
   })
 }
 
+/**
+ * character 层条目 → 世界书「人物卡」派生（SCRIPT-1 / guimi A3）。
+ *
+ * 为什么单开一路而不是复用 deriveWorldbookEntry：人物卡的内容结构不是 definition 一段话，
+ * 而是身份/性格/言行锚点/记忆点/剧作功能/知情——直接按 definition 落会把档案压成一句摘要。
+ * 契约化要点（guimi 轮是脚本里临场定的格式，本批把它变成代码里的唯一口径）：
+ *   kind/type = character、cat/catDir = 人物、keys = 别名（检索用）；
+ *   summary = identity 首行（≤500）；
+ *   content = 分节正文（身份/性格/言行/记忆点/剧作功能/知情），空节不写。
+ */
+function deriveCharacterWorldbookEntry(hubEntry, options, losses) {
+  const name = firstString(hubEntry.name, hubEntry.id, '未命名人物')
+  const identity = typeof hubEntry.identity === 'string' ? hubEntry.identity.trim() : ''
+  const personality = typeof hubEntry.personality === 'string' ? hubEntry.personality.trim() : ''
+  const traits = Array.isArray(hubEntry.traits) ? hubEntry.traits.map((item) => firstString(item)).filter(Boolean) : []
+  const anchors = isPlainObject(hubEntry.anchors) ? hubEntry.anchors : {}
+  const speech = Array.isArray(anchors.speech) ? anchors.speech.map((item) => firstString(item)).filter(Boolean) : []
+  const behavior = Array.isArray(anchors.behavior) ? anchors.behavior.map((item) => firstString(item)).filter(Boolean) : []
+  const catchphrase = Array.isArray(anchors.catchphrase) ? anchors.catchphrase.map((item) => firstString(item)).filter(Boolean) : []
+  const memoryPoints = Array.isArray(hubEntry.memoryPoints) ? hubEntry.memoryPoints.map((item) => firstString(item)).filter(Boolean) : []
+  const knowledge = Array.isArray(hubEntry.knowledge) ? hubEntry.knowledge.filter((item) => isPlainObject(item) && firstString(item.fromEntry)) : []
+  const castRole = isPlainObject(hubEntry.castRole) ? hubEntry.castRole : (Array.isArray(hubEntry.castRoles) && hubEntry.castRoles[0]) || null
+
+  const relationList = []
+  for (const relation of Array.isArray(hubEntry.relations) ? hubEntry.relations : []) {
+    const edge = deriveRelation(relation, losses)
+    if (edge) relationList.push(edge)
+    if (relationList.length >= MAX_RELATIONS) {
+      losses.push({ code: 'relations-truncated', field: 'relations', message: `关系超过 ${MAX_RELATIONS} 条，超出的未落进人物卡` })
+      break
+    }
+  }
+
+  // 正文分节：只在有内容时写该节，空节不占位（人物卡薄就薄，不为齐整编字）
+  const sections = []
+  if (identity) sections.push(`## 身份\n${identity}`)
+  if (personality) sections.push(`## 性格\n${personality}`)
+  if (traits.length && !personality) sections.push(`## 性格关键词\n${traits.join('、')}`)
+  if (speech.length || behavior.length || catchphrase.length) {
+    const lines = []
+    if (catchphrase.length) lines.push(`- 口癖：${catchphrase.join(' / ')}`)
+    if (speech.length) lines.push(...speech.map((item) => `- 「${item}」`))
+    // 动作锚点按「一条一行」排，长句不截断（宁可页面长，不可丢细节）
+    if (behavior.length) lines.push(...behavior.map((item) => `- ${item}`))
+    sections.push(`## 言行锚点\n${lines.join('\n')}`)
+  }
+  if (memoryPoints.length) sections.push(`## 记忆点\n${memoryPoints.map((item) => `- ${item}`).join('\n')}`)
+  if (castRole && (firstString(castRole.tier) || firstString(castRole.goal) || firstString(castRole.plotFunction))) {
+    const lines = []
+    if (firstString(castRole.tier)) lines.push(`- 档位：${firstString(castRole.tier)}`)
+    if (firstString(castRole.goal)) lines.push(`- 塑造目标：${firstString(castRole.goal)}`)
+    if (firstString(castRole.plotFunction)) lines.push(`- 剧情作用：${firstString(castRole.plotFunction)}`)
+    sections.push(`## 剧作功能\n${lines.join('\n')}`)
+  }
+  if (knowledge.length) {
+    sections.push(`## 知情\n${knowledge.map((item) => `- 知道「${firstString(item.fromEntry)}」（${firstString(item.kind) || 'event'}）`).join('\n')}`)
+  }
+
+  const fallbackContent = identity || name
+  const content = typeof options.content === 'string' ? options.content : (sections.length ? sections.join('\n\n') : fallbackContent)
+  if (typeof options.content !== 'string' && !sections.length) {
+    losses.push({ code: 'content-from-identity', field: 'content', message: '人物卡没有可分节字段，正文以姓名顶替' })
+  }
+  const summary = (identity.split('\n')[0] || name).slice(0, MAX_SUMMARY_CHARS)
+
+  const extra = {}
+  if (firstString(castRole?.tier)) extra.castTier = firstString(castRole.tier)
+
+  return normalizeWorldbookEntry({
+    id: firstString(hubEntry.id),
+    name,
+    kind: 'character',
+    type: 'character',
+    status: 'active',
+    version: '',
+    tags: [],
+    links: [],
+    cat: ['人物'],
+    catDir: '人物',
+    keys: Array.isArray(hubEntry.aliases) ? uniqueStrings(hubEntry.aliases) : [],
+    keysSecondary: [],
+    summary,
+    sourceRefs: [],
+    updatedAt: '',
+    relations: relationList,
+    injection: {},
+    profile: {},
+    extra,
+    content,
+    path: '',
+    revision: 0,
+    chars: content.length,
+    contract: true
+  })
+}
+
 function deriveWorldbookPath(entry) {
   const base = sanitizeFilename(entry.name || entry.id || 'untitled')
   const dir = entry.catDir
@@ -830,14 +926,15 @@ export function hubToWorldbook(hubEntry, options = {}) {
   if (!isPlainObject(hubEntry)) {
     return { ok: false, error: { code: 'INVALID_INPUT', message: 'hubToWorldbook 需要一条 fact 条目对象' }, losses, warnings }
   }
-  if (hubEntry.layer !== 'worldview') {
-    return { ok: false, error: { code: 'WRONG_LAYER', message: `hubToWorldbook 只接 worldview 层（收到 ${str(hubEntry.layer) || '空'}）` }, losses, warnings }
+  if (hubEntry.layer !== 'worldview' && hubEntry.layer !== 'character') {
+    return { ok: false, error: { code: 'WRONG_LAYER', message: `hubToWorldbook 只接 worldview／character 层（收到 ${str(hubEntry.layer) || '空'}）；plot 没有世界书对应物` }, losses, warnings }
   }
 
   const snapshot = isPlainObject(hubEntry.next?.worldbook) ? hubEntry.next.worldbook : null
+  const derive = hubEntry.layer === 'character' ? deriveCharacterWorldbookEntry : deriveWorldbookEntry
   const entry = snapshot
     ? restoreWorldbookEntry(snapshot, hubEntry, options, losses)
-    : deriveWorldbookEntry(hubEntry, options, losses)
+    : derive(hubEntry, options, losses)
   const path = snapshot?.path ? snapshot.path : deriveWorldbookPath(entry)
   entry.path = path
 
