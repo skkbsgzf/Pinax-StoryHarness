@@ -123,6 +123,7 @@ export async function dispatchPiCompletion({
   model = null,
   timeoutMs = 180_000,
   signal,
+  maxTokens = 8000,
   endpoint = process.env.PINAX_ADAPTER_ENDPOINT || 'http://127.0.0.1:8451',
   fetchImpl = fetch
 } = {}) {
@@ -143,6 +144,8 @@ export async function dispatchPiCompletion({
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         messages: [{ role: 'user', content: String(prompt ?? '') }],
+        // 任务面接受 200–8000；推理模型思维链与正文共享预算，4096 默认会让单段抽取大量 finishReason=length
+        maxTokens,
         ...(model ? { model } : {})
       }),
       signal: controller.signal
@@ -180,6 +183,114 @@ export async function dispatchPiCompletion({
   } catch (error) {
     if (error?.name === 'AbortError') {
       throw Object.assign(new Error(`推演补全超时（${timeoutMs}ms）：Pi 任务面没有在时限内交回结果`), { code: 'FACT_LLM_TIMEOUT' })
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
+/**
+ * dots.ai（小红书）通道（P-LLM 实跑通道，作者 2026-11-11 提供凭据）。
+ *
+ * 端点与鉴权口径来自 NovelPedia 的实测预设（ref-Novelpedia/src/cli.py:61-63）：
+ *   base https://note3-prev-api.askdiandian.com  →  {base}/v1/chat/completions（OpenAI 兼容）
+ *   model dots3-note-prev
+ * 鉴权**只认 `Authorization: Bearer <key>`**——实测 `apikey:` 头会被忽略并回 401
+ *   （Missing API key / governance.missing_api_key），所以这里不提供第二套方案。
+ *
+ * ⚠ 这是**推理模型**：回包同时带 `reasoning_content`（思维链）与 `content`（正文），
+ *   推理与正文**共享 max_tokens**。预算给小了会得到 finish_reason:"length" 且 content 缺失——
+ *   表现为「模型没说话」，实际是推理把预算吃光了。所以：
+ *     · 默认 maxTokens 给 2000（抽取单段实测够用）；
+ *     · 命中 length 且无 content 时**如实报 FACT_LLM_TRUNCATED**，不伪装成空补全；
+ *     · reasoning_content 不丢——记进 usage.reasoningChars，便于复盘成本。
+ */
+export const DOTS_ENDPOINT = 'https://note3-prev-api.askdiandian.com'
+export const DOTS_MODEL = 'dots3-note-prev'
+
+export async function dispatchDotsCompletion({
+  prompt,
+  model = DOTS_MODEL,
+  maxTokens = 2000,
+  timeoutMs = 180_000,
+  signal,
+  endpoint = process.env.PINAX_FACT_LLM_ENDPOINT || DOTS_ENDPOINT,
+  apiKey = process.env.PINAX_FACT_LLM_KEY || process.env.DOTSAI_API_KEY || process.env.LLM_API_KEY || null,
+  fetchImpl = fetch
+} = {}) {
+  if (signal?.aborted) {
+    throw Object.assign(new Error('推演补全在发起前已被取消'), { code: 'FACT_LLM_ABORTED' })
+  }
+  if (!apiKey) {
+    throw Object.assign(
+      new Error('dots.ai 通道缺少 API key：设 PINAX_FACT_LLM_KEY / DOTSAI_API_KEY / LLM_API_KEY 之一'),
+      { code: 'FACT_LLM_NO_KEY' }
+    )
+  }
+  const startedAt = Date.now()
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const onAbort = () => controller.abort(signal?.reason)
+  if (signal) {
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  }
+  try {
+    const response = await fetchImpl(new URL('/v1/chat/completions', endpoint), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: String(prompt ?? '') }],
+        max_tokens: maxTokens,
+        stream: false
+      }),
+      signal: controller.signal
+    })
+    const body = await response.json().catch(() => null)
+    if (!response.ok) {
+      const detail = String(body?.detail ?? body?.message ?? body?.title ?? '').slice(0, 300)
+      throw Object.assign(
+        new Error(`dots.ai 拒绝补全（${response.status}）：${detail || '无详情'}`),
+        { code: 'FACT_LLM_UPSTREAM_FAILED', status: response.status, errorType: body?.error_type ?? null }
+      )
+    }
+    const choice = Array.isArray(body?.choices) ? body.choices[0] : null
+    const message = choice?.message ?? {}
+    const content = String(message.content ?? '')
+    const reasoning = String(message.reasoning_content ?? '')
+    const finishReason = String(choice?.finish_reason ?? '')
+    const usage = body?.usage
+      ? {
+          promptTokens: Number.isFinite(body.usage.prompt_tokens) ? body.usage.prompt_tokens : null,
+          completionTokens: Number.isFinite(body.usage.completion_tokens) ? body.usage.completion_tokens : null,
+          totalTokens: Number.isFinite(body.usage.total_tokens) ? body.usage.total_tokens : null,
+          reasoningChars: reasoning.length
+        }
+      : { reasoningChars: reasoning.length }
+    if (!content.trim()) {
+      // 推理把预算吃光是最常见的「假空回包」——必须与真正的空区分开报。
+      const hint = finishReason === 'length'
+        ? `max_tokens=${maxTokens} 被推理过程耗尽（reasoningChars=${reasoning.length}）：调大 maxTokens 或收窄任务`
+        : '模型返回了空内容'
+      throw Object.assign(
+        new Error(`dots.ai 交回了空补全（finish_reason=${finishReason || '未给'}）：${hint}。这次不编任何文字`),
+        { code: finishReason === 'length' ? 'FACT_LLM_TRUNCATED' : 'FACT_LLM_EMPTY', finishReason: finishReason || null, reasoningChars: reasoning.length }
+      )
+    }
+    return {
+      text: content,
+      usage,
+      model: String(body?.model ?? model),
+      durationMs: Date.now() - startedAt,
+      numTurns: null,
+      finishReason: finishReason || null
+    }
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw Object.assign(new Error(`推演补全超时（${timeoutMs}ms）：dots.ai 没有在时限内交回结果`), { code: 'FACT_LLM_TIMEOUT' })
     }
     throw error
   } finally {

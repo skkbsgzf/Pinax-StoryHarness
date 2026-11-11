@@ -23,6 +23,7 @@
 import { readFileSync, readdirSync, mkdirSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { createExtractionLog } from '../next/runtime/extractionLog.mjs'
+import { parseModelReply } from './lib/jsonExtract.mjs'
 import { dispatchPiCompletion } from '../next/runtime/factLlmService.mjs'
 import {
   buildExtractionSource, validateExtractionRows, compileExtractionEntries, EXTRACTION_ROW_SCHEMA
@@ -99,12 +100,18 @@ const EXTRACT_SYSTEM = [
     knowledge: [{ character: '谁', source: '知情来源实体名', learned: '一句话学到了什么' }],
     hooks: ['伏笔一句话']
   }),
-  '要求：who 只收真实出现的人物；events 按原文先后；同角色同 channel 最多 2 条；不编造原文没有的信息。'
+  '要求：who 只收真实出现的人物；events 按原文先后；同角色同 channel 最多 2 条；不编造原文没有的信息。',
+  '直接输出 JSON，不要写推理过程：想清楚后一次性给出完整 JSON 对象。',
+  '字段纪律（缺一个整段作废）：',
+  '· characters[].{name,aliases,identity,traits,speech,behavior} 全部必填，没有就给 "" 或 []；',
+  '· settings[].{name,slot,definition} 必填；slot 用英文槽位之一：',
+  '  power_levels/abilities/rules/locations/items/orgs/roles/creatures/concepts/events/other；',
+  '· 键名必须是英文半角双引号包裹（不要写 settings: 这种裸键名）；数组元素之间必须有逗号。'
 ].join('\n')
 
 async function realExtract(prompt) {
-  const answer = await dispatchPiCompletion({ prompt, timeoutMs: 180_000 })
-  return answer.text
+  const answer = await dispatchPiCompletion({ prompt, maxTokens: 8000, timeoutMs: 300_000 })
+  return { text: answer.text, usage: answer.usage ?? null }
 }
 
 /* ---------- 主流程 ---------- */
@@ -151,37 +158,58 @@ for (const file of files) {
       EXTRACT_SYSTEM
     ].join('\n')
     const startedAt = Date.now()
-    let reply = ''
-    let error = null
-    try {
-      reply = FAKE ? fakeExtract(unit.text, meta) : await realExtract(prompt)
-    } catch (caught) {
-      error = caught
-    }
-    const ms = Date.now() - startedAt
     let parsed = null
-    if (!error) {
-      const match = /\{[\s\S]*\}/u.exec(reply)
-      if (!match) error = Object.assign(new Error('回包里找不到 JSON 对象'), { code: 'REPLY_NO_JSON' })
-      else {
-        try {
-          parsed = JSON.parse(match[0])
-          // segmentId 强制回填（模型常写错）
-          parsed.segmentId = meta.id
-        } catch (caught) {
-          error = Object.assign(caught, { code: 'REPLY_BAD_JSON' })
+    let lastParseError = ''
+    let reply = ''
+    let usage = null
+    let error = null
+    let totalMs = 0
+    let attempts = 0
+    const MAX_ATTEMPTS = FAKE ? 1 : 2
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      attempts = attempt
+      const attemptStart = Date.now()
+      error = null
+      reply = ''
+      try {
+        if (FAKE) reply = fakeExtract(unit.text, meta)
+        else {
+          const ask = attempt === 1
+            ? prompt
+            : `${prompt}
+
+【上次输出不是合法 JSON】解析错误：${lastParseError}
+重新输出完整且语法正确的 JSON（数组元素之间必须有逗号）。`
+          const answer = await realExtract(ask)
+          reply = answer.text
+          usage = answer.usage
         }
+      } catch (caught) {
+        error = caught
       }
+      totalMs += Date.now() - attemptStart
+      if (error) continue
+      const outcome = parseModelReply(reply)
+      if (outcome.ok) {
+        parsed = outcome.value
+        parsed.segmentId = meta.id
+        error = null
+        break
+      }
+      error = Object.assign(new Error(outcome.error), { code: outcome.code })
+      lastParseError = outcome.error
     }
     await log.call({
       stage: 'extract',
       sourceId: `正文/${file}`,
       segmentIndex: unit.index,
+
+      attempt: attempts,
       prompt,
       reply,
-      ms,
+      ms: totalMs,
       ok: !error,
-      usage: null, // 假模型无 usage；真模型 dispatchPiCompletion 会回（此驱动暂不拆）
+      usage,
       error
     })
     if (parsed) {

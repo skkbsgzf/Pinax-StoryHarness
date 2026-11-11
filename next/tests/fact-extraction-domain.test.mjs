@@ -68,7 +68,9 @@ function assertInvalid(rows, segments, field) {
 test('公开 API 与 rows.items schema：所有对象严格、全部行字段必填、没有长度/条数上限', () => {
   assert.equal(EXTRACTION_CHAIN_VERSION, 'fact-chain/v1')
   assert.deepEqual(EXTRACTION_ROW_SCHEMA.required, ['segmentId', 'who', 'when', 'where', 'events', 'notes', 'characters', 'settings'])
-  assert.deepEqual(EXTRACTION_ROW_SCHEMA.properties.settings.items.properties.slot.enum, WORLDVIEW_SLOT_NAMES)
+  // 行 schema 不校验 slot 取值（模型自由造词）：归一是 inferSlot 的职责，不是行校验的
+  assert.equal(EXTRACTION_ROW_SCHEMA.properties.settings.items.properties.slot.type, 'string')
+  assert.equal(EXTRACTION_ROW_SCHEMA.properties.settings.items.properties.slot.enum, undefined)
   const walk = (schema) => {
     assert.equal(Object.isFrozen(schema), true)
     if (schema.type === 'object') assert.equal(schema.additionalProperties, false)
@@ -227,7 +229,7 @@ test('全部字段必填且类型/枚举严格；嵌套数组不会静默筛掉�
     (value) => { value.when.timeline = '过去' },
     (value) => { value.events[0].channel = 'see' },
     (value) => { value.events[0].content = ' \t' },
-    (value) => { value.settings[0].slot = 'constructor' },
+    (value) => { value.settings[0].slot = '   ' },
     (value) => { value.settings[0].name = '' },
     (value) => { value.settings[0].definition = '  ' },
     (value) => { value.characters[0].name = '\n' },
