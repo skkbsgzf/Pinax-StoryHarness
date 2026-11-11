@@ -38,6 +38,17 @@ async function fixture(t) {
   const good = async (method, args) => { const result = await call(method, args); assert.equal(result.ok, true, JSON.stringify(result.error)); return result.value }
   return { ...options, tools, call, good, ref, reset: () => { tools = createFactExtractionTools(options) } }
 }
+/** 读落盘 dataset 并归一回全形状（落盘是瘦条目，直接读会拿到瘦 provenance）。 */
+async function readNormalized(f, resultPath) {
+  const raw = JSON.parse(await readFile(join(f.root, resultPath), 'utf8'))
+  const envelope = {
+    domain: raw.current.spec.domain, book: raw.current.spec.book, bookId: raw.current.spec.bookId,
+    mode: raw.current.mode, extractor: raw.current.extractor, statusByLayer: raw.current.statusByLayer
+  }
+  const entries = normalizeDatasetEntries(raw.current.entries, envelope, buildSegmentIndex(raw.current.sources))
+  return { raw, entries }
+}
+
 const initial = (ref, extra = {}) => ({ dataset: 'book', requestId: 'initial', domain: '试验世界', book: '试验书', sources: [ref], ...extra })
 function row(unit, note = '阿明收信并得知钟楼的进入限制。') {
   return { segmentId: unit.id, who: ['阿明', '守门人'], when: { story_time: '未明示', timeline: '顺叙' }, where: '门口',
@@ -315,4 +326,60 @@ test('真实工具循环使用离线turn完成两轮链，usage未知不编造',
   assert.equal(result.text, '已完成离线链路')
   assert.equal(result.usage, null)
   assert.equal((await f.good('status', { dataset: 'book', runId: run.runId })).state, 'finished')
+})
+
+test('P-TRIM T-1.5：跨 run 折叠——同人物命中即合并（chapters 并集），新拍照常新增', async (t) => {
+  const f = await fixture(t)
+  const ref2 = { pluginId: f.ref.pluginId, dir: f.ref.dir, file: '第二章.md', chapterNo: 2 }
+  await f.fileService.write({ ...ref2, text: prose.replace('收起信', '攥紧信'), expectedRevision: 0 })
+  // 第一跑：第一章
+  const run1 = await f.good('prepare', initial(f.ref))
+  await complete(f, run1)
+  const done1 = await f.good('finish', { dataset: 'book', runId: run1.runId, expectedRevision: 0 })
+  const after1 = await readNormalized(f, done1.resultPath)
+  const aming1 = after1.entries.find((entry) => entry.name === '阿明')
+  assert.equal(aming1.provenance.chapters.join(','), '1')
+  // 第二跑：新增第二章（同人物）
+  const run2 = await f.good('prepare', { dataset: 'book', requestId: 'run2', mode: 'update', sources: [f.ref, ref2] })
+  const row2 = (unit) => ({ segmentId: unit.id, who: ['阿明', '守门人'], when: { story_time: '未明示', timeline: '顺叙' }, where: '门口',
+    events: [{ who: '阿明', channel: 'do', content: '攥紧信件' }], notes: '阿明攥紧信件，钟楼的限制仍未解除。',
+    characters: [{ name: '阿明', aliases: [], identity: '访客', traits: ['警觉'], speech: [], behavior: ['攥紧信件'] }],
+    settings: [{ name: '钟楼', slot: 'locations', definition: '午夜后禁止进入的建筑。', aliases: [] }],
+    knowledge: [{ character: '阿明', source: '守门人', learned: '从守门人处确认钟楼午夜后禁止进入' }] })
+  let latest = null
+  for (let safety = 0; safety < 100; safety += 1) {
+    const task = await f.good('next', { dataset: 'book', runId: run2.runId })
+    latest = task
+    if (task.done) break
+    const args = { dataset: 'book', runId: run2.runId, expectedRevision: task.revision, taskId: task.taskId, submissionId: `r2-${task.revision}` }
+    args.rows = task.units.map((unit) => row2(unit))
+    await f.good('submit', args)
+    latest = task
+  }
+  const done2 = await f.good('finish', { dataset: 'book', runId: run2.runId, expectedRevision: latest.revision })
+  assert.equal(done2.state, 'finished')
+  const after2 = await readNormalized(f, done2.resultPath)
+  const aming2 = after2.entries.find((entry) => entry.name === '阿明')
+  assert.ok(aming2, '人物条目仍在')
+  assert.equal(aming2.id, aming1.id, 'id 零漂移')
+  assert.deepEqual(aming2.provenance.chapters, [1, 2], 'chapters 并集排序＝跨 run 折叠的直接证据')
+  // sources 并集：第一章的旧引用全保留，并新增第二章的引用
+  const ids1 = new Set(aming1.sources.map((ref) => ref.segmentId))
+  const ids2 = new Set(aming2.sources.map((ref) => ref.segmentId))
+  assert.ok(aming2.sources.length > aming1.sources.length)
+  for (const segmentId of ids1) assert.ok(ids2.has(segmentId), '旧段引用不丢')
+  assert.ok(aming2.sources.some((ref) => ref.sourceId.includes('第二章')), '新增第二章引用')
+  assert.ok(aming2.anchors.behavior.some((item) => item.includes('攥紧信')), '第二跑的行为锚点并进同一条目')
+  assert.ok(aming2.traits.includes('警觉'), 'traits 并集')
+  const gateKnowledge = (aming2.knowledge ?? []).find((item) => item.fromEntry === '守门人')
+  assert.ok(gateKnowledge, 'knowledge source（守门人）落进 fromEntry')
+  assert.ok(gateKnowledge.note && gateKnowledge.note.includes('午夜后'), 'learned 保留在 note')
+  assert.equal(gateKnowledge.atSpan.from, 2, 'atSpan 锚到第二章')
+  assert.ok(done2.consolidation, '回执带 consolidation 读数')
+  // 新拍的 plot 条目照常新增
+  const plots2 = after2.entries.filter((entry) => entry.layer === 'plot' && entry.provenance.chapters.includes(2))
+  assert.ok(plots2.length > 0)
+  // changes 里有 added（新拍）且无误报的 removed（人物条目仍在）
+  const removed = after2.raw.current.changes.filter((item) => item.kind === 'source-removed')
+  assert.ok(!removed.some((item) => item.id === aming1.id), '人物条目不该被当 removed')
 })
