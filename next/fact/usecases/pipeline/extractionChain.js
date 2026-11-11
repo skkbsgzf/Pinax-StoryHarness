@@ -122,6 +122,121 @@ export const EXTRACTION_ROW_SCHEMA = freezeTree(objectSchema({
   hooks: strings
 }, ['segmentId', 'who', 'when', 'where', 'events', 'notes', 'characters', 'settings']))
 
+/**
+ * 行字段名归一（P-LLM 调优）：模型在长输出里会漂移成中文/近义键名（实测同一数组第一条 definition、
+ * 第二条「定义」）。这属于表示层噪音，与「名称规范化」同一性质——在入口抹平，不进 schema 校验。
+ * 只做同义替换，不改结构、不补内容（缺的字段照旧报错，不猜）。
+ */
+const KEY_ALIASES = Object.freeze({
+  定义: 'definition', 描述: 'definition', 说明: 'definition',
+  名称: 'name', 名字: 'name', 别名: 'aliases',
+  身份: 'identity', 特质: 'traits', 性格: 'traits',
+  言语: 'speech', 台词: 'speech', 行为: 'behavior', 动作: 'behavior',
+  内容: 'content', 渠道: 'channel', 角色: 'who', 类型: 'type',
+  时间: 'when', 地点: 'where', 事件: 'events', 笔记: 'notes', 备注: 'notes',
+  人物: 'characters', 设定: 'settings', 关系: 'relations', 知情: 'knowledge',
+  伏笔: 'hooks', 作用: 'type', 来源: 'source', 学到: 'learned',
+  塑造目标: 'goal', 剧情作用: 'plotFunction', 档位: 'tier',
+  从: 'from', 到: 'to', 如何: 'how', 槽位: 'slot', 为什么: 'how'
+})
+
+/**
+ * 行级宽容归一（P-LLM 调优第二层）：把「语义合法但形式不合契约」的常见形态抹平，
+ * 只做**无损**变换（不编内容、不猜语义），让模型的可信产出不被形式问题整段作废。
+ *
+ * 三条（全部实测高频）：
+ *   1) 行内重复角色：同一段里同一角色出现两次（模型常先写概览再补细节）→ 合并成一条，
+ *      数组字段并集去重、标量取首个非空；
+ *   2) 角色数组里混入字符串（`characters: ["周明瑞"]`）→ 包成 `{name, aliases:[], ...}` 最小形状；
+ *   3) `relations[].content` 这类常见误键 → 已有 KEY_ALIASES 覆盖，这里再兜「未知键整体降级进 how」。
+ */
+export function normalizeRowShapes(row) {
+  if (!row || typeof row !== 'object') return row
+  // 与 normalizeRowKeys 同款安全前置：自定义原型/访问器/特殊键一律原样返回，
+  // 交回校验如实拒——`{...row}` 会把原型抹平、把 getter 求值，等于绕过两道安全闸。
+  const proto = Object.getPrototypeOf(row)
+  if (proto !== Object.prototype && proto !== null) return row
+  for (const key of Reflect.ownKeys(row)) {
+    if (typeof key !== 'string') return row
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') return row
+    const descriptor = Object.getOwnPropertyDescriptor(row, key)
+    if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return row
+  }
+  const out = { ...row }
+  if (Array.isArray(row.characters)) {
+    const byName = new Map()
+    for (const item of row.characters) {
+      // 形态 2：裸字符串 → 最小对象（identity 留空，后续 joined 自然为空，不编内容）
+      const character = typeof item === 'string'
+        ? { name: item, aliases: [], identity: '', traits: [], speech: [], behavior: [] }
+        : item
+      if (!character || typeof character !== 'object') continue
+      const name = String(character.name ?? '').trim()
+      // name 缺失**不能丢**——静默丢一条比报错严重得多（校验要让「缺 name」如实报错）。
+      // 用占位键保留原对象，交回 schema 报「name 必填」。
+      if (!name) { byName.set(` missing-name-${byName.size}`, character); continue }
+      const prior = byName.get(name)
+      if (!prior) { byName.set(name, { ...character }); continue }
+      // 形态 1：同名合并——数组并集、标量取首个非空
+      const merged = { ...prior }
+      for (const [key, value] of Object.entries(character)) {
+        if (Array.isArray(value)) merged[key] = [...new Set([...(Array.isArray(merged[key]) ? merged[key] : []), ...value])]
+        else if (merged[key] === undefined || merged[key] === '' || merged[key] === null) merged[key] = value
+      }
+      byName.set(name, merged)
+    }
+    out.characters = [...byName.values()]
+  }
+  // 形态 3：relations 里只有 content 没有 how → 把 content 当依据，未知键丢弃（它是描述不是数据）
+  if (Array.isArray(row.relations)) {
+    out.relations = row.relations.filter((item) => item && typeof item === 'object').map((item) => {
+      const { content, ...rest } = item
+      if (rest.how === undefined && typeof content === 'string' && content.trim()) rest.how = content.trim()
+      return rest
+    })
+  }
+  return out
+}
+
+/** 递归把对象/数组里的键名按 KEY_ALIASES 归一（值不动；标准键优先，后到的同义键不覆盖）。 */
+export function normalizeRowKeys(value, depth = 0) {
+  if (depth > 8) return value
+  if (Array.isArray(value)) {
+    // 数组附加属性（array.extra = ...）也要拦：map 会静默丢掉它们，等于绕过安全闸。
+    // 有非下标自有键就整数组原样返回，让 checkContainer 照旧报错。
+    // 合法的自有键只有 length 与「数组索引」——索引上限 2^32-2（4294967295 不是索引，是附加属性）
+    const MAX_INDEX = 4294967294
+    const isIndex = (key) => typeof key === 'string' && /^(0|[1-9][0-9]*)$/u.test(key) && Number(key) <= MAX_INDEX
+    if (Reflect.ownKeys(value).some((key) => key !== 'length' && !isIndex(key))) return value
+    return value.map((item) => normalizeRowKeys(item, depth + 1))
+  }
+  if (!value || typeof value !== 'object') return value
+  // 安全闸优先：出现特殊键就**整个对象原样返回**，不做任何归一——
+  // 让下游 checkContainer 照旧报「禁止特殊键」。归一绝不能成为绕过安全闸的通道。
+  // 用 Reflect.ownKeys + 属性描述符：Object.keys/entries 只看到可枚举自有键，
+  // 而 `__proto__` 常以 defineProperty（不可枚举）或访问器形态出现，那时会被静默跳过。
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') return value
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') return value
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return value
+  }
+  // 自定义原型同样原样返回（下游 checkContainer 会拒）
+  const proto = Object.getPrototypeOf(value)
+  if (proto !== Object.prototype && proto !== null) return value
+  const out = {}
+  for (const [key, raw] of Object.entries(value)) {
+    const canonical = Object.prototype.hasOwnProperty.call(KEY_ALIASES, key) ? KEY_ALIASES[key] : key
+    if (!Object.prototype.hasOwnProperty.call(out, canonical)) {
+      out[canonical] = normalizeRowKeys(raw, depth + 1)
+    } else if (Array.isArray(out[canonical]) && Array.isArray(raw)) {
+      out[canonical] = [...out[canonical], ...normalizeRowKeys(raw, depth + 1)]
+    }
+    // 标量冲突：标准键优先（先到的保留），同义键的值丢弃——不猜谁对
+  }
+  return out
+}
+
 /** 名称规范化：全角 ASCII→半角、空白归一、去首尾引号；不做同义改写，只抹表示层噪音。 */
 export function normalizeName(value) {
   // 全角 ASCII（U+FF01–U+FF5E）与全角空格（U+3000）按码点归一，避免正则里出现不规则空白字面量。
@@ -321,7 +436,18 @@ export function buildExtractionSource(input = {}) {
 export function validateExtractionRows(rows, segments) {
   const details = []
   const known = validateShape(segments, { type: 'array', items: segmentSchema }, 'segments', details)
-  const value = validateShape(rows, { type: 'array', items: EXTRACTION_ROW_SCHEMA }, 'rows', details)
+  // 入口先抹键名漂移（中文/近义键 → schema 键），再进严格校验——表示层噪音不该让整段作废
+  // 归一只能作用于「已经是数组」的输入：非数组（null/{}/'[]'/Array(1) 空洞）原样交回，
+  // 让校验如实拒——这层绝不能把非法输入洗成合法的空行集（会静默吞掉整个提交）。
+  // 数组自身也要查附加属性：map 只产生下标元素，`rows.extra = …` 会被静默丢掉。
+  // 有非下标自有键 → 整个数组原样交回，让 checkContainer 照旧报错。
+  const rowsArrayClean = Array.isArray(rows) && Reflect.ownKeys(rows).every((key) => (
+    key === 'length' || (typeof key === 'string' && /^(0|[1-9][0-9]*)$/u.test(key) && Number(key) <= 4294967294)
+  ))
+  const normalizedRows = rowsArrayClean
+    ? rows.map((row) => (row && typeof row === 'object' && !Array.isArray(row) ? normalizeRowShapes(normalizeRowKeys(row)) : row))
+    : rows
+  const value = validateShape(normalizedRows, { type: 'array', items: EXTRACTION_ROW_SCHEMA }, 'rows', details)
   if (!details.length) {
     const ids = new Set()
     for (const segment of known) {

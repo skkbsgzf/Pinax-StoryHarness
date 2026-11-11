@@ -46,7 +46,17 @@ if (rejected.length) {
   const codes = {}
   for (const item of rejected) codes[item.code] = (codes[item.code] ?? 0) + 1
   console.log('拒因:', codes)
-  for (const item of rejected.filter((r) => r.code === 'ROW_INVALID').slice(0, 3)) console.log('  样本:', item.details.join(' | '))
+  // 全量归并拒因（不只是前 3 条样本）——调优要看分布，不看个例
+  const fieldCounts = {}
+  for (const item of rejected.filter((r) => r.code === 'ROW_INVALID')) {
+    for (const detail of item.details ?? []) {
+      const key = detail.replace(/\[\d+\]/gu, '[]')
+      fieldCounts[key] = (fieldCounts[key] ?? 0) + 1
+    }
+  }
+  for (const [key, count] of Object.entries(fieldCounts).sort((a, b) => b[1] - a[1]).slice(0, 8)) {
+    console.log(`  ${String(count).padStart(3)} × ${key}`)
+  }
 }
 if (rows.length && dataset) {
   try {
