@@ -19,7 +19,7 @@ function run(cmd) {
 
 const MSG_FILE = process.argv[2] || 'D:/Pinax-e2e/msg.txt'
 run('git read-tree feat/pinax-electron-next')
-run('git add -A next/ docs/ devtools/')
+run('git add -A next/ docs/ devtools/ shared/')
 // 根级白名单（批次42 起 .gitattributes/eslint.config.js 有跨根改动；文件不在改动里时 add 是 no-op）
 try { run('git add -A .gitattributes eslint.config.js package.json') } catch {}
 const tree = run('git write-tree').trim()
