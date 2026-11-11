@@ -13,8 +13,19 @@ const schemas = {
   next: object({ dataset: key, runId: key }, ['dataset', 'runId']),
   submit: object({ dataset: key, runId: key, expectedRevision: integer, taskId: text, submissionId: key,
     rows: { type: 'array', items: EXTRACTION_ROW_SCHEMA } }, ['dataset', 'runId', 'expectedRevision', 'taskId', 'submissionId']),
-  status: object({ dataset: key, runId: key, view: { enum: ['summary', 'sources', 'manifest', 'entries', 'entry', 'row', 'changes', 'warnings', 'index'] }, pluginId: text, dir: text, id: text, offset: integer }),
-  finish: object({ dataset: key, runId: key, expectedRevision: integer }, ['dataset', 'runId', 'expectedRevision']),
+  status: object({ dataset: key, runId: key, view: { enum: ['summary', 'sources', 'manifest', 'entries', 'entry', 'row', 'changes', 'warnings', 'index', 'archive'] }, pluginId: text, dir: text, id: text, offset: integer }),
+  finish: object({
+    dataset: key, runId: key, expectedRevision: integer,
+    // 缓存池水位（Track 4，全可配）：不传用默认（120 条 / 4 章 / 6 万字）
+    flushPolicy: object({
+      flushEntries: { type: 'integer', minimum: 1 },
+      flushChapters: { type: 'integer', minimum: 1 },
+      flushChars: { type: 'integer', minimum: 1000 },
+      retrieveLimit: { type: 'integer', minimum: 1 },
+      retrieveChars: { type: 'integer', minimum: 200 },
+      keepReferenced: { type: 'boolean' }
+    })
+  }, ['dataset', 'runId', 'expectedRevision']),
   fact_check: object({ dataset: key, runId: key, scope: { enum: ['summary', 'full'] } }, ['dataset'])
 }
 const descriptions = {

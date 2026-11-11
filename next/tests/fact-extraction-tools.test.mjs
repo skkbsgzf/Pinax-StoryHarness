@@ -383,3 +383,82 @@ test('P-TRIM T-1.5：跨 run 折叠——同人物命中即合并（chapters 并
   const removed = after2.raw.current.changes.filter((item) => item.kind === 'source-removed')
   assert.ok(!removed.some((item) => item.id === aming1.id), '人物条目不该被当 removed')
 })
+
+test('P-TRIM Track 4：缓存池 flush——达水位时折进 archive，working 只留接续章，archive 可读', async (t) => {
+  const f = await fixture(t)
+  const ref2 = { pluginId: f.ref.pluginId, dir: f.ref.dir, file: '第二章.md', chapterNo: 2 }
+  await f.fileService.write({ ...ref2, text: prose.replace('收起信', '攥紧信'), expectedRevision: 0 })
+  const run1 = await f.good('prepare', initial(f.ref))
+  // 注意：complete() 内部会调 finish（不带 flushPolicy）——这里自己走一遍以便带 policy
+  let latest1 = null
+  for (let safety = 0; safety < 100; safety += 1) {
+    const task = await f.good('next', { dataset: 'book', runId: run1.runId })
+    latest1 = task
+    if (task.done) break
+    const args = { dataset: 'book', runId: run1.runId, expectedRevision: task.revision, taskId: task.taskId, submissionId: `r1-${task.revision}` }
+    args.rows = task.units.map((unit) => row(unit))
+    await f.good('submit', args)
+  }
+  // flushChapters:1 → 第一章就触发（验证机制，不是验证默认水位）
+  const done1 = await f.good('finish', {
+    dataset: 'book', runId: run1.runId, expectedRevision: latest1.revision,
+    flushPolicy: { flushChapters: 1, keepReferenced: true }
+  })
+  assert.ok(done1.cacheTier, '回执带缓存池读数')
+  assert.ok(done1.cacheTier.flush, '达到章跨度水位 → 触发 flush')
+  // 数据只在第 1 章 → 默认谓词「保留最新一章」把全部留在 working（这是设计意图：接续上下文的章不下沉）。
+  // 要验证真下沉用 keepReferenced:false（下一步单独跑）。
+  assert.equal(done1.cacheTier.flush.moved, 0, '单章数据的全部条目都属最新章 → 全部留热窗')
+  assert.equal(done1.cacheTier.flush.stayed, done1.cacheTier.level.entries)
+  assert.equal(done1.cacheTier.archive, 0, '没下沉就没有 archive 内容')
+
+  // 缓存池水位从 archive 视图读（summary 不带它——summary 是 run 级读数，缓存池是 dataset 级）
+
+  // archive 读口（此时为空：全留 working）
+  const archive = await f.good('status', { dataset: 'book', view: 'archive' })
+  assert.equal(archive.total, 0)
+  assert.equal(archive.flushes, 1, 'flush 规划已记账（即使 moved=0）')
+
+  // 第二跑：再 flush 一次，archive 累加（不覆盖）
+  const run2 = await f.good('prepare', { dataset: 'book', requestId: 'run2', mode: 'update', sources: [f.ref, ref2] })
+  let latest = null
+  for (let safety = 0; safety < 100; safety += 1) {
+    const task = await f.good('next', { dataset: 'book', runId: run2.runId })
+    latest = task
+    if (task.done) break
+    const args = { dataset: 'book', runId: run2.runId, expectedRevision: task.revision, taskId: task.taskId, submissionId: `r2-${task.revision}` }
+    args.rows = task.units.map((unit) => row(unit))
+    await f.good('submit', args)
+  }
+  // 第二轮：keepReferenced:false → 全量下沉，archive 真的有了内容
+  const done2 = await f.good('finish', {
+    dataset: 'book', runId: run2.runId, expectedRevision: latest.revision,
+    flushPolicy: { flushChapters: 1, keepReferenced: false }
+  })
+  assert.ok(done2.cacheTier.flush.moved > 0, 'keepReferenced:false 时全量下沉')
+  assert.equal(done2.cacheTier.level.entries, 0, 'working 彻底换新（清空）')
+  assert.ok(done2.cacheTier.archive > 0, 'archive 有内容了')
+  assert.ok(done2.cacheTier.flush.knowledgeMap > 0, '产出知识映射')
+  const archive2 = await f.good('status', { dataset: 'book', view: 'archive' })
+  assert.ok(archive2.total > 0, 'archive 分页可读')
+  assert.ok(archive2.knowledgeMap > 0)
+  assert.equal(archive2.flushes, 2, '两次 flush 都记账')
+})
+
+test('P-TRIM Track 4：默认水位不触发（单章数据量远低于 120 条 / 4 章）', async (t) => {
+  const f = await fixture(t)
+  const run = await f.good('prepare', initial(f.ref))
+  let latest = null
+  for (let safety = 0; safety < 100; safety += 1) {
+    const task = await f.good('next', { dataset: 'book', runId: run.runId })
+    latest = task
+    if (task.done) break
+    const args = { dataset: 'book', runId: run.runId, expectedRevision: task.revision, taskId: task.taskId, submissionId: `d-${task.revision}` }
+    args.rows = task.units.map((unit) => row(unit))
+    await f.good('submit', args)
+  }
+  const done = await f.good('finish', { dataset: 'book', runId: run.runId, expectedRevision: latest.revision })
+  assert.equal(done.cacheTier.flush, null, '默认水位下不 flush（全留 working）')
+  assert.equal(done.cacheTier.archive, 0)
+  assert.ok(done.cacheTier.level.entries > 0, 'working 有内容')
+})

@@ -10,6 +10,9 @@ import { sha1Hex } from '../fact/domain/stableId.js'
 import { buildExtractionSource, validateExtractionRows, compileExtractionEntries, buildIndex, EXTRACTION_CHAIN_VERSION } from '../fact/usecases/pipeline/extractionChain.js'
 import { buildEnvelopeFacts, buildSegmentIndex, leanDatasetEntries, normalizeDatasetEntries, LEAN_FORMAT } from '../fact/usecases/pipeline/leanEntries.js'
 import { consolidateEntries } from '../fact/usecases/pipeline/consolidate.js'
+import {
+  CACHE_TIER_VERSION, buildKnowledgeMap, normalizeFlushPolicy, planFlush, workingLevel
+} from '../fact/usecases/pipeline/cacheTier.js'
 import { checkConsistency } from '../fact/usecases/consistency.js'
 
 // 派生数据与作者 FactStore 分开：finish 发布待审快照，不采纳、不写正文/世界书。
@@ -268,7 +271,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
         return { state, value: summary(state, run) }
       })
     },
-    async finish({ dataset, runId, expectedRevision }) {
+    async finish({ dataset, runId, expectedRevision, flushPolicy }) {
       return write(dataset, async (state) => {
         const run = getRun(state, runId)
         if (run.finished) return { value: { ...summary(state, run), duplicate: true } }
@@ -318,13 +321,53 @@ export function createFactExtractionService({ root = null, fileService = null, r
         )
         const removed = existingEntries.filter((entry) => removedIds.has(entry.id)).map((entry) => ({ id: entry.id, kind: 'source-removed', action: 'review-only' }))
         const finalEntries = fold.entries.filter((entry) => !removedIds.has(entry.id))
+
+        // P-TRIM Track 4（作者 2026-11-11 缓存池裁定）：archive＝RAG 硬存储（SSD），current.entries＝working（DDR）。
+        // working 达水位就把这一批**折进 archive**（命中即合并，复用 consolidate），working 只留最近一章接续，
+        // 并产出 knowledgeMap（archive 的词法索引，供字面命中检索）。不达水位则全部留在 working。
+        const lockPolicy = normalizeFlushPolicy(flushPolicy)
+        const mergedWorking = finalEntries // 本 run 的产物先进 working
+        const level = workingLevel(mergedWorking, lockPolicy)
+        const archiveBefore = Array.isArray(state.archive?.entries) ? state.archive.entries : []
+        let archiveAfter = archiveBefore
+        let working = mergedWorking
+        let flushReport = null
+        if (level.shouldFlush) {
+          const plan = planFlush({ working: mergedWorking, policy: lockPolicy })
+          // archive ← 本批下沉条目（命中即合并，与 run 内 fold 同一套语义）
+          const archiveSegChars = new Map()
+          for (const source of [...(state.archive?.sources ?? []), ...run.sources]) {
+            for (const segment of source.segments ?? []) archiveSegChars.set(segment.id, segment.chars)
+          }
+          const archived = consolidateEntries(archiveBefore, plan.move, { segmentChars: archiveSegChars })
+          archiveAfter = archived.entries
+          working = plan.stay
+          flushReport = {
+            reason: plan.reason,
+            moved: plan.move.length,
+            stayed: plan.stay.length,
+            consolidated: archived.stats,
+            knowledgeMap: buildKnowledgeMap(archiveAfter).size
+          }
+        }
+
         state.revision += 1
         state.current = { version: EXTRACTION_CHAIN_VERSION, runId, revision: state.revision, spec: run.spec, sources: run.sources, rows: run.rows,
-          entries: finalEntries, warnings: fold.warnings, index: buildIndex(finalEntries), changes: [...changed, ...mergedRecords, ...removed], removedSources: run.removedSources }
+          entries: working, warnings: fold.warnings, index: buildIndex(working), changes: [...changed, ...mergedRecords, ...removed], removedSources: run.removedSources }
+        // archive 单独一层：不随 working 清空，下一次检索/推演从这里取（不进 prompt 除非被检索窗口选中）
+        state.archive = {
+          version: EXTRACTION_CHAIN_VERSION,
+          revision: state.revision,
+          entries: archiveAfter,
+          sources: [...(state.archive?.sources ?? []), ...run.sources.filter((source) => !(state.archive?.sources ?? []).some((old) => old.id === source.id))],
+          knowledgeMap: buildKnowledgeMap(archiveAfter).size,
+          flushes: [...(state.archive?.flushes ?? []), ...(flushReport ? [{ revision: state.revision, ...flushReport }] : [])]
+        }
+        state.cacheTier = { version: CACHE_TIER_VERSION, working: workingLevel(working, lockPolicy), archive: archiveAfter.length }
         run.finished = true
         run.revision += 1
-        return { state, value: { ...summary(state, run), entries: finalEntries.length, warnings: fold.warnings.length, changes: changed.length + mergedRecords.length + removed.length, index: buildIndex(finalEntries),
-          consolidation: { ...fold.stats, version: fold.version }, publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果。尚未写入作者事实库或自动采纳。' } }
+        return { state, value: { ...summary(state, run), entries: working.length, warnings: fold.warnings.length, changes: changed.length + mergedRecords.length + removed.length, index: buildIndex(working),
+          consolidation: { ...fold.stats, version: fold.version }, cacheTier: { level: workingLevel(working, lockPolicy), archive: archiveAfter.length, flush: flushReport }, publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果。尚未写入作者事实库或自动采纳。' } }
       })
     },
     /** 一致性检测（工具名 pinax_fact_check）：对已发布快照整库过一遍（也可指定 runId 用该运行已交的行现场编译）。只读，不写断点。
@@ -377,6 +420,14 @@ export function createFactExtractionService({ root = null, fileService = null, r
       if (kind === 'entries') return ok(page(current.entries.map(({ id, layer, name, status }) => ({ id, layer, name, status })), offset, { revision: current.revision }))
       if (kind === 'changes' || kind === 'warnings') return ok(page(current[kind], offset, { revision: current.revision }))
       if (kind === 'index') return ok({ revision: current.revision, ...current.index })
+      // Track 4：冷层（archive＝RAG 硬存储）读口——working 之外的已 flush 条目，分页读
+      if (kind === 'archive') {
+        const archive = state.archive ?? { entries: [], knowledgeMap: 0, flushes: [] }
+        return ok(page(archive.entries.map(({ id, layer, name, status }) => ({ id, layer, name, status })), offset, {
+          revision: state.revision, total: archive.entries.length, knowledgeMap: archive.knowledgeMap, flushes: archive.flushes.length,
+          cacheTier: state.cacheTier ?? null
+        }))
+      }
       reject('INVALID_INPUT', '不支持的status view。')
     }
   }
