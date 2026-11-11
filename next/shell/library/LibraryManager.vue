@@ -1,22 +1,51 @@
 <script setup>
+import { ref } from 'vue'
 import LibraryCard from './LibraryCard.vue'
+import CreateLibrary from './CreateLibrary.vue'
+import ImportLibrary from './ImportLibrary.vue'
+import OpenFailureCard from './OpenFailureCard.vue'
 
 /**
- * 库管理器（前端重构工单 A：库从设置页的四个配置项提升为一级界面）。
- *
- * 渲染条件＝没有已打开的项目（AppNext 的 v-if 分支）：整窗只留顶栏（品牌＋「我的库」＋设置入口），
- * 不渲染竖条／索引窗／页签／Agent 列（工单 A-1 验收）。有项目时整个组件不出现，工作区照旧。
- *
- * 渲染零 IPC（工单 A-2 验收）：最近清单由外壳以 props 快照传入；打开/新建/导入/移除/显示
- * 都只 emit 事件，通道调用与错误处理全部留在外壳（与菜单同一条分发口径）。
+ * 库管理器（前端重构工单 A）：无项目时的一级整窗视图。
+ * 内部三视图：list（最近库＋动作）／create（两步建库，A-4）／import（四步导库，A-6）；
+ * 打开失败修复卡（A-5）内嵌在 list 顶部——四类失败都有可点的下一步，不是死胡同。
+ * 渲染零 IPC（工单 A-2）：最近清单与失败详情由外壳以 props 快照传入；全部动作只 emit，
+ * 通道调用与错误处理留在外壳（与菜单同一条分发口径）。
  */
 const props = defineProps({
   /** 最近打开的库（appPreferences.recentProjects 快照；{path, name, kind, at}）。 */
   recents: { type: Array, default: () => [] },
-  /** 相对时间的基准（默认当下；测试注入固定值）。 */
+  /** 建库／导库整页的通道出口（外壳转发层）。 */
+  bridge: { type: Object, default: null },
+  /** 打开失败（A-5）：{ path, error, details }；null＝无失败卡。 */
+  openFailure: { type: Object, default: null },
+  /** 可任主模块的板块（[{id, title, projectKind}]，声明了 primary 的）。 */
+  primaryCarriers: { type: Array, default: () => [] },
+  /** 模块清单与伴生（失败卡内嵌主模块选择用）。 */
+  carriers: { type: Array, default: () => [] },
+  companions: { type: Array, default: () => [] },
+  extraEnabled: { type: Array, default: () => [] },
+  /** 相对时间的基准（测试注入）。 */
   now: { type: Object, default: null }
 })
-const emit = defineEmits(['open', 'reveal', 'remove', 'new-library', 'open-folder', 'import-records', 'open-settings'])
+const emit = defineEmits(['open', 'reveal', 'remove', 'open-folder', 'open-settings', 'create-done', 'set-primary', 'toggle-companion', 'open-modules'])
+
+/** 内部路由：list／create／import（工单 A-4／A-6 整页流；不套设置弹窗）。 */
+const view = ref('list')
+const createInitialDir = ref(null)
+const importInitialSource = ref(null)
+
+function startCreate(path = null) {
+  createInitialDir.value = path
+  view.value = 'create'
+}
+function startImport(source = null) {
+  importInitialSource.value = source
+  view.value = 'import'
+}
+function backToList() {
+  view.value = 'list'
+}
 
 const lead = () => (props.recents.length ? '接着写，或者开个新的。' : '从一个空文件夹开始你的下一本书。')
 </script>
@@ -30,33 +59,74 @@ const lead = () => (props.recents.length ? '接着写，或者开个新的。' :
     </header>
 
     <main class="lib-body">
-      <p class="lib-lead">{{ lead() }}</p>
-      <div class="lib-actions">
-        <button type="button" class="control-primary" data-test="library-new" @click="emit('new-library')">新建库</button>
-        <button type="button" class="control-secondary" data-test="library-open-folder" @click="emit('open-folder')">打开文件夹</button>
-        <button type="button" class="control-secondary" data-test="library-import" @click="emit('import-records')">导入既有稿</button>
-      </div>
+      <!-- ① 新建库整页（A-4） -->
+      <CreateLibrary
+        v-if="view === 'create'"
+        :bridge="bridge"
+        :primary-carriers="primaryCarriers"
+        :extra-enabled="extraEnabled"
+        :initial-dir="createInitialDir"
+        @done="emit('create-done', $event)"
+        @back="backToList"
+      />
 
-      <section v-if="recents.length" class="lib-recent" aria-label="最近打开的库">
-        <h2 class="lib-section-title">最近打开的库</h2>
-        <div class="lib-grid">
-          <LibraryCard
-            v-for="entry in recents"
-            :key="entry.path"
-            :entry="entry"
-            :now="now"
-            @open="(entryItem) => emit('open', entryItem)"
-            @reveal="(entryItem) => emit('reveal', entryItem)"
-            @remove="(entryItem) => emit('remove', entryItem)"
-          />
+      <!-- ② 导入整页（A-6）：四步＋完成页两出口 -->
+      <ImportLibrary
+        v-else-if="view === 'import'"
+        :bridge="bridge"
+        :primary-carriers="primaryCarriers"
+        :extra-enabled="extraEnabled"
+        :initial-source="importInitialSource"
+        @import-open="(payload) => emit('open', payload)"
+        @done="backToList"
+        @back="backToList"
+      />
+
+      <!-- ③ 列表态：失败修复卡（A-5）＋动作行＋最近库 -->
+      <template v-else>
+        <OpenFailureCard
+          v-if="openFailure"
+          :failure="openFailure"
+          :primary-carriers="primaryCarriers"
+          :carriers="carriers"
+          :companions="companions"
+          :extra-enabled="extraEnabled"
+          @create-here="(path) => startCreate(path)"
+          @import-here="(path) => startImport(path)"
+          @set-primary="(pluginId) => emit('set-primary', pluginId)"
+          @toggle-companion="(pluginId) => emit('toggle-companion', pluginId)"
+          @open-modules="emit('open-modules')"
+          @dismiss="emit('open', { __dismissFailure: true })"
+        />
+
+        <p class="lib-lead">{{ lead() }}</p>
+        <div class="lib-actions">
+          <button type="button" class="control-primary" data-test="library-new" @click="startCreate(null)">新建库</button>
+          <button type="button" class="control-secondary" data-test="library-open-folder" @click="emit('open-folder')">打开文件夹</button>
+          <button type="button" class="control-secondary" data-test="library-import" @click="startImport(null)">导入既有稿</button>
         </div>
-      </section>
+
+        <section v-if="recents.length" class="lib-recent" aria-label="最近打开的库">
+          <h2 class="lib-section-title">最近打开的库</h2>
+          <div class="lib-grid">
+            <LibraryCard
+              v-for="entry in recents"
+              :key="entry.path"
+              :entry="entry"
+              :now="now"
+              @open="(entryItem) => emit('open', entryItem)"
+              @reveal="(entryItem) => emit('reveal', entryItem)"
+              @remove="(entryItem) => emit('remove', entryItem)"
+            />
+          </div>
+        </section>
+      </template>
     </main>
   </div>
 </template>
 
 <style scoped>
-/* 库管理器（工单 A／C）：整窗一级视图；间距 4 的倍数；字号全走令牌（页面标题新令牌 --nx-fs-hero）。 */
+/* 库管理器（工单 A／C）：整窗一级视图；间距 4 的倍数；字号全走令牌（页面标题 --nx-fs-hero）。 */
 .lib-manager {
   display: flex;
   flex-direction: column;

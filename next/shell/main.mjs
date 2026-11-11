@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, shell } from 'elec
 import { fileURLToPath } from 'node:url'
 import { basename, dirname, join, resolve } from 'node:path'
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { existsSync, readdirSync } from 'node:fs'
 import * as gitHistory from '../history/gitHistory.mjs'
 import { createNextSession, loadBuiltInCarrierPlugins } from '../index.mjs'
 import { fail } from '../kernel/errors.mjs'
@@ -968,8 +969,27 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     await beginHistory({ root: session.projectRoot, fileService: session.project.value?.fileService })
   }
 
+  // projectOpen 失败时补一份目录状态（前端工单 A-5）：库管理器的失败卡要分「空目录→新建」与
+  // 「有稿子→导入」两档——渲染层无 IO，只能在主进程判；只追加 details 字段，错误码与消息不动。
+  const openFailureDetails = (root) => {
+    try {
+      const hasPinax = existsSync(join(root, '.pinax'))
+      let dirEmpty = null
+      try { dirEmpty = readdirSync(root).filter((name) => name !== '.pinax').length === 0 } catch { dirEmpty = null }
+      return { hasPinax, dirEmpty }
+    } catch {
+      return null
+    }
+  }
   for (const channel of Object.values(IPC_CHANNELS)) {
-    ipcMain.handle(channel, async (_event, payload) => slimForIpc(await dispatcher.dispatch(channel, payload)))
+    ipcMain.handle(channel, async (_event, payload) => {
+      const result = slimForIpc(await dispatcher.dispatch(channel, payload))
+      if (channel === IPC_CHANNELS.projectOpen && result && result.ok === false && result.error && payload?.root) {
+        const details = openFailureDetails(String(payload.root))
+        if (details) return { ...result, error: { ...result.error, details } }
+      }
+      return result
+    })
   }
 
   window_ = createWindow(preloadPath || join(currentDir, 'preload.mjs'), uiZoom, currentScheme)

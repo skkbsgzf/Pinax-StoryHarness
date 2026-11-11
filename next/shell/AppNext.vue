@@ -9,10 +9,8 @@ import RuntimeDock from './RuntimeDock.vue'
 import SettingsModal from './SettingsModal.vue'
 import PrefsSection from './settings/PrefsSection.vue'
 import CarriersSection from './settings/CarriersSection.vue'
-import ProjectWizardSection from './settings/ProjectWizardSection.vue'
 import OutlineImportSection from './settings/OutlineImportSection.vue'
 import BackupSection from './settings/BackupSection.vue'
-import PrimaryCarrierSection from './settings/PrimaryCarrierSection.vue'
 import HistorySection from './settings/HistorySection.vue'
 import ProposalsSection from './settings/ProposalsSection.vue'
 import ExportSection from './settings/ExportSection.vue'
@@ -574,9 +572,6 @@ const settingsSections = computed(() => [
   // 项目
   { id: 'carriers', title: '载体管理', group: '项目', keywords: ['板块', '载体', '启用', '停用', '主载体', '权限', '数据目录'], component: CarriersSection, props: { carriers: carriers.value } },
   // 工单E1：导入既有稿（老作者带稿上车）。三步与建项目同级，落盘走主进程 project:import-run。
-  { id: 'import', title: '导入既有稿', group: '项目', keywords: ['带稿上车', '稿子目录', '项目位置', '导入计划', '原文件只新增不修改', '剧本', '世界书'], component: ProjectWizardSection, props: { bridge: props.bridge, mode: 'import', primaryCarriers: primaryCarriers.value, extraEnabled: extraEnabled.value, currentProjectName: project.value?.name ?? null } },
-  { id: 'newProject', title: '新建项目', group: '项目', keywords: ['项目名称', '项目文件夹', '空目录', '磁盘上的一个文件夹', '主载体'], component: ProjectWizardSection, props: { bridge: props.bridge, mode: 'create', primaryCarriers: primaryCarriers.value, extraEnabled: extraEnabled.value } },
-  { id: 'primary', title: '主载体选择', group: '项目', keywords: ['这个项目要创作什么', '创作小说还是剧本'], component: PrimaryCarrierSection, props: { carriers: carriers.value, companions: companions.value, extraEnabled: extraEnabled.value } },
   // 文档
   { id: 'history', title: '文档历史', group: '文档', keywords: ['快照', '历史版本', '恢复', 'diff'], component: HistorySection, props: { bridge: props.bridge, target: historyTarget.value, restore: restoreHistoryVersion } },
   // 工单B1（协议 v1.1-B）：提案审阅迁出小说板索引窗，收进统一二级页的「文档」组。
@@ -609,19 +604,7 @@ async function openCarriers() {
   await refresh()
 }
 
-/** 新建项目（批次9 的闸原样保留）：只在「没有已打开的项目且装了可任主载体的板块」时摊得开。 */
-function openNewProject() {
-  if (project.value || !canPickPrimary.value) return
-  openSection('newProject')
-}
 
-/** 导入既有稿（工单E1）：菜单「文件 → 导入既有稿…」的落点。
- * 不做「有项目就不给开」的闸——恰恰是老作者带着稿子上车时才需要它；
- * 向导里会明示「导入会切换到新项目」，避免误切时没看见。
- */
-function openImport() {
-  openSection('import')
-}
 
 /** 备份与恢复（工单G2）：菜单「文件 → 备份与恢复…」的落点。
  *  与导入同一口径——不拦「有项目才给开」：恢复本来就是在别处打开面之前先把项目弄出来；
@@ -674,6 +657,31 @@ async function closeToLibrary() {
 
 /* —— 库管理器（前端工单 A）事件转发：通道调用与错误处理都留在壳层，组件只 emit。 ———— */
 /** 库卡片点开：复用「打开项目文件夹」的既有后半程（project:open → refresh）。 */
+/** 库管理器「打开文件夹」（前端工单 A-5）：失败不进死胡同——错误码与目录状态交给失败卡出修复动作。 */
+const libraryOpenFailure = ref(null)
+async function openFolderFromLibrary() {
+  if (!props.bridge?.request) return
+  let picked = null
+  try {
+    picked = await props.bridge.request(IPC_CHANNELS.projectPickDir, {})
+  } catch { picked = null }
+  if (!picked?.ok || !picked.value?.picked || !picked.value.path) return
+  try {
+    const result = await props.bridge.request(IPC_CHANNELS.projectOpen, { root: picked.value.path })
+    if (result.ok) { libraryOpenFailure.value = null; await refresh(); return }
+    libraryOpenFailure.value = { path: picked.value.path, error: result.error, details: result.details ?? result.error?.details ?? null }
+  } catch (error) {
+    libraryOpenFailure.value = { path: picked.value.path, error: { code: 'PINAX_INVALID_INPUT', message: String(error?.message ?? error) }, details: null }
+  }
+  await refresh()
+}
+
+/** 建库成功（A-4）：projectCreate 通道内部已打开——外壳 refresh 后工作区接管。 */
+function onLibraryCreateDone() {
+  libraryOpenFailure.value = null
+  void refresh()
+}
+
 function onLibraryOpen(entry) {
   if (entry?.path) void openProjectRoot(entry.path)
 }
@@ -784,11 +792,9 @@ function closeTopMenu() {
 /** 菜单动作的页面内落点：原生菜单事件（menuInvoked）与页内菜单点击共用这一份。
  * 带 root 的调用是「最近打开」的某一条：打开走 openProjectRoot，主进程对它没有可代劳的事。 */
 const menuActions = {
-  'project.create': () => openNewProject(),
   'project.open': () => void openProjectFolder(),
   'project.library': () => void closeToLibrary(),
   [RECENT_MENU_ID]: (root) => void openProjectRoot(root),
-  'project.import': () => openImport(),
   'project.backup': () => openBackup(),
   'project.history': () => openHistory(),
   'project.reviewProposals': () => openProposals(),
@@ -2324,8 +2330,6 @@ function isReadOnlyCompanion(carrier) {
   return scopes.length > 0 && scopes.every((scope) => !scope.endsWith(':rw'))
 }
 const companions = computed(() => carriers.value.filter((item) => !item.isPrimary))
-/** 清单里声明了 primary 的板块才配当主载体：没有就明说空框架，不让作者点一个假的。 */
-const canPickPrimary = computed(() => carriers.value.some((item) => item.primary))
 /** 新建项目载荷里的主载体 id（原 createProject 内联的那一句，提出来给节经 props 注入）。 */
 /** 向导第②步的主载体候选（作者 2026-11-11 点单）：声明了 primary 的板块全列（小说／剧本），不再硬编码第一个。 */
 const primaryCarriers = computed(() => carriers.value
@@ -2657,14 +2661,22 @@ onBeforeUnmount(() => {
     <!-- 无项目＝库管理器（一级整窗视图，前端工单 A-1）：竖条/索引/页签/Agent 全部不渲染。 -->
     <LibraryManager
       v-if="!project"
+      :bridge="bridge"
       :recents="recentProjects"
+      :open-failure="libraryOpenFailure"
+      :primary-carriers="primaryCarriers"
+      :carriers="carriers"
+      :companions="companions"
+      :extra-enabled="extraEnabled"
       @open="onLibraryOpen"
       @reveal="onLibraryReveal"
       @remove="onLibraryRemove"
-      @new-library="openSection('newProject')"
-      @open-folder="openProjectFolder()"
-      @import-records="openSection('import')"
+      @open-folder="openFolderFromLibrary"
       @open-settings="openSection('prefs')"
+      @create-done="onLibraryCreateDone"
+      @set-primary="pickPrimary"
+      @toggle-companion="toggleCompanion"
+      @open-modules="openSection('carriers')"
     />
     <template v-else>
     <header class="nx-titlebar">
@@ -2737,7 +2749,7 @@ onBeforeUnmount(() => {
         @select="selectBoard"
         @toggle-theme="toggleTheme"
         @open-project="openProjectFolder"
-        @new-project="openNewProject"
+        @new-project="void closeToLibrary"
       />
 
       <!-- 左树是 folder 模板的一个 pane：web／gallery 载体不渲染 IndexWindow（铁律四）。 -->

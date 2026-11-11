@@ -85,12 +85,19 @@ describe('库管理器（前端工单 A）', () => {
     expect(wrapper.text()).toContain('我的库')
     await wrapper.find('[data-test="library-open-settings"]').trigger('click')
     expect(on['open-settings']).toHaveBeenCalled()
+    // 「新建库」现在是内部路由（切 create 视图），不再向上抛事件。
     await wrapper.find('[data-test="library-new"]').trigger('click')
-    expect(on['new-library']).toHaveBeenCalled()
-    await wrapper.find('[data-test="library-open-folder"]').trigger('click')
-    expect(on['open-folder']).toHaveBeenCalled()
-    await wrapper.find('[data-test="library-import"]').trigger('click')
-    expect(on['import-records']).toHaveBeenCalled()
+    expect(wrapper.find('[data-test="library-create"]').exists()).toBe(true)
+    wrapper.unmount()
+
+    // 打开文件夹/导入既有稿仍是向上抛的事件（通道调用在外壳）。
+    const { wrapper: w2, on: on2 } = mountManager()
+    await w2.find('[data-test="library-open-folder"]').trigger('click')
+    expect(on2['open-folder']).toHaveBeenCalled()
+    // 「导入既有稿」同样是内部路由（切 import 视图）。
+    await w2.find('[data-test="library-import"]').trigger('click')
+    expect(w2.find('[data-test="library-import-page"]').exists()).toBe(true)
+    w2.unmount()
   })
 
   it('相对时间分档（工单 A-3）在卡片上的综合呈现', () => {

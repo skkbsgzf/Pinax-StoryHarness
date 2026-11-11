@@ -62,7 +62,8 @@ test('应用菜单由主进程建立：载体注入顶层菜单一律拒绝，�
   const ids = flattenMenuIds(MENU_TEMPLATE).map((item) => item.id)
   for (const required of [
     // 项目组（工单A：文件组改名；提案目录从运行时组并入）
-    'project.create', 'project.open', 'project.import', 'project.backup', 'project.history', 'project.proposals', 'app.quit',
+    // 前端工单 A：新建/导入迁库管理器整页——菜单项随之退役（project.library 收在组末尾）。
+    'project.open', 'project.backup', 'project.history', 'project.proposals', 'project.library', 'app.quit',
     // 编辑组：全部带 id，页内菜单行点得动（主进程落到 webContents 的编辑命令）
     'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.selectAll',
     // 设置组与帮助组

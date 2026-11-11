@@ -211,7 +211,11 @@ function scanFile(filePath) {
     const describe = (top) => {
       const { members, rootName } = spineNames(top)
       const head = rootName ?? members[members.length - 1] ?? '调用'
-      return block.content.slice(top.range[0], Math.min(top.range[1], top.range[0] + 72)).replace(/\s+/gu, ' ') + `（入口 ${head}）`
+      // 防御：个别节点（如 import 断言/装饰器语义）range 可能缺席——回退到行号，不让审计工具自己炸。
+      const text = Array.isArray(top.range) && top.range.length === 2
+        ? block.content.slice(top.range[0], Math.min(top.range[1], top.range[0] + 72)).replace(/\s+/gu, ' ')
+        : `line ${line(top)}`
+      return text + `（入口 ${head}）`
     }
 
     walk(ast, (node) => {
