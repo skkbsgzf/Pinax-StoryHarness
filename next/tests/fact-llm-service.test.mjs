@@ -143,3 +143,56 @@ test('effort 只从主进程配置透传（渲染层载荷里没有这个字段�
 test('默认模型名钉在 hy4（既有模型通道验证过的名字）', () => {
   assert.equal(FACT_LLM_DEFAULT_MODEL, 'hy4')
 })
+/* ---------- P-LLM：Pi 任务面通道（本地 Pi 真实环境，作者 2026-11-11 裁定） ---------- */
+
+test('Pi 通道：成功回包归一成 {text, usage, model, durationMs}（与 CLI 通道同形状）', async () => {
+  const { dispatchPiCompletion } = await import('../runtime/factLlmService.mjs')
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(init.body) })
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, content: '收到', usage: { inputTokens: 10, outputTokens: 2 }, model: 'zai.glm-5.3', finishReason: 'stop' })
+    }
+  }
+  const result = await dispatchPiCompletion({ prompt: '回复两个字：收到', fetchImpl })
+  assert.equal(result.text, '收到')
+  assert.equal(result.model, 'zai.glm-5.3')
+  assert.deepEqual(result.usage, { inputTokens: 10, outputTokens: 2 })
+  assert.ok(String(calls[0].url).endsWith('/v1/pinax/complete'))
+  assert.deepEqual(calls[0].body.messages, [{ role: 'user', content: '回复两个字：收到' }])
+})
+
+test('Pi 通道：finishReason=error 的空补全要如实报「缺凭据」，不能只报「空」', async () => {
+  const { dispatchPiCompletion } = await import('../runtime/factLlmService.mjs')
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ ok: true, content: '', toolCalls: [], finishReason: 'error', usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } })
+  })
+  await assert.rejects(
+    () => dispatchPiCompletion({ prompt: '测试', fetchImpl }),
+    (error) => error.code === 'FACT_LLM_UPSTREAM_ERROR' && /凭据|鉴权/.test(error.message) && /finishReason=error/.test(error.message)
+  )
+})
+
+test('Pi 通道：任务面 4xx/5xx 或 ok:false 时抛上游失败，带状态码', async () => {
+  const { dispatchPiCompletion } = await import('../runtime/factLlmService.mjs')
+  await assert.rejects(
+    () => dispatchPiCompletion({ prompt: 'x', fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({ ok: false, message: '模型不可用' }) }) }),
+    (error) => error.code === 'FACT_LLM_UPSTREAM_FAILED' && error.status === 503 && /模型不可用/.test(error.message)
+  )
+})
+
+test('Pi 通道：发起前已中止 → FACT_LLM_ABORTED，不发请求', async () => {
+  const { dispatchPiCompletion } = await import('../runtime/factLlmService.mjs')
+  const controller = new AbortController()
+  controller.abort()
+  let called = false
+  await assert.rejects(
+    () => dispatchPiCompletion({ prompt: 'x', signal: controller.signal, fetchImpl: async () => { called = true } }),
+    (error) => error.code === 'FACT_LLM_ABORTED'
+  )
+  assert.equal(called, false)
+})
