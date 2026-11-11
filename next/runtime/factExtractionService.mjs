@@ -7,8 +7,9 @@ import { segmentText } from '../fact/domain/segment.js'
 import { validateProduces } from '../fact/usecases/skillContract.js'
 import { SKILL_CONTRACTS } from '../skills/contracts.mjs'
 import { sha1Hex } from '../fact/domain/stableId.js'
-import { buildExtractionSource, validateExtractionRows, compileExtractionEntries, EXTRACTION_CHAIN_VERSION } from '../fact/usecases/pipeline/extractionChain.js'
+import { buildExtractionSource, validateExtractionRows, compileExtractionEntries, buildIndex, EXTRACTION_CHAIN_VERSION } from '../fact/usecases/pipeline/extractionChain.js'
 import { buildEnvelopeFacts, buildSegmentIndex, leanDatasetEntries, normalizeDatasetEntries, LEAN_FORMAT } from '../fact/usecases/pipeline/leanEntries.js'
+import { consolidateEntries } from '../fact/usecases/pipeline/consolidate.js'
 import { checkConsistency } from '../fact/usecases/consistency.js'
 
 // 派生数据与作者 FactStore 分开：finish 发布待审快照，不采纳、不写正文/世界书。
@@ -276,19 +277,54 @@ export function createFactExtractionService({ root = null, fileService = null, r
         if (state.revision !== run.baseRevision) reject('DATASET_CONFLICT', '另一运行已发布新版；用update重新对齐基线。')
         await verifySources(run)
         const output = compile({ sources: run.sources, rows: Object.values(run.rows), ...run.spec })
-        const oldEntries = state.current?.entries ?? []
-        const changed = output.entries.filter((entry) => {
-          const old = oldEntries.find((item) => item.id === entry.id)
-          return !old || digest(old) !== digest(entry)
-        }).map((entry) => ({ id: entry.id, kind: oldEntries.some((old) => old.id === entry.id) ? 'changed' : 'added' }))
-        const removed = oldEntries.filter((entry) => !output.entries.some((item) => item.id === entry.id)).map((entry) => ({ id: entry.id, kind: 'source-removed', action: 'review-only' }))
+        // P-TRIM Track 3（T-1.5）：批后巩固——编译产物折进已发布快照（命中即合并），不再整表替换。
+        // 纯确定性零模型（B8）；id/L0 别名/L1 词法三级匹配，fold 语义见 consolidate.js。
+        const existingEntries = state.current?.entries ?? []
+        const segmentChars = new Map()
+        for (const source of [...(state.current?.sources ?? []), ...run.sources]) {
+          for (const segment of source.segments ?? []) segmentChars.set(segment.id, segment.chars)
+        }
+        const fold = consolidateEntries(existingEntries, output.entries, { segmentChars })
+        const existingIds = new Map(existingEntries.map((entry) => [entry.id, JSON.stringify(entry)]))
+        const afterById = new Map(fold.entries.map((entry) => [entry.id, JSON.stringify(entry)]))
+        const changed = []
+        const mergedRecords = []
+        const seenChange = new Set()
+        for (const assignment of fold.assignments) {
+          const { incomingId, targetId } = assignment
+          const wasExisting = existingIds.has(targetId)
+          const changedContent = wasExisting && existingIds.get(targetId) !== afterById.get(targetId)
+          if (!wasExisting) {
+            if (!seenChange.has(`added|${targetId}`)) { seenChange.add(`added|${targetId}`); changed.push({ id: targetId, kind: 'added' }) }
+          } else if (changedContent && !seenChange.has(`changed|${targetId}`)) {
+            seenChange.add(`changed|${targetId}`)
+            changed.push({ id: targetId, kind: 'changed' })
+          }
+          if (incomingId !== targetId && !seenChange.has(`merged|${incomingId}`)) {
+            seenChange.add(`merged|${incomingId}`)
+            mergedRecords.push({ id: incomingId, kind: 'merged', into: targetId, matchedBy: assignment.matchedBy, action: 'review-only' })
+          }
+        }
+        // removed＝既有条目的来源**全部**不在新范围内（整表替换语义的等价物）——
+        // 未命中但来源在范围内的条目由 fold 原样保留（L1 歧义等场景不越权删）。
+        const inRange = new Set(run.sources.map((source) => source.id))
+        const removedIds = new Set(
+          existingEntries
+            .filter((entry) => {
+              const refs = Array.isArray(entry.sources) ? entry.sources : []
+              return refs.length > 0 && !refs.some((ref) => inRange.has(ref.sourceId))
+            })
+            .map((entry) => entry.id)
+        )
+        const removed = existingEntries.filter((entry) => removedIds.has(entry.id)).map((entry) => ({ id: entry.id, kind: 'source-removed', action: 'review-only' }))
+        const finalEntries = fold.entries.filter((entry) => !removedIds.has(entry.id))
         state.revision += 1
         state.current = { version: EXTRACTION_CHAIN_VERSION, runId, revision: state.revision, spec: run.spec, sources: run.sources, rows: run.rows,
-          entries: output.entries, warnings: output.warnings, index: output.index, changes: [...changed, ...removed], removedSources: run.removedSources }
+          entries: finalEntries, warnings: fold.warnings, index: buildIndex(finalEntries), changes: [...changed, ...mergedRecords, ...removed], removedSources: run.removedSources }
         run.finished = true
         run.revision += 1
-        return { state, value: { ...summary(state, run), entries: output.entries.length, warnings: output.warnings.length, changes: changed.length + removed.length, index: output.index,
-          publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果。尚未写入作者事实库或自动采纳。' } }
+        return { state, value: { ...summary(state, run), entries: finalEntries.length, warnings: fold.warnings.length, changes: changed.length + mergedRecords.length + removed.length, index: buildIndex(finalEntries),
+          consolidation: { ...fold.stats, version: fold.version }, publication: 'draft-proposal-snapshot', adopted: 0, instruction: '用status(view:entries/entry/changes/warnings)读取完整成果。尚未写入作者事实库或自动采纳。' } }
       })
     },
     /** 一致性检测（工具名 pinax_fact_check）：对已发布快照整库过一遍（也可指定 runId 用该运行已交的行现场编译）。只读，不写断点。
