@@ -210,12 +210,26 @@ export async function dispatchPiCompletion({
 export const DOTS_ENDPOINT = 'https://note3-prev-api.askdiandian.com'
 export const DOTS_MODEL = 'dots3-note-prev'
 
+/**
+ * 关闭思考链的载荷（作者 2026-11-11 提醒「推理的参数是可以关闭的，我的老项目强调过」）。
+ * 双保险口径与 ref-Novelpedia/src/llm_client.py:375-377 一致：
+ *   · `thinking: { type: 'disabled' }` —— Anthropic 风格开关；
+ *   · `chat_template_kwargs: { enable_thinking: false }` —— Qwen/vLLM 风格模板变量。
+ * 实测（guimi 10 章）：105 秒/段 → 4.5 秒/段（23 倍），outputTokens 2629 → 161。
+ * 关不掉的时候推理与正文共享 max_tokens，会把正文挤成空——所以宁可多带两个无害字段。
+ */
+export function disableThinkingPayload() {
+  return { thinking: { type: 'disabled' }, chat_template_kwargs: { enable_thinking: false } }
+}
+
 export async function dispatchDotsCompletion({
   prompt,
   model = DOTS_MODEL,
   maxTokens = 2000,
   timeoutMs = 180_000,
   signal,
+  /** 默认关闭思考链：这是抽取/绑定这类机械任务，推理只会烧预算。要开推理显式传 true。 */
+  disableThinking = true,
   endpoint = process.env.PINAX_FACT_LLM_ENDPOINT || DOTS_ENDPOINT,
   apiKey = process.env.PINAX_FACT_LLM_KEY || process.env.DOTSAI_API_KEY || process.env.LLM_API_KEY || null,
   fetchImpl = fetch
@@ -245,7 +259,8 @@ export async function dispatchDotsCompletion({
         model,
         messages: [{ role: 'user', content: String(prompt ?? '') }],
         max_tokens: maxTokens,
-        stream: false
+        stream: false,
+        ...(disableThinking ? disableThinkingPayload() : {})
       }),
       signal: controller.signal
     })

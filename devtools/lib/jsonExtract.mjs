@@ -62,20 +62,102 @@ const insertMissingCommas = (value) => value
   .replace(/([}\]"\d])(\s*)("(?:[^"\\]|\\.)*"\s*:)/gu, '$1,$2$3')
 
 /**
+ * 栈式配平：只**插入缺失的闭合符**，不删不改任何内容。
+ *
+ * 实测成因（dots3 绑定回包）：模型写嵌套数组 `"aka":[["甲","乙"]}` 时漏了外层的 `]`。
+ * 这类结构错用正则修不了，但可以确定性修：维护 `[`/`{` 栈，遇到不匹配的闭合符就先补栈顶的闭合符。
+ * 修不出的（多余的闭合符、字符串截断）如实返回 null——绝不猜内容。
+ */
+const balanceBrackets = (value) => {
+  const closer = { '[': ']', '{': '}' }
+  const stack = []
+  let out = ''
+  let inString = false
+  let escaped = false
+  for (const ch of value) {
+    if (escaped) { out += ch; escaped = false; continue }
+    if (ch === BACKSLASH) { out += ch; escaped = true; continue }
+    if (ch === QUOTE) { out += ch; inString = !inString; continue }
+    if (inString) { out += ch; continue }
+    if (ch === '[' || ch === '{') { stack.push(ch); out += ch; continue }
+    if (ch === ']' || ch === '}') {
+      // 先补上「必须在本闭合符之前闭合」的栈顶容器。
+      while (stack.length && closer[stack[stack.length - 1]] !== ch) {
+        const open = stack.pop()
+        if (ch === ']' && open === '{') return null  // `{]` 这种不是漏括号，是真错位
+        out += closer[open]
+      }
+      if (!stack.length) return null
+      stack.pop()
+      out += ch
+      continue
+    }
+    out += ch
+  }
+  if (inString) return null
+  while (stack.length) out += closer[stack.pop()]
+  return out
+}
+/**
+ * 数组里多出来的空值：`["a",[]]` / `["a",{}]`。
+ * 实测成因（dots3 绑定回包）：模型在 hooks/settings/knowledge 末尾多吐一个空容器。
+ * 只删「逗号紧跟空数组或空对象」的情形——有内容的元素一律不动。
+ */
+const dropEmptyArrayTail = (value) => value.replace(/,\s*(\[\]|\{\})\s*([\]}])/gu, '$2')
+
+/**
+ * 多余闭合符：栈为空时遇到的闭合符**只可能是多余的**，删掉它本身（不动别的字符）。
+ * 实测成因（dots3 绑定回包）：`"hooks":["…"],[]]}` —— 模型把闭合符写多了。
+ * 与 balanceBrackets 互补：一个补缺、一个削多；两者都只增删**括号本身**，绝不改内容。
+ */
+const dropUnmatchedClosers = (value) => {
+  const stack = []
+  let out = ''
+  let inString = false
+  let escaped = false
+  let dropped = 0
+  for (const ch of value) {
+    if (escaped) { out += ch; escaped = false; continue }
+    if (ch === BACKSLASH) { out += ch; escaped = true; continue }
+    if (ch === QUOTE) { out += ch; inString = !inString; continue }
+    if (inString) { out += ch; continue }
+    if (ch === '[' || ch === '{') { stack.push(ch); out += ch; continue }
+    if (ch === ']' || ch === '}') {
+      // 栈顶不匹配时先补闭合（漏闭合的常见形态），再削掉真正的多余闭合符。
+      while (stack.length && ({ '[': ']', '{': '}' })[stack[stack.length - 1]] !== ch) out += ({ '[': ']', '{': '}' })[stack.pop()]
+      if (!stack.length) { dropped += 1; continue }
+      stack.pop()
+      out += ch
+      continue
+    }
+    out += ch
+  }
+  while (stack.length) out += ({ '[': ']', '{': '}' })[stack.pop()]
+  return dropped ? out : null
+}
+
+/**
  * 保守修复：按「从轻到重」依次尝试，任一成功即返回修复后的文本。
  * @returns {string|null} 可被 JSON.parse 的文本；修不出返回 null
  */
 export function repairJsonText(text) {
   const source = String(text ?? '')
   if (!source) return null
+  const balanced = balanceBrackets(source)
+  const trimmed = dropUnmatchedClosers(dropEmptyArrayTail(source))
   const candidates = [
     source,
     dropTrailingCommas(source),
     quoteBareKeys(source),
     dropTrailingCommas(quoteBareKeys(source)),
+    dropTrailingCommas(dropEmptyArrayTail(quoteBareKeys(source))),
     dropTrailingCommas(quoteBareKeys(normalizeQuotes(source))),
     insertMissingCommas(dropTrailingCommas(quoteBareKeys(source))),
-    insertMissingCommas(dropTrailingCommas(quoteBareKeys(normalizeQuotes(source))))
+    insertMissingCommas(dropTrailingCommas(quoteBareKeys(normalizeQuotes(source)))),
+    // 结构错（漏闭合符）放在最后：它改动最大，只有前面全失败才用。
+    ...(balanced ? [balanced, dropTrailingCommas(dropEmptyArrayTail(balanced))] : []),
+    // 多闭合符同理，也排最后。
+    ...(trimmed ? [trimmed, dropTrailingCommas(quoteBareKeys(trimmed))] : [])
   ]
   for (const candidate of candidates) {
     try {
