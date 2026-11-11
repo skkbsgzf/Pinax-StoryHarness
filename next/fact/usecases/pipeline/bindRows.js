@@ -53,6 +53,18 @@ export const BIND_ROWS_VERSION = 'fact-bind-rows/v1'
 export const DEFAULT_WHEN = Object.freeze({ story_time: '未明示', timeline: '顺叙' })
 export const DEFAULT_WHERE = '未明示'
 
+/** 增量条数上限（可由档位 bind.maxIncrementsPerSegment 覆写）。 */
+const DEFAULT_LIMITS = Object.freeze({ settings: 6, knowledge: 4, hooks: 2, relations: 8 })
+
+/**
+ * 称谓式关系目标：不是条目名（图上是断链节点）。compile 侧也会告警，这里先拦下改写。
+ * 两种形态都拦（真跑实测两种都出现）：
+ *   · 带前缀的「X的父亲」；
+ *   · **裸称谓**「父亲」「哥哥」「妹妹」——模型最爱这么写，但世界书里没有这个条目。
+ */
+const KINSHIP_WORDS = '父亲|母亲|爸爸|妈妈|哥哥|弟弟|姐姐|妹妹|兄长|儿子|女儿|老师|师父|师傅|上司|下属|主人|仆人|妻子|丈夫|未婚妻|未婚夫|爷爷|奶奶|叔叔|舅舅|阿姨'
+const TITLE_TARGET = new RegExp(`^(?:.{1,12}的)?(?:${KINSHIP_WORDS})$`, 'u')
+
 const str = (value) => String(value ?? '').trim()
 
 /** who 必须真的出现在块或段原文里；否则视为幻觉绑定，丢弃并计数。 */
@@ -93,6 +105,7 @@ export function bindSegment(segment, binding = {}, options = {}) {
     ...normalizeTimeException(binding)
   }
   const where = str(binding?.where) || str(options.where) || DEFAULT_WHERE
+  const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) }
 
   const byId = new Map()
   for (const item of binding?.blocks ?? []) {
@@ -152,6 +165,7 @@ export function bindSegment(segment, binding = {}, options = {}) {
           aliases: Array.isArray(item?.aliases) ? item.aliases.map(str).filter(Boolean) : []
         }))
     .filter((item) => item.name && item.definition)
+    .slice(0, limits.settings)
 
   const knowledgeRaw = (Array.isArray(binding?.knowledge) ? binding.knowledge : [])
     .map((item) => (typeof item === 'string'
@@ -162,10 +176,41 @@ export function bindSegment(segment, binding = {}, options = {}) {
           learned: str(item?.learned)
         }))
   // 知情记录必须挂到人身上（compile 按 character 聚合）；没有 character 的丢弃并计数，不静默吞。
-  const knowledge = knowledgeRaw.filter((item) => item.character && item.learned)
+  const knowledge = knowledgeRaw.filter((item) => item.character && item.learned).slice(0, limits.knowledge)
   const knowledgeDropped = knowledgeRaw.length - knowledge.length
 
-  const hooks = (Array.isArray(binding?.hooks) ? binding.hooks : []).map(str).filter(Boolean).slice(0, 4)
+  const hooks = (Array.isArray(binding?.hooks) ? binding.hooks : []).map(str).filter(Boolean).slice(0, limits.hooks)
+
+  // 关系（P-6）：模型给 {from,to,type,how}，代码做三条确定性清洗——
+  //   1) from/to 必须都在本段原文里出现（否则是幻觉关系，丢弃并计数）；
+  //   2) 自指（from===to）丢弃；
+  //   3) 称谓目标（「X的父亲」或裸「父亲」）不当 to：改写进 how，条目名回到 from。
+  const relationsRaw = (Array.isArray(binding?.relations) ? binding.relations : [])
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      from: str(item.from),
+      to: str(item.to),
+      type: str(item.type),
+      how: str(item.how)
+    }))
+  const relations = []
+  const relationDropped = { missing: 0, hallucinated: 0, self: 0, titleTarget: 0 }
+  const hay = String(segment?.text ?? '')
+  for (const relation of relationsRaw) {
+    if (!relation.from || !relation.to || !relation.type) { relationDropped.missing += 1; continue }
+    if (!hay.includes(relation.from) || !hay.includes(relation.to)) { relationDropped.hallucinated += 1; continue }
+    if (relation.from === relation.to) { relationDropped.self += 1; continue }
+    // 称谓当 from 也不行：关系边必须有真实主体（「哥哥→进出口公司」这种 from 不是条目）。
+    if (TITLE_TARGET.test(relation.from)) { relationDropped.titleTarget += 1; continue }
+    if (TITLE_TARGET.test(relation.to)) {
+      // 称谓不是实体：保留关系语义（写进 how），但不指向一个不存在的条目。
+      relationDropped.titleTarget += 1
+      relation.how = relation.how ? `${relation.how}（目标：${relation.to}）` : `目标：${relation.to}`
+      relation.to = relation.from
+      continue
+    }
+    relations.push(relation)
+  }
 
   // aka：模型只在「原文明确断言同一人」时给的别名对。这里只做**收集**，
   // 真正的 entity 合并由 compile 的 aliasIndex 完成（代码干合并，模型只给判断）。
@@ -197,11 +242,11 @@ export function bindSegment(segment, binding = {}, options = {}) {
       notes: '',
       characters: [...profiles.values()],
       settings,
-      relations: [],
+      relations,
       knowledge,
       hooks
     },
-    stats: { ...stats, akaPairs: akaPairs.length, knowledgeDropped }
+    stats: { ...stats, akaPairs: akaPairs.length, knowledgeDropped, relations: relations.length, relationDropped }
   }
 }
 

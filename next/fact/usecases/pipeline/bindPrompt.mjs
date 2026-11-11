@@ -21,7 +21,7 @@ export const BIND_SYSTEM_PROMPT = [
   '你的唯一工作是给每块指定：主体（谁做的/谁说的/谁感知的）与通道。',
   '',
   '输出 JSON：{"segments":[{"id":"段id","blocks":[{"id":"b1","who":"人名或空串","ch":"通道"}],',
-  '"settings":[],"knowledge":[],"hooks":[],"aka":[]}]}',
+  '"settings":[],"knowledge":[],"hooks":[],"aka":[],"relations":[]}]}',
   '规则（违反即算错）：',
   '1) **不要输出任何原文**。块原文已经由系统保存，重复它只会浪费配额。',
   '2) who 必须是这块里**真实出现**的人物的名字；判断不出就写 ""，绝不编造、绝不用「他/她/某人」。',
@@ -31,9 +31,11 @@ export const BIND_SYSTEM_PROMPT = [
   '   但 who 不能因为 hint 有值就盲抄——hint 可能是代词推断出来的。',
   '5) settings / knowledge / hooks 的每一项**必须是对象**，不是句子。给不出就留 []。',
   '   句子是剧情，不是设定——「某人把枪藏进抽屉」这类不要放进 settings。',
-  '6) aka 只在原文**明确断言两者是同一人**时填（如「这就是现在的我，克莱恩·莫雷蒂？」），',
+  '6) relations 这一轮**留空数组**：关系抽取是独立的一轮（需要一点推理），会在另一个请求里专门做。',
+  '   你在这里只要把它原样输出成 []，不要顺手填。',
+  '7) aka 只在原文**明确断言两者是同一人**时填（如「这就是现在的我，克莱恩·莫雷蒂？」），',
   '   写成 [["当前称呼","另一个称呼"]]；只是同一场戏出现两个名字不算。',
-  '7) 只输出 JSON，不要解释、不要 markdown 围栏。'
+  '8) 只输出 JSON，不要解释、不要 markdown 围栏。'
 ].join('\n')
 
 /**
@@ -113,4 +115,44 @@ export function buildBatchBindPrompt(input = {}) {
     '',
     ...section
   ].filter(Boolean).join('\n')
+}
+
+/**
+ * 关系抽取的独立窄窗提示词（ADR §5.2 B4「窄窗特写」）。
+ *
+ * 为什么独立：真跑实测（10 章 / 30 批）主绑定调用里模型**从不填 relations**（0/130 段），
+ * 但同一个模型在「只做关系」的窄请求上给出 7 条高质量关系。原因不是能力问题，是**任务性质冲突**：
+ * 主绑定要求「不要思考、只贴标签」，关系抽取需要一点推理——混在一次请求里，模型会放弃后者。
+ * 所以按 B4 拆开：一次窄窗只回答一个窄问题。
+ */
+export const RELATION_SYSTEM_PROMPT = [
+  '你是实体关系标注器。用户给你一段小说原文（可能分成若干块），',
+  '你只做一件事：列出这段原文里**明示的**实体间关系。',
+  '',
+  '输出 JSON：{"relations":[{"from":"实体名","to":"实体名","type":"关系性质","how":"依据短语"}]}',
+  '规则（违反即算错）：',
+  '1) from 与 to 必须是原文里**逐字出现**的名字或名词；不要用代词，不要用「X的父亲」这类称谓。',
+  '2) type 写关系性质：师徒/敌对/亲属/隶属/持有/位于/交易/同事/朋友…',
+  '3) how 用不超过 12 字说明依据（如「三兄妹之一」「一把拿走了怀表」）。',
+  '4) 只收**这段原文里能看出**的关系；推测、常识、后文知识一律不要。',
+  '5) 没有关系就给 {"relations":[]}——**不要为了填满而编**。',
+  '6) 只输出 JSON，不要解释、不要 markdown 围栏。'
+].join(String.fromCharCode(10))
+
+/**
+ * 关系窄窗的用户消息：一段原文 + 块清单（块给模型看边界，帮助定位实体）。
+ * @param {{id:string,index:number,text:string,blocks:Array}} segment
+ */
+export function buildRelationPrompt(segment = {}) {
+  const blocks = Array.isArray(segment.blocks) ? segment.blocks : []
+  return [
+    `【段 ${segment.id}｜第 ${segment.index} 段】`,
+    '【原文】',
+    String(segment.text ?? ''),
+    '',
+    '【块边界（仅供定位，不要复述）】',
+    ...blocks.map((block) => `[${block.id}] ${block.text}`),
+    '',
+    '只输出 {"relations":[{"from":"","to":"","type":"","how":""}]}。'
+  ].join(String.fromCharCode(10))
 }

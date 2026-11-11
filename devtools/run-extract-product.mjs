@@ -17,7 +17,7 @@ import { openProject } from '../next/project/openProject.mjs'
 import { loadBuiltInCarrierPlugins } from '../next/carriers/index.mjs'
 import { NOVEL_CARRIER_ID } from '../next/carriers/novel/manifest.mjs'
 import { createFactExtractionTools } from '../next/runtime/factExtractionTools.mjs'
-import { BIND_SYSTEM_PROMPT } from '../next/fact/usecases/pipeline/bindPrompt.mjs'
+import { BIND_SYSTEM_PROMPT, RELATION_SYSTEM_PROMPT, buildRelationPrompt } from '../next/fact/usecases/pipeline/bindPrompt.mjs'
 import { dispatchDotsCompletion } from '../next/runtime/factLlmService.mjs'
 import { parseModelReply } from './lib/jsonExtract.mjs'
 
@@ -99,13 +99,14 @@ await log('prepared', { runId: prepared.runId, segments: prepared.segments })
 let calls = 0
 let promptChars = 0
 let completionTokens = 0
-let bindStatsTotal = { segments: 0, blocks: 0, bound: 0, hallucinated: 0, ruleFallback: 0, unknownChannel: 0, akaPairs: 0 }
+let bindStatsTotal = { segments: 0, blocks: 0, bound: 0, hallucinated: 0, ruleFallback: 0, unknownChannel: 0, akaPairs: 0, relations: 0 }
 let step = 0
+let finalRevision = null
 let finished = null
 for (let safety = 0; safety < 200; safety += 1) {
   const task = await call('next', { dataset: 'product', runId: prepared.runId })
   if (task.done) {
-    finished = await call('finish', { dataset: 'product', runId: prepared.runId, expectedRevision: task.revision })
+    finalRevision = task.revision
     break
   }
   step += 1
@@ -113,13 +114,13 @@ for (let safety = 0; safety < 200; safety += 1) {
   const section = task.units.map((unit) => [
     `=== ${unit.id} | 第 ${unit.index} 段 | ${unit.chars} 字 ===`,
     ...unit.blocks.map((block) => `  [${block.id}] (${block.hint}${block.speakerHint ? ` hint=${block.speakerHint}` : ''}) ${block.text}`),
-    '  【增量】settings:[{name,slot,definition}] knowledge:[{character,source,learned}] hooks:[一句话] aka:[[称呼,称呼]]'
+    '  【增量】settings:[{name,slot,definition}] knowledge:[{character,source,learned}] hooks:[一句话] aka:[[称呼,称呼]] relations:[{from,to,type,how}]'
   ].join('\n'))
   const prompt = [
     BIND_SYSTEM_PROMPT,
     '',
     `共 ${task.units.length} 段。逐段逐块绑定，输出一次 JSON：`,
-    '{"segments":[{"id":"段id","blocks":[{"id":"b1","who":"","ch":"state"}],"settings":[],"knowledge":[],"hooks":[],"aka":[]}]}',
+    '{"segments":[{"id":"段id","blocks":[{"id":"b1","who":"","ch":"state"}],"settings":[],"knowledge":[],"hooks":[],"aka":[],"relations":[]}]}',
     `【已知人物】${(task.knownNames ?? []).join('、') || '(无)'}`,
     '',
     ...section
@@ -156,10 +157,55 @@ for (let safety = 0; safety < 200; safety += 1) {
   })
 }
 
+/* ---------- 关系窄窗（B4）：独立一轮，只问关系 ---------- */
+let relationCalls = 0
+let relationsLanded = 0
+const relationDropped = { missing: 0, hallucinated: 0, self: 0, titleTarget: 0 }
+{
+  // 找还需要关系的段（已绑定但 relations 为空）
+  const statePath = join(ROOT, '.pinax', 'extractions', 'product.json')
+  const raw = JSON.parse(readFileSync(statePath, 'utf8'))
+  const rows = raw.runs[prepared.runId].rows
+  const targets = Object.keys(rows).filter((id) => Array.isArray(rows[id].relations) && rows[id].relations.length === 0).slice(0, 12)
+  for (let index = 0; index < targets.length; index += 4) {
+    const batch = targets.slice(index, index + 4)
+    const relationsBySegment = {}
+    for (const id of batch) {
+      // finish 之前 current 还是 null：sources 从 run 上读（run.sources 在 prepare 时就已固化）。
+      const source = raw.runs[prepared.runId].sources.find((item) => item.segments.some((segment) => segment.id === id))
+      const meta = source?.segments.find((segment) => segment.id === id)
+      if (!meta) continue
+      const prompt = [RELATION_SYSTEM_PROMPT, '', buildRelationPrompt({
+        id, index: meta.index, text: (rows[id].events ?? []).map((event) => event.content).join(''), blocks: []
+      })].join(String.fromCharCode(10))
+      const answer = await dispatchDotsCompletion({ prompt, maxTokens: 1500, timeoutMs: 120_000 })
+      relationCalls += 1
+      const parsed = parseModelReply(answer.text)
+      if (parsed.ok && Array.isArray(parsed.value.relations)) relationsBySegment[id] = parsed.value.relations
+      else await dumpRound(prompt, answer.text)
+    }
+    if (!Object.keys(relationsBySegment).length) continue
+    // relationsOnly 不消费新段，所以 revision 用「最后一次绑定的 revision」，
+    // 不能调 next（抽完时 next 直接返回 done 且不带 revision）。
+    const applied = await call('submit', {
+      dataset: 'product', runId: prepared.runId, expectedRevision: finalRevision,
+      submissionId: `relations-${index}`, relationsOnly: true,
+      segmentIds: Object.keys(relationsBySegment), relationsBySegment
+    })
+    finalRevision = (applied.revision ?? finalRevision + 1)
+    relationsLanded += applied.applied ?? 0
+    for (const key of Object.keys(relationDropped)) relationDropped[key] += applied.relationDropped?.[key] ?? 0
+    await log('relations', { batch: batch.length, applied: applied.applied, dropped: applied.relationDropped })
+  }
+}
+// 关系补完再 finish（finish 会锁 run，必须最后做）
+if (finalRevision !== null) {
+  finished = await call('finish', { dataset: 'product', runId: prepared.runId, expectedRevision: finalRevision })
+}
 const totalMs = Date.now() - startedAll
-await log('done', { totalMs, calls, promptChars, completionTokens, bindStatsTotal, finish: finished })
+await log('done', { totalMs, calls, relationCalls, relationsLanded, relationDropped, promptChars, completionTokens, bindStatsTotal, finish: finished })
 await writeFile(join(LOG, 'summary.json'), JSON.stringify({
-  totalMs, calls, promptChars, completionTokens, bindStatsTotal, finished
+  totalMs, calls, relationCalls, relationsLanded, relationDropped, promptChars, completionTokens, bindStatsTotal, finished
 }, null, 2), 'utf8')
 console.log(JSON.stringify({
   totalMs, calls, promptChars, completionTokens, bindStatsTotal,

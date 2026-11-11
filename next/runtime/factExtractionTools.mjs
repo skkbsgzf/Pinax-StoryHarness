@@ -1,7 +1,10 @@
 import { createFactExtractionService } from './factExtractionService.mjs'
 import { EXTRACTION_ROW_SCHEMA } from '../fact/usecases/pipeline/extractionChain.js'
 
-export const EXTRACTION_TOOL_NAMES = Object.freeze(['pinax_extract_prepare', 'pinax_extract_next', 'pinax_extract_submit', 'pinax_extract_status', 'pinax_extract_finish', 'pinax_fact_check'])
+export const EXTRACTION_TOOL_NAMES = Object.freeze([
+  'pinax_extract_prepare', 'pinax_extract_next', 'pinax_extract_submit', 'pinax_extract_status',
+  'pinax_extract_finish', 'pinax_fact_check'
+])
 const text = { type: 'string', minLength: 1 }
 const key = { type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$' }
 const integer = { type: 'integer', minimum: 0 }
@@ -18,6 +21,8 @@ const binding = object({
   settings: { type: 'array' },
   knowledge: { type: 'array' },
   hooks: { type: 'array' },
+  /** 关系（P-6）：{from,to,type,how}，服务端做幻觉/自指/称谓目标三条清洗。 */
+  relations: { type: 'array' },
   aka: { type: 'array' },
   when: object({ story_time: { type: 'string' }, timeline: { enum: ['顺叙', '倒叙', '插叙', '未明示'] } }),
   where: { type: 'string' }
@@ -27,14 +32,55 @@ const timeDefaults = object({
   when: object({ story_time: { type: 'string' }, timeline: { enum: ['顺叙', '倒叙', '插叙', '未明示'] } }),
   where: { type: 'string' }
 })
+/**
+ * 抽取档位（作者 2026-11-11「不同体裁采集节奏不一样，要参数化」）。
+ * 只写想覆写的部分，其余继承默认档；也可传预置档名（novel-web-tight/script/nonfiction）。
+ * **一旦 prepare 就固化在 run 里**：同一 dataset 不能改档位（改档＝换采集口径，另起 dataset）。
+ */
+const profile = object({
+  name: { type: 'string' },
+  description: { type: 'string' },
+  segment: object({ min: { type: 'integer', minimum: 1 }, max: { type: 'integer', minimum: 1 } }),
+  blocks: object({
+    min: { type: 'integer', minimum: 1 },
+    max: { type: 'integer', minimum: 1 },
+    shortQuoteMax: { type: 'integer', minimum: 0 }
+  }),
+  bind: object({
+    batchChars: { type: 'integer', minimum: 300, maximum: 12000 },
+    channels: { type: 'array', items: text },
+    maxIncrementsPerSegment: object({
+      settings: { type: 'integer', minimum: 0 },
+      knowledge: { type: 'integer', minimum: 0 },
+      hooks: { type: 'integer', minimum: 0 },
+      relations: { type: 'integer', minimum: 0 }
+    })
+  }),
+  salience: object({
+    characterEntryFloor: { type: 'number' },
+    characterTiers: { type: 'array' },
+    worldviewEntryFloor: { type: 'number' }
+  }),
+  cache: object({
+    flushEntries: { type: 'integer', minimum: 1 },
+    flushChapters: { type: 'integer', minimum: 1 },
+    flushChars: { type: 'integer', minimum: 1 },
+    retrieveLimit: { type: 'integer', minimum: 1 },
+    retrieveChars: { type: 'integer', minimum: 1 }
+  })
+})
 const schemas = {
   prepare: object({ dataset: key, requestId: key, fromRunId: key, mode: { enum: ['initialize', 'update', 'repair'] }, domain: text, book: text, bookId: text,
     sources: { type: 'array', minItems: 1, items: source }, sourceIds: { type: 'array', minItems: 1, items: text },
-    batchChars: { type: 'integer', minimum: 300, maximum: 12000 }, timeDefaults }, ['dataset', 'requestId']),
+    batchChars: { type: 'integer', minimum: 300, maximum: 12000 }, timeDefaults, profile }, ['dataset', 'requestId']),
   next: object({ dataset: key, runId: key }, ['dataset', 'runId']),
   submit: object({ dataset: key, runId: key, expectedRevision: integer, taskId: text, submissionId: key,
     rows: { type: 'array', items: EXTRACTION_ROW_SCHEMA },
-    bindings: { type: 'array', items: binding } }, ['dataset', 'runId', 'expectedRevision', 'taskId', 'submissionId']),
+    bindings: { type: 'array', items: binding },
+    /** 关系窄窗（B4）：只补关系、不推进抽取进度。relationsBySegment = { [segmentId]: [{from,to,type,how}] } */
+    relationsOnly: { type: 'boolean' },
+    segmentIds: { type: 'array', items: text },
+    relationsBySegment: { type: 'object' } }, ['dataset', 'runId', 'expectedRevision', 'submissionId']),
   status: object({ dataset: key, runId: key, view: { enum: ['summary', 'sources', 'manifest', 'entries', 'entry', 'row', 'changes', 'warnings', 'index', 'archive'] }, pluginId: text, dir: text, id: text, offset: integer }),
   finish: object({
     dataset: key, runId: key, expectedRevision: integer,
@@ -53,7 +99,7 @@ const schemas = {
 const descriptions = {
   prepare: '准备产品抽取运行：initialize首次、update存量、repair定向补抽。sources是完整项目文件范围（省略沿用基线），不传正文。保留100–300字单元并批量派发。只建派生断点，不调用模型、不改原稿。requestId保证重放幂等；恢复直接next旧runId。',
   next: '读取未抽取的下一批，**原文已切好块**（零模型）：每个 unit 带 blocks[{id,kind,text,hint,speakerHint}]，模型只需逐块给 {id,who,ch} 绑定，不必自己切句或写事件文本。单轮扫描：一次同时抽剧情、人物、设定、关系、知情与伏笔。相同断点重读不耗推理；done且phase:ready才能finish。',
-  submit: '提交当前批结果，必须带taskId、expectedRevision与稳定submissionId。两种形态：bindings（推荐，窄绑定 {id,blocks:[{id,who,ch}],settings,knowledge,hooks,aka}，服务端按块原文回组装事件正文并校验幻觉 who）或 rows（完整行，兼容旧用法）。可只交合法部分，遗漏段仍待办；工具自动校验、归并、生成ID/来源并原子保存。',
+  submit: '提交当前批结果，必须带expectedRevision与稳定submissionId。三种形态：① bindings（推荐，窄绑定 {id,blocks:[{id,who,ch}],settings,knowledge,hooks,aka}，服务端按块原文回组装事件正文并校验幻觉 who；需带 taskId）；② rows（完整行，兼容旧用法；需带 taskId）；③ relationsOnly + segmentIds + relationsBySegment（关系窄窗，只补关系不推进进度；不需 taskId）。可只交合法部分，遗漏段仍待办；工具自动校验、归并、生成ID/来源并原子保存。',
   status: '读取断点、源目录及成果。sources不需dataset：先列已启用板块，再带pluginId/dir列文件。summary列runId；manifest列范围；entries列三层条目；entry/row按id和offset读JSON分片，拼到nextOffset:null；changes/warnings列影响清单。分页沿用同一快照版本。',
   finish: '覆盖检查通过后发布draft/proposed三层快照＋基础索引及差异清单。原稿变更、漏段或并发基线冲突会拒绝。不会自动采纳，不会覆盖作者已adopted/superseded事实；成果用status读取，后续作者采纳另走事实库入口。',
   fact_check: '整库一致性检测（只读，不写断点、不改条目）：锚点/规则/时间轴/知情四类断言＋关系与知情引用悬空、同名跨层、槽位堆积、伏笔统计。可判定项进 conflicts（error）与 warnings；不可判定项如实列 undecidable。全书拆解完成或改编改写前过一遍；不带 runId 检测已发布快照，带 runId 检测进行中已交的行。'
@@ -93,6 +139,11 @@ function validate(value, schema, path = 'arguments') {
     if (schema.pattern && !new RegExp(schema.pattern, 'u').test(value)) return `${path}格式不符`
   }
   if (schema.type === 'integer' && (!Number.isSafeInteger(value) || (schema.minimum !== undefined && value < schema.minimum) || (schema.maximum !== undefined && value > schema.maximum))) return `${path}整数范围不符`
+  // 档位里的阈值是小数（显著度门槛 2.0、1.5…），必须有 number 这一档；
+  // 之前只实现 integer/string/array/object，写 type:'number' 等于**不校验**（静默放行）。
+  if (schema.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value)
+    || (schema.minimum !== undefined && value < schema.minimum)
+    || (schema.maximum !== undefined && value > schema.maximum))) return `${path}数值范围不符`
   return null
 }
 

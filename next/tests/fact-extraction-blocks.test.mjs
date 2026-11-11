@@ -198,3 +198,122 @@ test('〔P1-7〕bindings 为空数组时明确拒绝，不静默推进', async (
   assert.equal(result.ok, false)
   assert.equal(result.error.code, 'INVALID_INPUT', '空 bindings 且无 rows 要如实拒')
 })
+
+
+test('〔P1-8〕档位生效：prepare 给 profile 后，批大小与切块粒度都按档位走，且写进 spec 固化', async (t) => {
+  const f = await fixture(t)
+  const run = await f.good('prepare', initial(f.ref, {
+    requestId: 'initial-profile',
+    profile: { bind: { batchChars: 400 }, blocks: { min: 5, max: 20 } }
+  }))
+  const task = await f.good('next', { dataset: 'book', runId: run.runId })
+  // batchChars=400 → 一批只装一两个 100–300 字单元（默认 3600 会装更多）
+  assert.ok(task.units.length <= 2, `batchChars=400 时不该派 ${task.units.length} 段`)
+  for (const unit of task.units) {
+    for (const block of unit.blocks) {
+      // blocks.max=20：叙述块应被切得更碎
+      if (block.kind === 'narration') assert.ok(block.text.length <= 40, `块不该远超上限（实际 ${block.text.length}）`)
+    }
+  }
+  // 同一数据集改档位必须被拒（改档＝换采集口径，另起 dataset）——
+  // update 需要已完成基线才走到档位比对，所以这里先把这一跑走完。
+  for (let safety = 0; safety < 100; safety += 1) {
+    const current = await f.good('next', { dataset: 'book', runId: run.runId })
+    if (current.done) break
+    await f.good('submit', {
+      dataset: 'book', runId: run.runId, expectedRevision: current.revision, taskId: current.taskId,
+      submissionId: `prof-${current.revision}`,
+      bindings: current.units.map((item) => ({ id: item.id, blocks: item.blocks.map((block) => ({ id: block.id, who: '', ch: block.hint })) }))
+    })
+  }
+  const latest = await f.good('next', { dataset: 'book', runId: run.runId })
+  await f.good('finish', { dataset: 'book', runId: run.runId, expectedRevision: latest.revision })
+  const changed = await f.call('prepare', { dataset: 'book', requestId: 'other', mode: 'update', profile: { bind: { batchChars: 6000 } } })
+  assert.equal(changed.ok, false)
+  assert.equal(changed.error.code, 'PROFILE_CHANGED')
+})
+
+test('〔P1-9〕关系走绑定路径：真实关系落库，幻觉/自指/称谓目标被清洗', async (t) => {
+  const f = await fixture(t)
+  const run = await f.good('prepare', initial(f.ref))
+  const task = await f.good('next', { dataset: 'book', runId: run.runId })
+  const unit = task.units[0]
+  const bindings = task.units.map((item) => ({ id: item.id, blocks: item.blocks.map((block) => ({ id: block.id, who: '', ch: block.hint })) }))
+  // 给第一段三种关系：真实一条、自指一条、幻觉一条
+  bindings[0].relations = [
+    { from: '周明瑞', to: '左轮手枪', type: '持有' },
+    { from: '周明瑞', to: '周明瑞', type: '自指' },
+    { from: '周明瑞', to: '不存在的人', type: '敌对' }
+  ]
+  const result = await f.good('submit', {
+    dataset: 'book', runId: run.runId, expectedRevision: task.revision, taskId: task.taskId,
+    submissionId: 'bind-rel', bindings
+  })
+  assert.equal(result.bindStats.relations, 1, '只有真实关系保留')
+  const state = JSON.parse(await readFile(join(f.root, result.resultPath), 'utf8'))
+  const stored = state.runs[run.runId].rows[unit.id]
+  assert.equal(stored.relations.length, 1)
+  assert.equal(stored.relations[0].to, '左轮手枪')
+})
+
+
+test('〔P1-10〕关系窄窗 relationsOnly：只补关系、不推进抽取进度，且清洗生效', async (t) => {
+  const f = await fixture(t)
+  const run = await f.good('prepare', initial(f.ref))
+  const task = await f.good('next', { dataset: 'book', runId: run.runId })
+  const bindings = task.units.map((unit) => ({
+    id: unit.id,
+    blocks: unit.blocks.map((block) => ({ id: block.id, who: '', ch: block.hint }))
+  }))
+  const afterBind = await f.good('submit', {
+    dataset: 'book', runId: run.runId, expectedRevision: task.revision, taskId: task.taskId,
+    submissionId: 'bind-then-rel', bindings
+  })
+  const unit = task.units[0]
+  const before = await readFile(join(f.root, afterBind.resultPath), 'utf8')
+  const pendingBefore = JSON.parse(before).runs[run.runId]
+  const rowsBefore = Object.keys(pendingBefore.rows).length
+
+  // 关系窄窗：只补第一段的关系（含一条幻觉、一条自指）
+  const rel = await f.good('submit', {
+    dataset: 'book', runId: run.runId, expectedRevision: afterBind.revision,
+    submissionId: 'relations-1',
+    relationsOnly: true,
+    segmentIds: [unit.id],
+    relationsBySegment: {
+      [unit.id]: [
+        { from: '周明瑞', to: '左轮手枪', type: '持有' },
+        { from: '周明瑞', to: '周明瑞', type: '自指' },
+        { from: '周明瑞', to: '不存在的人', type: '敌对' }
+      ]
+    }
+  })
+  assert.equal(rel.relationsOnly, true)
+  assert.equal(rel.applied, 1, '真实关系落库')
+  assert.equal(rel.relationDropped.self, 1, '自指被清洗')
+  assert.equal(rel.relationDropped.hallucinated, 1, '幻觉被清洗')
+  // 关键：不推进抽取进度（rows 数量不变、pending 不变）
+  const state = JSON.parse(await readFile(join(f.root, rel.resultPath), 'utf8'))
+  assert.equal(Object.keys(state.runs[run.runId].rows).length, rowsBefore, 'relationsOnly 不新增已抽段')
+  assert.equal(state.runs[run.runId].rows[unit.id].relations.length, 1)
+})
+
+test('〔P1-11〕关系窄窗：缺 segmentIds 或段未绑定都如实拒', async (t) => {
+  const f = await fixture(t)
+  const run = await f.good('prepare', initial(f.ref))
+  const task = await f.good('next', { dataset: 'book', runId: run.runId })
+  const noIds = await f.call('submit', {
+    dataset: 'book', runId: run.runId, expectedRevision: task.revision, submissionId: 'rel-no-ids', relationsOnly: true
+  })
+  assert.equal(noIds.ok, false)
+  assert.equal(noIds.error.code, 'INVALID_INPUT')
+
+  const unknownRow = await f.call('submit', {
+    dataset: 'book', runId: run.runId, expectedRevision: task.revision, submissionId: 'rel-ghost',
+    relationsOnly: true, segmentIds: ['deadbeef00:1:00000000'], relationsBySegment: {}
+  })
+  // 段还没绑定 → 计入 missing，不炸、也不假装成功
+  assert.equal(unknownRow.ok, true)
+  assert.equal(unknownRow.value.applied, 0)
+  assert.equal(unknownRow.value.relationDropped.missing, 1)
+})

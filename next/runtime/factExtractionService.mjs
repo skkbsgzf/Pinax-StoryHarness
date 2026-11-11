@@ -16,6 +16,9 @@ import {
 import { checkConsistency } from '../fact/usecases/consistency.js'
 import { segmentBlocks } from '../fact/usecases/pipeline/blocks.js'
 import { bindSegment, resolveSegmentId } from '../fact/usecases/pipeline/bindRows.js'
+import {
+  normalizeExtractionProfile, saliencePolicyOf, flushPolicyOf, profileDigest, DEFAULT_EXTRACTION_PROFILE
+} from '../fact/usecases/pipeline/extractionProfile.js'
 
 // 派生数据与作者 FactStore 分开：finish 发布待审快照，不采纳、不写正文/世界书。
 // 一个 dataset 一份原子文件，包含已发布快照和运行断点，避免“两文件只写成一半”。
@@ -141,7 +144,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
       return ok(result.value)
     } finally { await lock.close(); await unlink(lockPath) }
   }
-  async function readSource(ref) {
+  async function readSource(ref, segmentLimits = undefined) {
     if (!ref || !['pluginId', 'dir', 'file'].every((key) => typeof ref[key] === 'string' && ref[key].trim()) || !Number.isInteger(ref.chapterNo) || ref.chapterNo < 1) {
       reject('INVALID_INPUT', '每份源须带pluginId、dir、file与正整数chapterNo。')
     }
@@ -149,7 +152,8 @@ export function createFactExtractionService({ root = null, fileService = null, r
     const result = await fileService.readRange({ pluginId: ref.pluginId, dir: ref.dir, file: ref.file, from: 0, to: Number.MAX_SAFE_INTEGER })
     if (!result.ok) reject(result.error.code, result.error.message, result.error.details)
     const id = result.value.relativePath.replaceAll('\\', '/')
-    const source = buildExtractionSource({ id, text: result.value.text, chapterNo: ref.chapterNo })
+    // 分段档位在建来源时定死（段 id 由分段结果算出）：run 内不换档，避免 id 漂移。
+    const source = buildExtractionSource({ id, text: result.value.text, chapterNo: ref.chapterNo, segment: segmentLimits })
     source.ref = { pluginId: ref.pluginId, dir: ref.dir, file: ref.file, chapterNo: ref.chapterNo }
     return { source, text: result.value.text }
   }
@@ -157,7 +161,8 @@ export function createFactExtractionService({ root = null, fileService = null, r
     const texts = new Map()
     for (const source of run.sources) {
       if (ids && !ids.includes(source.id)) continue
-      const live = await readSource(source.ref)
+      // 校验也按 run 的档位重新分段：否则段 id 会与建来源时算出的不一致，误报 SOURCE_STALE。
+      const live = await readSource(source.ref, run.spec.profile?.segment)
       if (live.source.id !== source.id || live.source.hash !== source.hash) reject('SOURCE_STALE', '原稿已变化；本次提交不生效。用update准备新运行，不续交旧稿结果。', { sourceId: source.id })
       texts.set(source.id, live.text)
     }
@@ -178,10 +183,13 @@ export function createFactExtractionService({ root = null, fileService = null, r
     if (!candidates.length) return { ...summary(state, run), done: true, phase: 'ready' }
     const source = run.sources.find((item) => item.segments.some((unit) => unit.id === candidates[0].id))
     const texts = await verifySources(run, [source.id])
-    const segments = segmentText(texts.get(source.id))
+    // 分段也走档位（非虚构要长段、剧本要短段）——这里只影响派发时的块切分视图；
+    // source.segments 的 id 由 buildExtractionSource 在 prepare 时按当时档位算定，不在此漂移。
+    const segments = segmentText(texts.get(source.id), run.spec.profile?.segment ?? {})
     // P-1：下一批直接**带上切好的块**（零模型），模型只需给 {id,who,ch} 绑定。
     // 这就是「LLM 只做机械流水线」在产品链路上的落点：agent 不再自己判批、自己切句、自己写事件文本。
     const knownNames = Array.isArray(run.nameTable) ? run.nameTable : []
+    const batchChars = run.spec.profile?.bind?.batchChars ?? run.batchChars
     const task = {
       dataset: state.dataset, runId: run.id, revision: run.revision, phase,
       taskId: '', source: { id: source.id, chapterNo: source.chapterNo },
@@ -190,9 +198,9 @@ export function createFactExtractionService({ root = null, fileService = null, r
     const candidateIds = new Set(candidates.map((item) => item.id))
     let chars = 0
     for (const meta of source.segments.filter((item) => candidateIds.has(item.id))) {
-      if (task.units.length && chars + meta.chars > run.batchChars) break
+      if (task.units.length && chars + meta.chars > batchChars) break
       const text = segments.find((item) => item.index === meta.index).text
-      const { blocks } = segmentBlocks(text, { knownNames })
+      const { blocks } = segmentBlocks(text, { knownNames, ...(run.spec.profile?.blocks ?? {}) })
       const unit = { id: meta.id, index: meta.index, chars: meta.chars, text, blocks: blocks.map((block) => ({
         id: block.id, kind: block.kind, text: block.text,
         hint: block.channelHint, speakerHint: block.speakerHint ?? null
@@ -224,12 +232,25 @@ export function createFactExtractionService({ root = null, fileService = null, r
         if (args.fromRunId && baseline.baseRevision !== state.revision) reject('DATASET_CONFLICT', '旧运行的基线已过时，请从已发布快照update。')
         if (mode !== 'initialize' && !baseline) reject('DATASET_NOT_FOUND', '没有已完成基线；恢复用原runId，原稿变更可用update加fromRunId。')
         const spec = baseline?.spec ?? { domain: args.domain, book: args.book, bookId: args.bookId ?? dataset }
+        // 抽取档位（作者 2026-11-11「不同体裁采集节奏不一样，参数化」）：
+        // 首次运行写进 spec 固化——同一 run 内不改档（改档等于换采集口径，应另起 dataset）。
+        if (!spec.profile) {
+          const normalized = normalizeExtractionProfile(args.profile ?? DEFAULT_EXTRACTION_PROFILE)
+          if (!normalized.ok) reject(normalized.error.code, '抽取档位无效', normalized.error.details)
+          spec.profile = normalized.value
+        } else if (args.profile !== undefined) {
+          const normalized = normalizeExtractionProfile(args.profile)
+          if (!normalized.ok) reject(normalized.error.code, '抽取档位无效', normalized.error.details)
+          if (digest(normalized.value) !== digest(spec.profile)) reject('PROFILE_CHANGED', '同一数据集不能改抽取档位；另建 dataset。', { current: profileDigest(spec.profile) })
+        }
         if (typeof spec.domain !== 'string' || !spec.domain.trim() || typeof spec.book !== 'string' || !spec.book.trim()) reject('INVALID_INPUT', '首次抽取须给domain和book。')
         if (baseline && ['domain', 'book', 'bookId'].some((key) => args[key] !== undefined && args[key] !== spec[key])) reject('DATASET_IDENTITY_CHANGED', '更新不能静默改书名/domain/bookId；另建数据集。')
         const refs = args.sources ?? baseline?.sources.map((source) => source.ref)
         if (!Array.isArray(refs) || !refs.length) reject('INVALID_INPUT', '需要非空sources清单；update传入的清单代表完整范围，不是新增项列表。')
         const sources = []
-        for (const ref of refs) sources.push((await readSource(ref)).source)
+        // 档位已在上面写进 spec：建来源时就要用它分段（段 id 由分段结果算出，之后不能再变）。
+        const segmentLimits = spec.profile?.segment
+        for (const ref of refs) sources.push((await readSource(ref, segmentLimits)).source)
         if (new Set(sources.map((source) => source.id)).size !== sources.length) reject('INVALID_INPUT', 'sources含重复路径。')
         const targets = args.sourceIds ?? []
         if (mode === 'repair' && (!targets.length || targets.some((id) => !sources.some((source) => source.id === id)))) reject('INVALID_INPUT', 'repair须点名存在的sourceIds。')
@@ -273,12 +294,47 @@ export function createFactExtractionService({ root = null, fileService = null, r
         if (run.finished) reject('RUN_FINISHED', '该运行已完成，不能再提交。')
         if (run.revision !== args.expectedRevision) reject('STALE_REVISION', '断点版本已变化；先next读取最新任务。', { actual: run.revision })
         const task = await nextTask(state, run)
+        // 关系窄窗（B4）：关系必须单独一轮问——真跑实测主绑定从不在同一次请求里产关系（0/130 段），
+        // 但单独问就很好（7 条/段）。这一形态只补关系、不推进抽取进度，所以 taskId 允许留空。
+        if (args.relationsOnly) {
+          const ids = Array.isArray(args.segmentIds) ? args.segmentIds : []
+          if (!ids.length) reject('INVALID_INPUT', 'relationsOnly 需要 segmentIds。')
+          if (run.revision !== args.expectedRevision) reject('STALE_REVISION', '断点版本已变化。', { actual: run.revision })
+          const applied = []
+          const dropped = { missing: 0, hallucinated: 0, self: 0, titleTarget: 0 }
+          for (const id of ids) {
+            const row = run.rows[id]
+            if (!row) { dropped.missing += 1; continue }
+            const source = run.sources.find((item) => item.segments.some((segment) => segment.id === id))
+            if (!source) { dropped.missing += 1; continue }
+            const texts = await verifySources(run, [source.id])
+            const parsed = segmentText(texts.get(source.id), run.spec.profile?.segment ?? {})
+            const meta = source.segments.find((segment) => segment.id === id)
+            const text = parsed.find((item) => item.index === meta.index)?.text ?? ''
+            const { blocks } = segmentBlocks(text, { knownNames: run.nameTable ?? [], ...(run.spec.profile?.blocks ?? {}) })
+            const provided = (args.relationsBySegment && typeof args.relationsBySegment === 'object') ? args.relationsBySegment[id] : null
+            const { row: cleaned, stats } = bindSegment(
+              { id, index: meta.index, chars: meta.chars, text, blocks },
+              { id, relations: Array.isArray(provided) ? provided : [] },
+              { knownNames: run.nameTable ?? [] }
+            )
+            for (const key of Object.keys(dropped)) dropped[key] += stats.relationDropped?.[key] ?? 0
+            if (cleaned.relations.length) {
+              run.rows = { ...run.rows, [id]: { ...row, relations: cleaned.relations } }
+              applied.push(id)
+            }
+          }
+          compile({ sources: run.sources, rows: Object.values(run.rows), ...run.spec, policy: saliencePolicyOf(run.spec.profile) })
+          run.receipts[args.submissionId] = hash
+          run.revision += 1
+          return { state, value: { ...summary(state, run), relationsOnly: true, applied: applied.length, relationDropped: dropped } }
+        }
         if (task.done || task.taskId !== args.taskId) reject('TASK_STALE', 'taskId不属于当前批次。')
         const ids = task.units.map((unit) => unit.id)
         // 双形态提交（P-1）：rows＝完整行（兼容既有用法）；bindings＝窄绑定（服务端零模型回组装）。
         // 两者可同时给：bindings 先按段回组装，rows 再覆盖同段（便于「绑定没好的一两段手工补」）。
         const hasBindings = Array.isArray(args.bindings) && args.bindings.length > 0
-        if (!hasBindings && !Array.isArray(args.rows)) reject('INVALID_INPUT', 'submit需要rows或bindings之一。')
+        if (!args.relationsOnly && !hasBindings && !Array.isArray(args.rows)) reject('INVALID_INPUT', 'submit需要rows或bindings之一（或 relationsOnly）。')
         const assembled = []
         const bindStats = { segments: 0, blocks: 0, bound: 0, hallucinated: 0, ruleFallback: 0, unknownChannel: 0, akaPairs: 0 }
         if (hasBindings) {
@@ -297,7 +353,8 @@ export function createFactExtractionService({ root = null, fileService = null, r
             const { row, stats } = bindSegment(unit, byId.get(unit.id) ?? {}, {
               knownNames: [...(task.knownNames ?? []), ...run.nameTable ?? []],
               when: run.timeDefaults?.when,
-              where: run.timeDefaults?.where
+              where: run.timeDefaults?.where,
+              limits: run.spec.profile?.bind?.maxIncrementsPerSegment
             })
             assembled.push(row)
             bindStats.segments += 1
@@ -307,6 +364,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
             bindStats.ruleFallback += stats.ruleFallback
             bindStats.unknownChannel += stats.unknownChannel
             bindStats.akaPairs += stats.akaPairs
+            bindStats.relations = (bindStats.relations ?? 0) + (stats.relations ?? 0)
           }
           // 对齐失败的绑定数要暴露出来——静默降级会让「模型没回绑定」看起来像「抽了但没主体」。
           bindStats.unmatchedBindings = unmatchedBindings
@@ -328,7 +386,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
         if (!corrected.length) reject('EMPTY_SUBMISSION', '未交任何结果，不推进断点。')
         // 在保存链路上构造并校验三层产物；非法结果在这里拒绝，不留到finish才爆炸。
         const merged = { ...run.rows, ...Object.fromEntries(check.value.map((row) => [row.segmentId, row])) }
-        compile({ sources: run.sources, rows: Object.values(merged), ...run.spec })
+        compile({ sources: run.sources, rows: Object.values(merged), ...run.spec, policy: saliencePolicyOf(run.spec.profile) })
         run.rows = merged
         run.receipts[args.submissionId] = hash
         // P-3：跨批名表累积（只增名，不带证据）——下一批的切块器能立刻用它找说话人。
@@ -347,7 +405,7 @@ export function createFactExtractionService({ root = null, fileService = null, r
         if (pending(run).length) reject('INCOMPLETE_COVERAGE', '还有未抽取的单元；不能用计数自报完整。', { pending: pending(run).length })
         if (state.revision !== run.baseRevision) reject('DATASET_CONFLICT', '另一运行已发布新版；用update重新对齐基线。')
         await verifySources(run)
-        const output = compile({ sources: run.sources, rows: Object.values(run.rows), ...run.spec })
+        const output = compile({ sources: run.sources, rows: Object.values(run.rows), ...run.spec, policy: saliencePolicyOf(run.spec.profile) })
         // P-TRIM Track 3（T-1.5）：批后巩固——编译产物折进已发布快照（命中即合并），不再整表替换。
         // 纯确定性零模型（B8）；id/L0 别名/L1 词法三级匹配，fold 语义见 consolidate.js。
         const existingEntries = state.current?.entries ?? []
@@ -393,7 +451,8 @@ export function createFactExtractionService({ root = null, fileService = null, r
         // P-TRIM Track 4（作者 2026-11-11 缓存池裁定）：archive＝RAG 硬存储（SSD），current.entries＝working（DDR）。
         // working 达水位就把这一批**折进 archive**（命中即合并，复用 consolidate），working 只留最近一章接续，
         // 并产出 knowledgeMap（archive 的词法索引，供字面命中检索）。不达水位则全部留在 working。
-        const lockPolicy = normalizeFlushPolicy(flushPolicy)
+        // 档位里给了缓存水位就以它为底，显式 flushPolicy 仍可临时覆写（运维调参口）。
+        const lockPolicy = normalizeFlushPolicy({ ...(flushPolicyOf(run.spec.profile) ?? {}), ...(flushPolicy ?? {}) })
         const mergedWorking = finalEntries // 本 run 的产物先进 working
         const level = workingLevel(mergedWorking, lockPolicy)
         const archiveBefore = Array.isArray(state.archive?.entries) ? state.archive.entries : []
@@ -480,7 +539,13 @@ export function createFactExtractionService({ root = null, fileService = null, r
       const state = await load(args.dataset)
       if (!state) return ok({ dataset: args.dataset, exists: false })
       const run = args.runId ? getRun(state, args.runId) : null
-      if (kind === 'summary') return ok(run ? summary(state, run) : page(Object.values(state.runs).map((item) => ({ runId: item.id, revision: item.revision, finished: item.finished, requestId: item.requestId })), offset, { dataset: state.dataset, revision: state.revision, entries: state.current?.entries.length ?? 0 }))
+      if (kind === 'summary') {
+        // 档位随 summary 披露（只列与默认档不同的覆写）：作者一眼能确认自己的参数真的生效了。
+        const digest = run?.spec?.profile ? profileDigest(run.spec.profile) : null
+        return ok(run
+          ? { ...summary(state, run), profile: digest }
+          : page(Object.values(state.runs).map((item) => ({ runId: item.id, revision: item.revision, finished: item.finished, requestId: item.requestId })), offset, { dataset: state.dataset, revision: state.revision, entries: state.current?.entries.length ?? 0 }))
+      }
       if (kind === 'row' || kind === 'entry') {
         const value = kind === 'row' ? (run?.rows ?? state.current?.rows)?.[args.id] : state.current?.entries.find((entry) => entry.id === args.id)
         if (!value) reject('RESULT_NOT_FOUND', '找不到该结果ID。')

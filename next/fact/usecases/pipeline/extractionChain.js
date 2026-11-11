@@ -412,9 +412,16 @@ export function parseChapterNoFromId(id) {
 
 export function buildExtractionSource(input = {}) {
   const details = []
-  validateShape(input, objectSchema({ id: nonempty, text: nonempty, chapterNo: positiveInteger }), 'source', details)
+  validateShape(input, objectSchema({
+    id: nonempty, text: nonempty, chapterNo: positiveInteger,
+    // 分段档位（可选）：min/max 覆盖 100–300 默认。段 id 由分段结果算出，所以档位一旦定下不随 run 变。
+    segment: objectSchema({ min: positiveInteger, max: positiveInteger }, [])
+  }, ['id', 'text', 'chapterNo']), 'source', details)
   if (details.length) fail('INVALID_INPUT', '抽取来源无效', details)
   const { id, text, chapterNo } = input
+  // 分段档位（作者 2026-11-11「不同体裁采集节奏不一样」）：缺省＝100–300。
+  // 段 id 由分段结果算出，所以档位必须在建来源时给定且同 run 内不变。
+  const segmentLimits = input.segment && typeof input.segment === 'object' ? input.segment : {}
   // X7：文件名能解析出章号时必须与传入值一致——不一致在源头拒，防 validity 静默错位（guimi C2）。
   // 解析不出就不比对：文件名没有章号是合法形态，不逼作者重命名。
   const parsed = parseChapterNoFromId(id)
@@ -426,7 +433,7 @@ export function buildExtractionSource(input = {}) {
     id,
     chapterNo,
     hash: sha1Hex(text), // 整份输入的精确哈希，包含原始换行/空白。
-    segments: segmentText(text).map((segment) => {
+    segments: segmentText(text, segmentLimits).map((segment) => {
       const hash = sha1Hex(segment.text)
       return { id: segmentId(id, segment.index, hash), index: segment.index, chars: segment.chars, hash }
     })

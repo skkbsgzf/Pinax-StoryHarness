@@ -59,7 +59,8 @@ const ACTION_VERBS = Object.freeze([
 
 /** 引号内出现这些词，说明它不是台词而是书名/牌匾/标语/术语引用——不参与事件标注。 */
 const MENTION_ONLY_QUOTE = Object.freeze(['《', '》', '第', '号', '型', '式', '款', '章', '节', '条例', '规定', '通知', '公告', '碑文', '刻着', '写着', '印着'])
-/** 引号内是单个词/短语（≤5 字）且无标点，多为「强调引号」而不是台词或成句心里话。 */
+/** 引号内是单个词/短语（≤5 字）且无标点，多为「强调引号」而不是台词或成句心里话。
+ *  可被档位 blocks.shortQuoteMax 覆写（体裁不同，「短」的阈值不同）。 */
 const SHORT_QUOTE_MAX = 5
 
 const hasAny = (text, words) => words.some((word) => text.includes(word))
@@ -202,6 +203,12 @@ export function speakerHintOf(before, knownNames = []) {
 export function segmentBlocks(text, options = {}) {
   const source = String(text ?? '').replace(CHAPTER_HEAD, '')
   const knownNames = Array.isArray(options.knownNames) ? options.knownNames.filter(Boolean) : []
+  // 档位覆写（extractionProfile.blocks）：不传就用模块默认，既有调用行为不变。
+  const minChars = Number.isSafeInteger(options.min) && options.min > 0 ? options.min : BLOCK_MIN_CHARS
+  const maxChars = Number.isSafeInteger(options.max) && options.max > 0 ? options.max : BLOCK_MAX_CHARS
+  const shortQuoteMax = Number.isSafeInteger(options.shortQuoteMax) && options.shortQuoteMax >= 0
+    ? options.shortQuoteMax
+    : SHORT_QUOTE_MAX
   const { spans } = extractQuoteSpans(source)
   const blocks = []
   const dropped = []
@@ -237,7 +244,7 @@ export function segmentBlocks(text, options = {}) {
       pending.push(clean)
       const length = pending.join('').length
       // 凑够最小长度就落块；引号块要独立，所以进引号前一定 flush。
-      if (length >= BLOCK_MIN_CHARS || length >= BLOCK_MAX_CHARS) flushPending()
+      if (length >= minChars || length >= maxChars) flushPending()
     }
   }
 
@@ -249,7 +256,7 @@ export function segmentBlocks(text, options = {}) {
     // 注意顺序：这个判断必须在 flushPending 之前——否则叙述会被这一刀切断。
     const inner = span.text.trim()
     const innerCore = inner.replace(/[\s…—\-.·、，。！？；：]/gu, '')
-    const emphasis = innerCore.length <= SHORT_QUOTE_MAX
+    const emphasis = innerCore.length <= shortQuoteMax
       && !/[？！?!…。]/u.test(inner)
       && !MENTION_ONLY_QUOTE.some((mark) => inner.startsWith(mark))
     if (emphasis) {
@@ -289,7 +296,7 @@ export function segmentBlocks(text, options = {}) {
   while (blocks.length > 1) {
     const last = blocks[blocks.length - 1]
     const prev = blocks[blocks.length - 2]
-    const short = last.text.length < Math.ceil(BLOCK_MIN_CHARS / 2)
+    const short = last.text.length < Math.ceil(minChars / 2)
     if (last.kind !== 'narration' || prev.kind !== 'narration' || !short) break
     prev.text = `${prev.text}${last.text}`
     if (CHANNEL_PRIORITY.indexOf(last.channelHint) < CHANNEL_PRIORITY.indexOf(prev.channelHint)) {
@@ -316,7 +323,7 @@ export function segmentBlocks(text, options = {}) {
   }
 }
 
-/** 多段批量：返回 [{id, index, chars, text, blocks, stats}]，段序与入参一致。 */
+/** 多段批量：返回 [{id, index, chars, text, blocks, stats}]，段序与入参一致。options 原样透传给 segmentBlocks（含档位）。 */
 export function blocksOfSegments(segments, options = {}) {
   const list = Array.isArray(segments) ? segments : []
   return list.map((segment) => {
