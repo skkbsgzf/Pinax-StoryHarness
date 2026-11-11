@@ -197,7 +197,11 @@ test('重复/未知段、行内重复人物及 slot+name 拒绝；同名不同 s
   assertInvalid([first, first], built.segments, 'segmentId')
   assertInvalid([{ ...first, segmentId: 'unknown' }], built.segments, 'segmentId')
   assertInvalid([first], [built.segments[0], built.segments[0]], 'segments')
-  assertInvalid([{ ...first, characters: [character(), character()] }], built.segments, 'characters')
+  // P-LLM 调优后：行内同名角色**合并**（模型常先写概览再补细节，属啰嗦不属错误）——
+  // 信息不丢（数组并集、标量取首个非空）；但 settings 的 slot+name 重复仍是冲突，照拒。
+  const mergedChars = validateExtractionRows([{ ...first, characters: [character(), character()] }], built.segments)
+  assert.equal(mergedChars.ok, true, '同行同名角色合并放行')
+  assert.equal(mergedChars.value[0].characters.length, 1, '合并成一条')
   assertInvalid([{ ...first, settings: [setting(), setting()] }], built.segments, 'settings')
   assert.equal(validateExtractionRows([{ ...first, settings: [setting(), setting({ slot: 'orgs' })] }], built.segments).ok, true)
 })
