@@ -113,8 +113,11 @@ async function callModel(prompt, maxTokens = 4000) {
 
 
 /** 一段原文 → 绑定 → 行（含失败隔离：解析不出的批退回规则绑定）。 */
-async function extractBook(book, index, profile) {
-  const filePath = join(LIB, '正文', book.file)
+/** 单本抽取（供管线复用）。env 可覆写 LIB/BATCH/CALL_RETRIES/RESUME_*。 */
+
+export async function extractBook(book, index, profile, env = {}) {
+  const lib = env.LIB ?? LIB
+  const filePath = join(lib, '正文', book.file)
   const text = stripLibraryFile(await readFile(filePath, 'utf8'))
   const body = LIMIT_CHARS > 0 ? text.slice(0, LIMIT_CHARS) : text
   // 视角参数（作者 2026-11-12）：读者视角代入，第一人称下称谓即身份。
@@ -148,10 +151,10 @@ async function extractBook(book, index, profile) {
   const callLog = []
   // 续跑：把已落盘的批次读回来，从断点之后继续（长篇 50+ 次调用中途超时不可避免）。
   let resumeFrom = 0
-  if (RESUME_MODE && RESUME_DIR && existsSync(RESUME_DIR)) {
-    const done = readdirSyncCompat(RESUME_DIR).filter((name) => name.startsWith('bindings-')).sort()
+  if ((env.RESUME_MODE ?? RESUME_MODE) && (env.RESUME_DIR ?? RESUME_DIR) && existsSync(env.RESUME_DIR ?? RESUME_DIR)) {
+    const done = readdirSyncCompat(env.RESUME_DIR ?? RESUME_DIR).filter((name) => name.startsWith('bindings-')).sort()
     for (const name of done) {
-      const saved = JSON.parse(await readFile(join(RESUME_DIR, name), 'utf8'))
+      const saved = JSON.parse(await readFile(join(env.RESUME_DIR ?? RESUME_DIR, name), 'utf8'))
       bindings.push(...saved.bindings)
       for (const who of saved.knownNames ?? []) if (!knownNames.includes(who)) knownNames.push(who)
       resumeFrom = Math.max(resumeFrom, saved.start + saved.batch.length)
@@ -163,7 +166,7 @@ async function extractBook(book, index, profile) {
     const prompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: batch, knownNames, priorNames: [] })].join('\n')
     let reply = ''
     let parsedBinding = null
-    for (let attempt = 1; attempt <= CALL_RETRIES; attempt += 1) {
+    for (let attempt = 1; attempt <= env.CALL_RETRIES ?? CALL_RETRIES; attempt += 1) {
       const ask = attempt === 1 ? prompt : `${prompt}\n\n【上次输出不是合法 JSON】重新输出完整 JSON。`
       const answer = await callModel(ask)
       reply = answer.text
@@ -320,4 +323,6 @@ async function main() {
   console.log('\n' + JSON.stringify(summary, null, 1))
 }
 
-await main()
+if (process.argv[1] && process.argv[1].endsWith('run-extract-library.mjs')) {
+  await main()
+}

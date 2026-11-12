@@ -5,12 +5,18 @@ import { join } from 'node:path'
  * Wiki 总索引：把多本书的 wiki 串到一个入口页。
  * 只读各书的拆解结果，不重新生成页面。
  */
-const LIB = 'D:/短篇选题库'
+function argOf(prefix, fallback = null) {
+  const hit = process.argv.slice(2).find((item) => item.startsWith(`${prefix}=`))
+  return hit ? hit.slice(prefix.length + 1) : fallback
+}
+
+const LIB = argOf('--lib', 'D:/短篇选题库')
 const WIKI = join(LIB, 'wiki')
 
 const esc = (value) => String(value ?? '')
   .replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;').replace(/"/gu, '&quot;')
 
+export function buildWikiIndex(lib = LIB) {
 const index = JSON.parse(readFileSync(join(LIB, '正文', '入库索引.json'), 'utf8'))
 const books = []
 
@@ -90,4 +96,11 @@ writeFileSync(join(WIKI, 'index.html'), `<!doctype html>
 <title>番茄短篇 · 世界书 Wiki</title><style>${CSS}</style></head>
 <body><div class="wrap">${body}</div></body></html>`, 'utf8')
 
-console.log(JSON.stringify({ root: WIKI, books: books.map((book) => ({ id: book.id, title: book.title, chapters: book.chapters, characters: book.characters })) }, null, 2))
+  return { root: WIKI, books: books.map((book) => ({ id: book.id, title: book.title, chapters: book.chapters, characters: book.characters })) }
+
+}
+
+if (process.argv[1] && process.argv[1].endsWith('build-wiki-index.mjs')) {
+  const result = buildWikiIndex(LIB)
+  console.log(JSON.stringify(result, null, 2))
+}

@@ -14,15 +14,15 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const LIB = 'D:/短篇选题库'
+const LIB = argOf('--lib', 'D:/短篇选题库')
 const OUT_ROOT = join(LIB, 'wiki')
 
-const ids = process.argv.slice(2)
-if (!ids.length) {
-  console.error('用法：node build-wiki.mjs <book_id> [book_id...]')
-  process.exit(1)
+function argOf(prefix, fallback = null) {
+  const hit = process.argv.slice(2).find((item) => item.startsWith(`${prefix}=`))
+  return hit ? hit.slice(prefix.length + 1) : fallback
 }
 
+const ids = process.argv.slice(2).filter((item) => !item.startsWith('--'))
 const esc = (value) => String(value ?? '')
   .replace(/&/gu, '&amp;').replace(/</gu, '&lt;').replace(/>/gu, '&gt;').replace(/"/gu, '&quot;')
 
@@ -158,7 +158,7 @@ ${body}
 </div></body></html>`
 }
 
-function buildBook(id) {
+export function buildBook(id) {
   const result = JSON.parse(readFileSync(join(LIB, '拆解', `${id}.json`), 'utf8'))
   const book = result.book
   const plots = result.entries.filter((entry) => entry.layer === 'plot')
@@ -310,5 +310,13 @@ ${places.length ? `<h2>地点（${places.length}）</h2><div>${places.slice(0, 3
   return { id, title: book.title, dir, characters: derived.length, chapters: chapters.length, places: places.length, relations: relations.length, plots: plots.length }
 }
 
+// 直接执行时才跑（被 import 时只取 buildBook）
+if (process.argv[1] && process.argv[1].endsWith('build-wiki.mjs')) {
+if (!ids.length) {
+  console.error('用法：node build-wiki.mjs <book_id> [book_id...]')
+  process.exit(1)
+}
+
 const built = ids.map(buildBook)
 console.log(JSON.stringify(built, null, 2))
+}
