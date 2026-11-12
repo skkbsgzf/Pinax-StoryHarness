@@ -155,7 +155,11 @@ function deriveCharacter(entry, plots, profile) {
     name,
     aliases,
     identity: profile?.identity || entry.identity || '',
+    archetype: profile?.archetype || '',
     personality: profile?.personality?.length ? profile.personality : (entry.traits ?? []),
+    arc: profile?.arc ?? null,
+    keyChoices: profile?.keyChoices ?? [],
+    mirror: profile?.mirror || '',
     summary: profile?.summary || '',
     castTier: entry.castRole?.tier ?? null,
     appearances: involved.length,
@@ -242,6 +246,7 @@ function buildBook(id, ds) {
   const chapterNumbers = [...byChapter.keys()].sort((a, b) => a - b)
   // 伪章标题优先用增补小标题（enrich 与本侧用同一伪章切分公式，章号对得上）
   const enrichTitle = (no) => (usePseudo ? (wiki?.chapterSummaries?.find((item) => item.chapter === no)?.title ?? '') : '')
+  const chapterInfo = (no) => wiki?.chapterSummaries?.find((item) => item.chapter === no) ?? null
 
   // 人物派生
   const characters = characterEntries.map((entry) => deriveCharacter(entry, plots, enrichProfile(entry.name)))
@@ -255,6 +260,10 @@ function buildBook(id, ds) {
       no,
       title: enrichTitle(no) || (chapterTitles.get(no) ?? (usePseudo ? `第 ${no} 节` : `第 ${no} 章`)),
       summary: chapterSummary(no),
+      // 细化层（kb/deconstruct/protocol）：章节功能九类＋核心情绪＋剧情点密度
+      function: chapterInfo(no)?.function ?? '',
+      emotion: chapterInfo(no)?.emotion ?? '',
+      beats: chapterInfo(no)?.beats ?? null,
       segments: chapterPlots.length,
       events: events.length,
       chars: [...new Set(chapterPlots.flatMap((plot) => plot.who ?? []))],
@@ -369,6 +378,11 @@ function buildBook(id, ds) {
       arc: wiki?.arc ?? []
     },
     quality: { traceableRate: result.quality?.traceableRate ?? null },
+    // 六槽位拆解交付物（kb/deconstruct/protocol）：gimmick / plot-design / intro / 文风九维
+    slots: wiki?.slots ?? null,
+    excerpts: wiki?.excerpts ?? [],
+    // 枚举表（章节功能九类/核心情绪八种/结构六母型）
+    enums: wiki?.enums ?? null,
     // OpenDesign dashboard 设计系统（token 真源＋SVG 图表调色板＋来源标识）
     ds: { id: 'dashboard', title: 'Dashboard', summary: ds.summary, source: ds.source, palette: ds.palette }
   }
@@ -428,6 +442,13 @@ details.drill summary { cursor:pointer; color:var(--muted); font-size:13px; user
 details.drill summary:hover { color:var(--accent); }
 details.drill[open] summary { border-bottom:1px solid var(--border-soft); padding-bottom:8px; margin-bottom:8px; }
 .arc-range { font-size:12px; color:var(--muted); font-weight:400; margin-left:10px; }
+/* 六槽位卡（kb/deconstruct/protocol 对齐） */
+.slotcard { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 18px; margin:10px 0; }
+.slotcard .logline { font-size:17px; font-weight:600; color:var(--fg); line-height:1.5; letter-spacing:-0.01em; }
+.kv { width:100%; border-collapse:collapse; margin-top:10px; font-size:13px; }
+.kv td { padding:5px 10px 5px 0; vertical-align:top; line-height:1.6; }
+.kv td:first-child { width:72px; color:var(--muted); white-space:nowrap; }
+.kv tr + tr td { border-top:1px solid var(--border-soft); }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }
 .card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px; }
 .card h4 { margin:0 0 6px; font-size:16px; } .card .sub { color:var(--muted); font-size:12px; margin-top:6px; }

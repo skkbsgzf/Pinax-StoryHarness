@@ -1,18 +1,16 @@
 /**
- * Wiki 增补执行器（CLI + 可导入函数）。
+ * Wiki 增补执行器 v3（CLI + 可导入函数）。
  *
- * 对已拆解的书跑模型窄窗归纳，结果写回拆解 JSON 的 wiki 字段。
- * 这是 Wiki 的剧情来源——绑定路径只产 who/ch（事件正文取原文），梗概与身份需要归纳。
+ * 2026-11-13 对齐 author 编剧/文学 skill（storymasterv4/knowledge）：
+ *   · 拆书总协议六槽位（kb/deconstruct/protocol）：gimmick / character / plot-design / intro / plot-refine / excerpt
+ *   · 双层拆解：设计层（结构母型选型+核心情绪）＋细化层（章节功能九类+剧情点+伏笔落点）
+ *   · 文风学习协议九维（kb/deconstruct/style-learning）：情绪笔墨密度/句式节奏/信息控制/对话权力关系/动作代心理…
+ *   · 溯源纪律（block 级）：章号证据、三态区分（事实/推断/未确认）、不虚构未读取情节
  *
- * 2026-11-13 v2（作者指出「伏笔和大纲为什么这么简单」）：
- *   · 伪章节：正文无「第N章」标记的短篇按段号切伪章（lib/pseudoChapters.mjs），
- *     章梗概按伪章出——大纲不再塌成单章；
- *   · 章批三合一：同一批窄窗同时出 小标题＋梗概＋伏笔（{"chapter","title","summary","foreshadows"}），
- *     伏笔从此有数据（v3 绑定契约砍了 hooks，语义层在这里补回）；
- *   · 人物档案 / 全书梗概不变。
+ * 调用预算：章批（5 章/批，五合一输出）＋ gimmick 1 ＋ plot-design 1 ＋ intro 1 ＋ 文风 1-2 ＋ 人物档案 top12。
+ * 事件正文恒为原文切片（fact 层不动）；语义槽位全部落 wiki 字段（wiki-enrich@3）。
  *
  * 用法：node devtools/wiki-enrich-run.mjs --lib=D:/Qbook/短篇选题库 --books=<id>[,<id>]
- * 幂等：重跑覆盖 wiki 字段（归纳结果以最后一次为准）。
  */
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -28,19 +26,30 @@ const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const BOOKS = (argOf('--books', '') || '').split(',').map((item) => item.trim()).filter(Boolean)
 const LIMIT = Number(argOf('--limit-chars', '2400')) || 2400
 
-/** dots 调用（key 从环境取，管线不落盘）。 */
 async function callJson(prompt, maxTokens = 2000) {
   return dispatchDotsCompletion({ prompt, maxTokens, timeoutMs: 180_000 })
 }
 
-/** dots 回包容错解析（缩围栏 + 直接 parse，解析失败返回 null）。 */
 function parseReply(text) {
   const raw = String(text ?? '').replace(/^```(?:json)?/u, '').replace(/```$/u, '').trim()
   try { return JSON.parse(raw) } catch { return null }
 }
 
+/** 溯源纪律（block 级）进每个窗的公共头。 */
+const TRACE_HEADER = [
+  '溯源纪律（必须遵守）：',
+  '1) 所有判断必须能给章节号依据；不得补写人物经历、不得虚构未读取的情节；',
+  '2) 三态区分：原文事实 / 合理推断 / 暂时无法确认——推断与未确认在对应字段注明；',
+  '3) 引用原文仅限极短（≤40 字），其余用概括。'
+].join('\n')
+
+// 枚举表（来自 kb/structure/catalog 六母型、kb/deconstruct/protocol 章节功能九类、核心情绪八种）
+const STRUCTURE_TYPES = ['复仇', '救猫咪', '逆袭升级', '双线交叉', '倒钩回归', '单元宿命', '复合（须注明主辅）']
+const CHAPTER_FUNCTIONS = ['建立', '铺垫', '叠加', '误导', '打击', '觉醒', '对峙', '揭露', '收束']
+const EMOTIONS = ['甜', '痛', '爽', '悔', '疑', '燃', '压迫', '释然']
+
 /**
- * 单本增补（供管线复用）。
+ * 单本增补（六槽位版）。
  * @param {string} id
  * @param {string} lib
  * @param {{protagonist?:string|null}} [options]
@@ -49,8 +58,9 @@ export async function enrichBook(id, lib = LIB, options = {}) {
   const result = JSON.parse(await readFile(join(lib, '拆解', `${id}.json`), 'utf8'))
   const book = result.book
   const plots = result.entries.filter((entry) => entry.layer === 'plot')
+  const failures = []
 
-  // 章输入：真章按 validity.from 分组；无章节标记的书按段号切伪章
+  // 章分组：真章按 validity.from；无标记书按段号伪章
   const usePseudo = !hasRealChapters(plots)
   const chapterGroups = usePseudo
     ? derivePseudoChapters(plots, result.source?.chars ?? book.word_count ?? 0)
@@ -63,7 +73,7 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     text: group.plots.flatMap((plot) => (plot.events ?? []).map((event) => event.content)).join('\n').slice(0, LIMIT)
   }))
 
-  // 人物输入：按出场段数排序取 top（≤12），言行取事件（原文逐字）
+  // 人物输入：出场段数 top12
   const byName = new Map()
   for (const plot of plots) {
     const chapter = Number.isInteger(plot.validity?.from) ? plot.validity.from : 0
@@ -82,66 +92,197 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     .sort((a, b) => (b.speech.length + b.behavior.length) - (a.speech.length + a.behavior.length))
     .slice(0, 12)
 
-  console.log(`  ${book.title}: ${chapterInputs.length} ${usePseudo ? '节(伪章)' : '章'} / ${personInputs.length} 个主要人物`)
+  console.log(`  ${book.title}: ${chapterInputs.length} ${usePseudo ? '节(伪章)' : '章'} / ${personInputs.length} 人物`)
 
-  // ① 章批三合一：小标题 + 梗概 + 伏笔（每批 5 章）
+  /* ---------- 槽位 plot-refine＋excerpt：章批五合一 ---------- */
   const chapterSummaries = []
   const foreshadows = []
-  for (let start = 0; start < chapterInputs.length; start += 5) {
-    const batch = chapterInputs.slice(start, start + 5)
+  const excerpts = []
+  for (let start = 0; start < chapterInputs.length; start += 3) {
+    const batch = chapterInputs.slice(start, start + 3)
     const prompt = [
-      '你是小说章节分析器。输入是**若干章**的事件文本（按章分组、按原文顺序）。',
+      '你是小说章节拆解器（细化层）。输入是若干章的事件文本（按章分组、按原文顺序）。',
       '对每一章输出：',
-      '1) title：2–6 字的小标题（贴该章剧情，如「假千金露馅」「兄妹相认」）；',
-      '2) summary：2–3 句剧情梗概（60–120 字，只概括该章原文里发生的事）；',
-      '3) foreshadows：该章埋下的伏笔/悬念（0–3 条，每条一句话写清「什么悬念被埋下」；没有就给空数组）。',
-      '只依据原文，不推测、不引入原文没有的信息。',
-      '只输出 JSON：{"chapters":[{"chapter":章号,"title":"标题","summary":"梗概","foreshadows":["…"]}]}，章号与输入一一对应，不要解释。',
+      `1) title：2–6 字小标题；`,
+      `2) summary：2–3 句剧情梗概（60–120 字，只概括原文发生的事）；`,
+      `3) function：本章主功能，从 [${CHAPTER_FUNCTIONS.join('/')}] 里选一个；`,
+      `4) emotion：本章核心情绪，从 [${EMOTIONS.join('/')}] 里选一个；`,
+      `5) beats：本章承载的剧情点数（1–5 的整数，推进了多少个独立剧情点）；`,
+      `6) foreshadows：埋下的伏笔/悬念 0–3 条；`,
+      `7) excerpt：本章最高光片段 { "beat": "场景概括 ≤40 字", "quote": "原文摘引 ≤40 字" }（没有高光就给 null）。`,
+      '',
+      TRACE_HEADER,
+      '',
+      `只输出 JSON：{"chapters":[{"chapter":章号,"title":"","summary":"","function":"","emotion":"","beats":1,"foreshadows":[],"excerpt":null}]}`,
       '',
       ...batch.map((item) => `【第 ${item.chapter} ${usePseudo ? '节' : '章'}事件】\n${item.text}`)
     ].join('\n\n')
-    try {
-      const answer = await callJson(prompt, 4000)
-      const parsed = parseReply(answer.text)
-      for (const item of batch) {
-        const row = parsed?.chapters?.find((c) => Number(c.chapter) === item.chapter)
-        const hooks = Array.isArray(row?.foreshadows) ? row.foreshadows.slice(0, 3).map(String).filter(Boolean) : []
-        chapterSummaries.push({ chapter: item.chapter, title: String(row?.title ?? ''), summary: String(row?.summary ?? '') })
-        for (const hook of hooks) foreshadows.push({ chapter: item.chapter, text: hook })
+    let parsed = null
+    for (let attempt = 0; attempt < 2 && !parsed; attempt++) {
+      try {
+        const answer = await callJson(prompt, 5200)
+        parsed = parseReply(answer.text)
+        if (!parsed && attempt === 0) await new Promise((resolve) => setTimeout(resolve, 5000))
+      } catch (error) {
+        if (attempt === 1) failures.push({ stage: 'chapter-batch', chapter: batch.map((b) => b.chapter).join(','), reason: String(error?.message ?? error) })
       }
-    } catch {
-      // 单批失败退化为空梗概，页面照常渲染事件列表
-      for (const item of batch) chapterSummaries.push({ chapter: item.chapter, title: '', summary: '' })
+    }
+    if (!parsed) failures.push({ stage: 'chapter-batch', chapter: batch.map((b) => b.chapter).join(','), reason: 'parse-failed' })
+    for (const item of batch) {
+      const row = parsed?.chapters?.find((c) => Number(c.chapter) === item.chapter)
+      const hooks = Array.isArray(row?.foreshadows) ? row.foreshadows.slice(0, 3).map(String).filter(Boolean) : []
+      chapterSummaries.push({
+        chapter: item.chapter,
+        title: String(row?.title ?? ''),
+        summary: String(row?.summary ?? ''),
+        function: CHAPTER_FUNCTIONS.includes(row?.function) ? row.function : '',
+        emotion: EMOTIONS.includes(row?.emotion) ? row.emotion : '',
+        beats: Number.isInteger(row?.beats) ? Math.max(1, Math.min(5, row.beats)) : null
+      })
+      for (const hook of hooks) foreshadows.push({ chapter: item.chapter, text: hook })
+      if (row?.excerpt && typeof row.excerpt === 'object' && row.excerpt.beat) {
+        excerpts.push({
+          chapter: item.chapter,
+          beat: String(row.excerpt.beat).slice(0, 60),
+          quote: String(row.excerpt.quote ?? '').slice(0, 60)
+        })
+      }
     }
   }
 
-  // ①.5 小标题回填：章批里模型偶发漏 title，用已有梗概单次调用补齐（summary 是回填的可靠依据）
-  const missingTitle = chapterSummaries.filter((item) => item.summary && !item.title)
-  if (missingTitle.length) {
+  /* ---------- 槽位 gimmick：卖点/元素/共情点/爽点内核/情绪承诺 ---------- */
+  let gimmick = null
+  {
+    const titleList = chapterSummaries.map((c) => `第${c.chapter}${usePseudo ? '节' : '章'}「${c.title}」`).join('、')
     const prompt = [
-      '你是章节小标题器。输入是若干章的剧情梗概（按章号）。',
-      '给每一章起一个 2–6 字的小标题，贴该章最核心的剧情转折（如「假千金露馅」「兄妹相认」）。',
-      '只输出 JSON：{"chapters":[{"chapter":章号,"title":"小标题"}]}，章号与输入一一对应，不要解释。',
+      '你是拆书器（槽位 gimmick·梗）。输入是书名、题材标签与全书章纲。',
+      '输出 JSON：{',
+      ' "logline": "一句话卖点（≤40 字，谁+什么处境+遇到什么+结果钩子）",',
+      ' "elements": ["题材元素组合", "…"],',
+      ' "empathy": "共情点：击中目标读者的什么处境与渴望",',
+      ' "coolPoint": "爽点内核：以什么对什么形成什么压制与释放",',
+      ' "emotionPromise": "核心情绪承诺，从 [' + EMOTIONS.join('/') + '] 里选主情绪并一句话说明",',
+      ' "confidence": "fact|inferred|unconfirmed"',
+      '}',
       '',
-      ...missingTitle.map((item) => `第${item.chapter}${usePseudo ? '节' : '章'}：${item.summary}`)
+      TRACE_HEADER,
+      '',
+      `【书名】${book.title}`,
+      `【题材】${[book.subject_group, book.subject_names].filter(Boolean).join(' / ') || '未标注'}`,
+      `【章纲】${titleList}`
     ].join('\n')
     try {
-      const answer = await callJson(prompt, 1000)
+      const answer = await callJson(prompt, 1200)
       const parsed = parseReply(answer.text)
-      for (const item of missingTitle) {
-        const row = parsed?.chapters?.find((c) => Number(c.chapter) === item.chapter)
-        if (row?.title) item.title = String(row.title).slice(0, 12)
-      }
-    } catch { /* 标题补不齐就退回 第N节 */ }
+      if (parsed?.logline) gimmick = parsed
+      else failures.push({ stage: 'gimmick', reason: 'empty' })
+    } catch (error) { failures.push({ stage: 'gimmick', reason: String(error?.message ?? error) }) }
   }
 
-  // ② 人物档案（一次一个）
+  /* ---------- 槽位 plot-design：结构母型选型＋阶段＋转折 ---------- */
+  let plotDesign = null
+  {
+    const outline = chapterSummaries.map((c) => `第${c.chapter}${usePseudo ? '节' : '章'}「${c.title}」：${c.summary}`).join('\n')
+    const prompt = [
+      '你是拆书器（槽位 plot-design·剧情设计/宏观骨架）。输入是全书章纲。',
+      `结构母型枚举：[${STRUCTURE_TYPES.join('/')}]。`,
+      '输出 JSON：{',
+      ' "structure": { "picked": "母型名", "evidence": "判定依据（引章号）", "confidence": "fact|inferred|unconfirmed" },',
+      ' "mainline": "主线一句话",',
+      ' "subplot": "支线一句话（没有就空串）",',
+      ' "stages": [ { "phase": "阶段名", "chapters": [起,止], "job": "该阶段在结构里干什么" } ],',
+      ' "turningPoints": [ { "chapter": 章, "event": "转折事件 ≤30 字" } ]',
+      '}',
+      '',
+      TRACE_HEADER,
+      '',
+      outline
+    ].join('\n')
+    try {
+      const answer = await callJson(prompt, 2000)
+      const parsed = parseReply(answer.text)
+      if (parsed?.structure?.picked) plotDesign = parsed
+      else failures.push({ stage: 'plot-design', reason: 'empty' })
+    } catch (error) { failures.push({ stage: 'plot-design', reason: String(error?.message ?? error) }) }
+  }
+
+  /* ---------- 槽位 intro：开局钩子结构 ---------- */
+  let intro = null
+  {
+    const head = chapterInputs.slice(0, 2).map((item) => `【第 ${item.chapter} ${usePseudo ? '节' : '章'}】\n${item.text}`).join('\n\n')
+    const prompt = [
+      '你是拆书器（槽位 intro·导语设计）。输入是全书开头（前两章）事件文本。',
+      '输出 JSON：{',
+      ' "entry": "切入方式一句话（从什么状态/场景切入）",',
+      ' "hookType": "钩子类型（悬念/反常/身份落差/危机开局/金手指亮出/其他，可组合）",',
+      ' "firstBeat": "开局第一拍是什么（≤30 字）",',
+      ' "expectation": "建立的核心期待",',
+      ' "confidence": "fact|inferred|unconfirmed"',
+      '}',
+      '',
+      TRACE_HEADER,
+      '',
+      head || '（无文本）'
+    ].join('\n')
+    try {
+      const answer = await callJson(prompt, 1200)
+      const parsed = parseReply(answer.text)
+      if (parsed?.entry) intro = parsed
+      else failures.push({ stage: 'intro', reason: 'empty' })
+    } catch (error) { failures.push({ stage: 'intro', reason: String(error?.message ?? error) }) }
+  }
+
+  /* ---------- 文风画像（文学层·九维） ---------- */
+  let style = null
+  {
+    const sample = chapterInputs
+      .map((item) => item.text.slice(0, Math.ceil(LIMIT / Math.min(6, chapterInputs.length))))
+      .join('\n')
+      .slice(0, 2600)
+    const prompt = [
+      '你是文风拆解器（文学层·九维观察）。输入是全书事件文本抽样。',
+      '标尺：写什么不重要，怎么写才重要；产物必须是可直接执行的写手规则，不是评论。',
+      '输出 JSON：{',
+      ' "density": "情绪笔墨密度规律（何处放慢细写、何处果断带过，引章号例证）",',
+      ' "sentence": "句式与段落节奏（句长配比/独句成段/段尾翻转补刀）",',
+      ' "pov": "叙述视角与信息控制（读者跟随谁的认知；何时给何时藏）",',
+      ' "dialogue": "对话写法（标签/密度/留白/短-短-长；权力关系如何经话语暴露）",',
+      ' "action": "动作写法（动作代心理的具体规律）",',
+      ' "character": "人物写法（标签特征/情绪按钮/靠选择与沉默站住）",',
+      ' "environment": "环境写法（是否作为情绪容器）",',
+      ' "transition": "转场与时间处理",',
+      ' "ending": "章节收束方式（钩子类型）",',
+      ' "rules": ["可直接执行的写手规则 3–6 条"]',
+      '}',
+      '',
+      TRACE_HEADER,
+      '',
+      sample || '（无文本）'
+    ].join('\n')
+    try {
+      const answer = await callJson(prompt, 2200)
+      const parsed = parseReply(answer.text)
+      if (parsed?.rules?.length) style = parsed
+      else failures.push({ stage: 'style', reason: 'empty' })
+    } catch (error) { failures.push({ stage: 'style', reason: String(error?.message ?? error) }) }
+  }
+
+  /* ---------- 槽位 character：人物卡（模式/弧光/关键选择/镜像） ---------- */
   const characterProfiles = []
   for (const person of personInputs) {
     const prompt = [
-      '你是人物档案归纳器。输入是某个角色在全书中的**台词**与**行为/经历**（均取自原文）。只做归纳，不编造。',
-      '输出 JSON：{"identity":"一句话身份定位","personality":["性格词",…],"summary":"2–3 句人物小传"}',
-      '不引入原文没有的信息。推断不出就给空。',
+      '你是人物拆解器（槽位 character·人物卡）。输入是某角色全书的台词与行为/经历（取自原文）。',
+      '输出 JSON：{',
+      ' "identity": "一句话身份定位",',
+      ' "archetype": "人设模式（如 替罪羊/觉醒者/镜像施害者/守护者，贴人物本身）",',
+      ' "personality": ["性格词 2–4 个"],',
+      ' "arc": { "start": "起点状态", "end": "终点状态", "turnChapter": 转变章号或 null, "evidence": "转变依据（引章号）" },',
+      ' "keyChoices": [ { "chapter": 章, "choice": "关键选择 ≤25 字" } ],',
+      ' "mirror": "镜像/对立人物是谁、如何互为镜像（没有就空串）",',
+      ' "summary": "2–3 句人物小传"',
+      '}',
+      '',
+      TRACE_HEADER,
       '',
       `【角色名】${person.name}`,
       `【台词】\n${person.speech.map((line) => `「${line}」`).join('\n') || '（无台词）'}`,
@@ -149,20 +290,34 @@ export async function enrichBook(id, lib = LIB, options = {}) {
       `【出场】第 ${person.chapters.join('、')} 章`
     ].join('\n')
     try {
-      const answer = await callJson(prompt, 1500)
+      const answer = await callJson(prompt, 1800)
       const parsed = parseReply(answer.text)
       characterProfiles.push({
-        name: person.name, chapters: person.chapters,
+        name: person.name,
+        chapters: person.chapters,
         identity: String(parsed?.identity ?? ''),
+        archetype: String(parsed?.archetype ?? ''),
         personality: Array.isArray(parsed?.personality) ? parsed.personality.slice(0, 4).map(String) : [],
+        arc: parsed?.arc && typeof parsed.arc === 'object' ? {
+          start: String(parsed.arc.start ?? ''),
+          end: String(parsed.arc.end ?? ''),
+          turnChapter: Number.isInteger(parsed.arc.turnChapter) ? parsed.arc.turnChapter : null,
+          evidence: String(parsed.arc.evidence ?? '')
+        } : null,
+        keyChoices: Array.isArray(parsed?.keyChoices) ? parsed.keyChoices.slice(0, 5).map((item) => ({
+          chapter: Number(item?.chapter) || null,
+          choice: String(item?.choice ?? '').slice(0, 40)
+        })).filter((item) => item.choice) : [],
+        mirror: String(parsed?.mirror ?? ''),
         summary: String(parsed?.summary ?? '')
       })
-    } catch {
-      characterProfiles.push({ name: person.name, identity: '', personality: [], summary: '' })
+    } catch (error) {
+      failures.push({ stage: 'character', name: person.name, reason: String(error?.message ?? error) })
+      characterProfiles.push({ name: person.name, identity: '', archetype: '', personality: [], arc: null, keyChoices: [], mirror: '', summary: '' })
     }
   }
 
-  // ③ 全书梗概
+  /* ---------- 全书梗概（沿用，供 wiki 概览） ---------- */
   let storySummary = ''
   let arc = []
   const storyInput = chapterSummaries
@@ -186,30 +341,40 @@ export async function enrichBook(id, lib = LIB, options = {}) {
         chapters: Array.isArray(item.chapters) ? item.chapters : [],
         text: String(item.text ?? '')
       })) : []
-    } catch { /* 全书梗概失败不阻塞 */ }
+    } catch { /* 不阻塞 */ }
   }
 
   result.wiki = {
-    version: 'wiki-enrich@2',
+    version: 'wiki-enrich@3',
     generated_at: new Date().toISOString(),
     perspective: result.perspective ?? null,
     protagonist: options.protagonist ?? null,
     pseudoChapters: usePseudo,
+    enums: { structures: STRUCTURE_TYPES, chapterFunctions: CHAPTER_FUNCTIONS, emotions: EMOTIONS },
+    slots: { gimmick, plotDesign, intro, style },
     storySummary,
     arc,
     chapterSummaries,
     foreshadows,
-    characterProfiles
+    excerpts,
+    characterProfiles,
+    failures
   }
   await writeFile(join(lib, '拆解', `${id}.json`), JSON.stringify(result, null, 2), 'utf8')
 
+  const slotsLanded = [gimmick, plotDesign, intro, style].filter(Boolean).length
   return {
     id, title: book.title,
     chapters: chapterInputs.length,
     pseudo: usePseudo,
-    chapterSummaries: chapterSummaries.filter((item) => item.summary).length,
-    characters: characterProfiles.filter((item) => item.identity || item.summary).length,
-    foreshadows: foreshadows.length,
+    summaries: chapterSummaries.filter((item) => item.summary).length,
+    functions: chapterSummaries.filter((item) => item.function).length,
+    emotions: chapterSummaries.filter((item) => item.emotion).length,
+    excerpts: excerpts.length,
+    profiles: characterProfiles.filter((item) => item.identity || item.summary).length,
+    arcs: characterProfiles.filter((item) => item.arc?.end).length,
+    slots: `${slotsLanded}/4`,
+    failures: failures.length,
     storySummary: Boolean(storySummary)
   }
 }
@@ -219,6 +384,6 @@ if (process.argv[1] && process.argv[1].endsWith('wiki-enrich-run.mjs')) {
     const startedAt = Date.now()
     const summary = await enrichBook(id)
     summary.sec = Math.round((Date.now() - startedAt) / 1000)
-    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.chapterSummaries}/${summary.chapters}，人物 ${summary.characters}，伏笔 ${summary.foreshadows}，全书梗概 ${summary.storySummary ? '✓' : '✗'}，${summary.sec}s`)
+    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.summaries}/${summary.chapters}，功能 ${summary.functions}，情绪 ${summary.emotions}，高光 ${summary.excerpts}，弧光 ${summary.arcs}/${summary.profiles}，槽位 ${summary.slots}，失败 ${summary.failures}，${summary.sec}s`)
   }
 }
