@@ -258,6 +258,29 @@ function buildBook(id) {
     })))
   }))
 
+  // 数据面板素材（确定性派生，作者 2026-11-13：不当数据库呈现，要面板＋矩形曲线）：
+  //   matrix[人物][章] = 出场段数（热力图/节奏曲线/屏份份额的数据源）
+  //   channels[人物] = {say, do, other} 渠道构成
+  const matrix = characters.map((c) => {
+    const allNames = [c.name, ...(c.aliases ?? [])]
+    const present = (plot) => (plot.who ?? []).some((who) => allNames.includes(who))
+      || (plot.events ?? []).some((event) => allNames.includes(event.who))
+    return chapters.map((ch) => (byChapter.get(ch.no) ?? []).filter(present).length)
+  })
+  const channels = characters.map((c) => {
+    const allNames = [c.name, ...(c.aliases ?? [])]
+    const cnt = { say: 0, do: 0, other: 0 }
+    for (const plot of plots) {
+      for (const event of plot.events ?? []) {
+        if (!allNames.includes(event.who)) continue
+        if (event.channel === 'say') cnt.say++
+        else if (event.channel === 'do') cnt.do++
+        else cnt.other++
+      }
+    }
+    return cnt
+  })
+
   const detail = {
     book: {
       id: book.id ?? id,
@@ -270,6 +293,8 @@ function buildBook(id) {
     pseudoChapters: usePseudo,
     chapters,
     characters,
+    matrix,
+    channels,
     terms,
     charGraph,
     timeline,
@@ -300,6 +325,27 @@ a { color:var(--accent); text-decoration:none; cursor:pointer; } a:hover { text-
 .nav a.on { background:#232838; color:var(--accent); font-weight:600; }
 #view { margin-left:264px; max-width:940px; padding:36px 32px 90px; }
 h1 { font-size:26px; margin:0 0 8px; line-height:1.4; } h2 { font-size:19px; margin:34px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--line); }
+h2 small { font-size:12px; color:var(--dim); font-weight:400; margin-left:10px; }
+.chartbox { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px 8px; margin:10px 0 4px; position:relative; }
+.hover-read { position:absolute; right:16px; top:10px; font-size:12px; color:var(--dim); opacity:.35; transition:opacity .15s; pointer-events:none; }
+.hbar { display:flex; align-items:center; gap:10px; margin:5px 0; }
+.hbar .hb-label { width:110px; text-align:right; font-size:13px; color:var(--text); flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hbar .hb-track { flex:1; height:12px; background:#232838; border-radius:6px; overflow:hidden; }
+.hbar .hb-fill { display:block; height:100%; border-radius:6px; opacity:.85; }
+.hbar .hb-val { width:86px; font-size:12px; color:var(--dim); flex:none; }
+.hbar .hb-val em { font-style:normal; color:#72777d; margin-left:4px; }
+.hbars .hbar .hb-label { width:52px; }
+.sharebar { display:flex; height:18px; border-radius:9px; overflow:hidden; margin:12px 0 8px; background:#232838; }
+.sharebar .seg { display:block; height:100%; opacity:.88; }
+.chips { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 4px; }
+.chip { font-size:12px; color:var(--dim); background:#232838; border-radius:10px; padding:2px 10px; }
+.chip b { color:var(--text); font-weight:600; }
+.chip.green { background:#183222; color:var(--green); } .chip.red { background:#3a1820; color:var(--red); }
+details.drill { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin:8px 0; }
+details.drill summary { cursor:pointer; color:var(--dim); font-size:13px; user-select:none; }
+details.drill summary:hover { color:var(--accent); }
+details.drill[open] summary { border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:8px; }
+.arc-range { font-size:12px; color:var(--dim); font-weight:400; margin-left:10px; }
 .meta { color:var(--dim); font-size:13px; margin-bottom:22px; } .meta span + span::before { content:" · "; }
 .summary { background:var(--panel); border-left:3px solid var(--accent); padding:14px 18px; border-radius:0 8px 8px 0; margin:14px 0; line-height:1.9; }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }
