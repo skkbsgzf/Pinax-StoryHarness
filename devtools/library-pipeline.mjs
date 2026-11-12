@@ -40,8 +40,8 @@ const RESUME_ROOT = join(LIB, '.resume')
 const OUT_DIR = join(LIB, '拆解')
 const SKIP_EXTRACT = flag('skip-extract')
 const SKIP_WIKI = flag('skip-wiki')
-  // Wiki 增补（作者 2026-11-12）：剧情梗概/人物档案需要归纳，默认开；--skip-enrich 跳过
-  const SKIP_ENRICH = flag('skip-enrich')
+// Wiki 增补（作者 2026-11-12）：剧情梗概/人物档案需要归纳，默认开；--skip-enrich 跳过
+const SKIP_ENRICH = flag('skip-enrich')
 
 async function loadIndex() {
   const path = join(LIB, '正文', '入库索引.json')
@@ -118,6 +118,9 @@ async function main() {
   // ② 整合（全部已拆的书一起重算读数，幂等）
   const integrated = runIntegrate(LIB)
 
+  // ③ 之前先算成功集（拆解失败的书不进增补/Wiki）
+  const okIds = results.filter((item) => !item.error).map((item) => item.id)
+
   // ②.5 Wiki 增补（模型窄窗归纳：章梗概/人物档案/全书梗概）——剧情就是从这里来的
   if (!SKIP_ENRICH) {
     for (const id of okIds) {
@@ -127,7 +130,6 @@ async function main() {
   }
 
   // ③ Wiki
-  const okIds = results.filter((item) => !item.error).map((item) => item.id)
   if (!SKIP_WIKI) {
     for (const id of okIds) buildBook(id)
     buildWikiIndex(LIB)
