@@ -158,3 +158,53 @@ test('〔I6〕挑显示名：真名 > 昵称 > 称谓，且都进别名', () => 
   assert.equal(picked.displayName, '林逸')
   assert.deepEqual(picked.aliases.sort(), ['小柯', '男友'].sort())
 })
+
+/* ---------- 代词 → 实体映射（作者 2026-11-12 视角裁定） ---------- */
+
+import { resolvePronoun } from '../fact/usecases/pipeline/pronounResolve.js'
+import { detectFirstPersonProtagonist, normalizeVocativeToName } from '../fact/usecases/pipeline/protagonistDetect.js'
+import { collectNameCandidates } from '../fact/usecases/pipeline/nameCandidates.js'
+
+test('〔R1〕第一人称「我」映射到主角真名', () => {
+  const ctx = { perspective: 'first', protagonist: '沈岚', others: ['林逸'] }
+  assert.deepEqual(resolvePronoun('我', ctx), { name: '沈岚', mapped: true, reason: 'first-person-protagonist' })
+})
+
+test('〔R2〕第一人称无主角名时保留「我」（称谓即身份）', () => {
+  const result = resolvePronoun('我', { perspective: 'first', protagonist: null })
+  assert.equal(result.name, '我')
+  assert.equal(result.mapped, true)
+})
+
+test('〔R3〕第三人称「他」：唯一候选取之，多候选不猜', () => {
+  const unique = resolvePronoun('他', { perspective: 'first', protagonist: '沈岚', others: ['林逸'] })
+  assert.equal(unique.name, '林逸')
+  const ambiguous = resolvePronoun('他', { perspective: 'first', protagonist: '沈岚', others: ['林逸', '顾茵'] })
+  assert.equal(ambiguous.name, '')
+  assert.equal(ambiguous.mapped, false)
+})
+
+test('〔R4〕复合称谓归一：我爸 → 爸爸', () => {
+  assert.equal(resolvePronoun('我爸', { perspective: 'first' }).name, '爸爸')
+  assert.equal(resolvePronoun('我妈', { perspective: 'first' }).name, '妈妈')
+  assert.equal(resolvePronoun('我的闺蜜', { perspective: 'first' }).name, '闺蜜')
+})
+
+test('〔R5〕主角识别：别人直呼的那个名字（不是出现最多的）', () => {
+  const text = [
+    '我叫沈岚。',
+    '“沈岚，你也在啊。”林逸说。',
+    '“沈岚你发什么疯！”',
+    '林逸说完就走了。林逸很生气。林逸走了。'
+  ].join('\n')
+  const stats = collectNameCandidates(text)
+  const detected = detectFirstPersonProtagonist(text, stats)
+  assert.equal(detected.name, '沈岚', '被直呼的才是叙述者，不是高频的那个')
+  assert.equal(detected.reason, 'vocative')
+})
+
+test('〔R6〕称呼形式归一到真名：余律师 → 余欢', () => {
+  const text = '“余律师你回来了？”\n余欢说。余欢笑了。余欢走了。余欢坐下。余欢起身。'
+  const stats = collectNameCandidates(text)
+  assert.equal(normalizeVocativeToName('余律师', stats).name, '余欢')
+})

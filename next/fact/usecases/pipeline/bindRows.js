@@ -14,6 +14,7 @@
 
 import { BIND_CHANNELS } from './bindPrompt.mjs'
 import { isIdentityTitle, normalizeTitleName, perspectiveContextOf } from './perspectiveTitles.js'
+import { resolvePronoun } from './pronounResolve.js'
 import { isLikelyPersonName } from './nameCandidates.js'
 
 /**
@@ -236,10 +237,11 @@ export function bindSegment(segment, binding = {}, options = {}) {
   // 全书名字候选统计（驱动侧一次性算好传进来）：有它就用它判，比「本段证据」可靠得多。
   const nameCandidates = options.nameCandidates ?? null
   // 视角上下文（作者 2026-11-12）：第一人称里「男友」「妈妈」这类称谓本身就是身份，可直接作 who。
-  const perspective = options.perspective
-    ? { perspective: options.perspective, titles: [], ...perspectiveContextOf(segment, options) }
-    : perspectiveContextOf(segment, options)
-
+  // 视角上下文：options.perspective 可传字符串（'first'/'third'）或 {perspective, confidence} 对象，两种都收。
+  const perspectiveInput = typeof options.perspective === 'string'
+    ? { perspective: options.perspective }
+    : (options.perspective ?? null)
+  const perspective = perspectiveContextOf(segment, { ...options, perspective: perspectiveInput })
   const byId = new Map()
   for (const item of binding?.blocks ?? []) {
     const id = str(item?.id)
@@ -329,12 +331,29 @@ export function bindSegment(segment, binding = {}, options = {}) {
       type: str(item.type),
       how: str(item.how)
     }))
+  // 代词映射（作者 2026-11-12）：第一人称里关系端点常是「我」「他」，
+  // 它们不是条目名，落库即断链。按视角映射到主角/唯一候选人；映射不了就丢弃并计数。
+  const pronounContext = {
+    perspective: perspective.perspective,
+    protagonist: options.protagonist ?? null,
+    others: [...new Set([...who, ...profiles.keys()])]
+  }
   const relations = []
-  const relationDropped = { missing: 0, hallucinated: 0, self: 0, titleTarget: 0 }
+  const relationDropped = { missing: 0, hallucinated: 0, self: 0, titleTarget: 0, pronoun: 0 }
   const hay = String(segment?.text ?? '')
   for (const relation of relationsRaw) {
     if (!relation.from || !relation.to || !relation.type) { relationDropped.missing += 1; continue }
-    if (!hay.includes(relation.from) || !hay.includes(relation.to)) { relationDropped.hallucinated += 1; continue }
+    // 代词先解析成实体，再做后续所有检查。
+    const resolvedFrom = resolvePronoun(relation.from, pronounContext)
+    const resolvedTo = resolvePronoun(relation.to, pronounContext)
+    if (!resolvedFrom.name || !resolvedTo.name) { relationDropped.pronoun += 1; continue }
+    relation.from = resolvedFrom.name
+    relation.to = resolvedTo.name
+    // 原文校验只对「原文里直接写的名字」生效。代词映射出来的实体（我→沈岚）本段原文当然没有，
+    // 拿它去比对必然误判幻觉——映射本身就是「用视角信息补原文没写的东西」。
+    const fromNeedsProof = !resolvedFrom.mapped
+    const toNeedsProof = !resolvedTo.mapped
+    if ((fromNeedsProof && !hay.includes(relation.from)) || (toNeedsProof && !hay.includes(relation.to))) { relationDropped.hallucinated += 1; continue }
     if (relation.from === relation.to) { relationDropped.self += 1; continue }
     // 称谓当 from 也不行：关系边必须有真实主体（「哥哥→进出口公司」这种 from 不是条目）。
     if (TITLE_TARGET.test(relation.from)) { relationDropped.titleTarget += 1; continue }
@@ -396,7 +415,7 @@ export function bindSegments(segments, bindings = [], options = {}) {
     if (id) map.set(id, item)
   }
   const rows = []
-  const stats = { segments: 0, blocks: 0, bound: 0, hallucinated: 0, ruleFallback: 0, unknownChannel: 0 }
+  const stats = { segments: 0, blocks: 0, bound: 0, hallucinated: 0, ruleFallback: 0, unknownChannel: 0, akaPairs: 0, knowledgeDropped: 0, relations: 0, relationDropped: { missing: 0, hallucinated: 0, self: 0, titleTarget: 0 } }
   for (const segment of list) {
     const { row, stats: one } = bindSegment(segment, map.get(str(segment?.id)) ?? {}, options)
     rows.push(row)
@@ -406,6 +425,11 @@ export function bindSegments(segments, bindings = [], options = {}) {
     stats.hallucinated += one.hallucinated
     stats.ruleFallback += one.ruleFallback
     stats.unknownChannel += one.unknownChannel
+    // 关系与别名的读数也要聚合——否则调用方看到 relationDropped 全 0，误以为「没被清洗」（真跑撞到）。
+    stats.akaPairs += one.akaPairs ?? 0
+    stats.knowledgeDropped += one.knowledgeDropped ?? 0
+    stats.relations += one.relations ?? 0
+    for (const key of Object.keys(stats.relationDropped)) stats.relationDropped[key] += one.relationDropped?.[key] ?? 0
   }
   return { rows, stats }
 }

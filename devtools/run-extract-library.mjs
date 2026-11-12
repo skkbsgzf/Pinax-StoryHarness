@@ -18,7 +18,8 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { segmentText, segmentStats } from '../next/fact/domain/segmentBuckets.js'
-import { detectPerspective } from '../next/fact/usecases/pipeline/perspectiveTitles.js'
+import { detectPerspective, isIdentityTitle } from '../next/fact/usecases/pipeline/perspectiveTitles.js'
+import { detectFirstPersonProtagonist, normalizeVocativeToName } from '../next/fact/usecases/pipeline/protagonistDetect.js'
 import { segmentBlocks } from '../next/fact/usecases/pipeline/blocks.js'
 import { bindSegments, normalizeBindReply } from '../next/fact/usecases/pipeline/bindRows.js'
 import { collectNameCandidates } from '../next/fact/usecases/pipeline/nameCandidates.js'
@@ -161,7 +162,17 @@ async function extractBook(book, index, profile) {
     callLog.push({ start, count: batch.length, ok: Boolean(parsedBinding), replyChars: reply.length })
   }
 
-  const { rows, stats } = bindSegments(segments, bindings, { knownNames, nameCandidates })
+  // 主角判定（作者 2026-11-12 视角裁定）：第一人称里「我」就是叙述者。
+  // 取全书**出现次数最高的名字候选**作为主角名——第一人称小说里它就是「我」。
+  // 取不到（比如全书只有称谓）就传 null，pronoun 解析会退化成「我」本身（称谓即身份）。
+  // 主角识别（作者 2026-11-12 视角裁定）：第一人称里「我」= 叙述者。
+  // 不能用「出现次数最高的真名」——实测《末世》最高频是林逸(78次)但那是男友；
+  // 正确判据是「别人直呼的那个名字」（“沈岚，你也在啊”），再由称呼形式归一到真名（余律师→余欢）。
+  const protagonistDetected = detectFirstPersonProtagonist(body, nameCandidates)
+  const protagonist = protagonistDetected.name
+    ? normalizeVocativeToName(protagonistDetected.name, nameCandidates).name
+    : null
+  const { rows, stats } = bindSegments(segments, bindings, { knownNames, nameCandidates, protagonist, perspective })
   const accepted = []
   const rejected = []
   for (const row of rows) {
@@ -186,6 +197,7 @@ async function extractBook(book, index, profile) {
   let relationCalls = 0
   let relationLanded = 0
   const relationDropped = { missing: 0, hallucinated: 0, self: 0, titleTarget: 0 }
+  const relationFailures = []
   const multiParty = segments.filter((segment) => new Set(segment.blocks.map((block) => block.speakerHint).filter(Boolean)).size >= 2)
   for (const segment of multiParty.slice(0, 20)) {
     const prompt = [RELATION_SYSTEM_PROMPT, '', buildRelationPrompt(segment)].join('\n')
@@ -194,14 +206,27 @@ async function extractBook(book, index, profile) {
       relationCalls += 1
       const parsed = parseModelReply(answer.text)
       if (!parsed.ok || !Array.isArray(parsed.value.relations)) continue
-      const { row, stats: relStats } = bindSegments([segment], [{ id: segment.id, relations: parsed.value.relations }], { knownNames })
+      // bindSegments 返回 { rows, stats }。早先这里写成 `const { row }`（少一个 s），
+      // row 就是 undefined，row[0] 抛 TypeError 被下面的 catch 吞掉——
+      // 表现为「29 次调用、关系 0 条、dropped 全 0」的无声失败。别把解构写错。
+      const { rows: relRows, stats: relStats } = bindSegments(
+        [segment],
+        [{ id: segment.id, relations: parsed.value.relations }],
+        // 代词映射的必要上下文必须一起传——只传 knownNames 的话，
+        // 「我→林逸」里的「我」映射不到主角，「他」也解析不出来（真跑撞到：8 条关系残留代词）。
+        { knownNames, nameCandidates, protagonist, perspective }
+      )
+      const relRow = relRows[0]
       for (const key of Object.keys(relationDropped)) relationDropped[key] += relStats.relationDropped?.[key] ?? 0
-      if (row[0].relations.length) {
-        relationLanded += row[0].relations.length
+      if (relRow.relations.length) {
+        relationLanded += relRow.relations.length
         const target = compiled.entries.find((entry) => entry.layer === 'plot' && entry.name.includes(`段${segment.index}`))
-        if (target) target.relations = row[0].relations
+        if (target) target.relations = relRow.relations
       }
-    } catch { /* 单段关系失败不影响主链路 */ }
+    } catch (error) {
+      // 不静默吞：关系窄窗失败必须可见，否则「没跑通」会被误读成「模型没给关系」。
+      relationFailures.push({ segmentIndex: segment.index, message: error?.message ?? String(error) })
+    }
   }
 
   return {
