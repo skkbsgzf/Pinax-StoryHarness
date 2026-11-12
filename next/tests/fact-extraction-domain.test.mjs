@@ -104,7 +104,8 @@ test('sourceHash 对精确原文计算，段 hash 对默认分段原文计算；
   assert.equal(built.hash, sha1Hex(text))
   assert.notEqual(built.hash, hash(text.trim()))
   assert.deepEqual(Object.keys(built).sort(), ['chapterNo', 'hash', 'id', 'segments'])
-  for (const segment of built.segments) assert.deepEqual(Object.keys(segment).sort(), ['chars', 'hash', 'id', 'index'])
+  // 分桶分段后每段带 chapterNo（章标题行确定）：段元数据是 5 个键，不再是 4 个。
+  for (const segment of built.segments) assert.deepEqual(Object.keys(segment).sort(), ['chapterNo', 'chars', 'hash', 'id', 'index'])
   assert.equal(JSON.stringify(built).includes('另一段'), false)
   assert.deepEqual(built, source('卷一/𠀀.txt', 19, text))
   assert.notEqual(built.hash, source('卷一/𠀀.txt', 19, `${text}改`).hash)

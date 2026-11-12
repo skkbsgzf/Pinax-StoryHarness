@@ -15,7 +15,7 @@
  *   node devtools/run-extract-library.mjs --lib=D:/短篇选题库 --all-s && --dry   （列出候选不跑）
  */
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync as readdirSyncCompat } from 'node:fs'
 import { join } from 'node:path'
 import { segmentText, segmentStats } from '../next/fact/domain/segmentBuckets.js'
 import { detectPerspective, isIdentityTitle } from '../next/fact/usecases/pipeline/perspectiveTitles.js'
@@ -41,6 +41,8 @@ const BATCH = Math.max(1, Number(argOf('--batch', '8')))
 const LIMIT_CHARS = Number(argOf('--limit-chars', '0')) || 0
 const OUT_DIR = join(LIB, '拆解')
 const DRY = flag('dry')
+const RESUME_MODE = flag('resume')
+const RESUME_DIR = argOf('--resume-dir', null)
 
 /** 剥掉下载器写的元数据头（书名/作者/book_id/... /====）与尾部（完）分隔线。 */
 export function stripLibraryFile(text) {
@@ -100,9 +102,15 @@ async function pickBooks(index) {
   throw new Error('需要 --books=<id,...> 或 --all / --all-s')
 }
 
+// 超时/重试可配：长篇（50+ 次调用）用默认 180s 容易在中途被上游拖死，
+// 命令行可用 --timeout=300000 --retries=3 放宽（真跑撞到：70k 字连续两次超时）。
+const TIMEOUT_MS = Number(argOf('--timeout', '180000')) || 180_000
+const CALL_RETRIES = Math.max(1, Number(argOf('--retries', '2')) || 2)
+
 async function callModel(prompt, maxTokens = 4000) {
-  return dispatchDotsCompletion({ prompt, maxTokens, timeoutMs: 180_000 })
+  return dispatchDotsCompletion({ prompt, maxTokens, timeoutMs: TIMEOUT_MS })
 }
+
 
 /** 一段原文 → 绑定 → 行（含失败隔离：解析不出的批退回规则绑定）。 */
 async function extractBook(book, index, profile) {
@@ -138,12 +146,24 @@ async function extractBook(book, index, profile) {
   const knownNames = []
   const bindings = []
   const callLog = []
-  for (let start = 0; start < segments.length; start += BATCH) {
+  // 续跑：把已落盘的批次读回来，从断点之后继续（长篇 50+ 次调用中途超时不可避免）。
+  let resumeFrom = 0
+  if (RESUME_MODE && RESUME_DIR && existsSync(RESUME_DIR)) {
+    const done = readdirSyncCompat(RESUME_DIR).filter((name) => name.startsWith('bindings-')).sort()
+    for (const name of done) {
+      const saved = JSON.parse(await readFile(join(RESUME_DIR, name), 'utf8'))
+      bindings.push(...saved.bindings)
+      for (const who of saved.knownNames ?? []) if (!knownNames.includes(who)) knownNames.push(who)
+      resumeFrom = Math.max(resumeFrom, saved.start + saved.batch.length)
+    }
+    if (done.length) console.log(`  续跑：已读回 ${done.length} 批（跳过前 ${resumeFrom} 段）`)
+  }
+  for (let start = resumeFrom; start < segments.length; start += BATCH) {
     const batch = segments.slice(start, start + BATCH)
     const prompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: batch, knownNames, priorNames: [] })].join('\n')
     let reply = ''
     let parsedBinding = null
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= CALL_RETRIES; attempt += 1) {
       const ask = attempt === 1 ? prompt : `${prompt}\n\n【上次输出不是合法 JSON】重新输出完整 JSON。`
       const answer = await callModel(ask)
       reply = answer.text
@@ -160,10 +180,17 @@ async function extractBook(book, index, profile) {
       }
     }
     callLog.push({ start, count: batch.length, ok: Boolean(parsedBinding), replyChars: reply.length })
+    // 断点：每批成功就落盘绑定结果。长篇（50+ 次调用）中途超时后可用同一 --resume 续跑，
+    // 不重跑已完成批次（真跑撞到：70k 字连续两次 180s 超时，重跑等于每次从零开始）。
+    if (RESUME_DIR && parsedBinding) {
+      await writeFile(
+        join(RESUME_DIR, `bindings-${String(start).padStart(4, '0')}.json`),
+        JSON.stringify({ start, batch: batch.map((item) => item.id), bindings: parsedBinding, knownNames }),
+        'utf8'
+      )
+    }
   }
 
-  // 主角判定（作者 2026-11-12 视角裁定）：第一人称里「我」就是叙述者。
-  // 取全书**出现次数最高的名字候选**作为主角名——第一人称小说里它就是「我」。
   // 取不到（比如全书只有称谓）就传 null，pronoun 解析会退化成「我」本身（称谓即身份）。
   // 主角识别（作者 2026-11-12 视角裁定）：第一人称里「我」= 叙述者。
   // 不能用「出现次数最高的真名」——实测《末世》最高频是林逸(78次)但那是男友；

@@ -285,7 +285,7 @@ export function inferSlot(item = {}) {
 
 const positiveInteger = { type: 'integer', minimum: 1 }
 const hashSchema = { type: 'string', pattern: '^[0-9a-f]{40}$' }
-const segmentSchema = objectSchema({ id: nonempty, index: positiveInteger, chars: positiveInteger, hash: hashSchema })
+const segmentSchema = objectSchema({ id: nonempty, index: positiveInteger, chars: positiveInteger, hash: hashSchema, chapterNo: positiveInteger }, ['id', 'index', 'chars', 'hash'])
 const sourceSchema = objectSchema({
   id: nonempty, chapterNo: positiveInteger, hash: hashSchema,
   segments: { type: 'array', minItems: 1, items: segmentSchema }
@@ -438,7 +438,10 @@ export function buildExtractionSource(input = {}) {
     hash: sha1Hex(text), // 整份输入的精确哈希，包含原始换行/空白。
     segments: segmentText(text, segmentLimits).map((segment) => {
       const hash = sha1Hex(segment.text)
-      return { id: segmentId(id, segment.index, hash), index: segment.index, chars: segment.chars, hash }
+      // 段级章号：桶式分段会给每段 chapterNo（章标题行确定）。
+      // 保留它，下游 plot 的 validity/provenance.chapters 才不会全塌成 1（真跑撞到：267 段全记第 1 章）。
+      const segChapter = Number.isInteger(segment.chapterNo) ? segment.chapterNo : chapterNo
+      return { id: segmentId(id, segment.index, hash), index: segment.index, chars: segment.chars, hash, chapterNo: segChapter }
     })
   }
 }
@@ -529,6 +532,7 @@ function compilePlot(row, evidence, context, minimal = false) {
   const entry = envelope('plot', name, [evidence], context)
   // X1（guimi A2）：段序号落结构化字段——剧本分集/粒度对齐不再从 name 里正则抠「段N」。
   entry.provenance.segmentIndex = segment.index
+  const chapterOf = Number.isInteger(segment.chapterNo) ? segment.chapterNo : source.chapterNo
   const plot = {
     ...entry,
     who: [...row.who],
@@ -549,7 +553,9 @@ function compilePlot(row, evidence, context, minimal = false) {
       segments: [{ index: segment.index, chars: segment.chars }],
       novelty: []
     })),
-    validity: { from: source.chapterNo, to: source.chapterNo }
+    // 章号优先取**段级**（分桶分段按章标题行确定），退回来源级。
+    // 旧实现只用 source.chapterNo（恒为 1），导致 38 章的小说全部塌成「第 1 章」（真跑撞到）。
+    validity: { from: chapterOf, to: chapterOf }
   }
   const hooks = unique((row.hooks ?? []).map((text) => String(text ?? '').trim()).filter(Boolean))
   if (hooks.length) plot.hooks = hooks
