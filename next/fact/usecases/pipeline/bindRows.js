@@ -190,6 +190,12 @@ function explainWho(value, context) {
   // 称谓即身份（作者裁定）：第一人称段里出现的「男友」「妈妈」「闺蜜」直接可用，不必等真名。
   // 这是第一人称小说的常态——全文可能一直只用称谓指称，强求真名会让条目整段丢失。
   const identityTitle = normalizeTitleName(str(value))
+  // 本段在场性：who 必须真的出现在这段原文里（否则是模型从别处串过来的名字）。
+  // 实测：某段绑了 who=「继续」，但这段原文根本没有「继续」——全书的候选统计通过了，它却不在场。
+  // 称谓与代词映射走各自的闸，不受此限。
+  const inSegment = context.text.includes(str(value))
+  if (!inSegment && !isIdentityTitle(str(value))) return { name: '', reason: 'not-in-segment' }
+
   if (context.perspective === 'first' && isIdentityTitle(identityTitle)) {
     return { name: identityTitle, reason: 'identity-title' }
   }

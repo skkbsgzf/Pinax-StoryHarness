@@ -5,10 +5,11 @@
  *
  *   ① 拆解   run-extract-library  剥头 → 分桶切块 → 模型窄绑定 → 回组装 → 编译
  *   ② 整合   lib/integrate        落库双向引用（入库索引 decompose 字段 + 拆解索引 + 报告）
- *   ③ Wiki   build-wiki           人物/章节/关系/地点静态页 + 总索引
+ *   ②.5 增补  wiki-enrich           章梗概/人物档案/全书梗概（模型窄窗归纳）
+ *   ③ Wiki   build-wiki           人物/章节/关系/地点静态页 + 总索引（读增补渲染剧情）
  *
  * 断点续跑：① 每批落盘到 --resume-dir，中断后重跑同一命令即从断点继续。
- * 幂等：② ③ 是纯派生，重跑无副作用。
+ * 幂等：② ③ 纯派生重跑无副作用；②.5 重跑覆盖归纳结果。
  *
  * 用法：
  *   node devtools/library-pipeline.mjs --lib=D:/短篇选题库 --books=<id1>,<id2>
@@ -22,6 +23,7 @@ import { extractBook } from './run-extract-library.mjs'
 import { runIntegrate } from './lib/integrate-decompose.mjs'
 import { buildBook } from './build-wiki.mjs'
 import { buildWikiIndex } from './build-wiki-index.mjs'
+import { enrichBook } from './wiki-enrich-run.mjs'
 
 function argOf(prefix, fallback = null) {
   const hit = process.argv.slice(2).find((item) => item.startsWith(`${prefix}=`))
@@ -38,6 +40,8 @@ const RESUME_ROOT = join(LIB, '.resume')
 const OUT_DIR = join(LIB, '拆解')
 const SKIP_EXTRACT = flag('skip-extract')
 const SKIP_WIKI = flag('skip-wiki')
+  // Wiki 增补（作者 2026-11-12）：剧情梗概/人物档案需要归纳，默认开；--skip-enrich 跳过
+  const SKIP_ENRICH = flag('skip-enrich')
 
 async function loadIndex() {
   const path = join(LIB, '正文', '入库索引.json')
@@ -113,6 +117,14 @@ async function main() {
 
   // ② 整合（全部已拆的书一起重算读数，幂等）
   const integrated = runIntegrate(LIB)
+
+  // ②.5 Wiki 增补（模型窄窗归纳：章梗概/人物档案/全书梗概）——剧情就是从这里来的
+  if (!SKIP_ENRICH) {
+    for (const id of okIds) {
+      const enriched = await enrichBook(id, LIB, { protagonist: null })
+      console.log(`  📖 增补 ${enriched.title}: 章梗概 ${enriched.chapterSummaries}/${enriched.chapters}，人物 ${enriched.characters}，全书梗概 ${enriched.storySummary ? '✓' : '✗'}`)
+    }
+  }
 
   // ③ Wiki
   const okIds = results.filter((item) => !item.error).map((item) => item.id)
