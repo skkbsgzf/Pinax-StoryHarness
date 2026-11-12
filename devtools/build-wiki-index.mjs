@@ -10,7 +10,7 @@ function argOf(prefix, fallback = null) {
   return hit ? hit.slice(prefix.length + 1) : fallback
 }
 
-const LIB = argOf('--lib', 'D:/短篇选题库')
+const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const WIKI = join(LIB, 'wiki')
 
 const esc = (value) => String(value ?? '')

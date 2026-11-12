@@ -18,13 +18,14 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { derivePseudoChapters, hasRealChapters } from './lib/pseudoChapters.mjs'
 
 function argOf(prefix, fallback = null) {
   const hit = process.argv.slice(2).find((item) => item.startsWith(`${prefix}=`))
   return hit ? hit.slice(prefix.length + 1) : fallback
 }
 
-const LIB = argOf('--lib', 'D:/短篇选题库')
+const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const OUT_ROOT = join(LIB, 'wiki')
 const ids = process.argv.slice(2).filter((item) => !item.startsWith('--'))
 const SPA_SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'wiki-spa.js'), 'utf8')
@@ -157,16 +158,25 @@ function buildBook(id) {
     chapterTitles = chapterTitlesFromSource(readFileSync(join(LIB, '正文', result.source.file), 'utf8'))
   } catch { /* 无原文时标题留空 */ }
 
-  // 按章分组
-  const chapterOf = (plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : null)
+  // 按章分组：真章按 validity.from；无章节标记的书按段号切伪章（作者 2026-11-13：大纲塌成单章的问题）
+  const usePseudo = !hasRealChapters(plots)
   const byChapter = new Map()
-  for (const plot of plots) {
-    const chapter = chapterOf(plot)
-    if (chapter === null) continue
-    if (!byChapter.has(chapter)) byChapter.set(chapter, [])
-    byChapter.get(chapter).push(plot)
+  if (usePseudo) {
+    for (const group of derivePseudoChapters(plots, result.source?.chars ?? book.word_count ?? 0)) {
+      byChapter.set(group.no, group.plots)
+    }
+  } else {
+    const chapterOf = (plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : null)
+    for (const plot of plots) {
+      const chapter = chapterOf(plot)
+      if (chapter === null) continue
+      if (!byChapter.has(chapter)) byChapter.set(chapter, [])
+      byChapter.get(chapter).push(plot)
+    }
   }
   const chapterNumbers = [...byChapter.keys()].sort((a, b) => a - b)
+  // 伪章标题优先用增补小标题（enrich 与本侧用同一伪章切分公式，章号对得上）
+  const enrichTitle = (no) => (usePseudo ? (wiki?.chapterSummaries?.find((item) => item.chapter === no)?.title ?? '') : '')
 
   // 人物派生
   const characters = characterEntries.map((entry) => deriveCharacter(entry, plots, enrichProfile(entry.name)))
@@ -178,12 +188,16 @@ function buildBook(id) {
     const events = chapterPlots.flatMap((plot) => plot.events ?? [])
     return {
       no,
-      title: chapterTitles.get(no) ?? `第 ${no} 章`,
+      title: enrichTitle(no) || (chapterTitles.get(no) ?? (usePseudo ? `第 ${no} 节` : `第 ${no} 章`)),
       summary: chapterSummary(no),
       segments: chapterPlots.length,
       events: events.length,
       chars: [...new Set(chapterPlots.flatMap((plot) => plot.who ?? []))],
-      foreshadow: [...new Set(chapterPlots.flatMap((plot) => plot.hooks ?? []))],
+      // 伏笔：语义层来自增补窄窗（wiki.foreshadows）；绑定层 hooks（v3 恒空）留作兜底
+      foreshadow: [...new Set([
+        ...(wiki?.foreshadows ?? []).filter((hook) => hook.chapter === no).map((hook) => String(hook.text)),
+        ...chapterPlots.flatMap((plot) => plot.hooks ?? [])
+      ])],
       newChars: firstByChapter.get(no) ?? []
     }
   })
@@ -203,6 +217,28 @@ function buildBook(id) {
       edgeSeen.add(pair)
       graphEdges.push({ a: edge.from, b: edge.to, type: edge.type })
     }
+  }
+  // 同场边（确定性）：两人同段共现 ≥2 次即连边。关系窄窗覆盖低（假千金 50 段才 4 条边），
+  // 单靠它图必断——同场共现是 plot.who 里现成的确定性数据（作者 2026-11-13「图为什么断成这样」）。
+  const pairKey = (a, b) => [a, b].sort().join('|')
+  const coCount = new Map()
+  for (const plot of plots) {
+    const who = [...new Set((plot.who ?? []).filter((name) => knownNames.has(name)))]
+    for (let i = 0; i < who.length; i++) {
+      for (let j = i + 1; j < who.length; j++) {
+        const key = pairKey(who[i], who[j])
+        coCount.set(key, (coCount.get(key) ?? 0) + 1)
+      }
+    }
+  }
+  const related = new Set(graphEdges.map((edge) => pairKey(edge.a, edge.b)))
+  const coEdges = [...coCount.entries()]
+    .filter(([key, count]) => count >= 2 && !related.has(key))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 60)
+  for (const [key, count] of coEdges) {
+    const [a, b] = key.split('|')
+    graphEdges.push({ a, b, type: '同场', weight: count })
   }
   const maxApp = Math.max(...characters.map((c) => c.appearances), 1)
   const charGraph = {
@@ -231,6 +267,7 @@ function buildBook(id) {
       group: [book.subject_group, book.length_tier].filter(Boolean).join(' · '),
       url: book.url ?? null
     },
+    pseudoChapters: usePseudo,
     chapters,
     characters,
     terms,
@@ -320,7 +357,7 @@ ${SPA_SRC}
   }
 }
 
-// CLI：node devtools/build-wiki.mjs --lib=D:/短篇选题库 <id...>
+// CLI：node devtools/build-wiki.mjs --lib=D:/Qbook/短篇选题库 <id...>
 const isCli = process.argv[1] && process.argv[1].endsWith('build-wiki.mjs')
 if (isCli) {
   if (!ids.length) {

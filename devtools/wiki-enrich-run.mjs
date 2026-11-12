@@ -1,23 +1,30 @@
 /**
  * Wiki 增补执行器（CLI + 可导入函数）。
  *
- * 对已拆解的书跑三组窄窗归纳（章梗概 / 人物档案 / 全书梗概），结果写回拆解 JSON 的 wiki 字段。
+ * 对已拆解的书跑模型窄窗归纳，结果写回拆解 JSON 的 wiki 字段。
  * 这是 Wiki 的剧情来源——绑定路径只产 who/ch（事件正文取原文），梗概与身份需要归纳。
- * 归纳属「需要一点推理」的活，按作者口径允许开（必要时可配 thinking + RAG）。
  *
- * 用法：node devtools/wiki-enrich-run.mjs --lib=D:/短篇选题库 --books=<id>[,<id>]
+ * 2026-11-13 v2（作者指出「伏笔和大纲为什么这么简单」）：
+ *   · 伪章节：正文无「第N章」标记的短篇按段号切伪章（lib/pseudoChapters.mjs），
+ *     章梗概按伪章出——大纲不再塌成单章；
+ *   · 章批三合一：同一批窄窗同时出 小标题＋梗概＋伏笔（{"chapter","title","summary","foreshadows"}），
+ *     伏笔从此有数据（v3 绑定契约砍了 hooks，语义层在这里补回）；
+ *   · 人物档案 / 全书梗概不变。
+ *
+ * 用法：node devtools/wiki-enrich-run.mjs --lib=D:/Qbook/短篇选题库 --books=<id>[,<id>]
  * 幂等：重跑覆盖 wiki 字段（归纳结果以最后一次为准）。
  */
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dispatchDotsCompletion } from '../next/runtime/factLlmService.mjs'
+import { derivePseudoChapters, hasRealChapters } from './lib/pseudoChapters.mjs'
 
 function argOf(prefix, fallback = null) {
   const hit = process.argv.slice(2).find((item) => item.startsWith(`${prefix}=`))
   return hit ? hit.slice(prefix.length + 1) : fallback
 }
 
-const LIB = argOf('--lib', 'D:/短篇选题库')
+const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const BOOKS = (argOf('--books', '') || '').split(',').map((item) => item.trim()).filter(Boolean)
 const LIMIT = Number(argOf('--limit-chars', '2400')) || 2400
 
@@ -43,16 +50,18 @@ export async function enrichBook(id, lib = LIB, options = {}) {
   const book = result.book
   const plots = result.entries.filter((entry) => entry.layer === 'plot')
 
-  // 章输入：按 validity.from 分组，事件正文拼接（这就是该章的原文摘要）
-  const chapterMap = new Map()
-  for (const plot of plots) {
-    const chapter = Number.isInteger(plot.validity?.from) ? plot.validity.from : 0
-    const text = (plot.events ?? []).map((event) => event.content).join('\n')
-    chapterMap.set(chapter, `${chapterMap.get(chapter) ?? ''}\n${text}`.trim())
-  }
-  const chapterInputs = [...chapterMap.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([chapter, text]) => ({ chapter, text: text.slice(0, LIMIT) }))
+  // 章输入：真章按 validity.from 分组；无章节标记的书按段号切伪章
+  const usePseudo = !hasRealChapters(plots)
+  const chapterGroups = usePseudo
+    ? derivePseudoChapters(plots, result.source?.chars ?? book.word_count ?? 0)
+    : [...new Set(plots.map((plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : 0)))]
+        .sort((a, b) => a - b)
+        .map((chapter) => ({ no: chapter, plots: plots.filter((plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : 0) === chapter) }))
+
+  const chapterInputs = chapterGroups.map((group) => ({
+    chapter: group.no,
+    text: group.plots.flatMap((plot) => (plot.events ?? []).map((event) => event.content)).join('\n').slice(0, LIMIT)
+  }))
 
   // 人物输入：按出场段数排序取 top（≤12），言行取事件（原文逐字）
   const byName = new Map()
@@ -73,32 +82,57 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     .sort((a, b) => (b.speech.length + b.behavior.length) - (a.speech.length + a.behavior.length))
     .slice(0, 12)
 
-  console.log(`  ${book.title}: ${chapterInputs.length} 章 / ${personInputs.length} 个主要人物`)
+  console.log(`  ${book.title}: ${chapterInputs.length} ${usePseudo ? '节(伪章)' : '章'} / ${personInputs.length} 个主要人物`)
 
-  // ① 章梗概（批 5 章）
+  // ① 章批三合一：小标题 + 梗概 + 伏笔（每批 5 章）
   const chapterSummaries = []
+  const foreshadows = []
   for (let start = 0; start < chapterInputs.length; start += 5) {
     const batch = chapterInputs.slice(start, start + 5)
     const prompt = [
-      '你是小说章节梗概器。输入是**若干章**的事件文本（按章分组、按原文顺序）。',
-      '对每一章输出一条 2–3 句的剧情梗概。只概括该章原文里发生的事；每章 60–120 字。',
-      '只输出 JSON：{"chapters":[{"chapter":章号,"summary":"梗概"}]}，不要解释。',
+      '你是小说章节分析器。输入是**若干章**的事件文本（按章分组、按原文顺序）。',
+      '对每一章输出：',
+      '1) title：2–6 字的小标题（贴该章剧情，如「假千金露馅」「兄妹相认」）；',
+      '2) summary：2–3 句剧情梗概（60–120 字，只概括该章原文里发生的事）；',
+      '3) foreshadows：该章埋下的伏笔/悬念（0–3 条，每条一句话写清「什么悬念被埋下」；没有就给空数组）。',
+      '只依据原文，不推测、不引入原文没有的信息。',
+      '只输出 JSON：{"chapters":[{"chapter":章号,"title":"标题","summary":"梗概","foreshadows":["…"]}]}，章号与输入一一对应，不要解释。',
       '',
-      ...batch.map((item) => `【第 ${item.chapter} 章事件】\n${item.text}`)
+      ...batch.map((item) => `【第 ${item.chapter} ${usePseudo ? '节' : '章'}事件】\n${item.text}`)
     ].join('\n\n')
     try {
-      const answer = await callJson(prompt, 2500)
+      const answer = await callJson(prompt, 4000)
       const parsed = parseReply(answer.text)
       for (const item of batch) {
-        chapterSummaries.push({
-          chapter: item.chapter,
-          summary: parsed?.chapters?.find((c) => Number(c.chapter) === item.chapter)?.summary ?? ''
-        })
+        const row = parsed?.chapters?.find((c) => Number(c.chapter) === item.chapter)
+        const hooks = Array.isArray(row?.foreshadows) ? row.foreshadows.slice(0, 3).map(String).filter(Boolean) : []
+        chapterSummaries.push({ chapter: item.chapter, title: String(row?.title ?? ''), summary: String(row?.summary ?? '') })
+        for (const hook of hooks) foreshadows.push({ chapter: item.chapter, text: hook })
       }
     } catch {
       // 单批失败退化为空梗概，页面照常渲染事件列表
-      for (const item of batch) chapterSummaries.push({ chapter: item.chapter, summary: '' })
+      for (const item of batch) chapterSummaries.push({ chapter: item.chapter, title: '', summary: '' })
     }
+  }
+
+  // ①.5 小标题回填：章批里模型偶发漏 title，用已有梗概单次调用补齐（summary 是回填的可靠依据）
+  const missingTitle = chapterSummaries.filter((item) => item.summary && !item.title)
+  if (missingTitle.length) {
+    const prompt = [
+      '你是章节小标题器。输入是若干章的剧情梗概（按章号）。',
+      '给每一章起一个 2–6 字的小标题，贴该章最核心的剧情转折（如「假千金露馅」「兄妹相认」）。',
+      '只输出 JSON：{"chapters":[{"chapter":章号,"title":"小标题"}]}，章号与输入一一对应，不要解释。',
+      '',
+      ...missingTitle.map((item) => `第${item.chapter}${usePseudo ? '节' : '章'}：${item.summary}`)
+    ].join('\n')
+    try {
+      const answer = await callJson(prompt, 1000)
+      const parsed = parseReply(answer.text)
+      for (const item of missingTitle) {
+        const row = parsed?.chapters?.find((c) => Number(c.chapter) === item.chapter)
+        if (row?.title) item.title = String(row.title).slice(0, 12)
+      }
+    } catch { /* 标题补不齐就退回 第N节 */ }
   }
 
   // ② 人物档案（一次一个）
@@ -131,7 +165,10 @@ export async function enrichBook(id, lib = LIB, options = {}) {
   // ③ 全书梗概
   let storySummary = ''
   let arc = []
-  const storyInput = chapterSummaries.filter((item) => item.summary).map((item) => `第${item.chapter}章：${item.summary}`).join('\n')
+  const storyInput = chapterSummaries
+    .filter((item) => item.summary)
+    .map((item) => `第${item.chapter}${usePseudo ? '节' : '章'}${item.title ? `「${item.title}」` : ''}：${item.summary}`)
+    .join('\n')
   if (storyInput) {
     const prompt = [
       '你是小说梗概器。输入是全书各章的剧情梗概（按章序）。',
@@ -153,13 +190,15 @@ export async function enrichBook(id, lib = LIB, options = {}) {
   }
 
   result.wiki = {
-    version: 'wiki-enrich@1',
+    version: 'wiki-enrich@2',
     generated_at: new Date().toISOString(),
     perspective: result.perspective ?? null,
     protagonist: options.protagonist ?? null,
+    pseudoChapters: usePseudo,
     storySummary,
     arc,
     chapterSummaries,
+    foreshadows,
     characterProfiles
   }
   await writeFile(join(lib, '拆解', `${id}.json`), JSON.stringify(result, null, 2), 'utf8')
@@ -167,8 +206,10 @@ export async function enrichBook(id, lib = LIB, options = {}) {
   return {
     id, title: book.title,
     chapters: chapterInputs.length,
+    pseudo: usePseudo,
     chapterSummaries: chapterSummaries.filter((item) => item.summary).length,
     characters: characterProfiles.filter((item) => item.identity || item.summary).length,
+    foreshadows: foreshadows.length,
     storySummary: Boolean(storySummary)
   }
 }
@@ -178,6 +219,6 @@ if (process.argv[1] && process.argv[1].endsWith('wiki-enrich-run.mjs')) {
     const startedAt = Date.now()
     const summary = await enrichBook(id)
     summary.sec = Math.round((Date.now() - startedAt) / 1000)
-    console.log(`✓ ${summary.title}: 章梗概 ${summary.chapterSummaries}/${summary.chapters}，人物 ${summary.characters}，全书梗概 ${summary.storySummary ? '✓' : '✗'}，${summary.sec}s`)
+    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.chapterSummaries}/${summary.chapters}，人物 ${summary.characters}，伏笔 ${summary.foreshadows}，全书梗概 ${summary.storySummary ? '✓' : '✗'}，${summary.sec}s`)
   }
 }

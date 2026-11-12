@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** @param {string} lib 库根目录（D:/短篇选题库） */
+/** @param {string} lib 库根目录（D:/Qbook/短篇选题库） */
 export function runIntegrate(lib) {
   const OUT = join(lib, '拆解')
   const indexPath = join(lib, '正文', '入库索引.json')

@@ -11,8 +11,8 @@
  *   D 关系窄窗（独立一轮）→ 清洗后并入
  *
  * 用法：
- *   node devtools/run-extract-library.mjs --lib=D:/短篇选题库 --books=<id1>,<id2> [--batch=8] [--limit-chars=0]
- *   node devtools/run-extract-library.mjs --lib=D:/短篇选题库 --all-s && --dry   （列出候选不跑）
+ *   node devtools/run-extract-library.mjs --lib=D:/Qbook/短篇选题库 --books=<id1>,<id2> [--batch=8] [--limit-chars=0]
+ *   node devtools/run-extract-library.mjs --lib=D:/Qbook/短篇选题库 --all-s && --dry   （列出候选不跑）
  */
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync, readdirSync as readdirSyncCompat } from 'node:fs'
@@ -35,7 +35,7 @@ function argOf(prefix, fallback = null) {
 }
 const flag = (name) => process.argv.includes(`--${name}`)
 
-const LIB = argOf('--lib', 'D:/短篇选题库')
+const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const BOOKS = (argOf('--books', '') || '').split(',').map((item) => item.trim()).filter(Boolean)
 const BATCH = Math.max(1, Number(argOf('--batch', '8')))
 const LIMIT_CHARS = Number(argOf('--limit-chars', '0')) || 0

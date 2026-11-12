@@ -16,7 +16,7 @@ import { collectNameCandidates } from '../next/fact/usecases/pipeline/nameCandid
 import { detectPerspective, isIdentityTitle } from '../next/fact/usecases/pipeline/perspectiveTitles.js'
 import { detectFirstPersonProtagonist, normalizeVocativeToName } from '../next/fact/usecases/pipeline/protagonistDetect.js'
 
-const LIB = 'D:/短篇选题库'
+const LIB = 'D:/Qbook/短篇选题库'
 const id = process.argv[2]
 const resumeDir = process.argv[3]
 if (!id || !resumeDir) {

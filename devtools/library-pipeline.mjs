@@ -12,8 +12,8 @@
  * 幂等：② ③ 纯派生重跑无副作用；②.5 重跑覆盖归纳结果。
  *
  * 用法：
- *   node devtools/library-pipeline.mjs --lib=D:/短篇选题库 --books=<id1>,<id2>
- *   node devtools/library-pipeline.mjs --lib=D:/短篇选题库 --all-s          # 全部 S 级未拆的
+ *   node devtools/library-pipeline.mjs --lib=D:/Qbook/短篇选题库 --books=<id1>,<id2>
+ *   node devtools/library-pipeline.mjs --lib=D:/Qbook/短篇选题库 --all-s          # 全部 S 级未拆的
  *   可选：--batch=8 --timeout=300000 --retries=2 --skip-wiki --skip-extract
  */
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
@@ -31,7 +31,7 @@ function argOf(prefix, fallback = null) {
 }
 const flag = (name) => process.argv.includes(`--${name}`)
 
-const LIB = argOf('--lib', 'D:/短篇选题库')
+const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const BOOKS = (argOf('--books', '') || '').split(',').map((item) => item.trim()).filter(Boolean)
 const BATCH = Math.max(1, Number(argOf('--batch', '8')))
 const TIMEOUT_MS = Number(argOf('--timeout', '300000')) || 300_000

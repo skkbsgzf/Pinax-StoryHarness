@@ -166,9 +166,10 @@ function vForeshadow() {
     c.foreshadow.forEach(function (f) { all.push({ no: c.no, title: c.title, text: f }); });
   });
   var h = '<h1>伏笔（' + all.length + '）</h1>';
-  if (!all.length) return h + '<p class="sub">本书拆解未产出伏笔条目（v3 契约只做减法，伏笔层待后续接入）。</p>';
+  if (!all.length) return h + '<p class="sub">本书拆解未产出伏笔条目（增补窄窗未归纳出，或原文确实没有明显伏笔）。</p>';
   h += '<ul>';
-  all.forEach(function (f) { h += '<li><span class="tag">第' + f.no + '章</span> ' + escHtml(f.text) + '</li>'; });
+  var unit = DETAIL.pseudoChapters ? '节' : '章';
+  all.forEach(function (f) { h += '<li><span class="tag">第' + f.no + unit + '</span> ' + escHtml(f.text) + '</li>'; });
   return h + '</ul>';
 }
 
@@ -245,7 +246,11 @@ function forceLayout(svg, nodes, edges, opt) {
     var line = document.createElementNS(NS, 'line');
     line.setAttribute('x1', a2.x); line.setAttribute('y1', a2.y);
     line.setAttribute('x2', b2.x); line.setAttribute('y2', b2.y);
-    line.setAttribute('stroke', '#b9c2d8'); line.setAttribute('stroke-width', '1.2');
+    line.setAttribute('stroke', e.type === '同场' ? '#5a6478' : '#b9c2d8');
+    line.setAttribute('stroke-width', '1.2');
+    var tip = document.createElementNS(NS, 'title');
+    tip.textContent = (e.type || '关联') + (e.weight ? ' · ' + e.weight + ' 段同场' : '');
+    line.appendChild(tip);
     svg.appendChild(line);
   });
   nodes.forEach(function (n) {
@@ -262,13 +267,17 @@ function forceLayout(svg, nodes, edges, opt) {
     g.appendChild(label);
     if (focus === n.id) g.setAttribute('filter', 'url(#glow)');
     g.style.cursor = 'pointer';
-    g.addEventListener('click', function () { go(n.kind === 'person' ? 'char' : 'term', n.id); });
+    g.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      if (focus === n.id) go(n.kind === 'person' ? 'char' : 'term', n.id);
+      else drawRelationGraph(n.id);
+    });
     svg.appendChild(g);
   });
 }
 
 function vGraph() {
-  var h = '<h1>关系图谱</h1><div class="meta">点击节点跳转人物/词条；再点一次背景返回全图。共 ' + DETAIL.charGraph.nodes.length + ' 节点 / ' + DETAIL.charGraph.edges.length + ' 边</div>';
+  var h = '<h1>关系图谱</h1><div class="meta">点节点聚焦邻域 → 再点同节点进人物页；点空白复位全图。共 ' + DETAIL.charGraph.nodes.length + ' 节点 / ' + DETAIL.charGraph.edges.length + ' 边（实线=关系，暗线=同场≥2段，悬停可看）</div>';
   h += '<svg id="relSvg" class="relation"></svg><div id="relLegend" class="legend"></div>';
   return h;
 }
@@ -276,22 +285,27 @@ function vGraph() {
 function drawRelationGraph(focus) {
   var svg = document.getElementById('relSvg');
   if (!svg) return;
+  svg.onclick = function (ev) { if (ev.target === svg && focus) drawRelationGraph(null); };
   var nodes = DETAIL.charGraph.nodes;
   var edges = DETAIL.charGraph.edges;
+  var meta = document.querySelector('#view .meta');
+  var fullMeta = '点节点聚焦邻域 → 再点同节点进人物页；点空白复位全图。共 ' + DETAIL.charGraph.nodes.length + ' 节点 / ' + DETAIL.charGraph.edges.length + ' 边（实线=关系，暗线=同场≥2段，悬停可看）';
   if (focus) {
     var nb = new Set([focus]);
     edges.forEach(function (e) { if (e.a === focus) nb.add(e.b); if (e.b === focus) nb.add(e.a); });
     nodes = nodes.filter(function (n) { return nb.has(n.id); });
     edges = edges.filter(function (e) { return nb.has(e.a) && nb.has(e.b); });
+    if (meta) meta.innerHTML = '聚焦「' + escHtml(focus) + '」的邻域（' + nodes.length + ' 节点 / ' + edges.length + ' 边）——再点同节点进人物页，点空白复位';
   } else {
     var deg = {};
     edges.forEach(function (e) { deg[e.a] = (deg[e.a] || 0) + 1; deg[e.b] = (deg[e.b] || 0) + 1; });
     nodes = nodes.slice().sort(function (a, b) { return (deg[b.id] || 0) - (deg[a.id] || 0); }).slice(0, 70);
     edges = edges.filter(function (e) { return nodes.some(function (n) { return n.id === e.a; }) && nodes.some(function (n) { return n.id === e.b; }); });
+    if (meta) meta.innerHTML = fullMeta;
     var lg = document.getElementById('relLegend');
     if (lg) lg.innerHTML = '<span><span class="dot" style="background:#4f7cff"></span>人物</span><span><span class="dot" style="background:#b45309"></span>设定/物品</span>';
   }
-  forceLayout(svg, nodes, edges.map(function (e) { return { a: e.a, b: e.b }; }), { focus: focus || null });
+  forceLayout(svg, nodes, edges.map(function (e) { return { a: e.a, b: e.b, type: e.type, weight: e.weight }; }), { focus: focus || null });
 }
 
 /* ===== 主渲染分发 ===== */
