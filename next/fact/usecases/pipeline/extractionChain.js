@@ -2,7 +2,8 @@
  * 联合抽取的纯域边界：原文只用于分段/哈希，结构化行严格校验后编译为三层事实。
  * 无模型、存储或宿主依赖；不经过旧 normalizeExtraction 的条数/字数裁剪。
  */
-import { segmentText } from '../../domain/segment.js'
+// 分桶分段（作者 2026-11-12）：段不跨章；段文本是原文切片，可逐字溯源。
+import { segmentText } from '../../domain/segmentBuckets.js'
 import { sha1Hex, stableEntryId } from '../../domain/stableId.js'
 import { validateFactEntry } from '../../domain/schema.js'
 import { createAliasIndex } from '../../domain/aliases.js'
@@ -11,6 +12,8 @@ import {
   characterSalience, decideCharacter, fieldsForTier,
   normalizeSaliencePolicy, summarizePruning, worldviewSalience
 } from './salience.js'
+import { isIdentityTitle } from './perspectiveTitles.js'
+import { resolveIdentity } from './identityEvolution.js'
 
 export const EXTRACTION_CHAIN_VERSION = 'fact-chain/v1'
 
@@ -558,6 +561,19 @@ const TITLE_TARGET = /^.{1,12}的(?:父亲|母亲|爸爸|妈妈|哥哥|弟弟|�
 
 function compileCharacter(name, records, context, warnings, extras = {}) {
   const entry = envelope('character', name, records.map((record) => record.evidence), context)
+  // 身份演进（作者 2026-11-12）：采集期先到先得，呈现期真名 > 昵称 > 称谓。
+  // 若本条目聚合到的名字里存在更高 rank 的（真名压过「男友」这类称谓），
+  // 就把显示名换成它，原名字降为别名——**条目 id 不变**，历史引用不断链。
+  const occurrences = [
+    ...records.map((record) => ({ name: record.item?.name ?? name, isTitle: isIdentityTitle(record.item?.name ?? name) })),
+    ...(extras.memberNames ?? []).map((member) => ({ name: member }))
+  ].filter((item) => item.name)
+  const identity = resolveIdentity(occurrences)
+  if (identity.displayName && identity.displayName !== name) {
+    entry.aliases = [...new Set([...(entry.aliases ?? []), name])].filter((alias) => alias !== identity.displayName)
+    entry.name = identity.displayName
+    entry.identityNote = { previousName: name, upgradedBy: 'identity-rank' }
+  }
   const profiles = records.map((record) => record.item)
   // X3 跨名合并：组员 surface 名与 alsoKnownAsInSource 全部并入别名（排除 canonical 本名）——
   // 「周明瑞/克莱恩」成一个条目、一个 id，别名组供 aliasIndex 解析与 Track 3 fold 匹配。

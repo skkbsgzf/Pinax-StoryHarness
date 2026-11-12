@@ -87,7 +87,7 @@ export function collectNameCandidates(text) {
         const record = stats.get(candidate) ?? { mentions: 0, withCue: 0, surname: false }
         record.mentions += 1
         if (/^(说|道|问|答|喊|叫|笑|叹|皱眉|抬头|低头|点头|摇头|转身|看向|望着|开口)/u.test(after)) record.withCue += 1
-        record.surname = [...candidate].some((ch, index) => index <= 1 && SURNAMES.has(ch))
+        record.surname = SURNAMES.has([...candidate][0])
         stats.set(candidate, record)
       }
     }
@@ -122,7 +122,12 @@ export function isLikelyPersonName(name, candidateStats) {
   }
   const record = candidateStats?.get(value)
   if (!record) return { ok: false, reason: 'not-in-text', name: value }
-  if (record.mentions < 2 && !record.surname) return { ok: false, reason: 'rare', name: value }
+  if (record.mentions < 2 && !record.surname) {
+    // 低频且不像真名：先试截到强前缀（「见林逸急」→「林逸」），截不出才拒。
+    const trimmed = trimToStrongPrefix(value, candidateStats)
+    if (trimmed) return { ok: true, reason: 'trimmed', name: trimmed }
+    return { ok: false, reason: 'rare', name: value }
+  }
   if (record.withCue < 1 && !record.surname) return { ok: false, reason: 'no-cue', name: value }
   // 前缀压制：「林逸拍」自己可能也出现几次（原文「林逸拍桌」重复），但「林逸」出现 78 次。
   // 有显著更强的短前缀时认前缀——这是最后一道，放在所有形态检查之后。
@@ -138,13 +143,22 @@ export function isLikelyPersonName(name, candidateStats) {
  */
 export function trimToStrongPrefix(value, candidateStats) {
   if (!candidateStats) return null
+  // ① 前缀截断：「林逸拍」→「林逸」。
   for (let cut = value.length - 1; cut >= 2; cut -= 1) {
     const prefix = value.slice(0, cut)
     if (FORBIDDEN.test(prefix)) continue
     const record = candidateStats.get(prefix)
-    // 阈值 3 次：真名在全书通常远高于此；粘连尾巴（动词/副词）成串后反而低频。
-    // 优先返回**更长**的前缀（先试 value.length-1），所以顺序上更长的 prefix 先命中。
     if (record && record.mentions >= 3) return prefix
+  }
+  // ② 内含真名：「见林逸急」里包着「林逸」——这类是「动词/语篇词 + 真名 + 动词」，
+  //    前缀截断救不了，必须扫子串。只认 mentions ≥10 的强名，避免把任意片段当人名。
+  for (let length = Math.min(5, value.length - 1); length >= 2; length -= 1) {
+    for (let start = 1; start + length <= value.length; start += 1) {
+      const inner = value.slice(start, start + length)
+      if (FORBIDDEN.test(inner)) continue
+      const record = candidateStats.get(inner)
+      if (record && record.mentions >= 10) return inner
+    }
   }
   return null
 }

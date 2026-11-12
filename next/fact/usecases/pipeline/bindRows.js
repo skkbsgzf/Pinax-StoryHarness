@@ -13,6 +13,7 @@
  */
 
 import { BIND_CHANNELS } from './bindPrompt.mjs'
+import { isIdentityTitle, normalizeTitleName, perspectiveContextOf } from './perspectiveTitles.js'
 import { isLikelyPersonName } from './nameCandidates.js'
 
 /**
@@ -185,6 +186,13 @@ export function looksLikePersonName(value) {
  * @param {{text:string, haystack:string, nameTable:string[]}} context
  */
 function explainWho(value, context) {
+  // 称谓即身份（作者裁定）：第一人称段里出现的「男友」「妈妈」「闺蜜」直接可用，不必等真名。
+  // 这是第一人称小说的常态——全文可能一直只用称谓指称，强求真名会让条目整段丢失。
+  const identityTitle = normalizeTitleName(str(value))
+  if (context.perspective === 'first' && isIdentityTitle(identityTitle)) {
+    return { name: identityTitle, reason: 'identity-title' }
+  }
+
   const verdict = judgePersonName(str(value), {
     text: context.text,
     nameTable: context.nameTable,
@@ -227,6 +235,10 @@ export function bindSegment(segment, binding = {}, options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) }
   // 全书名字候选统计（驱动侧一次性算好传进来）：有它就用它判，比「本段证据」可靠得多。
   const nameCandidates = options.nameCandidates ?? null
+  // 视角上下文（作者 2026-11-12）：第一人称里「男友」「妈妈」这类称谓本身就是身份，可直接作 who。
+  const perspective = options.perspective
+    ? { perspective: options.perspective, titles: [], ...perspectiveContextOf(segment, options) }
+    : perspectiveContextOf(segment, options)
 
   const byId = new Map()
   for (const item of binding?.blocks ?? []) {
@@ -244,7 +256,7 @@ export function bindSegment(segment, binding = {}, options = {}) {
       : (BIND_CHANNELS.includes(block.channelHint) ? block.channelHint : 'state')
     if (bound && str(bound?.ch) && !BIND_CHANNELS.includes(str(bound.ch))) stats.unknownChannel += 1
 
-    const whoContext = { text: segment?.text ?? '', haystack: `${block.text}${segment?.text ?? ''}`, nameTable: knownNames, nameCandidates }
+    const whoContext = { text: segment?.text ?? '', nameTable: knownNames, nameCandidates, perspective: perspective.perspective, titles: perspective.titles }
     const candidate = bound ? explainWho(bound.who, whoContext) : explainWho(block.speakerHint, whoContext)
     // 幻觉（原文没有）与「像句子不像人名」都是模型给错的 who，统一计入 hallucinated：
     // 对调用方而言「这个名字不能用」是同一件事，分两个计数器只会让人漏看。

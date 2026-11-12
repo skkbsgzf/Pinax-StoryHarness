@@ -17,7 +17,8 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { segmentText } from '../next/fact/domain/segment.js'
+import { segmentText, segmentStats } from '../next/fact/domain/segmentBuckets.js'
+import { detectPerspective } from '../next/fact/usecases/pipeline/perspectiveTitles.js'
 import { segmentBlocks } from '../next/fact/usecases/pipeline/blocks.js'
 import { bindSegments, normalizeBindReply } from '../next/fact/usecases/pipeline/bindRows.js'
 import { collectNameCandidates } from '../next/fact/usecases/pipeline/nameCandidates.js'
@@ -47,7 +48,8 @@ export function stripLibraryFile(text) {
   let body = sep >= 0 ? raw.slice(sep + 40) : raw
   const end = body.lastIndexOf('（完）')
   if (end > 0) body = body.slice(0, end)
-  body = body.replace(/^-{10,}\s*$/gmu, '').trim()
+  // 分隔线可能独占一行，也可能紧跟在正文句末（'……誓约。----------------'）——两种都剥。
+  body = body.replace(/-{10,}/gu, '').trim()
   // 章节标题行保留（它们是分段时的天然边界，但 segmentText 会按段落处理，不影响切块）
   return body
 }
@@ -106,6 +108,8 @@ async function extractBook(book, index, profile) {
   const filePath = join(LIB, '正文', book.file)
   const text = stripLibraryFile(await readFile(filePath, 'utf8'))
   const body = LIMIT_CHARS > 0 ? text.slice(0, LIMIT_CHARS) : text
+  // 视角参数（作者 2026-11-12）：读者视角代入，第一人称下称谓即身份。
+  const perspective = detectPerspective(body)
 
   // 全书名字候选统计（一次性，零模型）：判定 who 是不是真名，比单段证据可靠。
   const nameCandidates = collectNameCandidates(body)
@@ -120,11 +124,13 @@ async function extractBook(book, index, profile) {
   let searchFrom = 0
   const segments = units.map((unit) => {
     const meta = source.segments.find((item) => item.index === unit.index)
+    // 桶式分段后每段自带 chapterNo（章标题行确定）；不再统一记 1。
+    const chapterNo = Number.isInteger(unit.chapterNo) ? unit.chapterNo : 1
     const slice = relocateToSource(body.slice(searchFrom), unit)
     const text = slice ? slice.text : unit.text
     if (slice) searchFrom += slice.end
     const { blocks } = segmentBlocks(text, { ...profile.blocks })
-    return { id: meta.id, index: unit.index, chars: unit.chars, text, blocks, located: Boolean(slice) }
+    return { id: meta.id, index: unit.index, chars: unit.chars, text, blocks, located: Boolean(slice), chapterNo }
   })
 
   // B：模型窄绑定（批式串行——短篇量小，避免打爆上游）
@@ -206,6 +212,8 @@ async function extractBook(book, index, profile) {
       length_tier: book.length_tier, url: book.url
     },
     source: { file: book.file, chars: body.length, segments: segments.length, blocks: segments.reduce((sum, item) => sum + item.blocks.length, 0) },
+    // 视角参数（作者 2026-11-12）：读者视角代入，第一人称下称谓即身份。
+    perspective: { perspective: perspective.perspective, confidence: perspective.confidence },
     calls: callLog.length + relationCalls,
     bindStats: stats,
     relationCalls,
