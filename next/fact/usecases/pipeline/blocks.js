@@ -217,33 +217,45 @@ export function segmentBlocks(text, options = {}) {
 
   const flushPending = () => {
     if (!pending.length) return
-    const sentences = pending
+    const items = pending
     pending = []
+    // 关键：从原文切出 [首句 start, 末句 end) —— 块文本因此**恒为原文子串**。
+    const text = source.slice(items[0].start, items[items.length - 1].end).trim()
+    // 空块不产：切片可能因偏移落在纯空白区而变空（真跑撞到 1/323 段整批被拒）。
+    if (!text) return
     blocks.push({
       id: '',
       kind: 'narration',
-      text: sentences.join(''),
-      channelHint: dominantChannel(sentences),
+      text,
+      channelHint: dominantChannel(items.map((item) => item.text)),
       speakerHint: null,
       hintBasis: 'rule'
     })
   }
 
-  const pushNarration = (chunk) => {
-    const trimmed = String(chunk ?? '').trim()
-    if (!trimmed) return
-    for (const sentence of splitSentences(trimmed)) {
+  /**
+   * 叙述入待打包队列。**保留原文偏移**：块文本必须能从段原文原样切出来，
+   * 否则「事件正文＝块原文」就退化成「事件正文＝重新拼接的句子」，可溯源率会掉
+   * （番茄库实测：join('') 让 320 条事件只有 47.5% 能在原文定位）。
+   */
+  const pushNarration = (chunk, chunkOffset = 0) => {
+    const raw = String(chunk ?? '')
+    // 按句切分但记录每句在原 chunk 内的位置，压入带偏移的条目。
+    let cursor = 0
+    for (const sentence of splitSentences(raw)) {
+      const at = raw.indexOf(sentence, cursor)
+      const start = at >= 0 ? at : cursor
+      cursor = start + sentence.length
       const clean = sentence.trim()
       if (!clean) continue
       const informative = clean.replace(/[\s…—\-.·、，。！？；：]/gu, '')
-      // 段首的「…」「嘶…」这类残响不含叙事信息，也找不到主体——不计块（记进 dropped 供复盘）。
       if (informative.length <= FRAGMENT_MAX_CHARS && !pending.length && !blocks.length) {
         dropped.push(clean)
         continue
       }
-      pending.push(clean)
-      const length = pending.join('').length
-      // 凑够最小长度就落块；引号块要独立，所以进引号前一定 flush。
+      // 记录绝对偏移（chunkOffset 是 chunk 在段内的起点）。
+      pending.push({ text: clean, start: chunkOffset + start, end: chunkOffset + start + sentence.length })
+      const length = pending.reduce((sum, item) => sum + item.text.length, 0)
       if (length >= minChars || length >= maxChars) flushPending()
     }
   }
@@ -260,7 +272,8 @@ export function segmentBlocks(text, options = {}) {
       && !/[？！?!…。]/u.test(inner)
       && !MENTION_ONLY_QUOTE.some((mark) => inner.startsWith(mark))
     if (emphasis) {
-      pending.push(`“${inner}”`)
+      // 强调引号也是原文片段：用 span 的真实起止偏移入队（块文本仍能从原文切出）。
+      pending.push({ text: `“${inner}”`, start: span.start, end: span.end })
       cursor = span.end
       continue
     }

@@ -13,6 +13,7 @@
  */
 
 import { BIND_CHANNELS } from './bindPrompt.mjs'
+import { isLikelyPersonName } from './nameCandidates.js'
 
 /**
  * 段 id 容错对齐：模型会以三种**可确定性还原**的方式改写 id（实测各占一批）：
@@ -68,12 +69,130 @@ const TITLE_TARGET = new RegExp(`^(?:.{1,12}的)?(?:${KINSHIP_WORDS})$`, 'u')
 const str = (value) => String(value ?? '').trim()
 
 /** who 必须真的出现在块或段原文里；否则视为幻觉绑定，丢弃并计数。 */
-function explainWho(value, haystack, knownNames) {
-  const name = str(value)
-  if (!name) return { name: '', reason: 'empty' }
-  if (haystack.includes(name)) return { name, reason: 'verbatim' }
-  if (knownNames.includes(name)) return { name, reason: 'known' }
-  return { name: '', reason: 'hallucinated' }
+/**
+ * 人名合理性判定：`who` 光「在原文里出现」不够——第一人称小说里「我们买」「我找人」「我爸气得」
+ * 全都是原文子串，但它们不是人名。真跑（番茄短篇库 8.8k 字样本）实测 21 个「角色」里只有 1 个真名，
+ * 其余全是这类句子碎片。
+ *
+ * 三条确定性拒绝（都不需要模型）：
+ *   1) **含虚词/动词**：「的 了 着 过 是 在 把 被 我 你 他 她 它 想 要 去 来 说 道」等——人名几乎不含；
+ *   2) **代词本身**：我/你/他/她/它/我们/你们/他们/大家/自己/对方——是第一人称叙事的常态，不是条目；
+ *   3) **过长的短语**：>6 字（中文人名极少超 5 字，含少数民族/译名）。
+ * 拒绝只记计数、不报错——名字进 index.mentions 的路由在 compile 侧另算。
+ */
+const NAME_STOP_CHARS = /[的了着过是在把被让我你他她它们想要去来说道问看走坐站笑叹知能会可别没不就都也又而但和与同对这那哪什怎为因为所以如果虽然已经直接继续然后接着突然忽然立即马上顿时终于果然竟然]|\s/u
+/** 判定为「可用」的 reason 集合；其余一律计入 hallucinated。 */
+const ACCEPTED_WHO_REASONS = new Set(['verified', 'verbatim', 'known', 'empty'])
+
+const PRONOUN_NAMES = new Set([
+  '我', '你', '他', '她', '它', '我们', '你们', '他们', '她们', '它们',
+  '大家', '众人', '自己', '对方', '有人', '某人', '这人', '那人', '旁人', '所有人'
+])
+
+/**
+ * 正向证据：真名在叙事里必然与「说话/动作/出现在引号前」共现。
+ * 实测（脱轨 7 万字）：余欢出现 795 次、后接说话动词 39 次；碎片「闯祸」「犹豫」「最终」后接 0 次。
+ * 所以除了「像不像名字」，还可以问「它在原文里有没有像名字那样被用过」。
+ */
+const NAME_EVIDENCE_PATTERN = /(说|道|问|答|喊|叫|笑|叹|皱眉|抬头|低头|点头|摇头|转身|走进|走进来|看向|望着|开口|沉声|轻声)/u
+
+/**
+ * 名字取证：在原文里找这个串的共现证据。
+ * @returns {{mentions:number, withCue:number, inQuote:number}}
+ */
+export function nameEvidence(name, text) {
+  const target = str(name)
+  const source = String(text ?? '')
+  const stats = { mentions: 0, withCue: 0, inQuote: 0, beforeQuote: 0 }
+  if (!target || !source) return stats
+  let index = source.indexOf(target)
+  while (index >= 0) {
+    stats.mentions += 1
+    const after = source.slice(index + target.length, index + target.length + 4)
+    if (NAME_EVIDENCE_PATTERN.test(after)) stats.withCue += 1
+    const before = source.slice(Math.max(0, index - 2), index)
+    if (/[“「"]/u.test(before)) stats.inQuote += 1
+    // 说话人常写在后接引号前：「岑思犹豫了一下：“我也去。”」——引号在后也是线索。
+    if (/[“「"]/u.test(source.slice(index + target.length, index + target.length + 12))) stats.beforeQuote += 1
+    index = source.indexOf(target, index + 1)
+  }
+  return stats
+}
+
+/**
+ * @param {string} value 待判定的 who
+ * @param {{text?:string, nameTable?:string[]}} [context] 段原文与已确认名表
+ * @returns {{ok:boolean, reason:string}}
+ */
+/**
+ * 名尾修正：模型常把「名字＋动词首字」粘成一个 who（实测「林逸拍桌」→ 报成「林逸拍」）。
+ * 处理：若这个名字的前缀恰好是一个**已知名**（或本段高频出现的候选名），就截到已知名。
+ * 只做「向后截断」，绝不向前补字；截完仍要过形态闸。
+ * @returns {string} 修正后的名字（无需修正时原样返回）
+ */
+export function trimNameTail(name, knownNames = []) {
+  const value = str(name)
+  if (!value) return value
+  let best = value
+  for (const known of knownNames) {
+    const candidate = str(known)
+    if (!candidate || candidate === value) continue
+    if (value.startsWith(candidate) && value.length > candidate.length) {
+      // 只接受「多余部分是 1 字」的情形（动词首字最常见的粘连长度）。
+      // 尾巴允许 1–2 字（「林逸拍」「林逸斩钉」都是把动作粘进了名字）。
+      const tail = value.length - candidate.length
+      if (tail >= 1 && tail <= 2 && candidate.length < best.length) best = candidate
+    }
+  }
+  return best
+}
+
+export function judgePersonName(value, context = {}) {
+  // 先修正名尾粘连（「林逸拍」→「林逸」），再走形态闸。
+  const name = trimNameTail(str(value), context.nameTable)
+  // 有全书候选统计时以它为准：形态 + 分布双重判据，比单段证据可靠（实测 8/8 真名过、8/8 碎片拒）。
+  if (context.nameCandidates) {
+    // isLikelyPersonName 会做前缀截断，返回它修正后的 name（调用方用这个值）。
+    return isLikelyPersonName(str(value), context.nameCandidates)
+  }
+  if (!name) return { ok: false, reason: 'empty' }
+  if (PRONOUN_NAMES.has(name)) return { ok: false, reason: 'pronoun' }
+  if (name.length > 6) return { ok: false, reason: 'too-long' }
+  if (NAME_STOP_CHARS.test(name)) return { ok: false, reason: 'stop-char' }
+  // 已在名表里＝前文确认过，直接放行（跨段一致性优先）。
+  if (Array.isArray(context.nameTable) && context.nameTable.includes(name)) return { ok: true, reason: 'known' }
+  const text = context.text
+  if (!text) return { ok: true, reason: 'no-context' }
+  const evidence = nameEvidence(name, text)
+  if (!evidence.mentions) return { ok: false, reason: 'not-present' }
+  // 只出现一次且没有任何名字式共现 → 是句子碎片（真名哪怕只出现一次也常带说话动词）。
+  // 只出现一次时要求更强证据：后接动作词，或紧邻引号（说话人位置）。
+  // 单靠「出现一次」会放过「犹豫」「最终」这类高频副词——它们在任意文本里都出现。
+  if (evidence.mentions === 1 && evidence.withCue === 0 && evidence.inQuote === 0 && evidence.beforeQuote === 0) {
+    return { ok: false, reason: 'weak-evidence' }
+  }
+  return { ok: true, reason: 'evidence' }
+}
+
+/** 兼容旧调用：只做形态判定（不带原文证据）。 */
+export function looksLikePersonName(value) {
+  return judgePersonName(value).ok
+}
+
+/**
+ * 判定一个 who 能不能用。顺序：形态 → 原文出现 → 名字式证据。
+ * @param {string} value
+ * @param {{text:string, haystack:string, nameTable:string[]}} context
+ */
+function explainWho(value, context) {
+  const verdict = judgePersonName(str(value), {
+    text: context.text,
+    nameTable: context.nameTable,
+    nameCandidates: context.nameCandidates
+  })
+  if (!verdict.ok) return { name: '', reason: verdict.reason }
+  // 用 verdict.name：判定器可能做了前缀截断（「林逸拍」→「林逸」），那个才是可用名字。
+  return { name: verdict.name ?? str(value), reason: 'verified' }
 }
 
 /** 段级 when/where 例外：只收模型明确给出的字段，其余保持 undefined（由 run 默认继承）。 */
@@ -106,6 +225,8 @@ export function bindSegment(segment, binding = {}, options = {}) {
   }
   const where = str(binding?.where) || str(options.where) || DEFAULT_WHERE
   const limits = { ...DEFAULT_LIMITS, ...(options.limits ?? {}) }
+  // 全书名字候选统计（驱动侧一次性算好传进来）：有它就用它判，比「本段证据」可靠得多。
+  const nameCandidates = options.nameCandidates ?? null
 
   const byId = new Map()
   for (const item of binding?.blocks ?? []) {
@@ -123,9 +244,12 @@ export function bindSegment(segment, binding = {}, options = {}) {
       : (BIND_CHANNELS.includes(block.channelHint) ? block.channelHint : 'state')
     if (bound && str(bound?.ch) && !BIND_CHANNELS.includes(str(bound.ch))) stats.unknownChannel += 1
 
-    const hay = `${block.text}${segment?.text ?? ''}`
-    const candidate = bound ? explainWho(bound.who, hay, knownNames) : explainWho(block.speakerHint, hay, knownNames)
-    if (candidate.reason === 'hallucinated') stats.hallucinated += 1
+    const whoContext = { text: segment?.text ?? '', haystack: `${block.text}${segment?.text ?? ''}`, nameTable: knownNames, nameCandidates }
+    const candidate = bound ? explainWho(bound.who, whoContext) : explainWho(block.speakerHint, whoContext)
+    // 幻觉（原文没有）与「像句子不像人名」都是模型给错的 who，统一计入 hallucinated：
+    // 对调用方而言「这个名字不能用」是同一件事，分两个计数器只会让人漏看。
+    // 所有「名字不可用」的理由都计入 hallucinated：对调用方是同一件事。
+    if (candidate.reason && !ACCEPTED_WHO_REASONS.has(candidate.reason)) stats.hallucinated += 1
     if (bound && candidate.name) stats.bound += 1
 
     events.push({

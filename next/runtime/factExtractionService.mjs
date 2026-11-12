@@ -358,9 +358,13 @@ export function createFactExtractionService({ root = null, fileService = null, r
             if (resolved) byId.set(resolved, item)
             else unmatchedBindings += 1
           }
+          const bindConfirmed = []
           for (const unit of task.units) {
+            // 同批内累积：段 1 里被确认的名字，段 5 直接认（跨段一致性靠累积，不靠重算证据）。
+            // 不累积的话，单次出现且无说话动词的真名会被 evidence gate 误杀。
+            const confirmed = [...(task.knownNames ?? []), ...(run.nameTable ?? []), ...bindConfirmed]
             const { row, stats } = bindSegment(unit, byId.get(unit.id) ?? {}, {
-              knownNames: [...(task.knownNames ?? []), ...run.nameTable ?? []],
+              knownNames: confirmed,
               when: run.timeDefaults?.when,
               where: run.timeDefaults?.where,
               limits: run.spec.profile?.bind?.maxIncrementsPerSegment
@@ -369,6 +373,10 @@ export function createFactExtractionService({ root = null, fileService = null, r
             bindStats.segments += 1
             bindStats.blocks += stats.blocks
             bindStats.bound += stats.bound
+            // 本段接受下来的 who 立即进「已确认」，供同批后续段使用。
+            for (const event of row.events) {
+              if (event.who && !bindConfirmed.includes(event.who)) bindConfirmed.push(event.who)
+            }
             bindStats.hallucinated += stats.hallucinated
             bindStats.ruleFallback += stats.ruleFallback
             bindStats.unknownChannel += stats.unknownChannel
