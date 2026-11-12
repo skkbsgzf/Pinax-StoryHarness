@@ -1,21 +1,22 @@
 /**
- * 世界书 Wiki 生成器 v3（作者 2026-11-12 裁定：对齐原版 ref-Novelpedia demo 的单页 Pedia 形态）。
+ * 世界书 Wiki 生成器 v4（作者 2026-11-13 裁定：数据面板形态＋接入 OpenDesign 接口＋高级图表）。
  *
- * 形态（原版 demo/index.html 的结构）：单页 tab 式 Pedia，这里收敛为 8 个视图——
- *   概览 / 章节大纲 / 时间线 / 关系图谱 / 伏笔 / 人物页 / 词条页 / 单章页
- *   侧边导航 + 视图切换 + wiki-links（人物名/词条名点击即跳）+ 手写力导向 SVG 关系图。
+ * 形态：单页 Pedia → 数据面板。侧边导航 + 视图切换（概览仪表盘/人物矩阵/时间线/关系图谱/伏笔/人物页），
+ * wiki-links 互跳，全部图表为内嵌 SVG（dashboard skill 约定：inline SVG only, no JS libraries），
+ * 设计 token 来自 OpenDesign `dashboard` 设计系统（构建期经 daemon API 拉取，离线回退包文件/内嵌常量）。
  *
- * 与 v2（多页静态 HTML）的区别：整本书一个 index.html，数据内嵌 DETAIL JSON，
- * SPA（wiki-spa.js，独立文件，零依赖）负责渲染；构建期只做确定性派生。
+ * OpenDesign 接口（2026-11-13 探明）：
+ *   · daemon HTTP：127.0.0.1:3000 / :7456 —— GET /api/design-templates、/api/design-systems[/:id]
+ *   · 结构化 token 真源：包内 design-systems/dashboard/tokens.css（浅色 analytics 风，sky #0ea5e9）
+ *   · 拉取顺序：daemon 详情（拿 provenance/summary）→ 包文件 tokens.css → 内嵌常量
  *
- * 数据源：拆解 JSON（fact.data/v3 条目 + wiki 增补字段）。
- *   · 事件/台词/行为：绑定路径产出，逐字取自原文；
- *   · 梗概/身份/性格：wiki-enrich 模型窄窗归纳，缺了退回确定性派生（标题从原文提取）。
+ * 数据源：拆解 JSON（fact.data/v3 条目 + wiki 增补字段）。事件/台词/行为逐字取自原文；
+ * 梗概/身份/性格来自 wiki-enrich 窄窗归纳；全部统计（matrix/channels/KPI delta）确定性派生。
  *
  * 输出：wiki/<id>/index.html 单文件。
  */
 
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { derivePseudoChapters, hasRealChapters } from './lib/pseudoChapters.mjs'
@@ -29,6 +30,69 @@ const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const OUT_ROOT = join(LIB, 'wiki')
 const ids = process.argv.slice(2).filter((item) => !item.startsWith('--'))
 const SPA_SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'wiki-spa.js'), 'utf8')
+
+/* ---------- OpenDesign 设计系统接入（构建期） ---------- */
+
+const OD_PORTS = [3000, 7456]
+const OD_TOKENS_DISK = 'D:/OpenDesign/resources/open-design/design-systems/dashboard/tokens.css'
+
+/** 从 tokens.css 提取图表调色板（SPA SVG 需要具体色值，CSS 变量进 :root）。 */
+function extractPalette(css) {
+  const grab = (name, fallback) => {
+    const m = new RegExp(`--${name}\\s*:\\s*([^;]+);`).exec(css)
+    return m ? m[1].trim() : fallback
+  }
+  return {
+    accent: grab('accent', '#0ea5e9'),
+    success: grab('success', '#10b981'),
+    warn: grab('warn', '#f59e0b'),
+    danger: grab('danger', '#ef4444'),
+    bg: grab('bg', '#f4f7fb'),
+    surface: grab('surface', '#ffffff'),
+    fg: grab('fg', '#111827'),
+    fg2: grab('fg-2', '#334155'),
+    muted: grab('muted', '#64748b'),
+    meta: grab('meta', '#0ea5e9'),
+    border: grab('border', '#d8e2ee'),
+    borderSoft: grab('border-soft', '#edf3f8')
+  }
+}
+
+/** 内嵌兜底 token（与包内 tokens.css 同值；daemon 与磁盘都不可达时使用）。 */
+const FALLBACK_TOKENS_CSS = `:root {
+  --bg: #f4f7fb; --surface: #ffffff; --surface-warm: #eef6ff;
+  --fg: #111827; --fg-2: #334155; --muted: #64748b; --meta: #0ea5e9;
+  --border: #d8e2ee; --border-soft: #edf3f8;
+  --accent: #0ea5e9; --success: #10b981; --warn: #f59e0b; --danger: #ef4444;
+  --font-body: Inter, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --text-sm: 13px; --text-base: 15px; --text-xl: 22px; --text-2xl: 30px;
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 18px;
+  --motion-base: 200ms; --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}`
+
+/**
+ * 解析 dashboard 设计系统：daemon（拿 provenance）→ 包文件 tokens.css → 内嵌兜底。
+ * @returns {Promise<{css, palette, summary, source}>}
+ */
+async function resolveDesignSystem() {
+  for (const port of OD_PORTS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/design-systems/dashboard`, { signal: AbortSignal.timeout(1500) })
+      if (!res.ok) continue
+      const data = await res.json()
+      const summary = data?.designSystem?.summary ?? 'Dashboard'
+      if (existsSync(OD_TOKENS_DISK)) {
+        const css = readFileSync(OD_TOKENS_DISK, 'utf8')
+        return { css, palette: extractPalette(css), summary, source: `opendesign-daemon:${port}` }
+      }
+    } catch { /* daemon 未起则下一个端口/回退 */ }
+  }
+  if (existsSync(OD_TOKENS_DISK)) {
+    const css = readFileSync(OD_TOKENS_DISK, 'utf8')
+    return { css, palette: extractPalette(css), summary: 'Dashboard', source: 'opendesign-bundled' }
+  }
+  return { css: FALLBACK_TOKENS_CSS, palette: extractPalette(FALLBACK_TOKENS_CSS), summary: 'Dashboard', source: 'embedded-fallback' }
+}
 
 /** 章标题：从原文提取（「第1章 相亲」）。无章节标记的书返回空表。 */
 const CHAPTER_TITLE_LINE = /^[ \t　]*(第\s*\d+\s*章[^\n]*)$/gmu
@@ -142,7 +206,8 @@ function deriveTerms(entries, plots) {
 
 /* ---------- 单本构建 ---------- */
 
-function buildBook(id) {
+function buildBook(id, ds) {
+  if (!ds?.palette) throw new Error('buildBook 需要 ds（await resolveDesignSystem()）')
   const result = JSON.parse(readFileSync(join(LIB, '拆解', `${id}.json`), 'utf8'))
   const book = result.book
   const wiki = result.wiki ?? null
@@ -303,7 +368,9 @@ function buildBook(id) {
       storySummary: wiki?.storySummary ?? '',
       arc: wiki?.arc ?? []
     },
-    quality: { traceableRate: result.quality?.traceableRate ?? null }
+    quality: { traceableRate: result.quality?.traceableRate ?? null },
+    // OpenDesign dashboard 设计系统（token 真源＋SVG 图表调色板＋来源标识）
+    ds: { id: 'dashboard', title: 'Dashboard', summary: ds.summary, source: ds.source, palette: ds.palette }
   }
 
   // 单文件 HTML：样式 + DOM 骨架 + DETAIL JSON + SPA
@@ -313,62 +380,73 @@ function buildBook(id) {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${book.title} · 世界书</title>
 <style>
-:root { --bg:#12141a; --panel:#1a1d26; --line:#2a2f3d; --text:#e6e8ee; --dim:#9aa3b5; --accent:#7aa2ff; --warm:#ffb454; --green:#7ddc9a; --red:#ff7a8a; }
+/* OpenDesign dashboard 设计系统 token（构建期自 daemon/包文件拉取） */
+${ds.css}
+/* ---------- 组件层（全部走 DS token） ---------- */
 * { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--text); font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif; }
-a { color:var(--accent); text-decoration:none; cursor:pointer; } a:hover { text-decoration:underline; }
-#side { position:fixed; left:0; top:0; bottom:0; width:264px; overflow-y:auto; background:var(--panel); border-right:1px solid var(--line); padding:20px 14px; z-index:30; transition:transform .2s; }
-#side h3 { font-size:12px; color:var(--dim); margin:18px 0 6px; text-transform:uppercase; letter-spacing:.08em; }
+body { margin:0; background:var(--bg); color:var(--fg); font:var(--text-base)/1.6 var(--font-body, Inter, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif); }
+a { color:var(--accent); text-decoration:none; cursor:pointer; transition:color var(--motion-base) var(--ease-standard); } a:hover { text-decoration:underline; }
+#side { position:fixed; left:0; top:0; bottom:0; width:264px; overflow-y:auto; background:var(--surface); border-right:1px solid var(--border); padding:20px 14px; z-index:30; transition:transform .2s; }
+#side h3 { font-size:11px; color:var(--muted); margin:18px 0 6px; text-transform:uppercase; letter-spacing:.08em; }
 #side h3:first-child { margin-top:0; }
-.nav a { display:block; padding:5px 10px; border-radius:6px; color:var(--text); font-size:14px; }
-.nav a:hover { background:#232838; text-decoration:none; }
-.nav a.on { background:#232838; color:var(--accent); font-weight:600; }
-#view { margin-left:264px; max-width:940px; padding:36px 32px 90px; }
-h1 { font-size:26px; margin:0 0 8px; line-height:1.4; } h2 { font-size:19px; margin:34px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--line); }
-h2 small { font-size:12px; color:var(--dim); font-weight:400; margin-left:10px; }
-.chartbox { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px 8px; margin:10px 0 4px; position:relative; }
-.hover-read { position:absolute; right:16px; top:10px; font-size:12px; color:var(--dim); opacity:.35; transition:opacity .15s; pointer-events:none; }
+.nav a { display:block; padding:5px 10px; border-radius:var(--radius-sm); color:var(--fg-2); font-size:14px; transition:background 120ms var(--ease-standard), color var(--motion-base) var(--ease-standard); }
+.nav a:hover { background:var(--border-soft); text-decoration:none; }
+.nav a.on { background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); font-weight:600; }
+#view { margin-left:264px; max-width:960px; padding:36px 32px 90px; }
+h1 { font-size:26px; margin:0 0 8px; line-height:1.3; letter-spacing:-0.01em; }
+h2 { font-size:17px; margin:34px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--border-soft); }
+h2 small { font-size:12px; color:var(--muted); font-weight:400; margin-left:10px; }
+.meta { color:var(--muted); font-size:13px; margin-bottom:22px; } .meta span + span::before { content:" · "; }
+.summary { background:var(--surface-warm); border-left:3px solid var(--accent); padding:14px 18px; border-radius:0 var(--radius-sm) var(--radius-sm) 0; margin:14px 0; line-height:1.85; color:var(--fg-2); }
+/* KPI 卡片行（dashboard skill Row 1 约定） */
+.kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin:20px 0 6px; }
+.kpi { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; box-shadow:0 1px 2px rgba(15,23,42,.04); }
+.kpi .k-label { font-size:12px; color:var(--muted); }
+.kpi .k-value { font-size:var(--text-2xl); font-weight:700; color:var(--fg); line-height:1.2; margin-top:4px; font-variant-numeric:tabular-nums; }
+.kpi .k-delta { display:inline-block; margin-top:6px; font-size:11px; border-radius:9999px; padding:1px 9px; }
+.kpi .k-delta.up { background:color-mix(in srgb, var(--success) 14%, transparent); color:var(--success); }
+.kpi .k-delta.down { background:color-mix(in srgb, var(--danger) 14%, transparent); color:var(--danger); }
+.kpi .k-delta.flat { background:var(--border-soft); color:var(--muted); }
+@media (max-width:760px) { .kpis { grid-template-columns:repeat(2,1fr); } }
+/* 图表盒 */
+.chartbox { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px 8px; margin:10px 0 4px; position:relative; }
+.hover-read { position:absolute; right:16px; top:10px; font-size:12px; color:var(--muted); opacity:.35; transition:opacity .15s; pointer-events:none; font-variant-numeric:tabular-nums; }
 .hbar { display:flex; align-items:center; gap:10px; margin:5px 0; }
-.hbar .hb-label { width:110px; text-align:right; font-size:13px; color:var(--text); flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.hbar .hb-track { flex:1; height:12px; background:#232838; border-radius:6px; overflow:hidden; }
-.hbar .hb-fill { display:block; height:100%; border-radius:6px; opacity:.85; }
-.hbar .hb-val { width:86px; font-size:12px; color:var(--dim); flex:none; }
-.hbar .hb-val em { font-style:normal; color:#72777d; margin-left:4px; }
+.hbar .hb-label { width:110px; text-align:right; font-size:13px; color:var(--fg-2); flex:none; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hbar .hb-track { flex:1; height:12px; background:var(--border-soft); border-radius:6px; overflow:hidden; }
+.hbar .hb-fill { display:block; height:100%; border-radius:6px; transition:width var(--motion-base) var(--ease-standard); }
+.hbar .hb-val { width:86px; font-size:12px; color:var(--muted); flex:none; font-variant-numeric:tabular-nums; }
+.hbar .hb-val em { font-style:normal; color:var(--muted); margin-left:4px; }
 .hbars .hbar .hb-label { width:52px; }
-.sharebar { display:flex; height:18px; border-radius:9px; overflow:hidden; margin:12px 0 8px; background:#232838; }
-.sharebar .seg { display:block; height:100%; opacity:.88; }
 .chips { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0 4px; }
-.chip { font-size:12px; color:var(--dim); background:#232838; border-radius:10px; padding:2px 10px; }
-.chip b { color:var(--text); font-weight:600; }
-.chip.green { background:#183222; color:var(--green); } .chip.red { background:#3a1820; color:var(--red); }
-details.drill { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px; margin:8px 0; }
-details.drill summary { cursor:pointer; color:var(--dim); font-size:13px; user-select:none; }
+.chip { font-size:12px; color:var(--fg-2); background:var(--border-soft); border:1px solid var(--border-soft); border-radius:9999px; padding:2px 10px; }
+.chip b { color:var(--fg); font-weight:600; }
+.chip.green { background:color-mix(in srgb, var(--success) 12%, transparent); color:var(--success); border-color:transparent; }
+.chip.red { background:color-mix(in srgb, var(--danger) 12%, transparent); color:var(--danger); border-color:transparent; }
+details.drill { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:10px 14px; margin:8px 0; }
+details.drill summary { cursor:pointer; color:var(--muted); font-size:13px; user-select:none; }
 details.drill summary:hover { color:var(--accent); }
-details.drill[open] summary { border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:8px; }
-.arc-range { font-size:12px; color:var(--dim); font-weight:400; margin-left:10px; }
-.meta { color:var(--dim); font-size:13px; margin-bottom:22px; } .meta span + span::before { content:" · "; }
-.summary { background:var(--panel); border-left:3px solid var(--accent); padding:14px 18px; border-radius:0 8px 8px 0; margin:14px 0; line-height:1.9; }
+details.drill[open] summary { border-bottom:1px solid var(--border-soft); padding-bottom:8px; margin-bottom:8px; }
+.arc-range { font-size:12px; color:var(--muted); font-weight:400; margin-left:10px; }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }
-.card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
-.card h4 { margin:0 0 6px; font-size:16px; } .card .sub { color:var(--dim); font-size:12px; margin-top:6px; }
-.tag { display:inline-block; background:#232838; color:var(--dim); border-radius:4px; padding:1px 7px; font-size:12px; margin:2px 4px 2px 0; }
-.tag.warm { background:#3a2c18; color:var(--warm); } .tag.green { background:#183222; color:var(--green); } .tag.red { background:#3a1820; color:var(--red); }
+.card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px; }
+.card h4 { margin:0 0 6px; font-size:16px; } .card .sub { color:var(--muted); font-size:12px; margin-top:6px; }
+.tag { display:inline-block; background:var(--border-soft); color:var(--muted); border-radius:4px; padding:1px 7px; font-size:12px; margin:2px 4px 2px 0; }
+.tag.warm { background:color-mix(in srgb, var(--warn) 12%, transparent); color:var(--warn); }
+.tag.green { background:color-mix(in srgb, var(--success) 12%, transparent); color:var(--success); }
+.tag.red { background:color-mix(in srgb, var(--danger) 12%, transparent); color:var(--danger); }
 ul { margin:6px 0; padding-left:20px; } li { margin:4px 0; }
-.quote { border-left:2px solid var(--accent); padding-left:12px; color:#cfd6e6; margin:6px 0; }
-.event { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin:6px 0; }
-.event .who { color:var(--warm); font-weight:600; } .event .ch { color:var(--dim); font-size:12px; }
-.stat { display:flex; gap:26px; flex-wrap:wrap; margin:18px 0; } .stat div b { display:block; font-size:24px; color:var(--accent); } .stat div span { font-size:12px; color:var(--dim); }
-.chbar { display:flex; align-items:flex-end; gap:2px; height:52px; margin:10px 0 4px; }
-.chbar div { width:8px; background:var(--accent); border-radius:2px 2px 0 0; opacity:.75; }
-.tl { position:relative; padding-left:24px; } .tl::before { content:""; position:absolute; left:8px; top:0; bottom:0; width:2px; background:var(--line); }
-.tl-item { position:relative; margin:14px 0; } .tl-item::before { content:""; position:absolute; left:-22px; top:10px; width:10px; height:10px; border-radius:50%; background:var(--accent); }
-.outline-ch { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 18px; margin:12px 0; }
-.outline-ch h3 { margin:0 0 8px; font-size:17px; color:var(--warm); }
-svg.relation { display:block; width:100%; height:480px; background:var(--panel); border:1px solid var(--line); border-radius:12px; }
-.legend { color:var(--dim); font-size:13px; margin-top:10px; } .legend .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin:0 6px 0 12px; }
-#sideToggle { display:none; position:fixed; left:14px; top:14px; z-index:50; background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 12px; font-size:16px; cursor:pointer; }
-#sideMask { display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:25; }
-#homeLink { position:fixed; right:18px; top:14px; z-index:40; font-size:13px; color:var(--dim); background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:5px 12px; }
+.quote { border-left:2px solid var(--accent); padding-left:12px; color:var(--fg-2); margin:6px 0; }
+.event { background:var(--surface); border:1px solid var(--border-soft); border-radius:var(--radius-sm); padding:10px 14px; margin:6px 0; }
+.event .who { color:var(--accent); font-weight:600; } .event .ch { color:var(--muted); font-size:12px; }
+.outline-ch { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 18px; margin:12px 0; }
+.outline-ch h3 { margin:0 0 8px; font-size:16px; color:var(--fg); font-weight:650; }
+svg.relation { display:block; width:100%; height:480px; background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); }
+.legend { color:var(--muted); font-size:13px; margin-top:10px; } .legend .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin:0 6px 0 12px; }
+#dsFooter { color:var(--muted); font-size:11px; margin-top:56px; border-top:1px solid var(--border-soft); padding-top:12px; }
+#sideToggle { display:none; position:fixed; left:14px; top:14px; z-index:50; background:var(--surface); color:var(--fg); border:1px solid var(--border); border-radius:var(--radius-sm); padding:6px 12px; font-size:16px; cursor:pointer; }
+#sideMask { display:none; position:fixed; inset:0; background:rgba(15,23,42,.35); z-index:25; }
+#homeLink { position:fixed; right:18px; top:14px; z-index:40; font-size:13px; color:var(--fg-2); background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-sm); padding:5px 12px; }
 #homeLink:hover { color:var(--accent); text-decoration:none; }
 @media (max-width: 900px) {
   #side { transform:translateX(-100%); } #side.open { transform:none; }
@@ -410,7 +488,9 @@ if (isCli) {
     console.error('用法：node devtools/build-wiki.mjs --lib=<库目录> <id> [<id>...]')
     process.exit(2)
   }
-  console.log(JSON.stringify(ids.map(buildBook), null, 2))
+  const ds = await resolveDesignSystem()
+  const built = ids.map((id) => buildBook(id, ds))
+  console.log(JSON.stringify(built.map((b) => ({ ...b, designSystem: ds.source })), null, 2))
 }
 
-export { buildBook }
+export { buildBook, resolveDesignSystem }

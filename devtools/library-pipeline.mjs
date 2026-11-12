@@ -21,7 +21,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { extractBook } from './run-extract-library.mjs'
 import { runIntegrate } from './lib/integrate-decompose.mjs'
-import { buildBook } from './build-wiki.mjs'
+import { buildBook, resolveDesignSystem } from './build-wiki.mjs'
 import { buildWikiIndex } from './build-wiki-index.mjs'
 import { enrichBook } from './wiki-enrich-run.mjs'
 
@@ -129,9 +129,10 @@ async function main() {
     }
   }
 
-  // ③ Wiki
+  // ③ Wiki（OpenDesign dashboard 设计系统：daemon→包文件→内嵌兜底）
   if (!SKIP_WIKI) {
-    for (const id of okIds) buildBook(id)
+    const ds = await resolveDesignSystem()
+    for (const id of okIds) buildBook(id, ds)
     buildWikiIndex(LIB)
   }
 
