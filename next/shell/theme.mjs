@@ -26,7 +26,11 @@ export function isValidScheme(value) {
   return VALID_SCHEMES.includes(value)
 }
 
-/** 首帧：偏好是异步读的，先用应用默认值把页面画出来（浏览器缓存不是权威，R3-1）。 */
+/**
+ * 首帧：偏好是异步读的，先用应用默认值把页面画出来（浏览器缓存不是权威，R3-1）。
+ * 〔设置图谱 5.2，作者 2026-11-13 设置图谱裁定〕这里只给首帧默认值，不读任何持久化缓存：
+ * 主题的真相只有偏好 JSON 的 theme；本地缓存只写不读（双写桥见 writeScheme）。
+ */
 export function readScheme() {
   return DEFAULT_SCHEME
 }

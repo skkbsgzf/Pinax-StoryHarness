@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { IPC_CHANNELS } from '../ipcContract.mjs'
 
 /**
@@ -37,6 +37,61 @@ const manifest = ref(null)
 const restoreTarget = ref(null)
 const restoredRoot = ref(null)
 const restoreError = ref(null)
+
+/**
+ * 〔工单 P8 · B-10，作者 2026-11-13 设置图谱裁定〕定时快照间隔：应用级偏好
+ * historyIntervalMinutes，0–120 的整数分钟，0＝关闭。写走 prefs:set；主进程的
+ * onPrefsApplied 已经在同一拍里按新值重排快照调度器，本节不再另发一条重启指令。
+ */
+const INTERVAL_DEFAULT = 5
+const INTERVAL_MAX = 120
+const intervalDraft = ref(INTERVAL_DEFAULT)
+const intervalBusy = ref(false)
+const intervalFeedback = ref(null)
+const intervalError = ref('')
+
+onMounted(async () => {
+  if (!props.bridge?.request) return
+  let result
+  try {
+    result = await props.bridge.request(IPC_CHANNELS.prefsGet, {})
+  } catch {
+    return
+  }
+  if (!result?.ok) return
+  const value = Number(result.value?.historyIntervalMinutes)
+  if (Number.isFinite(value) && value >= 0 && value <= INTERVAL_MAX) intervalDraft.value = value
+})
+
+async function saveInterval() {
+  if (!props.bridge?.request || intervalBusy.value) return
+  const minutes = Number(intervalDraft.value)
+  if (intervalDraft.value === '' || intervalDraft.value === null || !Number.isInteger(minutes) || minutes < 0 || minutes > INTERVAL_MAX) {
+    intervalError.value = `间隔要是 0–${INTERVAL_MAX} 之间的整数分钟（0＝关闭）。`
+    intervalFeedback.value = null
+    return
+  }
+  intervalBusy.value = true
+  intervalError.value = ''
+  intervalFeedback.value = null
+  let result
+  try {
+    result = await props.bridge.request(IPC_CHANNELS.prefsSet, { historyIntervalMinutes: minutes })
+  } catch (error) {
+    result = { ok: false, error: { message: String(error?.message || error) } }
+  }
+  intervalBusy.value = false
+  if (!result?.ok) {
+    intervalFeedback.value = { kind: 'error', text: result?.error?.message ?? '保存失败。' }
+    return
+  }
+  const applied = Number(result.value?.historyIntervalMinutes)
+  if (Number.isFinite(applied)) intervalDraft.value = applied
+  intervalFeedback.value = {
+    kind: 'ok',
+    text: minutes === 0 ? '已保存并生效：定时快照已关闭。' : `已保存并生效：每 ${minutes} 分钟快照一次。`
+  }
+}
 
 const canExport = computed(() => Boolean(props.bridge?.request && props.project && !busy.value))
 const canInspect = computed(() => Boolean(props.bridge?.request && !busy.value))
@@ -145,14 +200,41 @@ async function restore() {
 
 <template>
   <div>
-    <!-- 〔批次68-R3 指南层〕节首只留一句白话；机制细节（目录名、文件名、历史仓路径）进「细节」折叠。 -->
-    <p class="settings-save-model" data-test="backup-save-model">动作即执行：备份与恢复都是点下就做，本节没有需要保存的设置。</p>
+    <!-- 〔批次68-R3 指南层〕节首只留一句白话；机制细节（目录名、文件名、历史仓路径）进「细节」折叠。
+         〔工单 P8 · B-10〕本节新增定时快照间隔：显式保存；导出／恢复仍是点下就做。 -->
+    <p class="settings-save-model" data-test="backup-save-model">定时快照间隔改完点「保存间隔」才写入；备份与恢复是点下就做。</p>
     <p class="wizard-note">备份＝整份复制项目文件夹；恢复只回空目录，不覆盖现稿。</p>
     <details class="nx-note-details">
       <summary>细节</summary>
       <p>备份文件夹命名为「项目名-backup-时间戳」，不压缩、不做增量。历史仓默认不进备份——体积大，
         时间线另由「文档历史」负责；要连历史一起带走就勾选下面的选项（历史仓即 .pinax/history.git）。</p>
     </details>
+
+    <section class="backup-block">
+      <h3 class="settings-panel-heading">定时快照</h3>
+      <div class="prefs-grid">
+        <div class="prefs-row">
+          <label class="prefs-row-label" for="backup-interval">间隔（分钟）</label>
+          <input
+            id="backup-interval"
+            v-model.number="intervalDraft"
+            class="nx-field backup-interval"
+            type="number"
+            min="0"
+            max="120"
+            step="1"
+            :aria-invalid="intervalError ? 'true' : undefined"
+            data-test="backup-interval"
+          >
+          <button type="button" class="control-secondary" :disabled="intervalBusy" data-test="backup-interval-save" @click="saveInterval">
+            {{ intervalBusy ? '正在保存…' : '保存间隔' }}
+          </button>
+        </div>
+        <p v-if="intervalError" class="settings-field-error" data-test="backup-interval-error">{{ intervalError }}</p>
+        <p class="prefs-row-hint" data-test="backup-interval-hint">应用级，不随库走；0＝关闭定时快照。</p>
+        <p v-if="intervalFeedback" class="prefs-state" :class="intervalFeedback.kind === 'ok' ? 'is-ready' : 'is-error'" data-test="backup-interval-feedback">{{ intervalFeedback.text }}</p>
+      </div>
+    </section>
 
     <section class="backup-block">
       <h3 class="settings-panel-heading">导出备份</h3>
@@ -235,6 +317,17 @@ async function restore() {
   font-size: var(--nx-fs-2xs);
   line-height: 1.6;
   color: var(--text-muted);
+}
+.settings-field-error {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--control-danger);
+}
+/* 间隔数字框只占固定宽（布局尺寸，不是字号/圆角刻度）。 */
+.backup-interval {
+  flex: 0 0 110px;
+  width: 110px;
 }
 /* 两个动作块之间的留白与勾选行的排布；字号/颜色一律走 token（Next 自写样式禁裸 px 字号与圆角）。 */
 .backup-block {

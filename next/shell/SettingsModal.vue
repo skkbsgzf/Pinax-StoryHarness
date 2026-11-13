@@ -4,6 +4,9 @@ import WorkbenchModal from './WorkbenchModal.vue'
 import CarrierSettingsGeneric from './settings/CarrierSettingsGeneric.vue'
 import SkillsSection from './settings/SkillsSection.vue'
 import OverviewSection from './settings/OverviewSection.vue'
+import AppearanceSection from './settings/AppearanceSection.vue'
+import WritingSection from './settings/WritingSection.vue'
+import HotkeysSection from './settings/HotkeysSection.vue'
 
 /**
  * SettingsModal（工单C0 · U13 作者裁定）：统一的二级页面。
@@ -101,6 +104,9 @@ const searchQuery = ref('')
  * 拼上载体前缀才能当全局目录键（DOM id／activeSection／搜索命中都用这一份）。
  * 内容组件按「声明 id」查 props.carrierSectionComponents（工单B：novel.writing → WritingPrefsSection）：
  * 查到就是 kind:'carrier-settings-content'（右栏渲染真内容），查不到仍是空态（不伪造设置项）。
+ * 〔工单 P8 · B-7，作者 2026-11-13 设置图谱裁定〕写作排版迁应用级「写作」节（builtInSections），
+ * SUPPRESSED_CARRIER_SETTING_IDS 里的声明虽然保留在载体清单里，但不再从载体组发目录项——
+ * 同一项设置只留一个入口，不让目录里出现两格同名内容。
  *
  * 批次45：没有专属组件、但声明了受支持类型的（section／string／number／boolean／enum），
  * 走通用渲染器 CarrierSettingsGeneric，值读写当前项目的 .pinax/settings.json；
@@ -108,11 +114,14 @@ const searchQuery = ref('')
  */
 const GENERIC_SETTING_TYPES = new Set(['section', 'string', 'number', 'boolean', 'enum'])
 
+/** 迁移后不再由载体组发出的声明 id（见上方 B-7 注）；声明本身留在载体的 settings 清单里。 */
+const SUPPRESSED_CARRIER_SETTING_IDS = new Set(['novel.writing'])
+
 const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
   if (!carrier?.id || !carrier?.title) return []
   const declared = Array.isArray(carrier.settings) ? carrier.settings : []
   return declared
-    .filter((setting) => setting?.id && setting?.title)
+    .filter((setting) => setting?.id && setting?.title && !SUPPRESSED_CARRIER_SETTING_IDS.has(setting.id))
     .map((setting) => {
       const mapped = props.carrierSectionComponents?.[setting.id] ?? null
       const generic = !mapped?.component && GENERIC_SETTING_TYPES.has(setting.type)
@@ -157,6 +166,16 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
  */
 const hostHasAppSections = computed(() => props.sections.some((section) => section?.group === '应用'))
 
+/**
+ * 〔工单 P8 · B-6／B-7／B-8，作者 2026-11-13 设置图谱裁定〕三个新节也在这里注册：
+ *   · 外观（应用组，紧随意「偏好与模型」之后）——主题＋界面缩放；
+ *   · 写作（应用组，紧随外观）——六项排版偏好（从载体声明的 novel.writing 迁来）；
+ *   · 快捷键（项目组，紧随「库设置（模块管理）」）——键位存在当前库里，随库走。
+ * 注册点为什么在弹窗这一层：宿主 AppNext 的 settingsSections 不在本工单允许文件里；
+ * 目录表本来就是「宿主节＋内置节＋载体声明节」三段拼的，中间插内置节是这一层已有的形状。
+ * 三节都自己经 bridge 读数据（不依赖宿主灌 props），所以这里只需要一枚桥。
+ * 插入位置按锚点 id 现算（见 allSections）：组的顺序与节序都是 shell-ui 钉着的规格。
+ */
 const builtInSections = computed(() => {
   const list = [{
     id: 'skills',
@@ -169,6 +188,30 @@ const builtInSections = computed(() => {
   }]
   if (hostHasAppSections.value) {
     list.push({
+      id: 'appearance',
+      title: '外观',
+      group: '应用',
+      keywords: ['外观', '主题', '明暗', '浅色', '深色', '界面缩放', '缩放', '换肤'],
+      component: AppearanceSection,
+      props: { bridge: props.bridge }
+    })
+    list.push({
+      id: 'writing',
+      title: '写作',
+      group: '应用',
+      keywords: ['写作', '写作偏好', '排版', '正文字号', '字号', '正文行高', '行高', '段落间距', '首行缩进', '打字机滚动', '段落聚焦'],
+      component: WritingSection,
+      props: { bridge: props.bridge }
+    })
+    list.push({
+      id: 'hotkeys',
+      title: '快捷键',
+      group: '项目',
+      keywords: ['快捷键', '键位', '组合键', '按键', '录入', '恢复默认', '冲突', '库设置'],
+      component: HotkeysSection,
+      props: { bridge: props.bridge }
+    })
+    list.push({
       id: 'overview',
       title: '设置总览',
       group: '应用',
@@ -180,7 +223,40 @@ const builtInSections = computed(() => {
   return list
 })
 
-const allSections = computed(() => [...props.sections, ...builtInSections.value, ...carrierSections.value])
+/** 新内置节的锚点：注册表本身不保证宿主节的顺序，插入位置按锚点 id 现算。 */
+const ANCHORED_SECTION_IDS = new Set(['appearance', 'writing', 'hotkeys'])
+
+/**
+ * 目录全表：宿主节 → 内置节（外观／写作插在「偏好与模型」后，快捷键插在「库设置（模块管理）」后，
+ * 其余内置节追加在宿主节之后）→ 载体声明节。
+ * 锚点缺失时新节仍追加在后面（不吞入口）；锚点存在时不重复插入。
+ */
+const allSections = computed(() => {
+  const builtIns = builtInSections.value
+  const inserted = new Set()
+  const merged = []
+  for (const section of props.sections) {
+    merged.push(section)
+    if (section.id === 'prefs') {
+      for (const extra of builtIns) {
+        if (extra.id !== 'appearance' && extra.id !== 'writing') continue
+        merged.push(extra)
+        inserted.add(extra.id)
+      }
+    } else if (section.id === 'carriers') {
+      for (const extra of builtIns) {
+        if (extra.id !== 'hotkeys') continue
+        merged.push(extra)
+        inserted.add(extra.id)
+      }
+    }
+  }
+  for (const extra of builtIns) {
+    if (ANCHORED_SECTION_IDS.has(extra.id) && !inserted.has(extra.id)) merged.push(extra)
+  }
+  const tail = builtIns.filter((section) => !ANCHORED_SECTION_IDS.has(section.id))
+  return [...merged, ...tail, ...carrierSections.value]
+})
 
 /** 当前节：目录里没有的 id 回落第一节，右栏不出现空窗。 */
 const current = computed(() => allSections.value.find((section) => section.id === props.activeSection) ?? allSections.value[0] ?? null)

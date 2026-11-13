@@ -9,6 +9,7 @@ import WorldbookGroupedTree from '../shell/WorldbookGroupedTree.vue'
 import IndexWindow from '../shell/IndexWindow.vue'
 import ProposalsSection from '../shell/settings/ProposalsSection.vue'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
+import { defaultBindings } from '../shell/hotkeys.mjs'
 import { hostWorkspace, resetWorkspace } from '../shell/workspace.mjs'
 import { CUSTOM_VIEW_TYPE, hostViewRegistry } from '../shell/viewRegistry.mjs'
 import { RUNTIME_CONTRACT } from '../runtime/runtimeContract.mjs'
@@ -2149,7 +2150,10 @@ describe('偏好与模型面板（批次8①）', () => {
     const panel = wrapper.find('[aria-label="偏好与模型"]')
     expect(panel.exists()).toBe(true)
     expect(panel.find('.prefs-input').element.value).toBe('http://127.0.0.1:8461')
-    expect(Number(panel.find('.prefs-zoom').element.value)).toBe(0.9)
+    // 〔工单 P8 · B-6，作者 2026-11-13 设置图谱裁定〕界面缩放迁出偏好节，落「外观」节；值仍来自同一次 prefsGet。
+    await wrapper.find('[data-test="settings-tab-appearance"]').trigger('click')
+    await flushPromises()
+    expect(Number(wrapper.find('[aria-label="外观"]').find('.prefs-zoom').element.value)).toBe(0.9)
     wrapper.unmount()
   })
 
@@ -2177,10 +2181,10 @@ describe('偏好与模型面板（批次8①）', () => {
 
     const panel = wrapper.find('[aria-label="偏好与模型"]')
     await panel.find('.prefs-input').setValue('')
-    await panel.find('.prefs-zoom').setValue('1.1')
+    // 〔工单 P8 · B-6，作者 2026-11-13 设置图谱裁定〕偏好节只剩端点：载荷不再夹带 uiZoom。
     await panel.find('.control-primary').trigger('click')
     await flushPromises()
-    expect(save).toHaveBeenCalledWith({ modelPlaneEndpoint: null, uiZoom: 1.1 })
+    expect(save).toHaveBeenCalledWith({ modelPlaneEndpoint: null })
     expect(wrapper.find('.prefs-state.is-ready').text()).toContain('已保存并生效')
     wrapper.unmount()
   })
@@ -2196,6 +2200,9 @@ describe('偏好与模型面板（批次8①）', () => {
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
     await flushPromises()
 
+    // 〔工单 P8 · B-6，作者 2026-11-13 设置图谱裁定〕主题迁「外观」节；真相仍是偏好 JSON 的 theme。
+    await wrapper.find('[data-test="settings-tab-appearance"]').trigger('click')
+    await flushPromises()
     const darkRadio = wrapper.find('input[name="prefs-theme"][value="dark"]')
     await darkRadio.setValue()
     await flushPromises()
@@ -2234,7 +2241,7 @@ describe('偏好与模型面板（批次8①）', () => {
     wrapper.unmount()
   })
 
-  it('写作偏好节（工单B＋批次46B）：六项保存时偏好载荷带全部 writing* 字段，根节点变量与开关数据集跟着变', async () => {
+  it('写作节（工单 P8 · B-7 迁应用组）：六项保存在「写作」节，载荷带全部 writing* 字段，根节点变量与开关数据集跟着变', async () => {
     const handlers = new Map()
     const save = vi.fn(async (patch) => ({
       ok: true,
@@ -2268,12 +2275,12 @@ describe('偏好与模型面板（批次8①）', () => {
 
     handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
     await flushPromises()
-    const writingTab = wrapper.findAll('.settings-navigation .settings-tab')
-      .find((node) => node.text() === '写作偏好')
-    await writingTab.trigger('click')
+    // 〔工单 P8 · B-7，作者 2026-11-13 设置图谱裁定〕写作排版是应用级节，目录项叫「写作」，
+    // 不再从载体声明的读写偏好节（carrier:fixture.novel:novel.writing）发出。
+    await wrapper.find('[data-test="settings-tab-writing"]').trigger('click')
     await flushPromises()
 
-    const panel = wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]')
+    const panel = wrapper.find('[data-test="settings-panel-writing"]')
     expect(panel.exists()).toBe(true)
     const fontInput = panel.find('.writing-font-size')
     const lineInput = panel.find('.writing-line-height')
@@ -2334,22 +2341,29 @@ describe('偏好与模型面板（批次8①）', () => {
     expect(panel.find('[data-test="prefs-save-model"]').text()).toContain('显式保存')
     expect(panel.find('[data-test="prefs-save-model"]').text()).toContain('保存并生效')
 
-    // 三个字段各有可见标签（不是只靠 placeholder）：主题是 span（单选组），另两个是 label＋for。
-    expect(panel.find('[data-test="prefs-field-theme"]').text()).toContain('外观主题')
+    // 偏好节只剩一个字段：可见 label＋for（不是只靠 placeholder）。
+    // 〔工单 P8 · B-6，作者 2026-11-13 设置图谱裁定〕主题与缩放的字段行随之外迁到「外观」。
     expect(panel.find('[data-test="prefs-field-endpoint"] .settings-field-label').text()).toBe('模型服务端点')
-    expect(panel.find('[data-test="prefs-field-zoom"] .settings-field-label').text()).toBe('界面缩放')
     expect(panel.find('#prefs-endpoint').exists()).toBe(true)
-    expect(panel.find('#prefs-zoom').exists()).toBe(true)
+    expect(panel.find('[data-test="prefs-field-theme"]').exists()).toBe(false)
+    expect(panel.find('[data-test="prefs-field-zoom"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="settings-tab-appearance"]').trigger('click')
+    await flushPromises()
+    const appearance = wrapper.find('[aria-label="外观"]')
+    expect(appearance.find('[data-test="appearance-field-theme"]').text()).toContain('外观主题')
+    expect(appearance.find('[data-test="appearance-field-zoom"] .settings-field-label').text()).toBe('界面缩放')
+    expect(appearance.find('#appearance-zoom').exists()).toBe(true)
 
     // 规范度量经 CSS 变量注入（与 fields.mjs 同源）：节内 16、控件 36、输入上限 480。
-    const fieldsRoot = panel.find('.settings-fields').element
+    const fieldsRoot = appearance.find('.settings-fields').element
     expect(fieldsRoot.style.getPropertyValue('--settings-field-gap')).toBe('16px')
     expect(fieldsRoot.style.getPropertyValue('--settings-control-height')).toBe('36px')
     expect(fieldsRoot.style.getPropertyValue('--settings-input-max')).toBe('480px')
     wrapper.unmount()
   })
 
-  it('恢复本节默认（工单 P2-3）：一次点击只出二次确认；确认后只发本节两项 patch，其余偏好不动', async () => {
+  it('恢复本节默认（工单 P2-3）：一次点击只出二次确认；确认后只发端点一项 patch，其余偏好不动', async () => {
     const handlers = new Map()
     const save = vi.fn(async (patch) => ({ ok: true, value: { ...patch } }))
     handlers.set(IPC_CHANNELS.prefsSet, save)
@@ -2372,18 +2386,17 @@ describe('偏好与模型面板（批次8①）', () => {
     await panel.find('[data-test="prefs-reset-confirm-ok"]').trigger('click')
     await flushPromises()
     expect(save).toHaveBeenCalledTimes(1)
-    // 载荷只有本节两个键：写作排版／主题／最近库都不在 patch 里（主题选完即生效，不归这条线）。
-    expect(save).toHaveBeenCalledWith({ modelPlaneEndpoint: null, uiZoom: null })
-    // 默认值回到草稿：端点空、缩放 0.85（存的是 null，生效默认 0.85）。
+    // 〔工单 P8 · B-6，作者 2026-11-13 设置图谱裁定〕缩放迁出本节：patch 只剩端点一个键，
+    // 外观（主题与缩放）／写作排版／最近库都不在载荷里。
+    expect(save).toHaveBeenCalledWith({ modelPlaneEndpoint: null })
     expect(panel.find('.prefs-input').element.value).toBe('')
-    expect(Number(panel.find('.prefs-zoom').element.value)).toBe(0.85)
     expect(panel.find('.prefs-state.is-ready').text()).toContain('已恢复本节默认')
     wrapper.unmount()
   })
 
   it('显式保存失败（工单 P2-2）：错误摆在字段下方，输入原样保留、不整节重置', async () => {
     const handlers = new Map()
-    const save = vi.fn(async () => ({ ok: false, error: { code: 'INVALID_INPUT', message: 'uiZoom 必须在 0.5–2 之间，收到：1.1' } }))
+    const save = vi.fn(async () => ({ ok: false, error: { code: 'INVALID_INPUT', message: 'modelPlaneEndpoint 不是合法地址' } }))
     handlers.set(IPC_CHANNELS.prefsSet, save)
     // theme 显式给值：缺 theme 时外壳挂载会补写一次默认主题（既有行为），那会把这次计数搅乱。
     const bridge = prefsBridge({ handlers, prefsValue: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } })
@@ -2394,23 +2407,21 @@ describe('偏好与模型面板（批次8①）', () => {
     const panel = wrapper.find('[aria-label="偏好与模型"]')
 
     await panel.find('.prefs-input').setValue('http://127.0.0.1:9999')
-    await panel.find('.prefs-zoom').setValue('1.1')
     await panel.find('.control-primary').trigger('click')
     await flushPromises()
 
     expect(save).toHaveBeenCalledTimes(1)
-    expect(panel.find('[data-test="prefs-error-zoom"]').text()).toContain('界面缩放没被接受')
-    // 作者刚填的两项都还在（整节重置会把它们抹掉）。
+    expect(panel.find('[data-test="prefs-error-endpoint"]').text()).toContain('端点没被接受')
+    // 作者刚填的值还在（整节重置会把它抹掉）。
     expect(panel.find('.prefs-input').element.value).toBe('http://127.0.0.1:9999')
-    expect(Number(panel.find('.prefs-zoom').element.value)).toBe(1.1)
 
-    // 本地校验先拦：越界缩放不发请求，错误同样落在字段下方。
+    // 本地校验先拦：非法端点不发请求，错误同样落在字段下方。
     save.mockClear()
-    await panel.find('.prefs-zoom').setValue('9')
+    await panel.find('.prefs-input').setValue('ftp://example.com')
     await panel.find('.control-primary').trigger('click')
     await flushPromises()
     expect(save).not.toHaveBeenCalled()
-    expect(panel.find('[data-test="prefs-error-zoom"]').text()).toContain('0.5–2')
+    expect(panel.find('[data-test="prefs-error-endpoint"]').text()).toContain('http(s)')
     wrapper.unmount()
   })
 
@@ -3634,17 +3645,17 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     // 〔批次68-R4 任务1〕只有单节的组（技能／载体）已拍平，不出组头，所以清单到此为止。
     const labels = wrapper.findAll('.settings-group-label').map((node) => node.text())
     // 前端工单 B-1：新建/导入/主载体/载体管理四节迁出（库管理器接管）——「项目」组整体消失。
-    expect(labels).toEqual(['应用', '文档'])
+    // 〔工单 P8 · B-8，作者 2026-11-13 设置图谱裁定〕快捷键节落「项目」组（与库设置同组），组头随之回来。
+    expect(labels).toEqual(['应用', '项目', '文档'])
 
-    // 内置节按组序排列：应用（偏好与模型/备份与恢复/服务与通知）→ 文档（文档历史…）；「载体管理」随 PR-3 迁模块管理。
+    // 内置节按组序排列：应用（偏好与模型/外观/写作/备份与恢复/服务与通知/设置总览）
+    // → 项目（库设置/快捷键）→ 文档（文档历史…）；「载体管理」随 PR-3 迁模块管理。
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
-    // 「载体管理」暂留原组（PR-3 迁模块管理——前端工单 A-7），单节组拍平不出组头。
-    // 〔工单 P2-4 扩展〕「设置总览」是本轮新登记的应用级只读节，按工单排在「应用」组最底部，
-    // 所以它落在服务与通知之后、库设置之前——切片从 4 扩到 5，不是把旧断言删掉。
-    expect(tabs.slice(0, 5)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '设置总览', '库设置（模块管理）'])
+    // 〔工单 P8 · B-6／B-7／B-8〕应用组前插外观与写作、项目组尾插快捷键；切片 5→8，不是把旧断言删掉。
+    expect(tabs.slice(0, 8)).toEqual(['偏好与模型', '外观', '写作', '备份与恢复', '服务与通知', '设置总览', '库设置（模块管理）', '快捷键'])
     // 〔批次68-R4 任务1·实测发现1〕组头是纯视觉层：不是 tab、不可聚焦、不参与方向键换节。
     const headers = wrapper.findAll('.settings-navigation .settings-group-label')
-    expect(headers).toHaveLength(2)
+    expect(headers).toHaveLength(3)
     for (const header of headers) {
       expect(header.element.tagName).toBe('P')
       expect(header.attributes('role')).toBeUndefined()
@@ -3741,17 +3752,18 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await flushPromises()
     expect(wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())).toEqual(['备份与恢复'])
 
-    // 〔任务4-2 的另一半〕字段标签进词表：作者搜「字号」是要改写作偏好，
+    // 〔任务4-2 的另一半〕字段标签进词表：作者搜「字号」是要改写作排版，
     // 原来目录空了、右栏却自说自话；现在「正文字号／行高／段落间距」这些控件名直接命中，
-    // 点这一格右栏就是那一节的真内容（组件仍由 AppNext 的映射表注入，不在弹窗里写死节名）。
+    // 点这一格右栏就是那一节的真内容。
+    // 〔工单 P8 · B-7，作者 2026-11-13 设置图谱裁定〕这一节已迁应用级「写作」，不再挂在载体声明下。
     await search.setValue('字号')
     await flushPromises()
     const fontTabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
-    expect(fontTabs).toEqual(['写作偏好'])
+    expect(fontTabs).toEqual(['写作'])
     expect(wrapper.find('[data-test="settings-search-blank"]').exists()).toBe(true)
     await wrapper.find('.settings-navigation .settings-tab').trigger('click')
     await flushPromises()
-    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-panel-writing"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="settings-search-blank"]').exists()).toBe(false)
 
     await search.setValue('不存在的设置项')
@@ -3763,17 +3775,18 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     expect(allBlank).toContain('没有与「不存在的设置项」匹配的设置项')
     expect(allBlank).not.toContain('左侧目录')
 
-    // 清空：目录恢复（静态八节在前，载体占位节在后），右栏跟着回来。
+    // 清空：目录恢复（宿主节＋内置节＋载体声明节），右栏跟着回来。
     await search.setValue('')
     await flushPromises()
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
-    // 前端工单 B-1：四节迁出后清单收敛。〔工单 P2-4 扩展〕应用组底部新增只读「设置总览」，切片 4→5。
-    expect(tabs.slice(0, 5)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '设置总览', '库设置（模块管理）'])
-    expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
+    // 前端工单 B-1：四节迁出后清单收敛。〔工单 P2-4 扩展〕应用组底部新增只读「设置总览」。
+    // 〔工单 P8 · B-6／B-7／B-8〕应用组前插外观与写作、项目组尾插快捷键，切片 5→8。
+    expect(tabs.slice(0, 8)).toEqual(['偏好与模型', '外观', '写作', '备份与恢复', '服务与通知', '设置总览', '库设置（模块管理）', '快捷键'])
+    expect(wrapper.find('[data-test="settings-panel-writing"]').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('载体设置节读真声明（P14 第二／三步）：有声明的载体出目录项，novel.writing 渲染真内容，未映射声明仍空态', async () => {
+  it('载体设置节读真声明（P14）：有声明的载体出目录项；写作声明迁应用组后不再重复出格，未映射声明仍空态', async () => {
     const handlers = new Map()
     const bridge = modalBridge({ handlers })
     const wrapper = mount(AppNext, { props: { bridge } })
@@ -3782,27 +3795,25 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await flushPromises()
 
     // 有声明的载体进目录，目录项文案就是声明里的 title——不再是按载体标题伪造的「<载体> 设置」。
-    // 〔批次68-R4 任务1〕单节组拍平：「载体」「技能」都不再出组头（组头与那一格同义），
-    // 写作偏好／技能库 作为顶级页面项出现并带分隔样式；前端工单 B-1 起「项目」组随四节迁出消失。
-    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toEqual(['应用', '文档'])
+    // 〔批次68-R4 任务1〕单节组拍平：「载体」「技能」都不再出组头（组头与那一格同义）。
+    // 〔工单 P8 · B-7，作者 2026-11-13 设置图谱裁定〕novel.writing 的声明保留在载体清单里，
+    // 但 UI 不再从载体组发出：写作落到「应用」组的「写作」节，载体组因此没有可出的格。
+    expect(wrapper.findAll('.settings-group-label').map((node) => node.text())).toEqual(['应用', '项目', '文档'])
     const standalone = wrapper.findAll('.settings-navigation .settings-tab.is-standalone').map((node) => node.text())
-    expect(standalone).toEqual(expect.arrayContaining(['技能库', '写作偏好']))
+    expect(standalone).toEqual(['技能库'])
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
-    expect(tabs).toContain('写作偏好')
+    expect(tabs).toContain('写作')
+    expect(tabs).not.toContain('写作偏好')
     expect(tabs).not.toContain('小说（夹具） 设置')
     // settings: [] 的载体不出目录项（fixture.script 声明为空）。
     expect(tabs).not.toContain('剧本（夹具） 设置')
 
-    const carrierTab = wrapper.findAll('.settings-navigation .settings-tab')
-      .find((node) => node.text() === '写作偏好')
-    await carrierTab.trigger('click')
+    // 应用级「写作」节照旧是真内容；prefsGet 没带写作字段（modalBridge 返回 {}）→ 组件按默认 17／1.9 起。
+    await wrapper.find('[data-test="settings-tab-writing"]').trigger('click')
     await flushPromises()
-    // 节 id 拼了载体前缀（声明 id 只在载体命名空间里唯一）；
-    // 工单B：novel.writing 在组件表里，右栏是真内容（字号/行高），不再是空态。
-    const panel = wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]')
+    const panel = wrapper.find('[data-test="settings-panel-writing"]')
     expect(panel.exists()).toBe(true)
     expect(wrapper.find('[data-test="carrier-settings-empty"]').exists()).toBe(false)
-    // prefsGet 没带写作字段（modalBridge 返回 {}）→ 组件按默认 17／1.9 起。
     expect(Number(panel.find('.writing-font-size').element.value)).toBe(17)
     expect(Number(panel.find('.writing-line-height').element.value)).toBe(1.9)
     wrapper.unmount()
@@ -3825,6 +3836,140 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     expect(unknown.find('[data-test="settings-panel-carrier:fixture.novel:novel.unknown"]').exists()).toBe(true)
     expect(unknown.find('[data-test="carrier-settings-empty"]').text()).toBe('该载体的设置项还没有内容')
     unknown.unmount()
+  })
+
+  /* —— 工单 P8 · B-8／B-10：快捷键节与定时快照间隔 ————————————————————— */
+
+  it('快捷键节（工单 P8 · B-8）：八条键位按当前库读出，点击录入后整表落盘、行内显示新键', async () => {
+    const handlers = new Map()
+    const loaded = defaultBindings()
+    const load = vi.fn(async () => ({ ok: true, value: { version: 1, bindings: loaded } }))
+    const save = vi.fn(async (payload) => ({ ok: true, value: { version: 1, bindings: payload.bindings } }))
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.hotkeysLoad) return load()
+      if (channel === IPC_CHANNELS.hotkeysSave) return save(payload)
+      return { ok: true, value: {} }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    const wrapper = mount(AppNext, { props: { bridge: { request, onEvent } } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    // 快捷键与「库设置（模块管理）」同组（项目组）。
+    await wrapper.find('[data-test="settings-tab-hotkeys"]').trigger('click')
+    await flushPromises()
+    const panel = wrapper.find('[data-test="settings-panel-hotkeys"]')
+    expect(panel.exists()).toBe(true)
+    expect(panel.find('[data-test="hotkeys-save-model"]').text()).toContain('即时保存')
+    expect(panel.findAll('[data-test^="hotkey-row-"]')).toHaveLength(8)
+    expect(panel.find('[data-test="hotkey-row-chat.send"]').text()).toContain('发送消息')
+    // 非 mac 的显示口径：CmdOrCtrl 落到 Ctrl。
+    expect(panel.find('[data-test="hotkey-key-palette.open"]').text()).toBe('Ctrl+P')
+
+    // 点击录入 → 按 Ctrl+Alt+K → 整表经 hotkeys:save 落盘，行内立刻显示新键。
+    await panel.find('[data-test="hotkey-record-chat.send"]').trigger('click')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, altKey: true, bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(save).toHaveBeenCalledTimes(1)
+    const payload = save.mock.calls[0][0]
+    expect(payload.bindings['chat.send']).toBe('Ctrl+Alt+K')
+    expect(payload.bindings['palette.open']).toBe('CmdOrCtrl+P')
+    expect(panel.find('[data-test="hotkey-key-chat.send"]').text()).toBe('Ctrl+Alt+K')
+    expect(panel.find('[data-test="hotkeys-feedback"]').text()).toContain('已保存并生效')
+    wrapper.unmount()
+  })
+
+  it('快捷键节冲突与恢复默认：撞键就地报错不落盘，恢复默认两次确认后整表回出厂', async () => {
+    const handlers = new Map()
+    const loaded = defaultBindings()
+    const load = vi.fn(async () => ({ ok: true, value: { version: 1, bindings: loaded } }))
+    const save = vi.fn(async (payload) => ({ ok: true, value: { version: 1, bindings: payload.bindings } }))
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.hotkeysLoad) return load()
+      if (channel === IPC_CHANNELS.hotkeysSave) return save(payload)
+      return { ok: true, value: {} }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    const wrapper = mount(AppNext, { props: { bridge: { request, onEvent } } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    await wrapper.find('[data-test="settings-tab-hotkeys"]').trigger('click')
+    await flushPromises()
+    const panel = wrapper.find('[data-test="settings-panel-hotkeys"]')
+    expect(panel.find('[data-test="hotkey-key-chat.send"]').text()).toBe('Ctrl+Enter')
+
+    // 把「打开命令面板」改成 Ctrl+Enter（已绑给「发送消息」）：行内报冲突，一个字节都不写。
+    await panel.find('[data-test="hotkey-record-palette.open"]').trigger('click')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(panel.find('[data-test="hotkey-error-palette.open"]').text()).toContain('已经绑给')
+    expect(panel.find('[data-test="hotkey-error-palette.open"]').text()).toContain('发送消息')
+    expect(panel.find('[data-test="hotkey-key-palette.open"]').text()).toBe('Ctrl+P')
+
+    // 裸字母不认：同样只报错不落盘。
+    await panel.find('[data-test="hotkey-record-palette.open"]').trigger('click')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q', bubbles: true, cancelable: true }))
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(panel.find('[data-test="hotkey-error-palette.open"]').text()).toContain('不能当快捷键')
+
+    // 恢复默认：第一下只出确认；确认后整表按出厂键位写入。
+    await panel.find('[data-test="hotkeys-reset"]').trigger('click')
+    await flushPromises()
+    expect(panel.find('[data-test="hotkeys-reset-confirm"]').exists()).toBe(true)
+    expect(save).not.toHaveBeenCalled()
+    await panel.find('[data-test="hotkeys-reset-confirm-ok"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(save.mock.calls[0][0].bindings).toEqual(defaultBindings())
+    wrapper.unmount()
+  })
+
+  it('定时快照间隔（工单 P8 · B-10）：读出当前值，改 0 关闭；越界就地报错不落盘', async () => {
+    const handlers = new Map()
+    const save = vi.fn(async (payload) => ({ ok: true, value: { ...payload } }))
+    const request = vi.fn(async (channel, payload) => {
+      if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+      if (channel === IPC_CHANNELS.prefsGet) {
+        return { ok: true, value: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light', historyIntervalMinutes: 10 } }
+      }
+      if (channel === IPC_CHANNELS.prefsSet) {
+        save(payload)
+        return { ok: true, value: { ...payload } }
+      }
+      return { ok: true, value: {} }
+    })
+    const onEvent = (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    const wrapper = mount(AppNext, { props: { bridge: { request, onEvent } } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    await wrapper.find('[data-test="settings-tab-backup"]').trigger('click')
+    await flushPromises()
+    const input = wrapper.find('[data-test="backup-interval"]')
+    expect(Number(input.element.value)).toBe(10)
+    expect(wrapper.find('[data-test="backup-interval-hint"]').text()).toContain('应用级，不随库走')
+
+    await input.setValue('0')
+    await wrapper.find('[data-test="backup-interval-save"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledWith({ historyIntervalMinutes: 0 })
+    expect(wrapper.find('[data-test="backup-interval-feedback"]').text()).toContain('已关闭')
+
+    // 越界（121）在本地拦住，不落盘。
+    save.mockClear()
+    await input.setValue('121')
+    await wrapper.find('[data-test="backup-interval-save"]').trigger('click')
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="backup-interval-error"]').text()).toContain('0–120')
+    wrapper.unmount()
   })
 })
 
