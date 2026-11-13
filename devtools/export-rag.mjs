@@ -59,6 +59,9 @@ function worldbookEntryMd(entry) {
   return lines.join('\n')
 }
 
+/** 文件名净化：场景/道具名可能含括号、斜线等非法字符。 */
+const safeFileName = (name) => String(name ?? '').replace(/[/\\:*?"<>|\s]+/gu, '_').slice(0, 40)
+
 /** 单本导出：拆解 JSON → rag/<id>/ 项目目录。 */
 function exportBookRag(id, lib = LIB) {
   const result = JSON.parse(readFileSync(join(lib, '拆解', `${id}.json`), 'utf8'))
@@ -74,9 +77,10 @@ function exportBookRag(id, lib = LIB) {
   // project.json 按 pinax-project@3 契约（validateProjectDocument 实测：中文载体 id「正文」通过）
   writeFileSync(join(root, '.pinax', 'project.json'), JSON.stringify({ spec: 'pinax-project@3', projectId: `proj_${id}`, name: book.title, kind: 'novel', createdAt: new Date().toISOString(), carriers: { primary: '正文', enabled: ['正文'], revision: 1 } }, null, 2), 'utf8')
 
-  // 人物卡：世界书条目（worldbook_search 可检）
+  // 图谱一等公民（作者 2026-11-13）：人物/事件/场景/道具四类节点，按权重（出场/提及）排 links
   const charEntries = result.entries.filter((entry) => entry.layer === 'character')
-  const idOf = new Map(charEntries.map((entry, index) => [entry.name, `w-${String(index + 1).padStart(2, '0')}`]))
+  const idOf = new Map()
+  charEntries.forEach((entry, index) => idOf.set(entry.name, `w-${String(index + 1).padStart(2, '0')}`))
   const profileOf = (name) => profiles.find((item) => item.name === name) ?? null
   let written = 0
   for (const entry of charEntries) {
@@ -113,6 +117,92 @@ function exportBookRag(id, lib = LIB) {
     written += 1
   }
 
+  // 事件节点（图谱一等公民）：每「节」一个条目，权重=剧情点+事件量；links=参与人物
+  const worldElements = wiki.worldElements ?? null
+  const summariesList = wiki.chapterSummaries ?? []
+  const plots = result.entries.filter((entry) => entry.layer === 'plot')
+  const usePseudo = wiki.pseudoChapters ?? !hasRealChapters(plots)
+  const groups = usePseudo
+    ? derivePseudoChapters(plots, result.source?.chars ?? book.word_count ?? 0)
+    : [...new Set(plots.map((plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : 0)))].sort((a, b) => a - b)
+        .map((chapter) => ({ no: chapter, plots: plots.filter((plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : 0) === chapter) }))
+  const eventIds = new Map()
+  const sceneIds = new Map()
+  const itemIds = new Map()
+  for (const group of groups) eventIds.set(group.no, `e-${String(group.no).padStart(2, '0')}`)
+  ;(worldElements?.scenes ?? []).forEach((scene, index) => sceneIds.set(scene.name, `s-${String(index + 1).padStart(2, '0')}`))
+  ;(worldElements?.items ?? []).forEach((item, index) => itemIds.set(item.name, `i-${String(index + 1).padStart(2, '0')}`))
+
+  for (const group of groups) {
+    const summary = summariesList.find((item) => item.chapter === group.no)
+    const eventContents = group.plots.flatMap((plot) => plot.events ?? []).map((event) => event.content)
+    const charMentions = {}
+    for (const plot of group.plots) {
+      for (const who of plot.who ?? []) if (idOf.has(who)) charMentions[who] = (charMentions[who] ?? 0) + 1
+    }
+    const present = Object.entries(charMentions).sort((a, b) => b[1] - a[1])
+    const mentionedScenes = (worldElements?.scenes ?? []).filter((scene) => scene.chapters.includes(group.no))
+    const mentionedItems = (worldElements?.items ?? []).filter((item) => item.chapters.includes(group.no))
+    const links = [
+      ...present.map(([name]) => idOf.get(name)),
+      ...mentionedScenes.map((scene) => sceneIds.get(scene.name)),
+      ...mentionedItems.map((item) => itemIds.get(item.name))
+    ].filter(Boolean)
+    const md = worldbookEntryMd({
+      id: eventIds.get(group.no),
+      title: `第${group.no}${unit}·${summary?.title ?? ''}`,
+      keys: [`${group.no}${unit}`, summary?.title ?? ''].filter(Boolean),
+      summary: `功能:${summary?.function ?? '—'} 情绪:${summary?.emotion ?? '—'} 剧情点:${summary?.beats ?? '—'}｜${summary?.summary ?? ''}`.slice(0, 120),
+      links: [...new Set(links)],
+      sections: [
+        ['权重', `剧情点 ${summary?.beats ?? '—'} · ${eventContents.length} 事件 · ${group.plots.length} 段 · 在场 ${present.map(([name, count]) => `${name}×${count}`).join('、') || '—'}`],
+        ['梗概', summary?.summary || '（无）'],
+        ...(mentionedScenes.length ? [['场景', mentionedScenes.map((scene) => `- ${scene.name}：${scene.desc}`).join('\n')]] : []),
+        ...(mentionedItems.length ? [['道具', mentionedItems.map((item) => `- ${item.name}（${item.holder || '—'}）：${item.desc}`).join('\n')]] : []),
+        ['事件流（原文）', eventContents.slice(0, 6).map((line) => `- ${line}`).join('\n')]
+      ]
+    })
+    writeFileSync(join(root, '世界书', `事件-${String(group.no).padStart(2, '0')}.md`), md, 'utf8')
+    written += 1
+  }
+
+  // 场景节点（权重=出现章数）
+  for (const scene of worldElements?.scenes ?? []) {
+    const relatedChars = profiles.filter((profile) => profile.chapters?.some((chapter) => scene.chapters.includes(chapter))).slice(0, 5)
+    const md = worldbookEntryMd({
+      id: sceneIds.get(scene.name),
+      title: scene.name,
+      keys: [scene.name],
+      summary: `场景（${scene.chapters.length}${unit}）｜${scene.desc}`,
+      links: relatedChars.map((profile) => idOf.get(profile.name)).filter(Boolean),
+      sections: [
+        ['权重', `${scene.chapters.length} ${unit}（第 ${scene.chapters.join('、')}${unit}）`],
+        ['这里发生了什么', scene.desc],
+        ...(relatedChars.length ? [['关联人物', relatedChars.map((profile) => `- ${profile.name}：${profile.identity || ''}`).join('\n')]] : [])
+      ]
+    })
+    writeFileSync(join(root, '世界书', `场景-${safeFileName(scene.name)}.md`), md, 'utf8')
+    written += 1
+  }
+
+  // 道具节点（权重=出现章数；holder=当前掌握者）
+  for (const item of worldElements?.items ?? []) {
+    const md = worldbookEntryMd({
+      id: itemIds.get(item.name),
+      title: item.name,
+      keys: [item.name],
+      summary: `道具（${item.chapters.length}${unit}，掌握者：${item.holder || '—'}）｜${item.desc}`,
+      links: [],
+      sections: [
+        ['权重', `${item.chapters.length} ${unit}（第 ${item.chapters.join('、')}${unit}）`],
+        ['掌握者', item.holder || '—'],
+        ['推动了什么', item.desc]
+      ]
+    })
+    writeFileSync(join(root, '世界书', `道具-${safeFileName(item.name)}.md`), md, 'utf8')
+    written += 1
+  }
+
   // 伏笔台账（特殊文件：作卡不作条目）
   const hooks = wiki.foreshadows ?? []
   if (hooks.length) {
@@ -146,17 +236,11 @@ function exportBookRag(id, lib = LIB) {
     if (md.length > 3) { writeFileSync(join(root, '世界书', '状态台账.md'), md.join('\n'), 'utf8'); written += 1 }
   }
 
-  // 事件流归档（kb_search 主力：每章一块）
-  const plots = result.entries.filter((entry) => entry.layer === 'plot')
-  const usePseudo = wiki.pseudoChapters ?? !hasRealChapters(plots)
-  const groups = usePseudo
-    ? derivePseudoChapters(plots, result.source?.chars ?? book.word_count ?? 0).map((group) => ({ chapter: group.no, contents: group.plots.flatMap((plot) => (plot.events ?? []).map((event) => event.content)) }))
-    : [...new Set(plots.map((plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : 0)))].sort((a, b) => a - b)
-        .map((chapter) => ({ chapter, contents: plots.filter((plot) => (Number.isInteger(plot.validity?.from) ? plot.validity.from : 0) === chapter).flatMap((plot) => (plot.events ?? []).map((event) => event.content)) }))
-  const chunks = groups.map((group) => ({ id: `ch-${group.chapter}`, text: chapterChunkText(group.chapter, group.contents) }))
+  // 事件流归档（kb_search 主力：每章一块；复用上面事件节点算好的 groups）
+  const chunks = groups.map((group) => ({ id: `ch-${group.no}`, text: chapterChunkText(group.no, group.plots.flatMap((plot) => (plot.events ?? []).map((event) => event.content))) }))
   writeArchive()
   function chapterChunkText(no, contents) {
-    const summary = summaries.find((item) => item.chapter === no)
+    const summary = summariesList.find((item) => item.chapter === no)
     const head = `第 ${no} ${unit}「${summary?.title ?? ''}」 功能:${summary?.function ?? '—'} 情绪:${summary?.emotion ?? '—'} 剧情点:${summary?.beats ?? '—'}\n${summary?.summary ?? ''}\n`
     return head + contents.join('\n').slice(0, EVENT_CAP)
   }

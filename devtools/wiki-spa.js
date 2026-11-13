@@ -816,14 +816,12 @@ function vTerm(name) {
   var t = TERMS[name];
   if (!t) return '<p>词条不存在</p>';
   var h = '<h1>' + escHtml(t.name) + '</h1>';
-  h += '<div class="meta"><span>' + t.mentions + ' 次关系提及</span><span>出现在 ' + t.chapters.length + ' ' + UNIT + '</span></div>';
+  h += '<div class="meta"><span>' + escHtml(t.kind || '设定') + '</span><span>权重 ' + t.mentions + ' ' + UNIT + '</span></div>';
+  if (t.desc) h += '<div class="summary">' + escHtml(t.desc) + '</div>';
+  if (t.chapters.length) h += '<h2>出现章节</h2><p>' + t.chapters.map(function (n) { return '<a data-go="chapter" data-no="' + n + '">第' + n + UNIT + '</a>'; }).join('、') + '</p>';
   if (t.edges.length) h += '<h2>关联</h2><ul>' + t.edges.map(function (e) {
     return '<li>' + charLink(e.person) + ' <span class="tag">' + escHtml(e.type) + '</span>' + (e.how ? ' <span class="sub">' + escHtml(e.how) + '</span>' : '') + '</li>';
   }).join('') + '</ul>';
-  var inCh = DETAIL.timeline.filter(function (t2) {
-    return t2.events.some(function (e) { return e.text.indexOf(name) >= 0; });
-  }).map(function (t2) { return t2.no; });
-  if (inCh.length) h += '<h2>出现章节</h2><p>' + inCh.map(function (n) { return '<a data-go="chapter" data-no="' + n + '">第' + n + UNIT + '</a>'; }).join('、') + '</p>';
   return h;
 }
 

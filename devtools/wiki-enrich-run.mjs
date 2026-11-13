@@ -319,6 +319,46 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     }
   }
 
+  /* ---------- 世界要素窗（场景+道具，知识图谱一等公民：作者裁定事件/道具/场景按权重纳入） ---------- */
+  let worldElements = null
+  {
+    const outline = chapterSummaries
+      .filter((item) => item.summary)
+      .map((item) => `第${item.chapter}${usePseudo ? '节' : '章'}「${item.title}」：${item.summary}`)
+      .join('\n')
+    const prompt = [
+      '你是世界要素登记员。输入是全书章纲。',
+      '输出 JSON：{',
+      ' "scenes": [ { "name": "场景名（具体地点，如 宋家别墅/律所/生日宴现场）", "chapters": [出现章号], "desc": "一句话（这里发生了什么）" } ],',
+      ' "items": [ { "name": "道具/关键物名（具体物件，如 纹身图纸/耳塞/房产证）", "chapters": [出现章号], "holder": "目前掌握者", "desc": "一句话（它推动了什么）" } ]',
+      '}',
+      '规则：scenes 3–10 个、items 3–10 个，按剧情重要性排序；只登记章纲里实际出现过的，不编造。',
+      '',
+      TRACE_HEADER,
+      '',
+      outline || '（无章纲）'
+    ].join('\n')
+    try {
+      const answer = await callJson(prompt, 1800)
+      const parsed = parseReply(answer.text)
+      if (parsed?.scenes?.length || parsed?.items?.length) {
+        worldElements = {
+          scenes: (parsed.scenes ?? []).slice(0, 10).map((item) => ({
+            name: String(item?.name ?? '').slice(0, 20),
+            chapters: Array.isArray(item?.chapters) ? item.chapters.filter(Number.isInteger) : [],
+            desc: String(item?.desc ?? '').slice(0, 60)
+          })).filter((item) => item.name),
+          items: (parsed.items ?? []).slice(0, 10).map((item) => ({
+            name: String(item?.name ?? '').slice(0, 20),
+            chapters: Array.isArray(item?.chapters) ? item.chapters.filter(Number.isInteger) : [],
+            holder: String(item?.holder ?? '').slice(0, 16),
+            desc: String(item?.desc ?? '').slice(0, 60)
+          })).filter((item) => item.name)
+        }
+      } else failures.push({ stage: 'worldElements', reason: 'empty' })
+    } catch (error) { failures.push({ stage: 'worldElements', reason: String(error?.message ?? error) }) }
+  }
+
   /* ---------- 状态台账（推演支撑：谁知道什么/谁拿了什么——continuity 标准的终局快照） ---------- */
   let ledger = null
   {
@@ -395,6 +435,7 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     pseudoChapters: usePseudo,
     enums: { structures: STRUCTURE_TYPES, chapterFunctions: CHAPTER_FUNCTIONS, emotions: EMOTIONS },
     slots: { gimmick, plotDesign, intro, style },
+    worldElements,
     ledger,
     storySummary,
     arc,
@@ -419,6 +460,7 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     arcs: characterProfiles.filter((item) => item.arc?.end).length,
     goals: characterProfiles.filter((item) => item.goal).length,
     ledger: ledger ? `${ledger.knowledgeLedger.length}知/${ledger.stateLedger.length}态` : '—',
+    world: worldElements ? `${worldElements.scenes.length}景/${worldElements.items.length}物` : '—',
     slots: `${slotsLanded}/4`,
     failures: failures.length,
     storySummary: Boolean(storySummary)
@@ -430,6 +472,6 @@ if (process.argv[1] && process.argv[1].endsWith('wiki-enrich-run.mjs')) {
     const startedAt = Date.now()
     const summary = await enrichBook(id)
     summary.sec = Math.round((Date.now() - startedAt) / 1000)
-    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.summaries}/${summary.chapters}，功能 ${summary.functions}，情绪 ${summary.emotions}，高光 ${summary.excerpts}，弧光 ${summary.arcs}/${summary.profiles}，动机 ${summary.goals}，台账 ${summary.ledger}，槽位 ${summary.slots}，失败 ${summary.failures}，${summary.sec}s`)
+    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.summaries}/${summary.chapters}，功能 ${summary.functions}，情绪 ${summary.emotions}，高光 ${summary.excerpts}，弧光 ${summary.arcs}/${summary.profiles}，动机 ${summary.goals}，台账 ${summary.ledger}，世界 ${summary.world}，槽位 ${summary.slots}，失败 ${summary.failures}，${summary.sec}s`)
   }
 }

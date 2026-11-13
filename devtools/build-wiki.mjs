@@ -197,16 +197,21 @@ function firstAppearances(plots, characters) {
 }
 
 /** 词条派生：world 层条目（当前 v3 管线为空，留好路径；mentions 从关系边统计）。 */
-function deriveTerms(entries, plots) {
-  return entries.filter((entry) => entry.layer === 'world').map((entry) => {
+function deriveTerms(entries, plots, wiki = null) {
+  const factTerms = entries.filter((entry) => entry.layer === 'world').map((entry) => {
     const mentions = plots.reduce((sum, plot) => sum + (plot.relations ?? []).filter((edge) => edge.from === entry.name || edge.to === entry.name).length, 0)
     const chapters = [...new Set(plots.filter((plot) =>
       (plot.who ?? []).includes(entry.name) || (plot.events ?? []).some((event) => event.who === entry.name)
     ).map((plot) => plot.validity?.from).filter(Number.isInteger))].sort((a, b) => a - b)
     const edges = plots.flatMap((plot) => (plot.relations ?? []).filter((edge) => edge.from === entry.name || edge.to === entry.name)
       .map((edge) => ({ person: edge.from === entry.name ? edge.to : edge.from, type: edge.type, how: edge.how ?? '' })))
-    return { name: entry.name, mentions, chapters, edges }
+    return { name: entry.name, kind: '设定', desc: entry.definition ?? '', mentions, chapters, edges }
   })
+  // 世界要素（图谱一等公民同源）：场景/道具按权重（出现章数）入 wiki 词条
+  const we = wiki?.worldElements ?? null
+  const sceneTerms = (we?.scenes ?? []).map((scene) => ({ name: scene.name, kind: '场景', desc: scene.desc, mentions: scene.chapters.length, chapters: scene.chapters, edges: [] }))
+  const itemTerms = (we?.items ?? []).map((item) => ({ name: item.name, kind: '道具', desc: `${item.desc}${item.holder ? `（掌握者：${item.holder}）` : ''}`, mentions: item.chapters.length, chapters: item.chapters, edges: [] }))
+  return [...factTerms, ...sceneTerms, ...itemTerms]
 }
 
 /* ---------- 单本构建 ---------- */
@@ -283,7 +288,7 @@ function buildBook(id, ds) {
   })
 
   // 词条（world 层；当前为空）
-  const terms = deriveTerms(result.entries, plots)
+  const terms = deriveTerms(result.entries, plots, wiki)
 
   // 关系图：节点 = 人物（+词条）；边 = 去重（无向对），两端都已知才收
   const knownNames = new Set([...characters.map((c) => c.name), ...terms.map((t) => t.name)])
