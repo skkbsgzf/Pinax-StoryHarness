@@ -14,6 +14,7 @@
  */
 
 import { hierarchy, tree } from 'd3-hierarchy'
+import { isWikiTab } from './wiki/wikiView.mjs'
 
 export const ENTRIES_VIEW_STORAGE_PREFIX = 'entriesView.'
 
@@ -60,6 +61,34 @@ export function writeEntriesView(projectRoot, view, storage = defaultStorage()) 
 export function nextEntriesView(view) {
   const index = ENTRIES_VIEWS.indexOf(view)
   return ENTRIES_VIEWS[(index + 1) % ENTRIES_VIEWS.length] ?? 'table'
+}
+
+/* —— wiki 五页签的选中记忆（S4 · WO-S4-02）——————————————————————————————
+ * 三态词表一个字不动（既有存储值与用例照旧）；wiki 页签另占一格键，
+ * 仍由本模块拼、仍挂在 entriesView. 前缀下——换项目各记各的页签。 */
+
+export function wikiTabStorageKey(projectRoot) {
+  const key = `wikiTab.${String(projectRoot ?? '')}`
+  return `${ENTRIES_VIEW_STORAGE_PREFIX}${key}`
+}
+
+export function readWikiTab(projectRoot, storage = defaultStorage()) {
+  try {
+    const raw = storage?.getItem?.(wikiTabStorageKey(projectRoot))
+    return isWikiTab(raw) ? raw : 'overview'
+  } catch {
+    return 'overview'
+  }
+}
+
+export function writeWikiTab(projectRoot, tab, storage = defaultStorage()) {
+  if (!isWikiTab(tab)) return false
+  try {
+    storage?.setItem?.(wikiTabStorageKey(projectRoot), tab)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /* —— 看板区（批次44）的纯函数 ———————————————————————————————————————
@@ -335,6 +364,9 @@ export default {
   writeEntriesView,
   nextEntriesView,
   entriesViewStorageKey,
+  wikiTabStorageKey,
+  readWikiTab,
+  writeWikiTab,
   entryEdges,
   radialLayout,
   ENTRY_COLUMNS,

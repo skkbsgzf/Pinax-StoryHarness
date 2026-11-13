@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { NEXT_ERROR_CODES, fail } from './errors.mjs'
 import { validateFactEntry } from '../fact/domain/pediaSchema.js'
+import { deriveWiki } from './wikiDerive.mjs'
 
 /**
  * 拆解文件仓储（S1 只读 ＋ S2 写协议 · WO-S1-01 / WO-S2-01/03）。
@@ -575,8 +577,30 @@ export function readFactWiki({ root, id, document } = {}) {
   return { wiki: envelope, derivedFrom: null, source: envelope ? 'envelope' : 'none' }
 }
 
+/** 读主档（wiki 派生用）：缺失／坏档按「没有」处理，不在读侧抛错。 */
+function readMainDocument(root, id) {
+  try {
+    const document = JSON.parse(readFileSync(join(root, FACT_DIR_NAME, `${id}.json`), 'utf-8'))
+    return isPlainObject(document) ? document : null
+  } catch {
+    return null
+  }
+}
+
+/** 正文全文（章标题提取用）：只认 `正文/` 下的文件名，路径分隔符一律拒；读不到给空串。 */
+function readSourceText(root, source) {
+  const file = str(source?.file).trim()
+  if (!file || file === '.' || file === '..' || file.includes('/') || file.includes('\\')) return ''
+  try {
+    return readFileSync(join(root, '正文', file), 'utf-8')
+  } catch {
+    return ''
+  }
+}
+
 /**
- * 仓储实例：读四方法（list/get/search）＋写两方法（save/remove，转调 writeFactFile）。
+ * 仓储实例：读四方法（list/get/search）＋写两方法（save/remove，转调 writeFactFile）
+ * ＋wiki 两方法（wikiGet/wikiDerive，S4 · WO-S4-01）。
  * 写失败载荷见 writeFail()：`{ ok:false, code, error }`，写协议三枚码按 FactStore 端口原样透传。
  *
  * @param {{ root: string }} options
@@ -665,6 +689,58 @@ export function createFactFileStore({ root } = {}) {
       }
       hits.sort((left, right) => right.score - left.score || left.name.localeCompare(right.name, 'zh-Hans-CN'))
       return { ok: true, hits: hits.slice(0, Math.min(wantedLimit, MAX_SEARCH_LIMIT)), warnings: read.warnings }
+    },
+
+    /**
+     * S4 · WO-S4-01：读一本书的 wiki（两代兼容走 readFactWiki：兄弟 wiki.json 优先，旧信封回落）。
+     * 没有 wiki 不是错误：回 `{ ok:true, wiki:null, derivedFrom:null }`，前端据此整组不摆页签。
+     */
+    wikiGet({ bookId } = {}) {
+      if (!projectRoot) return fail('INVALID_INPUT', 'wiki 读取需要一个项目根（root）：这条通道不接受隐式当前项目')
+      const targetId = safeFileId(bookId)
+      if (!targetId) return fail('INVALID_INPUT', '请带上要读取 wiki 的书 id（bookId）')
+      const document = readMainDocument(projectRoot, targetId)
+      const { wiki, derivedFrom } = readFactWiki({ root: projectRoot, id: targetId, document })
+      return { ok: true, wiki: wiki ?? null, derivedFrom: derivedFrom ?? null }
+    },
+
+    /**
+     * S4 · WO-S4-01：零模型纯计算派生，经 writeFactFile 落 `拆解/<id>.wiki.json`。
+     * 写前读到的 revision 作为 expectedRevision：期间别的写者推进过就 REVISION_MISMATCH，
+     * 不拿旧条目算出新 wiki 去覆盖。派生档可删可重建——重跑一次即可。
+     */
+    async wikiDerive({ bookId, operationId } = {}) {
+      if (!projectRoot) return fail('INVALID_INPUT', 'wiki 派生需要一个项目根（root）：这条通道不接受隐式当前项目')
+      const targetId = safeFileId(bookId)
+      if (!targetId) return fail('INVALID_INPUT', '请带上要派生 wiki 的书 id（bookId）')
+      const document = readMainDocument(projectRoot, targetId)
+      if (!document) {
+        return fail('FACT_NOT_FOUND', `拆解数据里没有 ${targetId} 这本书：派生需要先有拆解文件`, { bookId: targetId, root: projectRoot })
+      }
+      const { wiki } = readFactWiki({ root: projectRoot, id: targetId, document })
+      const derived = deriveWiki(document, {
+        wiki,
+        sourceText: readSourceText(projectRoot, document.source),
+        quality: document.quality,
+        perspective: document.perspective,
+        id: targetId
+      })
+      const written = await writeFactFile({
+        root: projectRoot,
+        bookId: targetId,
+        patch: { wiki: derived },
+        operationId: str(operationId).trim() || `wiki-derive-${targetId}-${randomUUID()}`,
+        expectedRevision: revisionOf(document)
+      })
+      if (!written.ok) return written
+      const readBack = readFactWiki({ root: projectRoot, id: targetId })
+      return {
+        ok: true,
+        wiki: readBack.wiki ?? null,
+        derivedFrom: readBack.derivedFrom ?? null,
+        revision: written.revision,
+        duplicate: written.duplicate === true
+      }
     }
   }
 }

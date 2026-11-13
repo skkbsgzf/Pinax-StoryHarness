@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import EntryDetailPanel from './EntryDetailPanel.vue'
 import EntryGraph from './EntryGraph.vue'
+import WikiTabs from './wiki/WikiTabs.vue'
 import { worldbookToHub } from '../wikihub/convert.mjs'
 import {
   buildHubViewModel,
@@ -17,8 +18,10 @@ import {
   entryCategoryTree,
   nextEntriesView,
   readEntriesView,
+  readWikiTab,
   sortEntriesBy,
-  writeEntriesView
+  writeEntriesView,
+  writeWikiTab
 } from './entriesView.mjs'
 
 /**
@@ -61,6 +64,13 @@ const emit = defineEmits(['history', 'chip-action'])
 
 /** 三态视图：list（条目树＋阅读列）→ table（Dataview 式表格）→ graph（整书图谱）。 */
 const view = ref('list')
+/**
+ * wiki 五页签（S4 · WO-S4-02）：中栏的第四态，**追加**在三态之外——
+ * 三态词表与循环一个字没动；wiki 只在本板有拆解书（bookId）时给入口。
+ * 页签选中态按项目根记在 entriesView.<root> 家族里（见 entriesView.mjs 的 readWikiTab）。
+ */
+const wikiOpen = ref(false)
+const wikiTab = ref('overview')
 const filter = ref('')
 const sort = ref(null)
 /** 信息卡整体收起（一钮，收起后阅读列吃满）。 */
@@ -100,11 +110,46 @@ watch(colsWidth, (width) => {
 
 watch(() => props.projectRoot, () => {
   view.value = readEntriesView(props.projectRoot)
+  wikiOpen.value = false
+  wikiTab.value = readWikiTab(props.projectRoot)
   filter.value = ''
   sort.value = null
 }, { immediate: true })
 
+/**
+ * wiki 属于哪本书：拆解条目溯源里带着 book_id（fact 投影原样带过来的）；
+ * 优先当前选中条目，其次清单首条——世界书（md）那条路径没有 book_id，整组 wiki 入口不出现。
+ */
+const factBookId = computed(() => {
+  const selected = String(props.data.entry?.provenance?.book_id ?? '').trim()
+  if (selected) return selected
+  for (const entry of props.data.entries ?? []) {
+    const id = String(entry?.provenance?.book_id ?? '').trim()
+    if (id) return id
+  }
+  return ''
+})
+
+// 换书／回落到世界书：wiki 面板没有可读的书，整组入口收起（不摆死页签）。
+watch(factBookId, (id) => {
+  if (!id) wikiOpen.value = false
+})
+
+function toggleWiki() {
+  wikiOpen.value = !wikiOpen.value
+}
+
+function selectWikiTab(tab) {
+  wikiTab.value = tab
+  writeWikiTab(props.projectRoot, tab)
+}
+
 function toggleView() {
+  // wiki 打开时这枚钮先回列表（不跳态）：作者点「视图切换」的预期是回到阅读列。
+  if (wikiOpen.value) {
+    wikiOpen.value = false
+    return
+  }
   view.value = nextEntriesView(view.value)
   writeEntriesView(props.projectRoot, view.value)
 }
@@ -115,6 +160,10 @@ const VIEW_TOGGLE = {
   table: { label: '图', aria: '切换为图谱视图', title: '图谱视图' },
   graph: { label: '列', aria: '切换为列表视图', title: '列表视图' }
 }
+
+const viewToggle = computed(() => (wikiOpen.value
+  ? { label: '列', aria: '切换为列表视图', title: '列表视图' }
+  : VIEW_TOGGLE[view.value]))
 
 /** 书名：项目根目录名（hub 的 domain 兜底与信息卡「域」共用这一口）。 */
 const bookName = computed(() => {
@@ -375,11 +424,21 @@ const infoboxTier = computed(() => {
             type="button"
             class="control-quiet nx-entries-view-toggle"
             data-test="entries-view-toggle"
-            :aria-label="VIEW_TOGGLE[view].aria"
-            :aria-pressed="(view !== 'list').toString()"
-            :title="VIEW_TOGGLE[view].title"
+            :aria-label="viewToggle.aria"
+            :aria-pressed="(view !== 'list' || wikiOpen).toString()"
+            :title="viewToggle.title"
             @click="toggleView"
-          >{{ VIEW_TOGGLE[view].label }}</button>
+          >{{ viewToggle.label }}</button>
+          <!-- wiki 五页签入口（S4）：只在有拆解书时出现——世界书路径没有可派生的书，整组入口不摆。 -->
+          <button
+            v-if="factBookId"
+            type="button"
+            class="control-quiet nx-entries-wiki-toggle"
+            data-test="entries-wiki-toggle"
+            :aria-pressed="wikiOpen ? 'true' : 'false'"
+            title="wiki 页签"
+            @click="toggleWiki"
+          >wiki</button>
           <!-- 〔批次 W5〕零计数的结构锚点默认不摆：这枚开关是唯一的唤出口（标题行，不藏在悬浮里）。 -->
           <button
             type="button"
@@ -488,10 +547,18 @@ const infoboxTier = computed(() => {
         </div>
       </div>
 
-      <!-- ② 中央阅读列（1fr）：阅读是常态，表格／图谱是切换态。 -->
+      <!-- ② 中央阅读列（1fr）：阅读是常态，表格／图谱是切换态；wiki 页签是 S4 追加的第四态。 -->
       <div class="nx-wiki-center" data-test="entries-center-col">
+        <!-- wiki 五页签（S4 · WO-S4-02）：数据经 fact:wiki:get，无 wiki 时页签组不出现。 -->
+        <WikiTabs
+          v-if="wikiOpen"
+          :root="projectRoot"
+          :book-id="factBookId"
+          :tab="wikiTab"
+          @tab="selectWikiTab"
+        />
         <!-- 表格（批次36 · 任务一）：可排序列头 ＋ 按槽位分组（组头带条数）。 -->
-        <table v-if="view === 'table' && visibleEntries.length" class="nx-entries-table" data-test="entries-table">
+        <table v-else-if="view === 'table' && visibleEntries.length" class="nx-entries-table" data-test="entries-table">
           <thead>
             <tr>
               <th v-for="column in ENTRY_COLUMNS" :key="column.key" scope="col">
@@ -656,6 +723,11 @@ const infoboxTier = computed(() => {
 .nx-entries-view-toggle {
   flex: none;
   min-width: 30px;
+}
+/* wiki 页签入口：与视图切换钮同一行、同一控件词汇（S4 只加这一枚，不挤占三态循环）。 */
+.nx-entries-wiki-toggle {
+  flex: none;
+  font-size: var(--nx-fs-2xs);
 }
 /* 零计数锚点组的唤出开关：与视图切换钮同一行、同一控件词汇，不额外占一行。 */
 .nx-entries-anchor-toggle {

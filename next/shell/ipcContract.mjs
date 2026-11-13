@@ -141,7 +141,12 @@ export const IPC_CHANNELS = Object.freeze({
   factList: 'pinax:agent:fact:list',
   factGet: 'pinax:agent:fact:get',
   factSave: 'pinax:agent:fact:save',
-  factSearch: 'pinax:agent:fact:search'
+  factSearch: 'pinax:agent:fact:search',
+  // S4 · WO-S4-01：wiki 两通道（追加性扩展，上面四条冻结签名一个字不动）。
+  //   get   → { root, bookId } → { ok, wiki, derivedFrom }（无则 wiki:null）
+  //   derive→ { root, bookId } → { ok, wiki, derivedFrom }（零模型纯计算，经 writeFactFile 落兄弟 wiki.json）
+  factWikiGet: 'pinax:agent:fact:wiki:get',
+  factWikiDerive: 'pinax:agent:fact:wiki:derive'
 })
 
 /**
@@ -765,6 +770,17 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
         const store = factStoreForRequest(input)
         if (typeof store?.search !== 'function') return store
         return store.search({ q: input.q, layer: input.layer, limit: input.limit })
+      }
+      // S4 · WO-S4-01：wiki 两通道（与四通道同一套 root 解析；store 未接线时原样回失败载荷）。
+      case IPC_CHANNELS.factWikiGet: {
+        const store = factStoreForRequest(input)
+        if (typeof store?.wikiGet !== 'function') return store
+        return store.wikiGet({ bookId: input.bookId })
+      }
+      case IPC_CHANNELS.factWikiDerive: {
+        const store = factStoreForRequest(input)
+        if (typeof store?.wikiDerive !== 'function') return store
+        return store.wikiDerive({ bookId: input.bookId })
       }
       case IPC_CHANNELS.runtimeToolCall: {
         if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')

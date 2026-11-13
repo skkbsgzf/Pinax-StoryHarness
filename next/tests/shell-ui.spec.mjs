@@ -8,6 +8,9 @@ import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import WorldbookGroupedTree from '../shell/WorldbookGroupedTree.vue'
 import IndexWindow from '../shell/IndexWindow.vue'
 import ProposalsSection from '../shell/settings/ProposalsSection.vue'
+import EntriesBoard from '../shell/EntriesBoard.vue'
+import { factEntriesToBoardEntries } from '../shell/factEntriesToHub.mjs'
+import { stableEntryId } from '../fact/domain/pediaSchema.js'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
 import { defaultBindings } from '../shell/hotkeys.mjs'
 import { hostWorkspace, resetWorkspace } from '../shell/workspace.mjs'
@@ -6473,3 +6476,166 @@ describe('推演工作区（工单 P7 · Agent 在左为默认列序）', () => 
   })
 })
 
+
+/**
+ * 世界书 wiki 五页签（S4 · WO-S4-02）：中栏第四态，追加在三态之外。
+ * 数据只走 fact:wiki:*（组件自己经 globalThis.pinaxNext 取，与外部应用面同一先例）；
+ * 没有拆解书（条目溯源没有 book_id）时整组入口不出现——沉默层，不摆死钮。
+ */
+describe('世界书 wiki 五页签（S4）', () => {
+  const ROOT = 'D:/books/停摆之城'
+  const BOOK_ID = 'book-tower'
+  const TAB_KEY = `entriesView.wikiTab.${ROOT}`
+
+  const WIKI = {
+    pseudoChapters: true,
+    quality: { traceableRate: 0.9 },
+    chapters: [
+      { no: 1, title: '雪夜', summary: '钟楼停摆。', function: '铺垫', emotion: '冷', newChars: ['柯秒'], foreshadow: ['停在十一点'] },
+      { no: 2, title: '修表', summary: '', function: '', emotion: '', newChars: [], foreshadow: [] }
+    ],
+    characters: [{ name: '柯秒' }, { name: '钟楼' }],
+    matrix: [[3, 1], [2, 0]],
+    terms: [{ name: '钟楼', kind: '场景' }],
+    timeline: [{ no: 1, title: '雪夜', events: [{ who: '柯秒', channel: 'say', text: '雪停了。' }] }]
+  }
+
+  function factBoardData({ withBook = true } = {}) {
+    const provenance = withBook
+      ? { mode: 'analyze', book: '停摆之城', book_id: BOOK_ID, chapters: [1], scenes: [], extractor: 'test' }
+      : { mode: 'analyze', book: '停摆之城', chapters: [1], scenes: [], extractor: 'test' }
+    const entry = {
+      schema: 'fact.data/v3',
+      id: stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'items', name: '停摆的表' }),
+      layer: 'worldview',
+      name: '停摆的表',
+      domain: '停摆之城',
+      slot: 'items',
+      status: 'draft',
+      definition: '一只停在雪夜十一点的表。',
+      fingerprint: { vec: null, metrics: { chars: 12 } },
+      provenance
+    }
+    const entries = factEntriesToBoardEntries([entry], { book: '停摆之城' })
+    return {
+      entries,
+      entry: entries[0],
+      selection: { type: 'entry', item: entries[0] },
+      categories: [],
+      entriesSource: 'fact',
+      busy: false,
+      treeError: null,
+      listWarnings: [],
+      chapters: [],
+      scripts: [],
+      entriesFilterCat: '',
+      setEntriesFilterCat: () => {},
+      entryWarnings: [],
+      openEntry: async () => {},
+      createEntry: async () => {}
+    }
+  }
+
+  function mountBoard(data) {
+    return mount(EntriesBoard, { props: { data, projectRoot: ROOT } })
+  }
+
+  function stubWikiBridge({ wiki = WIKI } = {}) {
+    const request = vi.fn(async (channel) => {
+      if (channel === IPC_CHANNELS.factWikiGet) {
+        return { ok: true, wiki, derivedFrom: wiki ? { factRevision: 3, schema: 'pinax-wiki-derived@1' } : null }
+      }
+      if (channel === IPC_CHANNELS.factWikiDerive) {
+        return { ok: true, wiki: WIKI, derivedFrom: { factRevision: 4, schema: 'pinax-wiki-derived@1' } }
+      }
+      return { ok: true }
+    })
+    vi.stubGlobal('pinaxNext', { request })
+    return request
+  }
+
+  beforeEach(() => {
+    globalThis.localStorage?.removeItem(TAB_KEY)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('有拆解书：wiki 入口出现，点开显五页签，概览读数来自 wiki JSON', async () => {
+    stubWikiBridge()
+    const wrapper = mountBoard(factBoardData())
+
+    const toggle = wrapper.find('[data-test="entries-wiki-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    await toggle.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="wiki-tabs"]').exists()).toBe(true)
+    const tabs = wrapper.findAll('[data-test="wiki-tab-bar"] button')
+    expect(tabs.map((tab) => tab.text())).toEqual(['概览', '人物矩阵', '时间线', '章纲', '伏笔'])
+    expect(wrapper.find('[data-test="wiki-panel-overview"]').exists()).toBe(true)
+    // 条目总数＝人物 2＋场景 1；章节 2；伏笔 1；可溯源率 90%
+    expect(wrapper.find('[data-test="wiki-kpi-entries"]').text()).toContain('3')
+    expect(wrapper.find('[data-test="wiki-kpi-chapters"]').text()).toContain('2')
+    expect(wrapper.find('[data-test="wiki-kpi-foreshadow"]').text()).toContain('1')
+    expect(wrapper.find('[data-test="wiki-kpi-traceable"]').text()).toContain('90%')
+
+    await wrapper.find('[data-test="wiki-tab-timeline"]').trigger('click')
+    expect(wrapper.find('[data-test="wiki-panel-timeline"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="wiki-panel-overview"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="wiki-timeline"]').text()).toContain('雪停了。')
+
+    await wrapper.find('[data-test="wiki-tab-matrix"]').trigger('click')
+    expect(wrapper.find('[data-test="wiki-matrix"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="wiki-tab-outline"]').trigger('click')
+    expect(wrapper.find('[data-test="wiki-outline"]').text()).toContain('钟楼停摆。')
+
+    await wrapper.find('[data-test="wiki-tab-foreshadow"]').trigger('click')
+    expect(wrapper.find('[data-test="wiki-foreshadow"]').text()).toContain('停在十一点')
+  })
+
+  it('没有拆解书（条目溯源无 book_id）：wiki 入口整组不出现', async () => {
+    stubWikiBridge()
+    const wrapper = mountBoard(factBoardData({ withBook: false }))
+
+    expect(wrapper.find('[data-test="entries-wiki-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="wiki-tabs"]').exists()).toBe(false)
+  })
+
+  it('没有 wiki：页签组不出现，派生钮在空态里走通（fact:wiki:derive → 刷新）', async () => {
+    const request = stubWikiBridge({ wiki: null })
+    const wrapper = mountBoard(factBoardData())
+
+    await wrapper.find('[data-test="entries-wiki-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="wiki-tab-bar"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="wiki-empty"]').exists()).toBe(true)
+
+    const derive = wrapper.find('[data-test="wiki-empty"] [data-test="wiki-derive"]')
+    expect(derive.exists()).toBe(true)
+    await derive.trigger('click')
+    await flushPromises()
+
+    expect(request).toHaveBeenCalledWith(IPC_CHANNELS.factWikiDerive, { root: ROOT, bookId: BOOK_ID })
+    expect(wrapper.find('[data-test="wiki-tab-bar"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="wiki-derived"]').text()).toContain('第 4 版')
+  })
+
+  it('页签状态记忆：选中页签按项目根落 localStorage，重挂载后回到同一页', async () => {
+    stubWikiBridge()
+    const first = mountBoard(factBoardData())
+    await first.find('[data-test="entries-wiki-toggle"]').trigger('click')
+    await flushPromises()
+    await first.find('[data-test="wiki-tab-foreshadow"]').trigger('click')
+    expect(globalThis.localStorage.getItem(TAB_KEY)).toBe('foreshadow')
+    first.unmount()
+
+    const second = mountBoard(factBoardData())
+    await second.find('[data-test="entries-wiki-toggle"]').trigger('click')
+    await flushPromises()
+    expect(second.find('[data-test="wiki-panel-foreshadow"]').exists()).toBe(true)
+    expect(second.find('[data-test="wiki-panel-overview"]').exists()).toBe(false)
+  })
+})

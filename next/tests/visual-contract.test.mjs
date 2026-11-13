@@ -2053,3 +2053,19 @@ test('〔P6〕demo 字阶与圆角：28px 第六档、14px 卡片圆角、9999 �
   assert.match(filters, /for \(const item of LIBRARY_FILTERS\)/u)
   assert.doesNotMatch(filters, /count\s*>\s*0/u)
 })
+
+/**
+ * 〔S4〕wiki 五页签声明钉死：页签 id／标签是作者口径，顺序也钉死——
+ * 组件按这份声明渲染，数据面按 id 分派；改词表就得改这条门禁（防止悄悄换词或换序）。
+ */
+test('〔S4〕wiki 五页签：概览／人物矩阵／时间线／章纲／伏笔，id 与顺序钉死', async () => {
+  const view = stripComments(await readFile(join(shellDir, 'wiki', 'wikiView.mjs'), 'utf-8'))
+  assert.ok(view.includes('WIKI_TABS = Object.freeze(['), '五页签表应从 WIKI_TABS 声明出发')
+  for (const [id, label] of [['overview', '概览'], ['matrix', '人物矩阵'], ['timeline', '时间线'], ['outline', '章纲'], ['foreshadow', '伏笔']]) {
+    assert.ok(view.includes(`id: '${id}', label: '${label}'`), `页签声明缺了 ${label}`)
+  }
+  // 组件只按声明画，不另写一套页签文案。
+  const component = stripComments(await readFile(join(shellDir, 'wiki', 'WikiTabs.vue'), 'utf-8'))
+  assert.match(component, /v-for="item in WIKI_TABS"/u)
+  assert.ok(component.includes('{{ item.label }}'), '页签文案应来自 WIKI_TABS 的 label')
+})
