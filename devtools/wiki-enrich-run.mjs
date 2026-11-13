@@ -127,7 +127,34 @@ export async function enrichBook(id, lib = LIB, options = {}) {
         if (attempt === 1) failures.push({ stage: 'chapter-batch', chapter: batch.map((b) => b.chapter).join(','), reason: String(error?.message ?? error) })
       }
     }
-    if (!parsed) failures.push({ stage: 'chapter-batch', chapter: batch.map((b) => b.chapter).join(','), reason: 'parse-failed' })
+    // 整批失败时逐章单独补（一次只做一章，token 压力减到 1/N，成功率明显更高——
+    // 实测整批 parse-failed 后单章重试大多能成）。
+    if (!parsed) {
+      for (const item of batch) {
+        try {
+          // 只喂这一章的文本（不重复整批输入），输出格式同批式但只一条
+          const singlePrompt = [
+            '你是小说章节拆解器（细化层）。输入是若干章的事件文本（按章分组、按原文顺序）。',
+            '对每一章输出：',
+            '1) title：2–6 字小标题；2) summary：2–3 句剧情梗概（60–120 字）；',
+            `3) function：从 [${CHAPTER_FUNCTIONS.join('/')}] 选一个；4) emotion：从 [${EMOTIONS.join('/')}] 选一个；`,
+            '5) beats：剧情点数 1–5；6) foreshadows：伏笔 0–3 条；7) excerpt：{beat,quote} 或 null。',
+            '',
+            TRACE_HEADER,
+            '',
+            '只输出 JSON：{"chapters":[{"chapter":章号,"title":"","summary":"","function":"","emotion":"","beats":1,"foreshadows":[],"excerpt":null}]}',
+            '',
+            `【第 ${item.chapter} ${usePseudo ? '节' : '章'}事件】\n${item.text}`
+          ].join('\n')
+          const single = await callJson(singlePrompt, 2200)
+          const singleParsed = parseReply(single.text)
+          if (singleParsed?.chapters?.length) {
+            parsed = { chapters: [...(parsed?.chapters ?? []), ...singleParsed.chapters] }
+          }
+        } catch { /* 单章也失败就记账 */ }
+      }
+      if (!parsed) failures.push({ stage: 'chapter-batch', chapter: batch.map((b) => b.chapter).join(','), reason: 'parse-failed-single-retry' })
+    }
     for (const item of batch) {
       const row = parsed?.chapters?.find((c) => Number(c.chapter) === item.chapter)
       const hooks = Array.isArray(row?.foreshadows) ? row.foreshadows.slice(0, 3).map(String).filter(Boolean) : []

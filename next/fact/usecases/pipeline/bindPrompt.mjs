@@ -31,6 +31,7 @@ export const BIND_SYSTEM_PROMPT = [
   '3) ch 只能是：do（动作）、say（说出口的话）、think（心里想的话）、feel（身体感受或情绪）、',
   '   perceive（看见/听见/闻到/注意到）、state（状态描写、环境、身份说明）、event（不可归类的客观事件）。',
   '4) 块里若有 `hint` 字段（系统给的线索），它只是建议：你有把握就照用，没把握就改成你判断的；',
+  '   若有 `turn` 字段（上一句的说话人），只是轮次线索：对话交替时可直接沿用，出现新的说话人线索时按原文改；',
   '   但 who 不能因为 hint 有值就盲抄——hint 可能是代词推断出来的。',
   '5) settings / knowledge / hooks 的每一项**必须是对象**，不是句子。给不出就留 []。',
   '   句子是剧情，不是设定——「某人把枪藏进抽屉」这类不要放进 settings。',
@@ -57,9 +58,15 @@ export function buildBindPrompt(input = {}) {
   const knownNames = Array.isArray(input.knownNames) ? input.knownNames.filter(Boolean) : []
   const priorNames = Array.isArray(input.priorNames) ? input.priorNames.filter(Boolean) : []
 
+  // 对话块补「上一句说话人」上下文（审计 2026-11-14）：对话密集书（每段 40+ 块、say 占一半）
+  // 单看一块引号内文本判不出说话人，模型只能留空 → say 无 who 上千条。
+  // 给出「上一块绑定的 who」作为 turn 线索（只是线索，模型仍可改）。
+  let lastSpeaker = ''
   const blockLines = blocks.map((block) => {
     const hint = block.speakerHint ? ` hint=${block.speakerHint}` : ''
-    return `[${block.id}] (${block.channelHint}${hint}) ${block.text}`
+    const turn = block.channelHint === 'say' && lastSpeaker ? ` turn=${lastSpeaker}` : ''
+    if (block.speakerHint) lastSpeaker = block.speakerHint
+    return `[${block.id}] (${block.channelHint}${hint}${turn}) ${block.text}`
   })
 
   return [

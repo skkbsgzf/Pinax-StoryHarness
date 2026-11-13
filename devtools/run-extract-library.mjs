@@ -132,6 +132,18 @@ export async function extractBook(book, index, profile, env = {}) {
     segment: profile.segment
   })
   const units = segmentText(body, profile.segment)
+  // 对话密度自适应（审计 2026-11-14）：对话密集书块被切成大量 ≤10 字碎片
+  // （「老婆烂醉」2175 块里 946 块 <10 字 → 模型回包率崩到 39%）。
+  // 探样本要避开开场短段（实证：前 3 段 14.7 块/段，全书 44 块/段）——取全书均匀 5 段。
+  const probeSample = [0, 0.25, 0.5, 0.75, 1].map((ratio) => units[Math.min(units.length - 1, Math.floor(ratio * units.length))]).filter(Boolean)
+  const probeBlocks = probeSample.reduce((sum, unit) => sum + segmentBlocks(unit.text, { ...profile.blocks }).blocks.length, 0)
+  const blocksPerSegment = probeBlocks / Math.max(1, probeSample.length)
+  const blockOptions = blocksPerSegment > 32
+    ? { ...profile.blocks, min: Math.round((profile.blocks.min ?? 25) * 1.8), max: Math.round((profile.blocks.max ?? 70) * 1.8) }
+    : { ...profile.blocks }
+  if (blocksPerSegment > 32) {
+    console.log(`  对话密集（${blocksPerSegment.toFixed(0)} 块/段）→ 块合并阈值 ${profile.blocks.min ?? 25}→${blockOptions.min}`)
+  }
   // 锚回原文：段文本换成原文切片，块/事件的可溯源率才成立（48.8% → 99.7% 的差别）。
   let searchFrom = 0
   const segments = units.map((unit) => {
@@ -141,7 +153,7 @@ export async function extractBook(book, index, profile, env = {}) {
     const slice = relocateToSource(body.slice(searchFrom), unit)
     const text = slice ? slice.text : unit.text
     if (slice) searchFrom += slice.end
-    const { blocks } = segmentBlocks(text, { ...profile.blocks })
+    const { blocks } = segmentBlocks(text, blockOptions)
     return { id: meta.id, index: unit.index, chars: unit.chars, text, blocks, located: Boolean(slice), chapterNo }
   })
 
@@ -178,7 +190,11 @@ export async function extractBook(book, index, profile, env = {}) {
       const probeParsed = parseModelReply(probeAnswer.text)
       if (probeParsed.ok) {
         const probeName = probeParsed.value?.narrator ? String(probeParsed.value.narrator).trim() : ''
-        if (probeName) {
+        // 拒绝代词/泛指/单字（实测「静音耳塞」返回字面「我」→ 叙述者豁免全废，无who 83%）：
+        // 探测要给的是**可用作 who 的真名或稳定称谓**，拿不到就保留 vocative 结果或置空。
+        const PROBE_REJECT = new Set(['我', '你', '他', '她', '它', '我们', '你们', '他们', '她们', '自己', '本人', '主角', '女主', '男主', '叙述者', ''])
+        const usable = probeName && !PROBE_REJECT.has(probeName) && probeName.length >= 2
+        if (usable) {
           name = normalizeVocativeToName(probeName, nameCandidates).name || probeName
         }
       }
@@ -198,11 +214,75 @@ export async function extractBook(book, index, profile, env = {}) {
     }
     if (done.length) console.log(`  续跑：已读回 ${done.length} 批（跳过前 ${resumeFrom} 段）`)
   }
-  for (let start = resumeFrom; start < segments.length; start += BATCH) {
-    const batch = segments.slice(start, start + BATCH)
-    const prompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: batch, knownNames, priorNames: [], perspective: perspective.perspective })].join('\n')
+  // 极长段（对话密集书单段 40+ 块）直接成批仍超模型回包能力（实测 44 块/段只回 39% 块）。
+  // 对策：按块数把段**纵向切开**成子批，每子批仍属同一段，回包按块 id 合并。
+  // 实测 dots 回包块数硬上限 ≈44（多批回包恒 41-44 块）——批块数必须低于它并留余量
+  const BATCH_BLOCKS = Math.max(8, Number(argOf('--batch-blocks', '24')) || 24)
+  const batches = []
+  {
+    let cursor = resumeFrom
+    while (cursor < segments.length) {
+      const chunk = []
+      const sliced = []
+      let blockCount = 0
+      while (cursor + sliced.length < segments.length && sliced.length < BATCH) {
+        const segment = segments[cursor + sliced.length]
+        const segBlocks = segment.blocks ?? []
+        if (chunk.length && blockCount + segBlocks.length > BATCH_BLOCKS) break
+        if (segBlocks.length > BATCH_BLOCKS) {
+          // 单段超批块数：拆成 ≤BATCH_BLOCKS 的连续子段（id 加切片后缀，回包合并时还原）
+          for (let offset = 0; offset < segBlocks.length; offset += BATCH_BLOCKS) {
+            chunk.push({
+              ...segment,
+              id: `${segment.id}#${offset / BATCH_BLOCKS}`,
+              blocks: segBlocks.slice(offset, offset + BATCH_BLOCKS)
+            })
+          }
+          blockCount += segBlocks.length
+        } else {
+          chunk.push(segment)
+          blockCount += segBlocks.length
+        }
+        sliced.push(segment)
+      }
+      if (!chunk.length) chunk.push(segments[cursor])
+      batches.push({ start: cursor, batch: chunk, sourceSegments: sliced.length ? sliced : [segments[cursor]] })
+      cursor += (sliced.length || 1)
+    }
+  }
+  for (const { start, batch } of batches) {
+    // 块 id 全局唯一化（审计 2026-11-14 真 bug）：segmentBlocks 的块 id 是段内 b1..bN，
+    // 多段一批时必然重名——模型回包按 id 区分不开，把第 2 段的说话人填到第 1 段的块上
+    // （实测「年代知青」66 条 hallucinated 全是这种跨段串名）。发提示词前加段前缀，收回包再剥掉。
+    // 前缀按「原段 id」（剥掉切片后缀）取，切片子段共享同一前缀
+    const idPrefix = new Map(batch.map((segment) => {
+      const baseId = String(segment.id).replace(/#\d+$/u, '')
+      return [baseId, baseId.slice(0, 4) + Math.abs(baseId.length * 7 + baseId.charCodeAt(0)) % 97]
+    }))
+    const prefixedBatch = batch.map((segment) => ({
+      ...segment,
+      blocks: (segment.blocks ?? []).map((block) => ({ ...block, id: `${idPrefix.get(String(segment.id).replace(/#\d+$/u, ''))}_${block.id}` }))
+    }))
+    const prompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: prefixedBatch, knownNames, priorNames: [], perspective: perspective.perspective })].join('\n')
     let reply = ''
     let parsedBinding = null
+    /** 回包块 id 去前缀（`a1b2_b3` → `b3`），并对齐到真实段 id。 */
+    const unprefix = (segmentsReply) => {
+      const merged = new Map() // 原段 id → { ...item, blocks: [] }（切片子段合并回一段）
+      for (const item of segmentsReply) {
+        // 子段 id 形如 `真段id#0`；原段 id 形如 `真段id`
+        const baseId = String(item.id).replace(/#\d+$/u, '')
+        const chunkMeta = batch.find((segment) => segment.id === String(item.id))
+        const prefix = idPrefix.get(baseId) ? `${idPrefix.get(baseId)}_` : null
+        const blocks = (item.blocks ?? []).map((block) => ({
+          ...block,
+          id: prefix && String(block.id).startsWith(prefix) ? String(block.id).slice(prefix.length) : String(block.id)
+        }))
+        if (!merged.has(baseId)) merged.set(baseId, { ...item, id: baseId, blocks: [] })
+        merged.get(baseId).blocks.push(...blocks)
+      }
+      return [...merged.values()]
+    }
     for (let attempt = 1; attempt <= env.CALL_RETRIES ?? CALL_RETRIES; attempt += 1) {
       const ask = attempt === 1 ? prompt : `${prompt}\n\n【上次输出不是合法 JSON】重新输出完整 JSON。`
       const answer = await callModel(ask)
@@ -210,7 +290,7 @@ export async function extractBook(book, index, profile, env = {}) {
       const parsed = parseModelReply(reply)
       if (parsed.ok) {
         const normalized = normalizeBindReply(parsed.value)
-        if (normalized.ok) { parsedBinding = normalized.segments; break }
+        if (normalized.ok) { parsedBinding = unprefix(normalized.segments); break }
       }
     }
     // 覆盖度校验（审计 B1）：模型回包漏段时只对缺失段补发一轮，不让它们静默落进规则兜底。
@@ -218,14 +298,18 @@ export async function extractBook(book, index, profile, env = {}) {
       const returnedSegIds = new Set(parsedBinding.map((item) => item.id))
       const missingSegs = batch.filter((segment) => !returnedSegIds.has(segment.id))
       if (missingSegs.length) {
-        const retryPrompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: missingSegs, knownNames, priorNames: [], perspective: perspective.perspective }), '', '【上一轮漏了以上段】只输出这些段的绑定。'].join('\n')
+        const missingPrefixed = missingSegs.map((segment) => ({
+          ...segment,
+          blocks: (segment.blocks ?? []).map((block) => ({ ...block, id: `${idPrefix.get(String(segment.id).replace(/#d+$/u, ''))}_${block.id}` }))
+        }))
+        const retryPrompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: missingPrefixed, knownNames, priorNames: [], perspective: perspective.perspective }), '', '【上一轮漏了以上段】只输出这些段的绑定。'].join('\n')
         try {
           const retryAnswer = await callModel(retryPrompt)
           const retryParsed = parseModelReply(retryAnswer.text)
           if (retryParsed.ok) {
             const retryNormalized = normalizeBindReply(retryParsed.value)
             if (retryNormalized.ok) {
-              for (const item of retryNormalized.segments) {
+              for (const item of unprefix(retryNormalized.segments)) {
                 if (!returnedSegIds.has(item.id)) { parsedBinding.push(item); returnedSegIds.add(item.id) }
               }
             }
