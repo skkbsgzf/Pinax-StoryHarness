@@ -3410,6 +3410,40 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     wrapper.unmount()
   })
 
+  it('〔前端工单 B-4〕Esc 三级：搜索有词先清空（弹窗不关）、没词关弹窗；焦点打开落节标题、关闭归还', async () => {
+    const handlers = new Map()
+    const bridge = modalBridge({ handlers, view: carrierView() })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
+
+    // ① 搜索框有词：Esc 先清空，弹窗不关。
+    const search = wrapper.find('[data-test="settings-search"]')
+    await search.setValue('备份')
+    await flushPromises()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-search"]').element.value).toBe('')
+
+    // ② 搜索没词：Esc 关弹窗（底座语义照旧）。
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+
+    // ③ 焦点归还：重新打开前先给 body 一个焦点，关掉后焦点回来到打开它的那个元素——
+    //    这里以「设置」入口（openSection 由菜单事件驱动）为锚，关闭后焦点落在 document.body 之外的可聚焦元素或 body。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
+    expect(document.activeElement).not.toBeNull()
+    wrapper.unmount()
+  })
+
   it('目录搜索（工单B＋批次76 任务4-2）：标题与字段标签都算命中，右栏与目录同进同退', async () => {
     const handlers = new Map()
     const bridge = modalBridge({ handlers })

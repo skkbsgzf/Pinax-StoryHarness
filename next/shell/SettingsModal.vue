@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, ref, watch, onBeforeUnmount } from 'vue'
 import WorkbenchModal from './WorkbenchModal.vue'
 import CarrierSettingsGeneric from './settings/CarrierSettingsGeneric.vue'
 import SkillsSection from './settings/SkillsSection.vue'
@@ -53,6 +53,42 @@ const props = defineProps({
   bridge: { type: Object, default: null }
 })
 const emit = defineEmits(['close', 'changed', 'theme', 'set-enabled', 'set-primary', 'toggle-companion', 'writing-prefs', 'update:activeSection'])
+
+/* —— 键盘与焦点（前端工单 B-4）——————————————————————————————————————
+ * Esc 三级：搜索框有词先清空（stopImmediatePropagation，底座 WorkbenchModal 收不到就不会关弹窗）；
+ * 没词放行给底座（它 emit close）。
+ * 监听挂 window 的 capture 阶段：底座的 Esc 监听也挂在 window（WorkbenchModal.vue:58-61），
+ * 同一目标上 capture 先于 bubble，所以这里能先一步拦下带词的 Esc。
+ * （挂在面板根上的 @keydown.capture 收不到「事件直接派发到 window」的键盘——焦点不在面板里时
+ *  比如刚打开那一拍，事件目标是 body/window，走不到元素路径，那条实现曾因此整案不生效。）
+ * 焦点：打开时落当前节标题（落不到就落目录第一项），关闭后归还给打开前的元素。 */
+const panelRoot = ref(null)
+let lastFocused = null
+function onGlobalKeydown(event) {
+  if (event.key !== 'Escape' || !props.open) return
+  if (!searchQuery.value.trim()) return
+  event.stopImmediatePropagation()
+  event.preventDefault()
+  clearSearch()
+}
+watch(() => props.open, (open) => {
+  if (open) {
+    lastFocused = document.activeElement
+    window.addEventListener('keydown', onGlobalKeydown, true)
+    void nextTick(() => {
+      const title = panelRoot.value?.querySelector('[data-test-panel-title]')
+      if (title) { title.focus?.(); return }
+      panelRoot.value?.querySelector('input, button')?.focus()
+    })
+  } else {
+    window.removeEventListener('keydown', onGlobalKeydown, true)
+    if (lastFocused && document.contains(lastFocused)) {
+      lastFocused.focus?.()
+      lastFocused = null
+    }
+  }
+})
+onBeforeUnmount(() => window.removeEventListener('keydown', onGlobalKeydown, true))
 
 /** 目录搜索（工单B）：左栏按词表滤；右栏同进同退（见下面 panelSection 那条〔批次76 任务4-2〕）。 */
 const searchQuery = ref('')
@@ -223,7 +259,7 @@ function onTablistKeydown(event) {
     :title="title"
     @close="emit('close')"
   >
-    <div class="settings-layout">
+    <div ref="panelRoot" class="settings-layout">
       <!-- legacy-copied：左栏目录照抄 src/components/workbench/SettingsPopup.vue:15-30
            （settings-tabs／settings-navigation 词汇、tablist／tab 角色与 roving tabindex）；
            按钮本体落 .nx-row（Next 行按钮 primitive），激活态与配色按老版原件重刷。
