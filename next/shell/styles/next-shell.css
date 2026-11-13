@@ -471,21 +471,23 @@ body {
   overflow: hidden;
 }
 
-/* —— 推演模式（工单 P7 · demo「Agent 在左」）———————————————————————————
-   同一批 DOM，只用 flex order 换位＋显隐——零重挂载铁律：模板里组件的位置一个都不许动，
+/* —— 列序（工单 P7 → 作者 2026-11-14 裁定「左侧布局更合理」，Agent 在左升级为全局默认）———
+   同一批 DOM，只用 flex order 换位——零重挂载铁律：模板里组件的位置一个都不许动，
    Agent 会话（在途提问／轨迹）挂在 RuntimeDock 内部，组件一旦重挂载就丢。
-   竖条仍在最左（-2），Agent 列紧随其后（-1）；中栏抬到 1，让「中栏↔Agent」那根
-   拖拽把手（.col-center 之后、.col-dock 之前的那枚 .resizer）留在两者之间——
-   宽度仍走既有 dockWidth（320–680）拖拽记忆，与列在左在右无关。
-   索引窗与其把手按模板的紧邻关系成对隐藏（相邻选择器只看 DOM，不看显隐）。
+   竖条最左（-3），Agent 列紧随其后（-2），它的拖拽把手（DOM 里在 .col-dock 之前那枚
+   .resizer-dock，见 AppNext 模板）随列同位（-1）；索引窗/中栏保持 0——
+   宽度仍走既有 dockWidth（320–680）拖拽记忆；把手移到 Agent 列右缘后，
+   拖拽方向在 AppNext.startDrag 里翻为「往右拖＝变宽」（几何变了，符号跟着翻）。
    窄屏（≤860px）那套竖排不参与：本段只在桌面宽度成立。 */
 @media (min-width: 861px) {
-  .nx-deduce-mode .nx-ribbon { order: -2; }
-  .nx-deduce-mode .col-dock { order: -1; }
-  .nx-deduce-mode .col-center { order: 1; }
-  .nx-deduce-mode .nx-index-window { display: none; }
-  .nx-deduce-mode .nx-index-window + .resizer { display: none; }
+  .next-shell .nx-ribbon { order: -3; }
+  .next-shell .col-dock { order: -2; }
+  .next-shell .resizer-dock { order: -1; }
+  .next-shell .col-center { order: 1; }
 }
+
+/* 〔P7 遗留退役〕原 .nx-deduce-mode 换位段已升格为上面的默认列序；
+   「推演」开关回归本义＝开/关 DeducePanel 浮层（不再带布局切换）。 */
 
 /* —— 中栏 ——————————————————————————————————————————————— */
 .center {

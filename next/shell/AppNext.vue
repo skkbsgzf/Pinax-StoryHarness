@@ -438,9 +438,9 @@ const activeSection = ref('prefs')
  * M1-c 推演面板：AppNext 直接挂载的一枚中栏覆盖层（v-if 控制显隐）。
  * 不注册新页签／槽位／视图——避开守卫⑪⑫⑬的页态契约面，也不给 bundle 添宿主依赖。
  * M 系接线批：戏剧✦层的 LlmPort 经 fact:llm-complete 一条 IPC 通道走主进程子 Agent（见下）。
- * 〔工单 P7〕同一枚状态升级为**工作区布局模式**开关：ON 时壳根挂 .nx-deduce-mode，
- * Agent 列经 CSS order 换到竖条之后、索引窗成对隐藏；面板照旧由同一枚钮唤出（浮层职责不变）。
- * 状态只在会话内记忆，不落 workspace.json。
+ * 〔工单 P7 → 作者 2026-11-14 裁定〕Agent 列换左位已升格为**全局默认布局**（CSS order，见
+ * next-shell.css 列序段），本开关回归本义：只开/关 DeducePanel 浮层，不再带布局切换。
+ * 面板开合状态只在会话内记忆，不落 workspace.json。
  */
 const deduceOpen = ref(false)
 function toggleDeduce() {
@@ -2534,11 +2534,12 @@ function startDrag(target, event) {
   dragging.value = target
   const startX = event.clientX
   const startValue = target === 'index' ? indexWidth.value : dockWidth.value
-  // 两条把手都在各自面板的右缘：往左拖＝变宽。
+  // 索引窗把手在其右缘：往左拖＝变宽（几何未变）。
+  // Agent 列已按作者 2026-11-14 裁定换到左位（CSS order），把手随之在其右缘：往右拖＝变宽——符号与右位时代相反。
   // 右栏的钳制对齐老版参考区 320–680（src/composables/useWorkspaceHost.js:286 的 resize()）；
   // 索引窗仍是老版目录窗的 200–360，不动。
   const move = (moveEvent) => {
-    const next = startValue - (moveEvent.clientX - startX)
+    const next = target === 'index' ? startValue - (moveEvent.clientX - startX) : startValue + (moveEvent.clientX - startX)
     if (target === 'index') indexWidth.value = Math.min(360, Math.max(200, next))
     else dockWidth.value = Math.min(680, Math.max(320, next))
   }
@@ -2656,9 +2657,9 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <!-- 〔工单 P7〕推演模式只在这一层挂类：换位／显隐全在 next-shell.css 的 .nx-deduce-mode 段，
+  <!-- 〔工单 P7 → 2026-11-14〕Agent 在左已是默认列序（next-shell.css 列序段，CSS order），
        模板里的挂载顺序一字不动（零重挂载：Agent 会话状态不因换位丢失）。 -->
-  <div ref="shellRoot" class="nx-shell-root" :class="{ 'nx-deduce-mode': deduceOpen }">
+  <div ref="shellRoot" class="nx-shell-root">
     <!-- —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
          全宽一条：左侧应用名＋页内菜单行（数据源＝menus.mjs 的 MENU_TEMPLATE，与原生菜单同一份），
          中间项目信息 chip，右侧给原生窗控 overlay 留空（主进程 titleBarOverlay，约 138px）。
@@ -2725,7 +2726,7 @@ onBeforeUnmount(() => {
           </ul>
         </div>
         <!-- 推演入口：挂在菜单栏内（.nx-menubar 已是 no-drag 区，真窗可点）。
-             〔工单 P7〕语义＝工作区布局模式开关（壳根 .nx-deduce-mode），同时照旧唤出推演浮层；
+             〔工单 P7 → 2026-11-14〕语义回归本义＝开/关推演浮层（Agent 在左已是默认列序）；
              不开第二套页态、不移动任何组件在模板里的位置。 -->
         <button
           type="button"
@@ -2919,7 +2920,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div
-        class="resizer"
+        class="resizer resizer-dock"
         role="separator"
         aria-orientation="vertical"
         @pointerdown="startDrag('right', $event)"

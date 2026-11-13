@@ -1750,7 +1750,7 @@ test('〔批次68-R6 门禁⑳〕右栏是占位列：绑定链完整、坞不�
   const centerAt = app.indexOf('class="col-center"')
   const dockAt = app.indexOf('class="col-dock"')
   assert.ok(centerAt >= 0 && dockAt > centerAt, '右栏必须还是中心区的占位兄弟列——结构挪了就回到浮层老账')
-  assert.ok(app.slice(centerAt, dockAt).includes('class="resizer"'), '两列之间只应隔一条拖拽把手（坞宽唯一入口还是那个拖拽）')
+  assert.ok(app.slice(centerAt, dockAt).includes('class="resizer resizer-dock"'), '两列之间只应隔一条拖拽把手（P7 后这枚把手带 resizer-dock 类＝Agent 列左位排序；坞宽唯一入口还是那个拖拽）')
 })
 
 /**
@@ -1835,44 +1835,41 @@ test('〔批次 M1-c〕推演面板＝AppNext 直接挂载的中栏覆盖层：�
 })
 
 /**
- * 〔工单 P7〕推演模式（demo「Agent 在左」）：换位只许 CSS（flex order／显隐），零重挂载。
- *
- * jsdom 量不出 x 坐标，布局判据落在这里（声明级）：竖条仍 -2，Agent 列 -1 紧随其后，
- * 中栏抬到 1 让「中栏↔Agent」那根拖拽把手留在两者之间；索引窗与其紧邻把手成对隐藏。
- * 模板侧的判据：壳根类只由既有 deduceOpen 驱动（不另起状态、不落盘），
- * RuntimeDock／CollapseOrb 的挂载处不许出现 v-if（守卫⑰④：晚注册即丢 Esc 分层）。
+ * 〔工单 P7 → 作者 2026-11-14 裁定「左侧布局更合理」〕Agent 在左从「推演模式」升格为**默认列序**：
+ * 换位只许 CSS（flex order），零重挂载。判据：竖条 -3 最左，Agent 列 -2 紧随其后，
+ * 它的拖拽把手（.resizer-dock）-1 随列同位，索引窗/中栏 0——把手正好落在 Agent 列右缘。
+ * 拖拽方向随几何翻转（startDrag 对非 index 目标改「往右拖＝变宽」）。
+ * 模板侧：RuntimeDock／CollapseOrb 挂载处零 v-if（守卫⑰④）；DeducePanel 显隐仍归 deduceOpen。
  */
-test('〔工单 P7〕推演模式＝CSS 换位 + 索引窗成对隐藏；Agent 挂载处零 v-if', async () => {
+test('〔工单 P7 → 2026-11-14〕Agent 在左＝默认列序（CSS order）+ 拖拽方向随几何翻转；挂载处零 v-if', async () => {
   const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
   const clean = stripComments(app).replace(/<!--[\s\S]*?-->/gu, '')
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
 
-  // ① 壳根类由既有 deduceOpen 直接驱动——模式就是那一枚状态，不许另起第二套，也不许落盘。
-  assert.match(clean, /class="nx-shell-root"\s+:class="\{ 'nx-deduce-mode': deduceOpen \}"/u, '壳根没挂 .nx-deduce-mode，或驱动它的不是 deduceOpen')
-  assert.doesNotMatch(clean, /deduceMode\b/u, '推演模式不许另起第二套状态（模式＝deduceOpen 一枚）')
+  // ① 列序声明：竖条 -3、Agent 列 -2、它的把手 -1、中栏 1——把手正好落在 Agent 列右缘。
+  assert.match(ruleBody(layout, '.next-shell .nx-ribbon') ?? '', /order:\s*-3/u, '竖条没钉在最左（order:-3）')
+  assert.match(ruleBody(layout, '.next-shell .col-dock') ?? '', /order:\s*-2/u, 'Agent 列没换到竖条之后（order:-2）')
+  assert.match(ruleBody(layout, '.next-shell .resizer-dock') ?? '', /order:\s*-1/u, 'Agent 列的把手没随列同位（order:-1）')
+  assert.match(ruleBody(layout, '.next-shell .col-center') ?? '', /order:\s*1/u, '中栏没抬到 Agent 列之后（order:1），把手会被挤到最右缘')
+  assert.doesNotMatch(layout, /\.nx-deduce-mode/u, '模式类已退役：Agent 在左是默认列序，不再有第二形态（作者 2026-11-14）')
 
-  // ② 换位声明：竖条 -2、Agent 列 -1、中栏 1——把手（.col-center 之后、.col-dock 之前）
-  //    因此正好落在 Agent 列与中栏之间；宽度仍走同一份 dockWidth，与左右位置无关。
-  assert.match(ruleBody(layout, '.nx-deduce-mode .nx-ribbon') ?? '', /order:\s*-2/u, '竖条没钉在最左（order:-2）')
-  assert.match(ruleBody(layout, '.nx-deduce-mode .col-dock') ?? '', /order:\s*-1/u, 'Agent 列没换到竖条之后（order:-1）')
-  assert.match(ruleBody(layout, '.nx-deduce-mode .col-center') ?? '', /order:\s*1/u, '中栏没抬到 Agent 列之后（order:1），把手会被挤到最右缘')
+  // ② 拖拽方向随几何翻转：dock 把手在其右缘，往右拖＝变宽（startDrag 对非 index 目标改 + 号）。
+  assert.match(clean, /target === 'index' \? startValue - \(moveEvent\.clientX - startX\) : startValue \+ \(moveEvent\.clientX - startX\)/u,
+    '拖拽符号没随几何翻转：索引窗保持「往左＝宽」、Agent 列（左位）必须「往右＝宽」')
 
-  // ③ 索引窗与其紧邻把手成对隐藏（相邻选择器只看 DOM 顺序：模板里 IndexWindow 紧邻自己的 resizer）。
-  assert.match(ruleBody(layout, '.nx-deduce-mode .nx-index-window') ?? '', /display:\s*none/u, '推演模式下索引窗没隐藏')
-  assert.match(ruleBody(layout, '.nx-deduce-mode .nx-index-window + .resizer') ?? '', /display:\s*none/u, '索引窗隐藏了、它的拖拽把手还留着')
-
-  // ④ 只在桌面宽度成立：窄屏（≤860px）那套竖排不动。
+  // ③ 只在桌面宽度成立：窄屏（≤860px）那套竖排不动。
   const desktop = layout.indexOf('@media (min-width: 861px)')
   assert.ok(desktop >= 0, '找不到桌面宽度的媒体查询')
-  assert.ok(layout.indexOf('.nx-deduce-mode .nx-ribbon') > desktop, '推演换位没收在桌面宽度媒体查询里（窄屏竖排会被重排）')
+  assert.ok(layout.indexOf('.next-shell .nx-ribbon { order: -3') > desktop, '列序没收在桌面宽度媒体查询里（窄屏竖排会被重排）')
 
-  // ⑤ 挂载处零 v-if：换位不许包条件分支（Agent 会话与 Esc 分层都挂在这次挂载上）。
+  // ④ 挂载处零 v-if：换位不许包条件分支（Agent 会话与 Esc 分层都挂在这次挂载上）。
   const runtimeTag = (clean.match(/<RuntimeDock[\s\S]{0,400}?\/>/u) ?? [])[0] ?? ''
   assert.ok(runtimeTag, '找不到 RuntimeDock 挂载')
   assert.equal(/v-if/u.test(runtimeTag), false, 'RuntimeDock 挂载处不得出现 v-if（换位只许 CSS）')
   assert.equal(/<CollapseOrb\s+v-if=/u.test(clean), false, 'CollapseOrb 挂载处不得出现 v-if（守卫⑰④）')
-  assert.match(clean, /<DeducePanel\s+v-if="deduceOpen"/u, 'DeducePanel 的显隐仍归既有开关，不许叠新的模式条件')
+  assert.match(clean, /<DeducePanel\s+v-if="deduceOpen"/u, 'DeducePanel 的显隐仍归既有开关（本批回归面板开关本义）')
 })
+
 
 /**
  * 〔批次 M1-c〕场景卡／徽章／双模式／第一视角两面板／留档的字面量同步（工单交付物 2/3/4 + 6）。
