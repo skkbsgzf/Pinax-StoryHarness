@@ -8,7 +8,14 @@ const source = JSON.parse(fs.readFileSync(new URL('../shared/knowledgeRuntimeSou
 const root = path.resolve(import.meta.dirname, '..')
 const output = path.resolve(process.env.PINAX_KNOWLEDGE_RUNTIME || path.join(root, '.runtime/knowledge'))
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'pinax-knowledge-build-'))
-const run = (cmd, args, cwd = temp) => execFileSync(cmd, args, { cwd, stdio: 'inherit' })
+// Windows 双坑：spawnSync 裸 npm ENOENT（不走 shell）；npm.cmd EINVAL（Node 24 安全策略禁 .cmd 直 spawn）。
+// 解法：npm run 环境自带 npm_execpath（npm-cli.js），用当前 node 直跑它，全平台一致。
+const npmCli = process.env.npm_execpath
+const runNpm = (args, cwd) => {
+  if (npmCli && fs.existsSync(npmCli)) return execFileSync(process.execPath, [npmCli, ...args], { cwd, stdio: 'inherit' })
+  return execFileSync('npm', args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' })
+}
+const run = (cmd, args, cwd = temp) => (cmd === 'npm' ? runNpm(args, cwd) : execFileSync(cmd, args, { cwd, stdio: 'inherit' }))
 try {
   if (fs.existsSync(output)) throw new Error('Knowledge runtime exists; select a new PINAX_KNOWLEDGE_RUNTIME candidate.')
   const checkout = path.join(temp, 'source')
@@ -19,7 +26,8 @@ try {
   const archiveFile = path.join(temp, 'source.tar')
   fs.writeFileSync(archiveFile, archive)
   const exported = path.join(temp, 'export'); fs.mkdirSync(exported)
-  run('tar', ['-xf', archiveFile, '-C', exported])
+  // Windows GNU tar 把「C:\…」当远程主机名（Cannot connect to C:）——--force-local 关掉该解释。
+  run('tar', ['--force-local', '-xf', archiveFile, '-C', exported])
   const core = path.join(exported, 'core')
   run('npm', ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], core)
   run(process.execPath, ['node_modules/typescript/bin/tsc', '-p', '../adapters/tsconfig.json'], core)
