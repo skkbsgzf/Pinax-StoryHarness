@@ -1,12 +1,14 @@
 <script setup>
 import { ref } from 'vue'
 import WorkbenchIcon from '../../../src/components/workbench/WorkbenchIcon.vue'
-import { relativeTime } from './relativeTime.mjs'
+import { formatLibraryCardMeta, libraryKindLabel } from './libraryFilters.mjs'
 
 /**
  * 库卡片（库管理器工单 A-3）：标题＋类型胶囊＋路径＋相对时间，整卡可点（回车/空格打开）。
  * 「更多」菜单只放两个记录级动作：在文件管理器中显示、从列表移除（只移除记录，不删盘）。
- * 渲染零 IPC：路径/类型/时间全部来自 props 里的最近清单快照（工单 A-2 验收）。
+ * 渲染零 IPC：路径/类型/时间/篇数全部来自 props 里的最近清单快照（工单 A-2 验收）。
+ * 范围 P1：类型胶囊与筛选条共用 libraryFilters 的同一张映射表；第三行补「N 篇 · 时间」
+ * （旧记录没有 count 时只显示时间，不扫盘、不猜数）。
  */
 const props = defineProps({
   entry: { type: Object, required: true },
@@ -17,15 +19,10 @@ const emit = defineEmits(['open', 'reveal', 'remove'])
 
 const menuOpen = ref(false)
 
-const kindLabel = kindOf(props.entry)
-function kindOf(entry) {
-  const KINDS = { novel: '小说', script: '剧本', comic: '漫画' }
-  const kind = String(entry?.kind ?? '')
-  return KINDS[kind] ?? ''
-}
+const kindLabel = libraryKindLabel(props.entry?.kind)
 
-function timeText() {
-  return relativeTime(props.entry?.at, props.now ?? undefined)
+function metaText() {
+  return formatLibraryCardMeta(props.entry, props.now ?? undefined)
 }
 </script>
 
@@ -43,7 +40,7 @@ function timeText() {
         <span v-if="kindLabel" class="lib-card-kind">{{ kindLabel }}</span>
       </span>
       <span class="lib-card-path" :title="entry?.path ?? ''">{{ entry?.path }}</span>
-      <span class="lib-card-meta">{{ timeText() }}</span>
+      <span class="lib-card-meta">{{ metaText() }}</span>
     </button>
     <button
       type="button"

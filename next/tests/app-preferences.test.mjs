@@ -293,11 +293,44 @@ test('recentProjects 值域：非数组拒绝；坏条目丢弃不整体打回�
     { path: 'D:/books/空名', name: '   ', at: '2026-11-10T00:00:00.000Z' }
   ] })
   assert.equal(messy.ok, true)
+  // 翻案依据（工单 P1-2）：条目新增可选 count/countAt；旧记录两格归一为 null（不是缺键）。
   assert.deepEqual(messy.value.recentProjects, [
-    { path: 'D:/books/大梦', name: '大梦', kind: null, at: null },
-    { path: 'D:/books/空名', name: null, kind: null, at: '2026-11-10T00:00:00.000Z' }
+    { path: 'D:/books/大梦', name: '大梦', kind: null, at: null, count: null, countAt: null },
+    { path: 'D:/books/空名', name: null, kind: null, at: '2026-11-10T00:00:00.000Z', count: null, countAt: null }
   ], '坏条目丢、好条目归一（trim 路径与名、坏时间戳置 null、kind 可选透传）')
 
   const cleared = normalizePrefs({ recentProjects: [] })
   assert.deepEqual(cleared.value.recentProjects, [], '空数组＝清空，合法')
+})
+
+test('篇数（工单 P1-2）：count/countAt 往返；旧记录缺字段归一为 null；坏值不显示错数', async () => {
+  const normalized = normalizePrefs({ recentProjects: [
+    { path: 'D:/books/大梦', name: '大梦', kind: 'novel', at: '2026-11-10T00:00:00.000Z', count: 12, countAt: '2026-11-11T00:00:00.000Z' },
+    { path: 'D:/books/旧稿', count: '十二', countAt: '不是时间' },
+    { path: 'D:/books/负一篇', count: -1, countAt: '2026-11-11T00:00:00.000Z' }
+  ] })
+  assert.equal(normalized.ok, true)
+  assert.deepEqual(normalized.value.recentProjects[0], {
+    path: 'D:/books/大梦', name: '大梦', kind: 'novel', at: '2026-11-10T00:00:00.000Z', count: 12, countAt: '2026-11-11T00:00:00.000Z'
+  }, '合法篇数与统计时刻原样保留')
+  assert.equal(normalized.value.recentProjects[1].count, null, '非整数篇数丢弃')
+  assert.equal(normalized.value.recentProjects[1].countAt, null)
+  assert.equal(normalized.value.recentProjects[2].count, null, '负数篇数丢弃（卡片只显示时间）')
+
+  const merged = mergeRecentProject([], { path: 'D:/books/夜航', kind: 'script', at: '2026-11-11T00:00:00.000Z', count: 9, countAt: '2026-11-11T00:00:00.000Z' })
+  assert.equal(merged[0].count, 9)
+  assert.equal(merged[0].countAt, '2026-11-11T00:00:00.000Z')
+
+  const dir = await mkdtemp(join(tmpdir(), 'pinax-prefs-'))
+  const file = join(dir, 'next-preferences.json')
+  try {
+    const prefs = createAppPreferences({ file })
+    const written = await prefs.write({ recentProjects: merged })
+    assert.equal(written.ok, true)
+    const reread = await createAppPreferences({ file }).read()
+    assert.equal(reread.value.recentProjects[0].count, 9, '落盘后可读回')
+    assert.equal(reread.value.recentProjects[0].countAt, '2026-11-11T00:00:00.000Z')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

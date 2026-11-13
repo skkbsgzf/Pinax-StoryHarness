@@ -1,9 +1,10 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import LibraryCard from './LibraryCard.vue'
 import CreateLibrary from './CreateLibrary.vue'
 import ImportLibrary from './ImportLibrary.vue'
 import OpenFailureCard from './OpenFailureCard.vue'
+import { LIBRARY_FILTER_ALL, LIBRARY_FILTERS, buildLibraryFilterTabs, filterLibraryEntries } from './libraryFilters.mjs'
 
 /**
  * 库管理器（前端重构工单 A）：无项目时的一级整窗视图。
@@ -11,6 +12,10 @@ import OpenFailureCard from './OpenFailureCard.vue'
  * 打开失败修复卡（A-5）内嵌在 list 顶部——四类失败都有可点的下一步，不是死胡同。
  * 渲染零 IPC（工单 A-2）：最近清单与失败详情由外壳以 props 快照传入；全部动作只 emit，
  * 通道调用与错误处理留在外壳（与菜单同一条分发口径）。
+ *
+ * 工单 P1：标题与卡片之间加类型筛选条——类别只读 recentProjects[].kind（libraryFilters 纯函数），
+ * 选中态只在会话内记忆、不落盘；计数为 0 的类别不渲染。某一类在移除记录后变空时，
+ * 列表区给「这里还没有这一类库」空态与新建入口，不留白。
  */
 const props = defineProps({
   /** 最近打开的库（appPreferences.recentProjects 快照；{path, name, kind, at}）。 */
@@ -48,6 +53,41 @@ function backToList() {
 }
 
 const lead = () => (props.recents.length ? '接着写，或者开个新的。' : '从一个空文件夹开始你的下一本书。')
+
+/** 筛选条（P1-1）：会话内记忆，默认「全部」；不写偏好、不落盘。 */
+const activeFilter = ref(LIBRARY_FILTER_ALL)
+const filterTabs = computed(() => buildLibraryFilterTabs(props.recents))
+const visibleRecents = computed(() => filterLibraryEntries(props.recents, activeFilter.value))
+const activeFilterLabel = computed(() => {
+  if (activeFilter.value === LIBRARY_FILTER_ALL) return '全部'
+  return LIBRARY_FILTERS.find((item) => item.id === activeFilter.value)?.label ?? '全部'
+})
+
+/**
+ * roving tabindex 的 0 位（复用 SettingsModal.vue:225-252）：当前类别被移除（计数归零、
+ * tab 不再渲染）时落到第一个可见项；选中态仍保留，好让下方空态说明「这一类空了」。
+ */
+const focusFilterId = computed(() => {
+  const ids = filterTabs.value.map((tab) => tab.id)
+  return ids.includes(activeFilter.value) ? activeFilter.value : ids[0] ?? null
+})
+
+/** 方向键左右换类别（只走渲染出来的 tab）；Home/End 到两端。 */
+function onFilterKeydown(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+  const tabs = filterTabs.value
+  if (!tabs.length) return
+  const index = tabs.findIndex((tab) => tab.id === focusFilterId.value)
+  let next = index < 0 ? 0 : index
+  if (event.key === 'ArrowRight') next = (next + 1) % tabs.length
+  if (event.key === 'ArrowLeft') next = (next - 1 + tabs.length) % tabs.length
+  if (event.key === 'Home') next = 0
+  if (event.key === 'End') next = tabs.length - 1
+  if (next === index) return
+  event.preventDefault()
+  activeFilter.value = tabs[next].id
+  void nextTick(() => document.getElementById(`library-filter-${tabs[next].id}`)?.focus())
+}
 </script>
 
 <template>
@@ -107,17 +147,44 @@ const lead = () => (props.recents.length ? '接着写，或者开个新的。' :
         </div>
 
         <section v-if="recents.length" class="lib-recent" aria-label="最近打开的库">
+          <div class="lib-filterbar">
+            <div class="lib-filters" role="tablist" aria-label="按类型筛选" @keydown="onFilterKeydown">
+              <button
+                v-for="tab in filterTabs"
+                :id="`library-filter-${tab.id}`"
+                :key="tab.id"
+                type="button"
+                class="lib-filter"
+                role="tab"
+                :aria-selected="(tab.id === activeFilter).toString()"
+                aria-controls="library-filter-panel"
+                :tabindex="tab.id === focusFilterId ? 0 : -1"
+                :data-test="`library-filter-${tab.id}`"
+                @click="activeFilter = tab.id"
+              >
+                <span>{{ tab.label }}</span>
+                <span class="lib-filter-count">{{ tab.count }}</span>
+              </button>
+            </div>
+          </div>
+
           <h2 class="lib-section-title">最近打开的库</h2>
-          <div class="lib-grid">
-            <LibraryCard
-              v-for="entry in recents"
-              :key="entry.path"
-              :entry="entry"
-              :now="now"
-              @open="(entryItem) => emit('open', entryItem)"
-              @reveal="(entryItem) => emit('reveal', entryItem)"
-              @remove="(entryItem) => emit('remove', entryItem)"
-            />
+          <div id="library-filter-panel" role="tabpanel" :aria-label="activeFilterLabel">
+            <div v-if="visibleRecents.length" class="lib-grid">
+              <LibraryCard
+                v-for="entry in visibleRecents"
+                :key="entry.path"
+                :entry="entry"
+                :now="now"
+                @open="(entryItem) => emit('open', entryItem)"
+                @reveal="(entryItem) => emit('reveal', entryItem)"
+                @remove="(entryItem) => emit('remove', entryItem)"
+              />
+            </div>
+            <div v-else class="lib-filter-empty" data-test="library-filter-empty">
+              <p class="lib-filter-empty-text">这里还没有这一类库</p>
+              <button type="button" class="control-secondary" data-test="library-filter-empty-new" @click="startCreate(null)">新建库</button>
+            </div>
           </div>
         </section>
       </template>
@@ -172,6 +239,67 @@ const lead = () => (props.recents.length ? '接着写，或者开个新的。' :
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+/* 筛选条（P1-1）：原型是 Airbnb 式墨色下划线标签，不用色块；计数是角注胶囊。
+   圆角/字号/颜色全走令牌；激活态同时有颜色与下划线，不单靠颜色传达。 */
+.lib-filterbar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.lib-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.lib-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: -1px;
+  padding: 8px 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-md);
+  cursor: pointer;
+}
+.lib-filter:hover { color: var(--text-primary); }
+.lib-filter[aria-selected="true"] {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+.lib-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.lib-filter-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: var(--nx-radius-pill);
+  background: var(--nav-hover);
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  text-align: center;
+}
+.lib-filter[aria-selected="true"] .lib-filter-count { color: var(--text-primary); }
+.lib-filter-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px 16px;
+  border: 1px dashed var(--hairline-soft);
+  border-radius: var(--radius-surface);
+}
+.lib-filter-empty-text {
+  margin: 0;
+  font-size: var(--nx-fs-lg);
+  color: var(--text-secondary);
 }
 .lib-section-title {
   margin: 0 0 12px;

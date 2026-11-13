@@ -26,7 +26,10 @@ import { writeFileAtomic } from '../fs/atomicWrite.mjs'
  *   theme：可选迁移字段（D2）——'light' / 'dark' / null；缺省表示「还没迁过」，
  *     渲染层用老 localStorage 的值兜底并一次性迁入（老前端退役后删掉那条兜底）；
  *   recentProjects：最近打开的项目（作者 2026-11-10 点单）——应用级「这台机器开过哪些项目」，
- *     每条 { path, name, at }：path 必有、name/at 可空；最近打开在最前，最多 RECENT_PROJECTS_LIMIT 条。
+ *     每条 { path, name, kind, at, count, countAt }：path 必有，其余可空；
+ *     最近打开在最前，最多 RECENT_PROJECTS_LIMIT 条。
+ *     count/countAt（工单 P1-2）＝打开时统计一次的篇数与统计时刻（novel 数 正文/ 章节文件，
+ *     其余数主模块条目）；旧记录没有这两格就是 null，读侧只显示时间，不扫盘、不猜数。
  *     只有主进程写（打开成功自动记、菜单「清除最近打开」清空）；渲染层只经 recent-list 通道读。
  */
 
@@ -230,7 +233,14 @@ export function normalizePrefs(raw) {
           const stamp = new Date(String(entry.at))
           at = Number.isNaN(stamp.getTime()) ? null : stamp.toISOString()
         }
-        list.push({ path, name, kind, at })
+        // 篇数（工单 P1-2）：非法/缺失一律 null——卡片只显示时间，不显示错值。
+        const count = Number.isSafeInteger(entry?.count) && entry.count >= 0 ? entry.count : null
+        let countAt = null
+        if (count !== null && entry?.countAt) {
+          const stamp = new Date(String(entry.countAt))
+          countAt = Number.isNaN(stamp.getTime()) ? null : stamp.toISOString()
+        }
+        list.push({ path, name, kind, at, count, countAt })
       }
       out.recentProjects = list.slice(0, RECENT_PROJECTS_LIMIT)
     }
@@ -290,5 +300,8 @@ export function mergeRecentProject(list, entry, limit = RECENT_PROJECTS_LIMIT) {
   const rest = (Array.isArray(list) ? list : []).filter((item) => item?.path !== path)
   const name = typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim() : null
   const kind = typeof entry?.kind === 'string' && entry.kind.trim() ? entry.kind.trim() : null
-  return [{ path, name, kind, at: entry?.at ?? null }, ...rest].slice(0, limit)
+  // 篇数（工单 P1-2）：主进程打开时统计一次；没数出结果就留 null（读侧只显示时间）。
+  const count = Number.isSafeInteger(entry?.count) && entry.count >= 0 ? entry.count : null
+  const countAt = count === null ? null : entry?.countAt ?? null
+  return [{ path, name, kind, at: entry?.at ?? null, count, countAt }, ...rest].slice(0, limit)
 }

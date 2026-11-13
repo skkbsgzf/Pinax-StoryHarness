@@ -501,10 +501,56 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     sendToRenderer(IPC_PUSH.recentProjectsChanged, { recents: currentRecentProjects })
   }
 
+  /**
+   * 库卡片「N 篇」的记账口径（工单 P1-2）：打开时统计一次，卡片只读结果、不再扫盘。
+   * 小说＝正文/ 下章节 md 数（含一级卷目录，与章节树两级封顶同口径）；
+   * 其余模块＝主模块目录里的条目（文件）数（世界书的类别子目录也计入，最多再下一层）。
+   * 统计失败一律回 null：宁可只显示时间，也不在卡片上编一个错数。
+   */
+  async function countProjectEntries(kind, project) {
+    const fileService = project?.fileService
+    const view = project?.view
+    const primary = view?.enabledManifests?.find((manifest) => manifest.id === view?.primary)
+    const rootDir = primary ? Object.values(primary.dataDirs ?? {})[0] : null
+    if (!fileService || !primary || !rootDir) return null
+    const chaptersOnly = kind === 'novel'
+    const maxDepth = chaptersOnly ? 1 : 2
+    let total = 0
+    const queue = [{ dir: rootDir, depth: 0 }]
+    try {
+      while (queue.length) {
+        const { dir, depth } = queue.shift()
+        const listed = await fileService.list({ pluginId: primary.id, dir })
+        if (!listed.ok) return null
+        for (const item of listed.value?.entries ?? []) {
+          if (item.kind === 'file') {
+            if (chaptersOnly && !/\.md$/iu.test(item.name)) continue
+            total += 1
+          } else if (depth < maxDepth) {
+            queue.push({ dir: `${dir}/${item.name}`, depth: depth + 1 })
+          }
+        }
+      }
+    } catch {
+      return null
+    }
+    return total
+  }
+
   /** 记一次「打开过」：合并进偏好并落盘；失败只进池留名，不挡打开本身。 */
   async function recordRecentProject(root, name = null, kind = null) {
     if (!root || typeof root !== 'string') return
-    const entry = { path: root, name: typeof name === 'string' && name ? name : null, kind: typeof kind === 'string' && kind ? kind : null, at: new Date().toISOString() }
+    const at = new Date().toISOString()
+    // 篇数与 name/kind 同处记账（复用 onProjectOpened 的调用点）；数不出结果就是 null。
+    const count = await countProjectEntries(kind, session?.project?.value ?? null)
+    const entry = {
+      path: root,
+      name: typeof name === 'string' && name ? name : null,
+      kind: typeof kind === 'string' && kind ? kind : null,
+      at,
+      count,
+      countAt: count === null ? null : at
+    }
     const current = await prefs.read()
     if (!current.ok) return
     const written = await prefs.write({ recentProjects: mergeRecentProject(current.value.recentProjects ?? [], entry) })
