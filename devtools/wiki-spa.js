@@ -460,18 +460,45 @@ function kpiCards() {
     return '<span class="k-delta flat">前后半持平</span>';
   };
   var trace = DETAIL.quality.traceableRate;
+  // 迷你折线（sparkline）：把序列压成 72×22 的 SVG 路径
+  var spark = function (values, color) {
+    if (!values.length) return '';
+    var w = 72, hh = 22, max = Math.max.apply(null, values.concat([1])), min = Math.min.apply(null, values);
+    var span = max - min || 1;
+    var pts = values.map(function (v, i) {
+      var x = values.length === 1 ? w / 2 : (i / (values.length - 1)) * w;
+      return x.toFixed(1) + ',' + (hh - ((v - min) / span) * (hh - 3) - 1.5).toFixed(1);
+    });
+    return '<svg class="spark" width="' + w + '" height="' + hh + '" viewBox="0 0 ' + w + ' ' + hh + '">'
+      + '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>'
+      + '<circle cx="' + pts[pts.length - 1].split(',')[0] + '" cy="' + pts[pts.length - 1].split(',')[1] + '" r="2" fill="' + color + '"/></svg>';
+  };
+  var appSeries = DETAIL.matrix.length ? DETAIL.matrix[0] : evs; // 主角在场曲线
+  var hookSeries = hooks;
   return '<div class="kpis">'
-    + '<div class="kpi"><div class="k-label">事件总量</div><div class="k-value">' + evTotal + '</div>' + chip(evDelta, ' · 后半 vs 前半') + '</div>'
-    + '<div class="kpi"><div class="k-label">人物</div><div class="k-value">' + DETAIL.characters.length + '</div><span class="k-delta flat">后半新登场 ' + lateNew + ' 人</span></div>'
-    + '<div class="kpi"><div class="k-label">伏笔</div><div class="k-value">' + hookTotal + '</div>' + chip(hookDelta, ' · 后半 vs 前半') + '</div>'
+    + '<div class="kpi"><div class="k-label">事件总量</div><div class="k-value">' + evTotal.toLocaleString() + '</div>' + chip(evDelta, ' · 后半 vs 前半') + spark(evs, 'var(--accent)') + '</div>'
+    + '<div class="kpi"><div class="k-label">人物</div><div class="k-value">' + DETAIL.characters.length + '</div><span class="k-delta flat">后半新登场 ' + lateNew + ' 人</span>' + spark(appSeries, 'var(--warn)') + '</div>'
+    + '<div class="kpi"><div class="k-label">伏笔</div><div class="k-value">' + hookTotal + '</div>' + chip(hookDelta, ' · 后半 vs 前半') + spark(hookSeries, 'var(--danger)') + '</div>'
     + '<div class="kpi"><div class="k-label">事件可溯源</div><div class="k-value">' + (trace != null ? (trace * 100).toFixed(1) + '%' : '—') + '</div><span class="k-delta flat">逐字对回原文</span></div>'
     + '</div>';
 }
 
 /* ===== 概览（数据面板） ===== */
 function vOverview() {
-  var h = '<h1>' + escHtml(D.book.title) + ' · 世界书</h1>';
-  h += '<div class="meta"><span>' + escHtml(D.book.author) + '</span><span>' + D.book.words + ' 字</span><span>' + escHtml(D.book.group) + '</span><span>' + D.chapters.length + ' ' + UNIT + '</span>' + (D.enrich.perspective ? '<span>视角：' + escHtml(D.enrich.perspective.perspective) + '</span>' : '') + '</div>';
+  // 封面主视觉（编辑设计：书名衬线大字＋logline＋标签云＋暗色渐变）
+  var g = (D.slots && D.slots.gimmick) || null;
+  var h = '<section class="hero">';
+  h += '<div class="h-eyebrow">世界书 · World Book' + (D.enrich.perspective ? ' · ' + escHtml(D.enrich.perspective.perspective) + ' 人称' : '') + '</div>';
+  h += '<h1>' + escHtml(D.book.title) + '</h1>';
+  h += '<div class="h-meta"><span><b>' + escHtml(D.book.author) + '</b></span><span><b>' + (D.book.words || 0).toLocaleString() + '</b> 字</span>'
+    + '<span><b>' + D.chapters.length + '</b> ' + UNIT + '</span>'
+    + '<span><b>' + D.characters.length + '</b> 人物</span>'
+    + '<span><b>' + DETAIL.charGraph.edges.length + '</b> 关系边</span>'
+    + '<span><b>' + (D.quality.traceableRate != null ? (D.quality.traceableRate * 100).toFixed(1) + '%' : '—') + '</b> 可溯源</span></div>';
+  if (g && g.logline) h += '<div class="h-logline">' + escHtml(g.logline) + '</div>';
+  else if (D.enrich.storySummary) h += '<div class="h-logline">' + escHtml(D.enrich.storySummary.slice(0, 110)) + '…</div>';
+  if (g && g.elements && g.elements.length) h += '<div class="h-tags">' + g.elements.slice(0, 8).map(function (e) { return '<span>' + escHtml(e) + '</span>'; }).join('') + '</div>';
+  h += '</section>';
   h += kpiCards();
   if (D.enrich.storySummary) h += '<h2>剧情梗概</h2><div class="summary">' + escHtml(D.enrich.storySummary) + '</div>';
 
@@ -889,19 +916,49 @@ function forceLayout(svg, nodes, edges, opt) {
     line.appendChild(tip);
     svg.appendChild(line);
   });
+  // 节点视觉升级：径向渐变球体（高光）＋白描边＋标签带底衬（避免压线）
+  var defs = document.createElementNS(NS, 'defs');
+  ['person', 'term'].forEach(function (kind, index) {
+    var grad = document.createElementNS(NS, 'radialGradient');
+    grad.setAttribute('id', 'ng-' + kind);
+    grad.setAttribute('cx', '34%'); grad.setAttribute('cy', '30%'); grad.setAttribute('r', '72%');
+    var base = kind === 'person' ? C_ACCENT : C_WARN;
+    var stop1 = document.createElementNS(NS, 'stop');
+    stop1.setAttribute('offset', '0'); stop1.setAttribute('stop-color', mixWhite(base, 0.42));
+    var stop2 = document.createElementNS(NS, 'stop');
+    stop2.setAttribute('offset', '1'); stop2.setAttribute('stop-color', base);
+    grad.appendChild(stop1); grad.appendChild(stop2);
+    defs.appendChild(grad);
+  });
+  svg.appendChild(defs);
   nodes.forEach(function (n) {
     var g = document.createElementNS(NS, 'g');
+    // 光晕（密集图里帮助分离节点）
+    var halo = document.createElementNS(NS, 'circle');
+    halo.setAttribute('cx', n.x); halo.setAttribute('cy', n.y); halo.setAttribute('r', (n.r || 7) + 5);
+    halo.setAttribute('fill', n.kind === 'person' ? C_ACCENT : C_WARN);
+    halo.setAttribute('fill-opacity', '0.10');
+    g.appendChild(halo);
     var c = document.createElementNS(NS, 'circle');
     c.setAttribute('cx', n.x); c.setAttribute('cy', n.y); c.setAttribute('r', n.r || 7);
-    c.setAttribute('fill', catColor(n.kind)); c.setAttribute('fill-opacity', '0.92');
+    c.setAttribute('fill', 'url(#ng-' + n.kind + ')');
+    c.setAttribute('stroke', '#fff'); c.setAttribute('stroke-width', '1.6');
     if (focus === n.id) { c.setAttribute('stroke', C_FG); c.setAttribute('stroke-width', '2.5'); }
     g.appendChild(c);
     var label = document.createElementNS(NS, 'text');
-    label.setAttribute('x', n.x); label.setAttribute('y', n.y - n.r - 5);
+    var labelY = n.y - (n.r || 7) - 7;
+    label.setAttribute('x', n.x); label.setAttribute('y', labelY);
     label.setAttribute('text-anchor', 'middle'); label.setAttribute('font-size', '11');
-    label.setAttribute('fill', C_FG); label.textContent = n.id;
+    label.setAttribute('font-weight', '600');
+    label.setAttribute('fill', C_FG);
+    label.setAttribute('paint-order', 'stroke');
+    label.setAttribute('stroke', '#fff'); label.setAttribute('stroke-width', '3');
+    label.setAttribute('stroke-linejoin', 'round');
+    label.textContent = n.id;
     g.appendChild(label);
     g.style.cursor = 'pointer';
+    g.addEventListener('mouseenter', function () { halo.setAttribute('fill-opacity', '0.24'); c.setAttribute('r', (n.r || 7) + 1.5); });
+    g.addEventListener('mouseleave', function () { halo.setAttribute('fill-opacity', '0.10'); c.setAttribute('r', n.r || 7); });
     g.addEventListener('click', function (ev) {
       ev.stopPropagation();
       if (focus === n.id) go(n.kind === 'person' ? 'char' : 'term', n.id);

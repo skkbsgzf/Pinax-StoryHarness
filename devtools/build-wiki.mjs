@@ -409,6 +409,104 @@ function buildBook(id, ds) {
 <style>
 /* OpenDesign dashboard 设计系统 token（构建期自 daemon/包文件拉取） */
 ${ds.css}
+/* ---------- 视觉强化层（作者 2026-11-13：精致好看） ----------
+ * 从「文档排版」升级为「编辑设计（editorial design）」：
+ * 封面主视觉渐变、KPI 迷你折线、分区序号强调、悬浮层次、表格斑马纹、数字等宽。 */
+:root {
+  --ink: #0b1220;
+  --ink-2: #334155;
+  --paper: #fbfcfe;
+  --hairline: rgba(15, 23, 42, .07);
+  --shadow-1: 0 1px 2px rgba(15,23,42,.04), 0 1px 3px rgba(15,23,42,.06);
+  --shadow-2: 0 4px 12px rgba(15,23,42,.06), 0 12px 32px rgba(15,23,42,.05);
+  --shadow-lift: 0 10px 28px rgba(15,23,42,.10), 0 2px 6px rgba(15,23,42,.06);
+  --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia, serif;
+}
+body { background:
+  radial-gradient(1100px 460px at 8% -8%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 62%),
+  radial-gradient(900px 400px at 96% 4%, color-mix(in srgb, var(--warn) 7%, transparent), transparent 60%),
+  var(--paper); }
+
+/* 封面主视觉（概览首屏）*/
+.hero { position:relative; overflow:hidden; border-radius:20px; padding:34px 34px 30px; margin:0 0 22px;
+  background: linear-gradient(135deg, #0b1220 0%, #132441 48%, #1c3a63 100%); color:#eef4ff; box-shadow: var(--shadow-2); }
+.hero::after { content:""; position:absolute; inset:0;
+  background: radial-gradient(620px 300px at 88% 8%, rgba(122,162,255,.32), transparent 66%),
+              radial-gradient(520px 260px at 6% 96%, rgba(255,180,84,.18), transparent 68%); pointer-events:none; }
+.hero > * { position:relative; z-index:1; }
+.hero .h-eyebrow { font-size:11px; letter-spacing:.22em; text-transform:uppercase; color:#8fb0e8; margin-bottom:10px; }
+.hero h1 { font-family:var(--serif); font-size:34px; line-height:1.24; font-weight:700; margin:0 0 14px; letter-spacing:-.01em; color:#fff; }
+.hero .h-meta { display:flex; flex-wrap:wrap; gap:8px 16px; font-size:12.5px; color:#a9c0e4; margin-bottom:18px; }
+.hero .h-meta b { color:#fff; font-weight:600; }
+.hero .h-logline { font-size:15.5px; line-height:1.72; color:#dce8fb; max-width:74ch;
+  border-left:2px solid rgba(143,176,232,.5); padding-left:14px; }
+.hero .h-tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:16px; }
+.hero .h-tags span { font-size:11.5px; padding:3px 10px; border-radius:999px;
+  background:rgba(255,255,255,.10); border:1px solid rgba(255,255,255,.16); color:#cfe0ff; }
+
+/* KPI 卡：加迷你折线与强调角标 */
+.kpis { gap:14px; }
+.kpi { position:relative; overflow:hidden; box-shadow:var(--shadow-1); border-color:var(--hairline);
+  transition:transform .18s ease, box-shadow .18s ease; }
+.kpi:hover { transform:translateY(-2px); box-shadow:var(--shadow-lift); }
+.kpi .k-value { font-family:var(--serif); font-size:31px; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.kpi .spark { position:absolute; right:10px; bottom:8px; opacity:.55; }
+.kpi .k-label::before { content:""; display:inline-block; width:5px; height:5px; border-radius:50%;
+  background:var(--accent); margin-right:7px; vertical-align:middle; }
+
+/* 分区标题：序号强调条 */
+#view h2 { position:relative; padding-left:15px; border-bottom:1px solid var(--hairline); font-weight:650; }
+#view h2::before { content:""; position:absolute; left:0; top:52%; transform:translateY(-50%);
+  width:3px; height:15px; border-radius:2px; background:linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 35%, transparent)); }
+#view h2 small { margin-left:10px; }
+
+/* 卡片/面板统一悬浮层次 */
+.chartbox, .slotcard, .outline-ch, details.drill, .card { box-shadow:var(--shadow-1); border-color:var(--hairline); transition:box-shadow .18s ease, border-color .18s ease; }
+.chartbox:hover, .slotcard:hover, .outline-ch:hover { box-shadow:var(--shadow-2); }
+.outline-ch h3 { font-family:var(--serif); font-size:17.5px; font-weight:700; letter-spacing:-.005em; }
+.outline-ch { position:relative; }
+.outline-ch::before { content:""; position:absolute; left:0; top:14px; bottom:14px; width:2px; border-radius:2px;
+  background:linear-gradient(180deg, var(--accent), transparent); opacity:.5; }
+
+/* 剧情梗概：引言式排版 */
+.summary { font-size:15px; line-height:1.95; color:var(--ink-2); position:relative;
+  background:linear-gradient(180deg, var(--surface-warm), var(--surface)); box-shadow:var(--shadow-1); }
+.summary::before { content:"“"; position:absolute; right:16px; top:2px; font-family:var(--serif); font-size:56px;
+  color:color-mix(in srgb, var(--accent) 18%, transparent); line-height:1; }
+
+/* 表格：斑马纹＋等宽数字＋首列强调 */
+.kv tr:nth-child(even) td { background:color-mix(in srgb, var(--border-soft) 42%, transparent); }
+.kv td:first-child { font-weight:600; color:var(--ink); letter-spacing:.01em; }
+.kv td { font-variant-numeric:tabular-nums; }
+
+/* 侧边栏：分组标题与激活态强化 */
+#side { box-shadow:1px 0 0 var(--hairline); background:linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface-warm) 60%, var(--surface))); }
+#side h3 { color:var(--ink-2); font-weight:700; letter-spacing:.14em; }
+.nav a { position:relative; transition:background .15s ease, color .15s ease, padding-left .15s ease; }
+.nav a:hover { padding-left:14px; }
+.nav a.on { background:color-mix(in srgb, var(--accent) 13%, transparent); }
+.nav a.on::before { content:""; position:absolute; left:0; top:20%; bottom:20%; width:3px; border-radius:2px; background:var(--accent); }
+
+/* chips / tags 微调 */
+.chip { font-weight:500; }
+.tag { border:1px solid var(--hairline); }
+
+/* 图表盒内部留白与图例 */
+.chartbox { padding:18px 20px 12px; }
+.legend { line-height:2; }
+.hover-read { font-variant-numeric:tabular-nums; letter-spacing:.01em; }
+
+/* 事件卡（钻取层）：左侧色条 */
+.event { border-left:2px solid color-mix(in srgb, var(--accent) 30%, transparent); }
+.event .who { font-variant-numeric:normal; }
+.event:hover { border-left-color:var(--accent); background:color-mix(in srgb, var(--accent) 4%, var(--surface)); }
+
+/* 关系图谱容器 */
+svg.relation { box-shadow:var(--shadow-1); border-color:var(--hairline); }
+
+/* 页脚 */
+#dsFooter { letter-spacing:.02em; }
+
 /* ---------- 组件层（全部走 DS token） ---------- */
 * { box-sizing:border-box; }
 body { margin:0; background:var(--bg); color:var(--fg); font:var(--text-base)/1.6 var(--font-body, Inter, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif); }
