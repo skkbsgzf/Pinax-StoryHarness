@@ -1835,6 +1835,46 @@ test('〔批次 M1-c〕推演面板＝AppNext 直接挂载的中栏覆盖层：�
 })
 
 /**
+ * 〔工单 P7〕推演模式（demo「Agent 在左」）：换位只许 CSS（flex order／显隐），零重挂载。
+ *
+ * jsdom 量不出 x 坐标，布局判据落在这里（声明级）：竖条仍 -2，Agent 列 -1 紧随其后，
+ * 中栏抬到 1 让「中栏↔Agent」那根拖拽把手留在两者之间；索引窗与其紧邻把手成对隐藏。
+ * 模板侧的判据：壳根类只由既有 deduceOpen 驱动（不另起状态、不落盘），
+ * RuntimeDock／CollapseOrb 的挂载处不许出现 v-if（守卫⑰④：晚注册即丢 Esc 分层）。
+ */
+test('〔工单 P7〕推演模式＝CSS 换位 + 索引窗成对隐藏；Agent 挂载处零 v-if', async () => {
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  const clean = stripComments(app).replace(/<!--[\s\S]*?-->/gu, '')
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+
+  // ① 壳根类由既有 deduceOpen 直接驱动——模式就是那一枚状态，不许另起第二套，也不许落盘。
+  assert.match(clean, /class="nx-shell-root"\s+:class="\{ 'nx-deduce-mode': deduceOpen \}"/u, '壳根没挂 .nx-deduce-mode，或驱动它的不是 deduceOpen')
+  assert.doesNotMatch(clean, /deduceMode\b/u, '推演模式不许另起第二套状态（模式＝deduceOpen 一枚）')
+
+  // ② 换位声明：竖条 -2、Agent 列 -1、中栏 1——把手（.col-center 之后、.col-dock 之前）
+  //    因此正好落在 Agent 列与中栏之间；宽度仍走同一份 dockWidth，与左右位置无关。
+  assert.match(ruleBody(layout, '.nx-deduce-mode .nx-ribbon') ?? '', /order:\s*-2/u, '竖条没钉在最左（order:-2）')
+  assert.match(ruleBody(layout, '.nx-deduce-mode .col-dock') ?? '', /order:\s*-1/u, 'Agent 列没换到竖条之后（order:-1）')
+  assert.match(ruleBody(layout, '.nx-deduce-mode .col-center') ?? '', /order:\s*1/u, '中栏没抬到 Agent 列之后（order:1），把手会被挤到最右缘')
+
+  // ③ 索引窗与其紧邻把手成对隐藏（相邻选择器只看 DOM 顺序：模板里 IndexWindow 紧邻自己的 resizer）。
+  assert.match(ruleBody(layout, '.nx-deduce-mode .nx-index-window') ?? '', /display:\s*none/u, '推演模式下索引窗没隐藏')
+  assert.match(ruleBody(layout, '.nx-deduce-mode .nx-index-window + .resizer') ?? '', /display:\s*none/u, '索引窗隐藏了、它的拖拽把手还留着')
+
+  // ④ 只在桌面宽度成立：窄屏（≤860px）那套竖排不动。
+  const desktop = layout.indexOf('@media (min-width: 861px)')
+  assert.ok(desktop >= 0, '找不到桌面宽度的媒体查询')
+  assert.ok(layout.indexOf('.nx-deduce-mode .nx-ribbon') > desktop, '推演换位没收在桌面宽度媒体查询里（窄屏竖排会被重排）')
+
+  // ⑤ 挂载处零 v-if：换位不许包条件分支（Agent 会话与 Esc 分层都挂在这次挂载上）。
+  const runtimeTag = (clean.match(/<RuntimeDock[\s\S]{0,400}?\/>/u) ?? [])[0] ?? ''
+  assert.ok(runtimeTag, '找不到 RuntimeDock 挂载')
+  assert.equal(/v-if/u.test(runtimeTag), false, 'RuntimeDock 挂载处不得出现 v-if（换位只许 CSS）')
+  assert.equal(/<CollapseOrb\s+v-if=/u.test(clean), false, 'CollapseOrb 挂载处不得出现 v-if（守卫⑰④）')
+  assert.match(clean, /<DeducePanel\s+v-if="deduceOpen"/u, 'DeducePanel 的显隐仍归既有开关，不许叠新的模式条件')
+})
+
+/**
  * 〔批次 M1-c〕场景卡／徽章／双模式／第一视角两面板／留档的字面量同步（工单交付物 2/3/4 + 6）。
  *
  * 分工：deduce-panel.spec.mjs 在 jsdom 里验「跑起来那一面」，deduce-view.test.mjs 用 node:test 验纯封装；

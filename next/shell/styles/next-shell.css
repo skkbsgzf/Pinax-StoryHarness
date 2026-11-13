@@ -471,6 +471,22 @@ body {
   overflow: hidden;
 }
 
+/* —— 推演模式（工单 P7 · demo「Agent 在左」）———————————————————————————
+   同一批 DOM，只用 flex order 换位＋显隐——零重挂载铁律：模板里组件的位置一个都不许动，
+   Agent 会话（在途提问／轨迹）挂在 RuntimeDock 内部，组件一旦重挂载就丢。
+   竖条仍在最左（-2），Agent 列紧随其后（-1）；中栏抬到 1，让「中栏↔Agent」那根
+   拖拽把手（.col-center 之后、.col-dock 之前的那枚 .resizer）留在两者之间——
+   宽度仍走既有 dockWidth（320–680）拖拽记忆，与列在左在右无关。
+   索引窗与其把手按模板的紧邻关系成对隐藏（相邻选择器只看 DOM，不看显隐）。
+   窄屏（≤860px）那套竖排不参与：本段只在桌面宽度成立。 */
+@media (min-width: 861px) {
+  .nx-deduce-mode .nx-ribbon { order: -2; }
+  .nx-deduce-mode .col-dock { order: -1; }
+  .nx-deduce-mode .col-center { order: 1; }
+  .nx-deduce-mode .nx-index-window { display: none; }
+  .nx-deduce-mode .nx-index-window + .resizer { display: none; }
+}
+
 /* —— 中栏 ——————————————————————————————————————————————— */
 .center {
   display: flex;

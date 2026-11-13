@@ -6136,3 +6136,84 @@ describe('世界书分组列表（工单 P3）', () => {
     remounted.unmount()
   })
 })
+
+/**
+ * 〔工单 P7〕推演工作区（demo「Agent 在左」）。
+ *
+ * 换位／隐藏只许落到 CSS（.nx-deduce-mode 段的 order 与 display），模板里组件的位置一个都不许动：
+ * Agent 会话（在途提问／轨迹）挂在 RuntimeDock 内部，重挂载即丢。jsdom 量不出 x 坐标，
+ * 这里钉的是「同一批 DOM 节点 + 同一份消息」；坐标与把手位置由 visual-contract 的声明级判据承担。
+ */
+describe('推演工作区（工单 P7 · Agent 在左）', () => {
+  const deduceBridge = () => stubBridge(carrierView(), {
+    [IPC_CHANNELS.runtimeAsk]: async () => ({ ok: true, value: { source: 'in-process-runner', text: '没丢。' } })
+  })
+
+  async function askOnce(wrapper, text) {
+    await wrapper.find('.authoring-knowledge__input-row textarea').setValue(text)
+    await wrapper.find('.authoring-knowledge__send').trigger('click')
+    await flushPromises()
+  }
+
+  it('「推演」切模式：壳根挂类、索引窗与 Agent 列留在原位，再点回三栏消息一条不丢', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: deduceBridge() } })
+    await flushPromises()
+
+    await askOnce(wrapper, '推演模式会丢消息吗？')
+    const root = () => wrapper.find('.nx-shell-root')
+    expect(root().classes()).not.toContain('nx-deduce-mode')
+    expect(wrapper.findAll('.authoring-knowledge__question-row')).toHaveLength(1)
+    const dockEl = wrapper.find('.col-dock').element
+    const indexEl = wrapper.find('.nx-index-window').element
+
+    const toggle = wrapper.find('[data-test="deduce-toggle"]')
+    expect(toggle.attributes('aria-pressed')).toBe('false')
+    await toggle.trigger('click')
+    await flushPromises()
+
+    expect(root().classes()).toContain('nx-deduce-mode')
+    expect(toggle.attributes('aria-pressed')).toBe('true')
+    // 零重挂载：换位只是根上的一个类，两个节点还是同一颗（会话状态住在里面）。
+    expect(wrapper.find('.col-dock').element).toBe(dockEl)
+    expect(wrapper.find('.nx-index-window').element).toBe(indexEl)
+    expect(dockEl.parentElement).toBe(indexEl.parentElement)
+    // 推演浮层照旧由这枚钮唤出；页签条与中栏都还在（换位不动页组语义）。
+    expect(wrapper.find('[data-test="deduce-layer"]').exists()).toBe(true)
+    expect(wrapper.find('.nx-page-tabstrip').exists()).toBe(true)
+
+    await wrapper.find('[data-test="deduce-toggle"]').trigger('click')
+    await flushPromises()
+    expect(root().classes()).not.toContain('nx-deduce-mode')
+    expect(wrapper.find('[data-test="deduce-layer"]').exists()).toBe(false)
+    // 会话消息一条不丢：同一 wrapper 内前后条数与内容一致。
+    const rows = wrapper.findAll('.authoring-knowledge__question-row')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].text()).toContain('推演模式会丢消息吗？')
+    expect(wrapper.find('.authoring-knowledge__answer-text').text()).toContain('没丢。')
+  })
+
+  it('推演模式下 Agent 列把手照常可拖：改的是同一份 dockWidth，关掉模式宽度不丢', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: deduceBridge() } })
+    await flushPromises()
+
+    await wrapper.find('[data-test="deduce-toggle"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.nx-shell-root').classes()).toContain('nx-deduce-mode')
+
+    // 索引窗开着时有两根把手：第 0 根归索引窗，第 1 根＝中栏与 Agent 列之间那根。
+    const handles = wrapper.findAll('.resizer')
+    expect(handles).toHaveLength(2)
+    handles[1].element.dispatchEvent(new PointerEvent('pointerdown', { clientX: 300, bubbles: true }))
+    await flushPromises()
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, bubbles: true }))
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: 200, bubbles: true }))
+    await flushPromises()
+
+    const widthOf = () => Number((wrapper.find('.col-dock').attributes('style') ?? '').match(/width: (\d+(?:\.\d+)?)px/)?.[1])
+    expect(widthOf()).toBe(460) // 360 起拖、往左 100px＝变宽 100px（320–680 内）
+
+    await wrapper.find('[data-test="deduce-toggle"]').trigger('click')
+    await flushPromises()
+    expect(widthOf()).toBe(460)
+  })
+})
