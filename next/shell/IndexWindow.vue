@@ -4,7 +4,7 @@ import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { vWorkbenchTooltip } from '../../src/components/workbench/workbenchTooltip.js'
 import { outlineDepths as depthsOfOutline } from './outlineTree.mjs'
 import { recordCarrierOfPaneId } from './recordCarriers.mjs'
-import EntriesCategoryTree from './EntriesCategoryTree.vue'
+import WorldbookGroupedTree from './WorldbookGroupedTree.vue'
 
 /**
  * 索引窗：竖条右边那一栏——会话管理／文件结构管理那件事就落在这里。
@@ -51,7 +51,7 @@ const props = defineProps({
    */
   treeState: { type: Object, default: null }
 })
-const emit = defineEmits(['collapse', 'history', 'overlay', 'open-recent', 'tree-state'])
+const emit = defineEmits(['collapse', 'history', 'overlay', 'open-recent', 'tree-state', 'entries-view'])
 
 /**
  * 〔批次66 任务二〕「最近打开」默认摊开（窄栏里最多占 30vh，超出自己滚），
@@ -439,7 +439,15 @@ const isOutlineNodeOpen = (index) => props.data.selection?.type === 'outline-nod
  *
  * 视图记忆（`entriesView.<projectRoot>`）与看板区的筛选排序都归 EntriesBoard 那块，
  * 窄栏不再各记一份（那一格在 useBoardData 的 entriesFilterCat：点类别＝给看板区加一道筛选）。
+ *
+ * 工单 P3：世界书分支换成分组列表（WorldbookGroupedTree）——搜索＋「关系图谱」组头＋
+ * 按 type 分组、每项带段数。折叠态只活在组件里，不落盘。
+ * 「关系图谱」组头只上报意图（entries-view: graph）：三态视图与它的持久化仍归看板区，
+ * 索引窗没有 projectRoot、也没有视图 setter，不在这里另写一份视图记忆。
  */
+function openEntriesGraph() {
+  emit('entries-view', 'graph')
+}
 
 /**
  * 新建下拉的选项（批次34）：有类别目录＝那些目录；一个都没有＝只有「顶层」。
@@ -916,11 +924,12 @@ watch(() => props.board?.id, () => {
         <p v-if="data.notesError" class="nx-index-error">{{ data.notesError }}</p>
       </template>
 
-      <!-- 世界书（批次44：窄栏只做类别导航，图表列搬去核心区的看板区）。
+      <!-- 世界书（批次44 起图表列归核心区看板区；工单 P3 换成搜索＋分组列表）。
            作者 2026-10-31：「图表列的切换全都挤在左侧小区域里进行，右侧大面积留空，
            非常别扭，更合理的一个情况是，上面放图表列，下面放详情信息」。
-           所以这一栏不再有视图切换钮、表格、图谱——只剩「按类别找条目」这一件事：
-           类别树点一下＝给核心区的看板区加一道类别筛选（共享 state.entriesFilterCat）。
+           这一栏仍不摊视图切换钮、表格与图谱：P3 把它做成「搜索 → 关系图谱组头 →
+           按 type 分组（组头带计数、条目带段数）」，点条目走既有 openEntry。
+           组头折叠只在会话内，不落盘（WorldbookGroupedTree 自己管）。
            新建（＋）留在这栏：IDE 的「新建」本来就是文件树的动作，建完条目在看板区显形。 -->
       <template v-else-if="treeKind === 'entries'">
         <div class="nx-index-section-head is-entries">
@@ -961,7 +970,7 @@ watch(() => props.board?.id, () => {
             <option v-for="option in entryCategoryOptions" :key="option.value || '__top'" :value="option.value">{{ option.label }}</option>
           </select>
         </div>
-        <EntriesCategoryTree v-if="data.entries.length" :data="data" />
+        <WorldbookGroupedTree v-if="data.entries.length" :data="data" @open-graph="openEntriesGraph" />
         <p v-if="!data.entries.length && !data.treeError" class="nx-index-empty">这一栏还没有条目。
           <button type="button" class="control-quiet nx-index-add" :disabled="data.busy" @click="toggleNewItem('entries')">新建条目</button>
         </p>

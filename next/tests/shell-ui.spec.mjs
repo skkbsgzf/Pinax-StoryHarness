@@ -5,6 +5,8 @@ import ActivityRail from '../shell/ActivityRail.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
 import AssistantDialog from '../shell/AssistantDialog.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
+import WorldbookGroupedTree from '../shell/WorldbookGroupedTree.vue'
+import IndexWindow from '../shell/IndexWindow.vue'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
 import { hostWorkspace, resetWorkspace } from '../shell/workspace.mjs'
 import { CUSTOM_VIEW_TYPE, hostViewRegistry } from '../shell/viewRegistry.mjs'
@@ -5991,5 +5993,146 @@ describe('故障隔离：全部载体停用（批次63 任务2）', () => {
     expect(wrapper.find('[aria-label="库设置（模块管理）"]').exists(), '应用菜单动作必须真执行：这里就是打开载体管理节').toBe(true)
     expect(wrapper.text()).not.toContain('未接线')
     wrapper.unmount()
+  })
+})
+
+/**
+ * 工单 P3 · 世界书板左栏分组列表。
+ *
+ * 注意：世界书板在宿主里是 web 模板（批次59 铁律四），IndexWindow 不挂载；
+ * 这一组用例直接挂 WorldbookGroupedTree 核对组件契约（搜索／组头／段数／折叠）。
+ * IndexWindow 世界书分支的接线由 entries-grouped-list.test.mjs 的纯函数与代码审查兜底。
+ */
+describe('世界书分组列表（工单 P3）', () => {
+  const ENTRIES_P3 = [
+    { id: 'p3-a', name: '林砚', type: 'character', path: '世界书/人物/林砚.md', revision: 1, aliases: ['阿砚'], summary: '守夜人', content: '一\n\n二' },
+    { id: 'p3-b', name: '沈鹤', type: 'person', path: '世界书/人物/沈鹤.md', revision: 1, content: '一\n\n二\n\n三' },
+    { id: 'p3-c', name: '旧钟楼', type: 'item', path: '世界书/设定/旧钟楼.md', revision: 1 },
+    { id: 'p3-d', name: '雾港', type: 'location', path: '世界书/地理/雾港.md', revision: 1, content: '一\n\n二\n\n三\n\n四' }
+  ]
+
+  function groupedData(entries = ENTRIES_P3) {
+    return {
+      entries,
+      selection: { type: 'entry', item: entries[0] },
+      openEntry: vi.fn(),
+      tool: vi.fn(async (name, args) => {
+        if (name === 'pinax_worldbook_read') {
+          const hit = entries.find((entry) => entry.path === args.path)
+          return { ok: true, value: { entry: { ...hit, content: hit?.content ?? '一段\n\n两段' } } }
+        }
+        return { ok: false, message: `未预期的工具：${name}` }
+      })
+    }
+  }
+
+  it('IndexWindow 的世界书分支换成新组件：旧类别树退场，图谱组头上报 entries-view', async () => {
+    const data = { ...groupedData(), treeError: null, busy: false, categories: [], listWarnings: [], loadEntries: vi.fn() }
+    const board = { id: 'worldbook', title: '世界书', treePaneId: 'worldbook.board', dataDirs: ['世界书'], treePaneTitle: '世界书板' }
+    const wrapper = mount(IndexWindow, { props: { board, data } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="worldbook-grouped-tree"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="entry-category-tree"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-test="worldbook-group"]')).toHaveLength(3)
+
+    await wrapper.find('[data-test="worldbook-group-graph"]').trigger('click')
+    expect(wrapper.emitted('entries-view')).toEqual([['graph']])
+  })
+
+  it('搜索框、关系图谱组头（N 节点）、按 type 分组、每项段数都在', async () => {
+    const data = groupedData()
+    const wrapper = mount(WorldbookGroupedTree, { props: { data } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="worldbook-grouped-search"]').attributes('placeholder')).toBe('搜索条目…')
+
+    const graph = wrapper.find('[data-test="worldbook-group-graph"]')
+    expect(graph.exists()).toBe(true)
+    expect(graph.text()).toContain('关系图谱')
+    expect(graph.text()).toContain('4 节点')
+
+    const groups = wrapper.findAll('[data-test="worldbook-group"]')
+    expect(groups.map((node) => node.attributes('data-group'))).toEqual(['人物', '地点', '物件'])
+    expect(groups.map((node) => node.text())).toEqual(['人物2', '地点1', '物件1'])
+    // 组默认展开。
+    expect(groups.every((node) => node.attributes('aria-expanded') === 'true')).toBe(true)
+
+    const rows = wrapper.findAll('[data-test="worldbook-entry-row"]')
+    expect(rows).toHaveLength(4)
+    const segsOf = (name) => {
+      const row = rows.find((node) => node.attributes('data-entry') === name)
+      const segs = row.find('[data-test="worldbook-entry-segs"]')
+      return segs.exists() ? segs.text() : ''
+    }
+    expect(segsOf('林砚')).toBe('2 段')
+    expect(segsOf('沈鹤')).toBe('3 段')
+    expect(segsOf('雾港')).toBe('4 段')
+    // 清单里没有正文的条目懒读一次（既有 read 工具），读到后补上段数。
+    expect(segsOf('旧钟楼')).toBe('2 段')
+    expect(data.tool).toHaveBeenCalledWith('pinax_worldbook_read', { path: '世界书/设定/旧钟楼.md' })
+  })
+
+  it('搜索按 name／keys／summary 过滤；无命中说「没有匹配的条目」，图谱节点数不缩水', async () => {
+    const data = groupedData()
+    const wrapper = mount(WorldbookGroupedTree, { props: { data } })
+    await flushPromises()
+
+    const search = wrapper.find('[data-test="worldbook-grouped-search"]')
+    await search.setValue('阿砚')
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="worldbook-entry-row"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-test="worldbook-entry-row"]')[0].attributes('data-entry')).toBe('林砚')
+    expect(wrapper.find('[data-test="worldbook-group"]').text()).toBe('人物1')
+    expect(wrapper.find('[data-test="worldbook-group-graph"]').text()).toContain('4 节点')
+
+    await search.setValue('守夜')
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="worldbook-entry-row"]')).toHaveLength(1)
+
+    await search.setValue('查无此条')
+    await flushPromises()
+    expect(wrapper.findAll('[data-test="worldbook-entry-row"]')).toHaveLength(0)
+    expect(wrapper.find('[data-test="worldbook-grouped-empty"]').text()).toBe('没有匹配的条目')
+  })
+
+  it('点「关系图谱」组头只上报意图，点条目行走既有 openEntry', async () => {
+    const data = groupedData()
+    const wrapper = mount(WorldbookGroupedTree, { props: { data } })
+    await flushPromises()
+
+    await wrapper.find('[data-test="worldbook-group-graph"]').trigger('click')
+    expect(wrapper.emitted('open-graph')).toHaveLength(1)
+
+    const row = wrapper.findAll('[data-test="worldbook-entry-row"]').find((node) => node.attributes('data-entry') === '雾港')
+    await row.trigger('click')
+    expect(data.openEntry).toHaveBeenCalledTimes(1)
+    expect(data.openEntry.mock.calls[0][0]).toEqual(ENTRIES_P3[3])
+
+    // 当前条目（selection.item）那一行标成 is-active。
+    const active = wrapper.findAll('[data-test="worldbook-entry-row"]').filter((node) => node.classes().includes('is-active'))
+    expect(active.map((node) => node.attributes('data-entry'))).toEqual(['林砚'])
+  })
+
+  it('组头折叠只活在本次挂载里：不写 localStorage，重新挂载后恢复全展开', async () => {
+    globalThis.localStorage?.clear()
+    const data = groupedData()
+    const wrapper = mount(WorldbookGroupedTree, { props: { data } })
+    await flushPromises()
+
+    const people = wrapper.find('[data-test="worldbook-group"][data-group="人物"]')
+    await people.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="worldbook-group"][data-group="人物"]').attributes('aria-expanded')).toBe('false')
+    expect(wrapper.findAll('[data-test="worldbook-entry-row"]').map((node) => node.attributes('data-entry'))).toEqual(['雾港', '旧钟楼'])
+    // 折叠态不落盘：localStorage 里一条新键都没有。
+    expect(globalThis.localStorage?.length ?? 0).toBe(0)
+    wrapper.unmount()
+
+    const remounted = mount(WorldbookGroupedTree, { props: { data } })
+    await flushPromises()
+    expect(remounted.find('[data-test="worldbook-group"][data-group="人物"]').attributes('aria-expanded')).toBe('true')
+    expect(remounted.findAll('[data-test="worldbook-entry-row"]')).toHaveLength(4)
+    remounted.unmount()
   })
 })
