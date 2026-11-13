@@ -84,12 +84,16 @@ export function extractQuoteSpans(text) {
   const source = String(text ?? '')
   const spans = []
   let index = 0
+  // 分段会把一个引号对切断（实测《修仙女配》：上一段结尾是「沈清清！，本段从「你看看你干的好事！」
+  // 的中间开始，段首那段引号只有闭引号没有开引号）。原实现 closeAt<0 就 break，后面所有引号
+  // 全部失配 → 后续内容被当成叙述反复从段首重切，产「干的好事！」×3 这类重叠碎片。
+  // 正确做法：跳过这个孤立闭引号，从下一个开引号继续配对。
   while (index < source.length) {
     const opener = QUOTE_PAIRS.find(([open]) => source[index] === open)
     if (!opener) { index += 1; continue }
     const [open, close] = opener
     const closeAt = source.indexOf(close, index + 1)
-    if (closeAt < 0) break
+    if (closeAt < 0) { index += 1; continue } // 孤立开引号：跳过它，继续找后面的引号对
     const inner = source.slice(index + 1, closeAt)
     if (inner.trim()) spans.push({ start: index, end: closeAt + 1, text: inner, quote: `${open}${close}` })
     index = closeAt + 1
