@@ -275,6 +275,7 @@ export async function enrichBook(id, lib = LIB, options = {}) {
       '输出 JSON：{',
       ' "identity": "一句话身份定位",',
       ' "archetype": "人设模式（如 替罪羊/觉醒者/镜像施害者/守护者，贴人物本身）",',
+      ' "goal": "人物动机/目标（推动力：想要什么、为什么；≤40 字；推不出给空串）",',
       ' "personality": ["性格词 2–4 个"],',
       ' "arc": { "start": "起点状态", "end": "终点状态", "turnChapter": 转变章号或 null, "evidence": "转变依据（引章号）" },',
       ' "keyChoices": [ { "chapter": 章, "choice": "关键选择 ≤25 字" } ],',
@@ -297,6 +298,7 @@ export async function enrichBook(id, lib = LIB, options = {}) {
         chapters: person.chapters,
         identity: String(parsed?.identity ?? ''),
         archetype: String(parsed?.archetype ?? ''),
+        goal: String(parsed?.goal ?? ''),
         personality: Array.isArray(parsed?.personality) ? parsed.personality.slice(0, 4).map(String) : [],
         arc: parsed?.arc && typeof parsed.arc === 'object' ? {
           start: String(parsed.arc.start ?? ''),
@@ -315,6 +317,47 @@ export async function enrichBook(id, lib = LIB, options = {}) {
       failures.push({ stage: 'character', name: person.name, reason: String(error?.message ?? error) })
       characterProfiles.push({ name: person.name, identity: '', archetype: '', personality: [], arc: null, keyChoices: [], mirror: '', summary: '' })
     }
+  }
+
+  /* ---------- 状态台账（推演支撑：谁知道什么/谁拿了什么——continuity 标准的终局快照） ---------- */
+  let ledger = null
+  {
+    const outline = chapterSummaries
+      .filter((item) => item.summary)
+      .map((item) => `第${item.chapter}${usePseudo ? '节' : '章'}「${item.title}」：${item.summary}`)
+      .join('\n')
+    const cast = personInputs.map((person) => person.name).join('、')
+    const prompt = [
+      '你是状态台账登记员。输入是全书章纲与主要人物表。',
+      '输出 JSON：{',
+      ' "knowledgeLedger": [ { "character": "谁", "knows": ["他/她知道的关键信息（秘密/身世/真相）"], "chapter": "大约何时知道（章号）" } ],',
+      ' "stateLedger": [ { "object": "关键物品/身世/关系状态", "state": "终局状态（在谁手里/真伪/生死了/关系走向）", "chapter": "最后确认章号" } ]',
+      '}',
+      '只登记对后续剧情有意义的条目；knowledge 3–8 条、state 3–8 条。',
+      '',
+      TRACE_HEADER,
+      '',
+      `【主要人物】${cast}`,
+      outline || '（无章纲）'
+    ].join('\n')
+    try {
+      const answer = await callJson(prompt, 1800)
+      const parsed = parseReply(answer.text)
+      if (parsed?.knowledgeLedger?.length || parsed?.stateLedger?.length) {
+        ledger = {
+          knowledgeLedger: (parsed.knowledgeLedger ?? []).slice(0, 8).map((item) => ({
+            character: String(item?.character ?? ''),
+            knows: String(item?.knows ?? '').slice(0, 60),
+            chapter: item?.chapter ?? null
+          })),
+          stateLedger: (parsed.stateLedger ?? []).slice(0, 8).map((item) => ({
+            object: String(item?.object ?? '').slice(0, 30),
+            state: String(item?.state ?? '').slice(0, 60),
+            chapter: item?.chapter ?? null
+          }))
+        }
+      } else failures.push({ stage: 'ledger', reason: 'empty' })
+    } catch (error) { failures.push({ stage: 'ledger', reason: String(error?.message ?? error) }) }
   }
 
   /* ---------- 全书梗概（沿用，供 wiki 概览） ---------- */
@@ -352,6 +395,7 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     pseudoChapters: usePseudo,
     enums: { structures: STRUCTURE_TYPES, chapterFunctions: CHAPTER_FUNCTIONS, emotions: EMOTIONS },
     slots: { gimmick, plotDesign, intro, style },
+    ledger,
     storySummary,
     arc,
     chapterSummaries,
@@ -373,6 +417,8 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     excerpts: excerpts.length,
     profiles: characterProfiles.filter((item) => item.identity || item.summary).length,
     arcs: characterProfiles.filter((item) => item.arc?.end).length,
+    goals: characterProfiles.filter((item) => item.goal).length,
+    ledger: ledger ? `${ledger.knowledgeLedger.length}知/${ledger.stateLedger.length}态` : '—',
     slots: `${slotsLanded}/4`,
     failures: failures.length,
     storySummary: Boolean(storySummary)
@@ -384,6 +430,6 @@ if (process.argv[1] && process.argv[1].endsWith('wiki-enrich-run.mjs')) {
     const startedAt = Date.now()
     const summary = await enrichBook(id)
     summary.sec = Math.round((Date.now() - startedAt) / 1000)
-    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.summaries}/${summary.chapters}，功能 ${summary.functions}，情绪 ${summary.emotions}，高光 ${summary.excerpts}，弧光 ${summary.arcs}/${summary.profiles}，槽位 ${summary.slots}，失败 ${summary.failures}，${summary.sec}s`)
+    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.summaries}/${summary.chapters}，功能 ${summary.functions}，情绪 ${summary.emotions}，高光 ${summary.excerpts}，弧光 ${summary.arcs}/${summary.profiles}，动机 ${summary.goals}，台账 ${summary.ledger}，槽位 ${summary.slots}，失败 ${summary.failures}，${summary.sec}s`)
   }
 }

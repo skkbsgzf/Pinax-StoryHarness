@@ -37,7 +37,7 @@ const flag = (name) => process.argv.includes(`--${name}`)
 
 const LIB = argOf('--lib', 'D:/Qbook/短篇选题库')
 const BOOKS = (argOf('--books', '') || '').split(',').map((item) => item.trim()).filter(Boolean)
-const BATCH = Math.max(1, Number(argOf('--batch', '8')))
+const BATCH = Math.max(1, Number(argOf('--batch', '4')))
 const LIMIT_CHARS = Number(argOf('--limit-chars', '0')) || 0
 const OUT_DIR = join(LIB, '拆解')
 const DRY = flag('dry')
@@ -149,12 +149,49 @@ export async function extractBook(book, index, profile, env = {}) {
   const knownNames = []
   const bindings = []
   const callLog = []
+  const resumeDir = env.RESUME_DIR ?? RESUME_DIR
+  // 主角识别前置（审计 B2/B3）：绑定提示词需要叙述者名（视角规则 8）。
+  // 两路证据：vocative（别人直呼谁）+ think 探针（第一人称内心独白块属于叙述者——前 2 段先探一次）。
+  // 实测：假千金 vocative 判成宋戟（哥哥被直呼最多），think 探针纠正为崔泠月；第三人称书不做主角探测（曾产出「选妃」这类垃圾）。
+  let protagonist = null
+  if (perspective.perspective === 'first') {
+    const detected = detectFirstPersonProtagonist(body, nameCandidates)
+    let name = detected.name ? normalizeVocativeToName(detected.name, nameCandidates).name : null
+    // 叙述者直问探针（审计 B2 第二刀）：vocative 判据把「被直呼最多」错当叙述者（假千金判成哥哥），
+    // 绑定探针又会自强化（模型把「我」映射到唯一已知名）。直接拿开头文本问「我」是谁，
+    // 候选名表从全书名字统计取（按提及数排序），模型从真名里选。
+    try {
+      const probeNames = [...nameCandidates.entries()]
+        .filter(([key, stats]) => key.length >= 2 && key.length <= 5 && stats.mentions >= 3)
+        .sort((a, b) => b[1].mentions - a[1].mentions)
+        .slice(0, 12)
+        .map(([key]) => key)
+      const probeText = segments.slice(0, 2).map((segment) => segment.text).join('\n').slice(0, 2000)
+      const probePrompt = [
+        '这是一部第一人称小说的开头。判断叙述者「我」是谁。',
+        '候选名（全书高频名字）：' + (probeNames.join('、') || '(无)'),
+        '只输出 JSON：{"narrator":"叙述者的名字（从候选里选或给原文称呼；判断不出给空串）"}',
+        '',
+        probeText
+      ].join('\n')
+      const probeAnswer = await callModel(probePrompt, 200)
+      const probeParsed = parseModelReply(probeAnswer.text)
+      if (probeParsed.ok) {
+        const probeName = probeParsed.value?.narrator ? String(probeParsed.value.narrator).trim() : ''
+        if (probeName) {
+          name = normalizeVocativeToName(probeName, nameCandidates).name || probeName
+        }
+      }
+    } catch { /* 探针失败退回 vocative */ }
+    protagonist = name
+    if (protagonist) knownNames.push(protagonist)
+  }
   // 续跑：把已落盘的批次读回来，从断点之后继续（长篇 50+ 次调用中途超时不可避免）。
   let resumeFrom = 0
-  if ((env.RESUME_MODE ?? RESUME_MODE) && (env.RESUME_DIR ?? RESUME_DIR) && existsSync(env.RESUME_DIR ?? RESUME_DIR)) {
-    const done = readdirSyncCompat(env.RESUME_DIR ?? RESUME_DIR).filter((name) => name.startsWith('bindings-')).sort()
+  if ((env.RESUME_MODE ?? RESUME_MODE) && resumeDir && existsSync(resumeDir)) {
+    const done = readdirSyncCompat(resumeDir).filter((name) => name.startsWith('bindings-')).sort()
     for (const name of done) {
-      const saved = JSON.parse(await readFile(join(env.RESUME_DIR ?? RESUME_DIR, name), 'utf8'))
+      const saved = JSON.parse(await readFile(join(resumeDir, name), 'utf8'))
       bindings.push(...saved.bindings)
       for (const who of saved.knownNames ?? []) if (!knownNames.includes(who)) knownNames.push(who)
       resumeFrom = Math.max(resumeFrom, saved.start + saved.batch.length)
@@ -163,7 +200,7 @@ export async function extractBook(book, index, profile, env = {}) {
   }
   for (let start = resumeFrom; start < segments.length; start += BATCH) {
     const batch = segments.slice(start, start + BATCH)
-    const prompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: batch, knownNames, priorNames: [] })].join('\n')
+    const prompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: batch, knownNames, priorNames: [], perspective: perspective.perspective })].join('\n')
     let reply = ''
     let parsedBinding = null
     for (let attempt = 1; attempt <= env.CALL_RETRIES ?? CALL_RETRIES; attempt += 1) {
@@ -176,8 +213,28 @@ export async function extractBook(book, index, profile, env = {}) {
         if (normalized.ok) { parsedBinding = normalized.segments; break }
       }
     }
+    // 覆盖度校验（审计 B1）：模型回包漏段时只对缺失段补发一轮，不让它们静默落进规则兜底。
     if (parsedBinding) {
-      bindings.push(...parsedBinding)
+      const returnedSegIds = new Set(parsedBinding.map((item) => item.id))
+      const missingSegs = batch.filter((segment) => !returnedSegIds.has(segment.id))
+      if (missingSegs.length) {
+        const retryPrompt = [BIND_SYSTEM_PROMPT, '', buildBatchBindPrompt({ segments: missingSegs, knownNames, priorNames: [], perspective: perspective.perspective }), '', '【上一轮漏了以上段】只输出这些段的绑定。'].join('\n')
+        try {
+          const retryAnswer = await callModel(retryPrompt)
+          const retryParsed = parseModelReply(retryAnswer.text)
+          if (retryParsed.ok) {
+            const retryNormalized = normalizeBindReply(retryParsed.value)
+            if (retryNormalized.ok) {
+              for (const item of retryNormalized.segments) {
+                if (!returnedSegIds.has(item.id)) { parsedBinding.push(item); returnedSegIds.add(item.id) }
+              }
+            }
+          }
+        } catch { /* 补发失败按原样落规则兜底 */ }
+      }
+    }
+    if (parsedBinding) {
+      bindings.push(...parsedBinding.filter((item) => !bindings.some((b) => b.id === item.id)))
       for (const item of parsedBinding) {
         for (const block of item.blocks) if (block.who && !knownNames.includes(block.who)) knownNames.push(block.who)
       }
@@ -185,9 +242,9 @@ export async function extractBook(book, index, profile, env = {}) {
     callLog.push({ start, count: batch.length, ok: Boolean(parsedBinding), replyChars: reply.length })
     // 断点：每批成功就落盘绑定结果。长篇（50+ 次调用）中途超时后可用同一 --resume 续跑，
     // 不重跑已完成批次（真跑撞到：70k 字连续两次 180s 超时，重跑等于每次从零开始）。
-    if (RESUME_DIR && parsedBinding) {
+    if (resumeDir && parsedBinding) {
       await writeFile(
-        join(RESUME_DIR, `bindings-${String(start).padStart(4, '0')}.json`),
+        join(resumeDir, `bindings-${String(start).padStart(4, '0')}.json`),
         JSON.stringify({ start, batch: batch.map((item) => item.id), bindings: parsedBinding, knownNames }),
         'utf8'
       )
@@ -195,13 +252,7 @@ export async function extractBook(book, index, profile, env = {}) {
   }
 
   // 取不到（比如全书只有称谓）就传 null，pronoun 解析会退化成「我」本身（称谓即身份）。
-  // 主角识别（作者 2026-11-12 视角裁定）：第一人称里「我」= 叙述者。
-  // 不能用「出现次数最高的真名」——实测《末世》最高频是林逸(78次)但那是男友；
-  // 正确判据是「别人直呼的那个名字」（“沈岚，你也在啊”），再由称呼形式归一到真名（余律师→余欢）。
-  const protagonistDetected = detectFirstPersonProtagonist(body, nameCandidates)
-  const protagonist = protagonistDetected.name
-    ? normalizeVocativeToName(protagonistDetected.name, nameCandidates).name
-    : null
+  // 主角识别已前置到绑定循环之前（审计 B2：绑定提示词需要叙述者名）。
   const { rows, stats } = bindSegments(segments, bindings, { knownNames, nameCandidates, protagonist, perspective })
   const accepted = []
   const rejected = []
@@ -268,7 +319,7 @@ export async function extractBook(book, index, profile, env = {}) {
     },
     source: { file: book.file, chars: body.length, segments: segments.length, blocks: segments.reduce((sum, item) => sum + item.blocks.length, 0) },
     // 视角参数（作者 2026-11-12）：读者视角代入，第一人称下称谓即身份。
-    perspective: { perspective: perspective.perspective, confidence: perspective.confidence },
+    perspective: { perspective: perspective.perspective, confidence: perspective.confidence, protagonist: protagonist ?? null },
     calls: callLog.length + relationCalls,
     bindStats: stats,
     relationCalls,

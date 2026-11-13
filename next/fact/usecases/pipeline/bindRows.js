@@ -84,7 +84,7 @@ const str = (value) => String(value ?? '').trim()
  */
 const NAME_STOP_CHARS = /[的了着过是在把被让我你他她它们想要去来说道问看走坐站笑叹知能会可别没不就都也又而但和与同对这那哪什怎为因为所以如果虽然已经直接继续然后接着突然忽然立即马上顿时终于果然竟然]|\s/u
 /** 判定为「可用」的 reason 集合；其余一律计入 hallucinated。 */
-const ACCEPTED_WHO_REASONS = new Set(['verified', 'verbatim', 'known', 'empty'])
+const ACCEPTED_WHO_REASONS = new Set(['verified', 'verbatim', 'known', 'empty', 'narrator'])
 
 const PRONOUN_NAMES = new Set([
   '我', '你', '他', '她', '它', '我们', '你们', '他们', '她们', '它们',
@@ -190,11 +190,15 @@ function explainWho(value, context) {
   // 称谓即身份（作者裁定）：第一人称段里出现的「男友」「妈妈」「闺蜜」直接可用，不必等真名。
   // 这是第一人称小说的常态——全文可能一直只用称谓指称，强求真名会让条目整段丢失。
   const identityTitle = normalizeTitleName(str(value))
+  // 叙述者豁免（审计 2026-11-13 B2）：第一人称里视角规则让模型给无主语叙事块填叙述者名，
+  // 而叙事块写的是「我…」——段文本里往往没有叙述者的字面名。叙述者在本段天然在场，豁免在场性闸。
+  const isNarrator = context.perspective === 'first' && context.narrator && str(value) === context.narrator
   // 本段在场性：who 必须真的出现在这段原文里（否则是模型从别处串过来的名字）。
   // 实测：某段绑了 who=「继续」，但这段原文根本没有「继续」——全书的候选统计通过了，它却不在场。
   // 称谓与代词映射走各自的闸，不受此限。
   const inSegment = context.text.includes(str(value))
-  if (!inSegment && !isIdentityTitle(str(value))) return { name: '', reason: 'not-in-segment' }
+  if (!inSegment && !isIdentityTitle(str(value)) && !isNarrator) return { name: '', reason: 'not-in-segment' }
+  if (isNarrator && !inSegment) return { name: context.narrator, reason: 'narrator' }
 
   if (context.perspective === 'first' && isIdentityTitle(identityTitle)) {
     return { name: identityTitle, reason: 'identity-title' }
@@ -264,7 +268,7 @@ export function bindSegment(segment, binding = {}, options = {}) {
       : (BIND_CHANNELS.includes(block.channelHint) ? block.channelHint : 'state')
     if (bound && str(bound?.ch) && !BIND_CHANNELS.includes(str(bound.ch))) stats.unknownChannel += 1
 
-    const whoContext = { text: segment?.text ?? '', nameTable: knownNames, nameCandidates, perspective: perspective.perspective, titles: perspective.titles }
+    const whoContext = { text: segment?.text ?? '', nameTable: knownNames, nameCandidates, perspective: perspective.perspective, titles: perspective.titles, narrator: options.protagonist ?? null }
     const candidate = bound ? explainWho(bound.who, whoContext) : explainWho(block.speakerHint, whoContext)
     // 幻觉（原文没有）与「像句子不像人名」都是模型给错的 who，统一计入 hallucinated：
     // 对调用方而言「这个名字不能用」是同一件事，分两个计数器只会让人漏看。

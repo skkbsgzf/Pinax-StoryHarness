@@ -11,7 +11,7 @@
  * 提示词**逐字节稳定**（B3）：固定前缀在前、变量在后、无时间戳/计数器。
  */
 
-export const BIND_PROMPT_VERSION = 'fact-bind-prompt/v1'
+export const BIND_PROMPT_VERSION = 'fact-bind-prompt/v2'
 
 /** 通道闭集：与 EXTRACTION_ROW_SCHEMA 的 events.channel 枚举同源（单一真源）。 */
 export const BIND_CHANNELS = Object.freeze(['do', 'say', 'think', 'feel', 'perceive', 'state', 'event'])
@@ -38,7 +38,9 @@ export const BIND_SYSTEM_PROMPT = [
   '   你在这里只要把它原样输出成 []，不要顺手填。',
   '7) aka 只在原文**明确断言两者是同一人**时填（如「这就是现在的我，克莱恩·莫雷蒂？」），',
   '   写成 [["当前称呼","另一个称呼"]]；只是同一场戏出现两个名字不算。',
-  '8) 只输出 JSON，不要解释、不要 markdown 围栏。'
+  '8) 视角规则：第一人称书（用户消息会标注叙述者）里，**无明确主语的叙事块（动作/状态/感知）who 填叙述者真名**——叙述者就是已知人物表的第一个名字；对话块仍标说话者；确实判不出才留空。',
+  '   第三人称书同理：无主语块若上下文明确延续上一块的主体，可沿用该主体，判不出留空。',
+  '9) 只输出 JSON，不要解释、不要 markdown 围栏。'
 ].join('\n')
 
 /**
@@ -115,6 +117,10 @@ export function buildBatchBindPrompt(input = {}) {
     '',
     '【已知人物】' + (knownNames.length ? knownNames.join('、') : '(无)'),
     priorNames.length ? `【已抽过】${priorNames.join('、')}` : '',
+    // 视角规则（v2）：第一人称时叙述者必须是已知人物表第一位，供规则 8 使用。
+    input.perspective === 'first' && knownNames.length
+      ? `【视角】第一人称 · 叙述者＝${knownNames[0]}：无明确主语的叙事块（do/state/perceive/feel）who 填「${knownNames[0]}」。`
+      : '',
     '',
     ...section
   ].filter(Boolean).join('\n')
