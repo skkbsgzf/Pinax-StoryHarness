@@ -1,26 +1,33 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { basename, join } from 'node:path'
-import { fail } from './errors.mjs'
+import { appendFile, mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { basename, join, resolve } from 'node:path'
+import { NEXT_ERROR_CODES, fail } from './errors.mjs'
 import { validateFactEntry } from '../fact/domain/pediaSchema.js'
 
 /**
- * 拆解文件只读存储（S1 · WO-S1-01）。
+ * 拆解文件仓储（S1 只读 ＋ S2 写协议 · WO-S1-01 / WO-S2-01/03）。
  *
- * 真源：`<root>/拆解/*.json`，每个文件是拆解器的一次产物（顶层 book/source/entries/index/wiki/quality…）。
- * 本模块只做四件事：把多文件的 `entries[]` 合并、按 layer/slot/status 过滤、分页、按 id 取一条。
- * **不写盘**：`save` / `remove` 在 S1 只做到 `validateFactEntry` 校验，过后返回 typed fail
- * `WRITE_PROTOCOL_NOT_STARTED`——真落盘（tmp + os.replace、revision 自增、operationId 旁路日志）
- * 是 S2 的 writeFactFile，本模块不为它将来的形状提前埋半套实现。
+ * 真源：`<root>/拆解/<id>.json`，顶层 book/source/entries/index/quality…；`entries[]` 是 fact.data/v3 条目。
+ * 本模块两件事：
+ *   1) **读**：多文件合并、按 layer/slot/status 过滤、分页、按 id 取一条（S1）。
+ *   2) **写**：`writeFactFile()` 是唯一写入口（S2）——atomic tmp＋rename、顶层 revision 自增、
+ *      operationId 旁路日志（幂等）、同进程按文件路径排队。`store.save/remove` 都只转调它。
  *
  * 三条硬口径：
  *   1) **坏档不整体失败**（作者偏好）：单个文件 JSON.parse 失败／顶层不是对象／entries 不是数组，
- *      只跳过这个文件并往 warnings[] 记一条，其余文件照常合并。
- *   2) **只读**：读文件不触发任何镜像／索引写，也不改 `wiki.*`（本模块从不读 wiki 段）。
+ *      只跳过这个文件并往 warnings[] 记一条，其余文件照常合并。**写**则相反：真源档坏了拒绝覆盖。
+ *   2) **读不写**：list/get/search 不触发任何镜像／索引写，也不吐 `wiki`（wiki 是派生，见下）。
  *   3) **溯源字段**：合并后的每条 entry 追加 `bookId` / `bookName`（来自文件顶层 book，缺省退回文件名），
  *      `get` 的 revision 取来源文件顶层 `revision`（缺省 1）——条目自己不带版本号，版本属于文件。
  *
- * 失败载荷走内核统一的 `{ ok:false, code|error }` 形状（fail()），成功载荷是扁平对象
- * `{ ok:true, entries, total, warnings }`，与 S0 冻结的四通道契约一致（不再套一层 value）。
+ * wiki 分离（S2 · WO-S2-03）：写主 JSON 时始终剥离顶层 `wiki`，另写兄弟 `<id>.wiki.json`
+ * （`{ derivedFrom:{ factRevision, schema }, ...wiki }`）。读侧两代兼容走 `readFactWiki()`：
+ * 优先兄弟文件，没有才回落旧信封里的 `wiki`——存量文件照常可读，迁移器另开工单。
+ *
+ * 失败载荷走内核统一的 `{ ok:false, error:{ code, message, details } }` 形状；写协议的三枚码
+ * （OPERATION_ID_REQUIRED／VALIDATION_FAILED／REVISION_MISMATCH）沿用 FactStore 端口
+ * （next/fact/ports/pediaStore.js 的 FACT_STORE_WRITE_CODES）——S0 契约钉死，不另造 PINAX_ 码。
+ * 成功载荷是扁平对象（不套 value），与 S0 冻结的四通道契约一致。
  */
 
 export const FACT_DIR_NAME = '拆解'
@@ -28,6 +35,24 @@ const DEFAULT_REVISION = 1
 const DEFAULT_SEARCH_LIMIT = 50
 const MAX_SEARCH_LIMIT = 200
 const SNIPPET_RADIUS = 40
+export const OPERATIONS_LOG_NAME = '.operations.jsonl'
+export const WIKI_DERIVED_SCHEMA = 'pinax-wiki-derived@1'
+
+/** 写协议失败码（FactStore 端口同一套；S0 契约 §三）。 */
+export const FACT_WRITE_CODES = Object.freeze({
+  OPERATION_ID_REQUIRED: 'OPERATION_ID_REQUIRED',
+  VALIDATION_FAILED: 'VALIDATION_FAILED',
+  REVISION_MISMATCH: 'REVISION_MISMATCH',
+  NOT_FOUND: 'NOT_FOUND'
+})
+
+/** 写失败：内核码表里的走 NEXT_ERROR_CODES，端口码原样透传；顶层 code 与 error.code 同值。 */
+function writeFail(code, message, details) {
+  const resolved = NEXT_ERROR_CODES[code] ?? code
+  const error = { code: resolved, message }
+  if (details && Object.keys(details).length) error.details = details
+  return { ok: false, code: resolved, error }
+}
 
 function str(value) {
   return String(value ?? '')
@@ -180,7 +205,14 @@ function readFactDir(root) {
   if (!existsSync(dir)) return { entries: [], warnings }
   let names = []
   try {
-    names = readdirSync(dir).filter((name) => name.toLowerCase().endsWith('.json')).sort()
+    // `.wiki.json` 是 S2 起的兄弟派生文件（可删可重建）：入口形状与主档相似但没有 entries，
+    // 明确排除而不是靠「没有 entries 就跳过」——派生档里万一出现 entries 字段也不该混进真源清单。
+    names = readdirSync(dir)
+      .filter((name) => {
+        const lower = name.toLowerCase()
+        return lower.endsWith('.json') && !lower.endsWith('.wiki.json')
+      })
+      .sort()
   } catch (error) {
     warnings.push({ code: 'FACT_DIR_UNREADABLE', file: FACT_DIR_NAME, message: `拆解目录读不了：${String(error?.message || error)}` })
     return { entries: [], warnings }
@@ -219,7 +251,334 @@ function readFactDir(root) {
   return { entries, warnings }
 }
 
+/* ---------- S2 写协议 ---------- */
+
+function jsonClone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function nowIso() {
+  return new Date().toISOString()
+}
+
 /**
+ * 写队列：同进程内按目标文件绝对路径排队（Promise 串行闸）。
+ * 跨进程不做文件锁——靠 rename 的原子替换＋写前重读 revision 复核：两个写者都能写文件，
+ * 但后进队列／后通过复核的那个看见新 revision，拿 REVISION_MISMATCH，不丢数据。
+ */
+const writeQueues = new Map()
+
+function serializedByPath(key, task) {
+  const previous = writeQueues.get(key) ?? Promise.resolve()
+  const run = previous.then(task)
+  const tail = run.then(() => {}, () => {})
+  writeQueues.set(key, tail)
+  tail.then(() => {
+    if (writeQueues.get(key) === tail) writeQueues.delete(key)
+  })
+  return run
+}
+
+/** 原子替换：先写 `.tmp` 再 rename（Node 的 rename 在 Windows 上即 os.replace 语义，同名覆盖不撕裂）。 */
+async function writeJsonAtomic(path, document) {
+  const tmp = `${path}.tmp`
+  await writeFile(tmp, `${JSON.stringify(document, null, 2)}\n`, 'utf-8')
+  await rename(tmp, path)
+}
+
+async function readOperationRecord(logPath, operationId) {
+  let text
+  try {
+    text = await readFile(logPath, 'utf-8')
+  } catch {
+    return null
+  }
+  for (const line of text.split(/\r?\n/u)) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    let record
+    try {
+      record = JSON.parse(trimmed)
+    } catch {
+      continue // 旁路日志坏行不能拦住写
+    }
+    if (record?.operationId === operationId && record?.outcome === 'applied') return record
+  }
+  return null
+}
+
+async function appendOperation(logPath, record) {
+  await appendFile(logPath, `${JSON.stringify(record)}\n`, 'utf-8')
+}
+
+/** 条目 → 该进哪个 `拆解/<id>.json`：显式 bookId/id 优先，其次条目溯源里的 book_id（read 投影的 bookId 也认）。 */
+function fileIdFor({ bookId, id, entry } = {}) {
+  return str(bookId).trim()
+    || str(id).trim()
+    || str(entry?.bookId).trim()
+    || str(entry?.provenance?.book_id).trim()
+    || str(entry?.provenance?.book).trim()
+}
+
+/** 文件 id 就是文件名：路径分隔符与 dot 段一律拒，不把写入带出 `拆解/`。 */
+function safeFileId(value) {
+  const id = str(value).trim()
+  if (!id) return ''
+  if (id === '.' || id === '..') return ''
+  if (id.includes('/') || id.includes('\\')) return ''
+  return id
+}
+
+function normalizeExpectedRevision(value) {
+  if (value === undefined || value === null || value === '') return { ok: true, value: null }
+  const number = Number(value)
+  if (!Number.isSafeInteger(number) || number < 0) return { ok: false, value: null }
+  return { ok: true, value: number }
+}
+
+/**
+ * S2 · WO-S2-01：拆解文件唯一写入口。
+ *
+ * `entry`   —— 按 `entry.id` 在 `entries[]` 里定位：命中就替换，没有就追加（upsert）。
+ * `patch`   —— 顶层字段浅合并（book/source/index/quality…）；四个受管键特殊处理：
+ *              · `entries`（数组）＝整份替换（抽取管线重跑用；按 id 逐条 upsert 会产生 N 版 revision）；
+ *              · `removeEntryIds`（字符串数组）＝按 id 删除条目（一条都没删到 → NOT_FOUND，不假装成功）；
+ *              · `wiki` ＝搬进兄弟 `<id>.wiki.json`（主 JSON 永远不落 wiki）；
+ *              · `revision` / `updatedAt` ＝受管字段，传了也忽略（版本只能由本函数自增）。
+ *
+ * 写前重读磁盘当前档：`expectedRevision` 与磁盘 revision 不符 → REVISION_MISMATCH（不覆盖不合并）。
+ * 成功后顶层 `revision + 1`、`updatedAt` 刷新。同一 `operationId` 重放不再写盘，回 `{ ok, duplicate:true }`。
+ */
+export async function writeFactFile({ root, bookId, id, entry, patch, operationId, expectedRevision } = {}) {
+  const projectRoot = str(root).trim()
+  if (!projectRoot) return writeFail('INVALID_INPUT', '拆解文件写入需要一个项目根（root）：这条通道不接受隐式当前项目')
+
+  const opId = str(operationId).trim()
+  if (!opId) {
+    return writeFail('OPERATION_ID_REQUIRED', '写入必须带 operationId（幂等键）：同一 operationId 重放不会重复落盘', {
+      hint: '由调用方生成（例如 `${来源}-${bookId}-${randomUUID()}`），宿主不复用、不代填'
+    })
+  }
+
+  if (entry !== undefined && entry !== null && !isPlainObject(entry)) {
+    return writeFail('VALIDATION_FAILED', '要写入的条目必须是对象')
+  }
+  if (patch !== undefined && patch !== null && !isPlainObject(patch)) {
+    return writeFail('INVALID_INPUT', 'patch 必须是对象（顶层字段浅合并）')
+  }
+  if (!isPlainObject(entry) && !isPlainObject(patch)) {
+    return writeFail('INVALID_INPUT', 'writeFactFile 至少需要 entry（单条 upsert）或 patch（顶层字段／entries／删除清单）之一')
+  }
+
+  const targetId = safeFileId(fileIdFor({ bookId, id, entry }))
+  if (!targetId) {
+    return writeFail('INVALID_INPUT', '写不出该进哪个拆解文件：需要 bookId（或 id／条目溯源 book_id），且不能含路径分隔符', {
+      bookId: str(bookId), id: str(id)
+    })
+  }
+
+  let checked = null
+  if (isPlainObject(entry)) {
+    checked = validateFactEntry(entry)
+    if (!checked.ok) {
+      return writeFail('VALIDATION_FAILED', '条目信封校验没过，未进入写协议', { errors: checked.errors, warnings: checked.warnings })
+    }
+    if (!str(entry.id).trim()) {
+      return writeFail('VALIDATION_FAILED', '条目缺少 id：写协议按 id 定位替换／追加', { errors: [{ field: 'id', message: 'id 不能为空' }] })
+    }
+  }
+
+  const expected = normalizeExpectedRevision(expectedRevision)
+  if (!expected.ok) {
+    return writeFail('INVALID_INPUT', 'expectedRevision 必须是非负整数（新建给 0 或缺省）', { expectedRevision: str(expectedRevision) })
+  }
+
+  const dir = join(projectRoot, FACT_DIR_NAME)
+  const target = join(dir, `${targetId}.json`)
+  const wikiTarget = join(dir, `${targetId}.wiki.json`)
+  const logPath = join(dir, OPERATIONS_LOG_NAME)
+  const file = `${FACT_DIR_NAME}/${targetId}.json`
+
+  return serializedByPath(resolve(target), async () => {
+    try {
+      await mkdir(dir, { recursive: true })
+
+      const duplicate = await readOperationRecord(logPath, opId)
+      if (duplicate) {
+        return {
+          ok: true,
+          duplicate: true,
+          operationId: opId,
+          bookId: targetId,
+          revision: Number.isSafeInteger(duplicate.revision) ? duplicate.revision : null,
+          file
+        }
+      }
+
+      let raw = null
+      try {
+        raw = await readFile(target, 'utf-8')
+      } catch (error) {
+        if (error?.code !== 'ENOENT') throw error
+      }
+      let document = null
+      if (raw !== null) {
+        try {
+          document = JSON.parse(raw)
+        } catch (error) {
+          // 真源坏档拒绝覆盖：静默重写会把作者的原始产物抹掉，比报错更糟。
+          return writeFail('IO_FAILED', `拆解文件不是有效 JSON，拒绝覆盖（先修好再写）：${String(error?.message || error)}`, { file })
+        }
+        if (!isPlainObject(document)) {
+          return writeFail('IO_FAILED', '拆解文件顶层不是对象，拒绝覆盖', { file })
+        }
+        if (document.entries !== undefined && !Array.isArray(document.entries)) {
+          return writeFail('IO_FAILED', '拆解文件的 entries 不是数组，拒绝覆盖', { file })
+        }
+      }
+
+      const baseRevision = document ? revisionOf(document) : 0
+      if (expected.value !== null && expected.value !== baseRevision) {
+        await appendOperation(logPath, { at: nowIso(), operationId: opId, bookId: targetId, revision: baseRevision, outcome: 'revision_mismatch' })
+        return writeFail(
+          'REVISION_MISMATCH',
+          `revision 不符：磁盘是第 ${baseRevision} 版，本次期望第 ${expected.value} 版——不覆盖不合并，请重读后再写`,
+          { currentRevision: baseRevision, expectedRevision: expected.value, file }
+        )
+      }
+
+      const nextDocument = document ? { ...document } : {
+        book: {
+          id: str(entry?.provenance?.book_id).trim() || targetId,
+          title: str(entry?.provenance?.book).trim() || targetId
+        },
+        entries: []
+      }
+      let nextEntries = document ? [...nextDocument.entries] : []
+      const removeIds = new Set()
+
+      if (isPlainObject(patch)) {
+        for (const [key, value] of Object.entries(patch)) {
+          if (key === 'revision' || key === 'updatedAt' || key === 'wiki') continue
+          if (key === 'entries') {
+            if (!Array.isArray(value)) return writeFail('INVALID_INPUT', 'patch.entries 必须是数组（整份替换）')
+            if (value.some((item) => !isPlainObject(item))) return writeFail('INVALID_INPUT', 'patch.entries 里每一条都必须是对象')
+            nextEntries = jsonClone(value)
+            continue
+          }
+          if (key === 'removeEntryIds') {
+            if (!Array.isArray(value)) return writeFail('INVALID_INPUT', 'patch.removeEntryIds 必须是 id 数组')
+            for (const item of value) {
+              const wanted = str(item).trim()
+              if (wanted) removeIds.add(wanted)
+            }
+            continue
+          }
+          nextDocument[key] = value
+        }
+      }
+
+      if (removeIds.size) {
+        let removed = 0
+        nextEntries = nextEntries.filter((item) => {
+          if (!removeIds.has(str(item?.id))) return true
+          removed += 1
+          return false
+        })
+        if (!removed) {
+          return writeFail('NOT_FOUND', `拆解数据里没有 id=${[...removeIds].join(',')} 的条目`, { ids: [...removeIds], file })
+        }
+      }
+
+      if (isPlainObject(entry)) {
+        const entryId = str(entry.id)
+        const at = nextEntries.findIndex((item) => str(item?.id) === entryId)
+        if (at >= 0) nextEntries[at] = jsonClone(entry)
+        else nextEntries.push(jsonClone(entry))
+      }
+
+      // wiki 来源：patch 里给的优先；没给就沿用旧信封里的（存量文件重写时顺手搬去兄弟文件＝写时迁移）。
+      let wiki = null
+      let hasWiki = false
+      if (isPlainObject(patch) && Object.prototype.hasOwnProperty.call(patch, 'wiki')) {
+        hasWiki = true
+        wiki = patch.wiki
+      } else if (document && Object.prototype.hasOwnProperty.call(document, 'wiki')) {
+        hasWiki = true
+        wiki = document.wiki
+      }
+      delete nextDocument.wiki
+
+      nextDocument.entries = nextEntries
+      nextDocument.revision = baseRevision + 1
+      nextDocument.updatedAt = nowIso()
+
+      // wiki 先落、主档后落：主档是唯一真源，wiki 可删可重建；中途崩溃最多留下
+      // 「兄弟文件比主档新一版」，重建即可，不会反向污染真源。
+      if (hasWiki) {
+        await writeJsonAtomic(wikiTarget, {
+          derivedFrom: { factRevision: baseRevision, schema: WIKI_DERIVED_SCHEMA },
+          ...(isPlainObject(wiki) ? wiki : {})
+        })
+      }
+      await writeJsonAtomic(target, nextDocument)
+      await appendOperation(logPath, {
+        at: nowIso(),
+        operationId: opId,
+        bookId: targetId,
+        revision: nextDocument.revision,
+        outcome: 'applied'
+      })
+
+      const result = {
+        ok: true,
+        duplicate: false,
+        operationId: opId,
+        bookId: targetId,
+        revision: nextDocument.revision,
+        file
+      }
+      if (checked?.warnings?.length) result.warnings = checked.warnings
+      if (isPlainObject(entry)) result.entry = jsonClone(entry)
+      return result
+    } catch (error) {
+      return writeFail('IO_FAILED', `拆解文件写入失败：${String(error?.message || error)}`, { file, operationId: opId })
+    }
+  })
+}
+
+/**
+ * S2 · WO-S2-03 读侧两代兼容：优先兄弟 `<id>.wiki.json`（S2 起的派生文件），
+ * 没有才回落旧信封里的 `document.wiki`。派生档坏了按「没有」处理，不拦主档读。
+ * 返回 `{ wiki, derivedFrom, source }`——source 只用于诊断（sibling／envelope／none）。
+ */
+export function readFactWiki({ root, id, document } = {}) {
+  const projectRoot = str(root).trim()
+  const fileId = safeFileId(id)
+  if (projectRoot && fileId) {
+    const sibling = join(projectRoot, FACT_DIR_NAME, `${fileId}.wiki.json`)
+    try {
+      const derived = JSON.parse(readFileSync(sibling, 'utf-8'))
+      if (isPlainObject(derived)) {
+        const { derivedFrom, ...wiki } = derived
+        return {
+          wiki,
+          derivedFrom: isPlainObject(derivedFrom) ? derivedFrom : null,
+          source: 'sibling'
+        }
+      }
+    } catch {
+      // 派生档缺失或坏：回落信封（存量文件照常工作）。
+    }
+  }
+  const envelope = isPlainObject(document?.wiki) ? document.wiki : null
+  return { wiki: envelope, derivedFrom: null, source: envelope ? 'envelope' : 'none' }
+}
+
+/**
+ * 仓储实例：读四方法（list/get/search）＋写两方法（save/remove，转调 writeFactFile）。
+ * 写失败载荷见 writeFail()：`{ ok:false, code, error }`，写协议三枚码按 FactStore 端口原样透传。
+ *
  * @param {{ root: string }} options
  */
 export function createFactFileStore({ root } = {}) {
@@ -262,31 +621,21 @@ export function createFactFileStore({ root } = {}) {
     },
 
     /**
-     * S1 只校验、不落盘：校验过验才回 WRITE_PROTOCOL_NOT_STARTED；
-     * 校验不过照旧给 INVALID_ENTRY＋逐条 errors，作者能看出是哪一栏不对。
+     * S2 起真落盘：单条 upsert 走 writeFactFile（按 entry.id 定位替换／追加）。
+     * `expectedRevision` 是**文件级**版本（fact:get 回的 revision）；不符即 REVISION_MISMATCH。
+     * `operationId` 必填（幂等键）——重放同一 operationId 不再写盘，回 duplicate=true。
      */
-    save({ entry } = {}) {
-      if (!isPlainObject(entry)) return fail('INVALID_INPUT', '要保存的条目必须是对象')
-      const checked = validateFactEntry(entry)
-      if (!checked.ok) {
-        return fail('INVALID_ENTRY', '条目信封校验没过，未进入写协议', { errors: checked.errors, warnings: checked.warnings })
-      }
-      return fail(
-        'WRITE_PROTOCOL_NOT_STARTED',
-        '写协议未启动（S1 只读）：条目校验通过，但 factFileStore 现在不写任何文件——真落盘归 S2 的 writeFactFile',
-        { id: str(entry.id), schema: str(entry.schema) }
-      )
+    async save({ entry, bookId, operationId, expectedRevision } = {}) {
+      if (!projectRoot) return fail('INVALID_INPUT', '事实条目保存需要一个项目根（root）：这条通道不接受隐式当前项目')
+      return writeFactFile({ root: projectRoot, bookId, entry, operationId, expectedRevision })
     },
 
-    /** 删除同样只到「参数与存在性」这一层：不删、不写、不碰索引。 */
-    remove({ id } = {}) {
+    /** 按 id 删除条目（写协议开闸后的真删除）：同样走 writeFactFile，revision 自增、operationId 幂等。 */
+    async remove({ id, bookId, operationId, expectedRevision } = {}) {
+      if (!projectRoot) return fail('INVALID_INPUT', '事实条目删除需要一个项目根（root）：这条通道不接受隐式当前项目')
       const wanted = str(id).trim()
       if (!wanted) return fail('INVALID_INPUT', '请带上要删除的条目 id')
-      return fail(
-        'WRITE_PROTOCOL_NOT_STARTED',
-        '写协议未启动（S1 只读）：删除请求已收到，但 factFileStore 现在不写任何文件——真落盘归 S2 的 writeFactFile',
-        { id: wanted }
-      )
+      return writeFactFile({ root: projectRoot, bookId, patch: { removeEntryIds: [wanted] }, operationId, expectedRevision })
     },
 
     /**

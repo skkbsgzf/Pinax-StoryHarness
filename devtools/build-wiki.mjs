@@ -19,6 +19,7 @@
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readFactWiki } from '../next/kernel/factFileStore.mjs'
 import { derivePseudoChapters, hasRealChapters } from './lib/pseudoChapters.mjs'
 
 function argOf(prefix, fallback = null) {
@@ -220,7 +221,9 @@ function buildBook(id, ds) {
   if (!ds?.palette) throw new Error('buildBook 需要 ds（await resolveDesignSystem()）')
   const result = JSON.parse(readFileSync(join(LIB, '拆解', `${id}.json`), 'utf8'))
   const book = result.book
-  const wiki = result.wiki ?? null
+  // S2 · WO-S2-03 两代兼容：新写文件的 wiki 在兄弟 `<id>.wiki.json`（derivedFrom＋内容）；
+  // 存量文件仍在信封里。这里只认一个口子——兄弟优先、无则回落，生成逻辑不感知落在哪一代。
+  const { wiki } = readFactWiki({ root: LIB, id, document: result })
   const plots = result.entries.filter((entry) => entry.layer === 'plot')
   const characterEntries = result.entries.filter((entry) => entry.layer === 'character')
 

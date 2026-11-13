@@ -9,8 +9,8 @@ import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { stableEntryId } from '../fact/domain/pediaSchema.js'
 
 /**
- * fact 四通道（S1 · WO-S1-02）：名字钉死、未注入如实报缺、注入后按冻结签名转发，
- * fact:save 在 S1 如实回 WRITE_PROTOCOL_NOT_STARTED（不假装写成功）。
+ * fact 四通道（S1 · WO-S1-02 ＋ S2 写协议）：名字钉死、未注入如实报缺、注入后按冻结签名转发；
+ * fact:save 自 S2 起真落盘（writeFactFile：upsert＋revision 自增＋operationId 幂等）。
  */
 
 function validEntry() {
@@ -49,7 +49,7 @@ async function makeRoot() {
   const root = await mkdtemp(join(tmpdir(), 'pinax-fact-ipc-'))
   const dir = join(root, FACT_DIR_NAME)
   await mkdir(dir, { recursive: true })
-  await writeFile(join(dir, 'tower.json'), JSON.stringify({
+  await writeFile(join(dir, 'book-tower.json'), JSON.stringify({
     book: { id: 'book-tower', title: '停摆之城' },
     revision: 4,
     entries: [validEntry()]
@@ -116,23 +116,93 @@ test('fact:list / fact:get / fact:search 在 Node 侧调通，返回冻结的扁
   }
 })
 
-test('fact:save 在 S1 如实报 WRITE_PROTOCOL_NOT_STARTED（校验过验也不写盘）', async () => {
+test('fact:save 真落盘：upsert 推进 revision，get 回最新版；同 operationId 重放回 duplicate', async () => {
   const root = await makeRoot()
   try {
     const dispatcher = harness({ factStoreFor: (value) => createFactFileStore({ root: value }) })
-    const blocked = await dispatcher.dispatch(IPC_CHANNELS.factSave, {
+    const entry = validEntry()
+    const saved = await dispatcher.dispatch(IPC_CHANNELS.factSave, {
       root,
-      entry: validEntry(),
+      entry,
       operationId: 'op-1',
       expectedRevision: 4
     })
-    assert.equal(blocked.ok, false)
-    assert.equal(blocked.error.code, NEXT_ERROR_CODES.WRITE_PROTOCOL_NOT_STARTED)
-    assert.match(blocked.error.message, /写协议未启动/)
+    assert.equal(saved.ok, true, JSON.stringify(saved))
+    assert.equal(saved.duplicate, false)
+    assert.equal(saved.revision, 5, 'tower.json 原第 4 版 → 写后第 5 版')
+    assert.equal(saved.bookId, 'book-tower')
 
-    // 盘上条目数不变（没写）
+    // 通道每次现取 store：get 能读到写后的盘上版本，证明不是内存假成功
+    const got = await dispatcher.dispatch(IPC_CHANNELS.factGet, { root, id: entry.id })
+    assert.equal(got.ok, true)
+    assert.equal(got.revision, 5)
+    assert.equal(got.entry.definition, entry.definition)
+
+    const replay = await dispatcher.dispatch(IPC_CHANNELS.factSave, {
+      root,
+      entry,
+      operationId: 'op-1',
+      expectedRevision: 4
+    })
+    assert.equal(replay.ok, true)
+    assert.equal(replay.duplicate, true, '幂等键命中：不重写、不推进版本')
+    assert.equal(replay.revision, 5)
+
     const listed = await dispatcher.dispatch(IPC_CHANNELS.factList, { root })
-    assert.equal(listed.total, 1)
+    assert.equal(listed.total, 1, 'upsert 命中同 id：替换不追加')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('fact:save 版本冲突回 REVISION_MISMATCH；缺 operationId 回 OPERATION_ID_REQUIRED', async () => {
+  const root = await makeRoot()
+  try {
+    const dispatcher = harness({ factStoreFor: (value) => createFactFileStore({ root: value }) })
+    const entry = validEntry()
+
+    const missingOp = await dispatcher.dispatch(IPC_CHANNELS.factSave, { root, entry })
+    assert.equal(missingOp.ok, false)
+    assert.equal(missingOp.error.code, 'OPERATION_ID_REQUIRED')
+    assert.equal((await dispatcher.dispatch(IPC_CHANNELS.factGet, { root, id: entry.id })).revision, 4, '没写盘')
+
+    const stale = await dispatcher.dispatch(IPC_CHANNELS.factSave, {
+      root,
+      entry: { ...entry, definition: '改过的说明。' },
+      operationId: 'op-stale',
+      expectedRevision: 3
+    })
+    assert.equal(stale.ok, false)
+    assert.equal(stale.error.code, 'REVISION_MISMATCH')
+    assert.equal(stale.error.details.currentRevision, 4)
+    assert.equal(stale.error.details.expectedRevision, 3)
+
+    const unchanged = await dispatcher.dispatch(IPC_CHANNELS.factGet, { root, id: entry.id })
+    assert.equal(unchanged.revision, 4, '冲突不覆盖')
+    assert.equal(unchanged.entry.definition, entry.definition)
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('fact:save 新条目走通道追加（不带 expectedRevision 也按 id upsert）', async () => {
+  const root = await makeRoot()
+  try {
+    const dispatcher = harness({ factStoreFor: (value) => createFactFileStore({ root: value }) })
+    const added = await dispatcher.dispatch(IPC_CHANNELS.factSave, {
+      root,
+      entry: {
+        ...validEntry(),
+        id: stableEntryId({ layer: 'worldview', domain: '停摆之城', slot: 'items', name: '第二只表' }),
+        name: '第二只表'
+      },
+      operationId: 'op-add'
+    })
+    assert.equal(added.ok, true)
+    assert.equal(added.revision, 5)
+
+    const listed = await dispatcher.dispatch(IPC_CHANNELS.factList, { root })
+    assert.equal(listed.total, 2)
   } finally {
     await rm(root, { recursive: true, force: true })
   }

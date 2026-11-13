@@ -9,8 +9,9 @@ import { NEXT_ERROR_CODES } from '../kernel/errors.mjs'
 import { stableEntryId } from '../fact/domain/pediaSchema.js'
 
 /**
- * factFileStore（S1 · WO-S1-01）用例：多文件合并、过滤、分页、坏档不整体失败、get/搜索、
- * save/remove 的「校验过验后 typed fail」。全部在 os.tmpdir() 里造假档，不碰作者真实拆解库。
+ * factFileStore（S1 · WO-S1-01 ＋ S2 写协议）用例：多文件合并、过滤、分页、坏档不整体失败、
+ * get/搜索、save/remove 真落盘（writeFactFile：upsert／删除／revision／幂等）。全部在 os.tmpdir()
+ * 里造假档，不碰作者真实拆解库。
  */
 
 function worldbookEntry({ name = '停摆的表', id, status = 'draft', aliases = ['表'], relations = [{ to: '柯秒', type: 'related' }] } = {}) {
@@ -161,37 +162,76 @@ test('factFileStore：目录不存在＝空清单＋warning（普通项目回落
   }
 })
 
-test('factFileStore：save 只校验不落盘——过验回 WRITE_PROTOCOL_NOT_STARTED，坏信封回 INVALID_ENTRY', async () => {
+test('factFileStore：save 真落盘（按 id upsert）；坏信封回 VALIDATION_FAILED 且不写盘', async () => {
   const { root, dir } = await makeFixture()
   try {
     const store = createFactFileStore({ root })
-    const before = await readFile(join(dir, 'a.json'), 'utf-8')
-    const blocked = store.save({ entry: worldbookEntry() })
-    assert.equal(blocked.ok, false)
-    assert.equal(blocked.error.code, NEXT_ERROR_CODES.WRITE_PROTOCOL_NOT_STARTED)
-    assert.match(blocked.error.message, /写协议未启动/)
+    const entry = worldbookEntry()
+    const saved = await store.save({ entry, bookId: 'a', operationId: 'save-1' })
+    assert.equal(saved.ok, true, JSON.stringify(saved))
+    assert.equal(saved.duplicate, false)
+    assert.equal(saved.revision, 8, 'a.json 原第 7 版 → 写后第 8 版')
+    assert.equal(saved.bookId, 'a', '文件 id 由调用方显式给出（拆解/<id>.json）')
 
-    const invalid = store.save({ entry: { schema: 'fact.data/v3', layer: 'worldview', name: '' } })
+    const got = store.get({ id: entry.id })
+    assert.equal(got.ok, true)
+    assert.equal(got.revision, 8, 'get 回的 revision 随写协议成立（就是最新版）')
+    assert.equal(got.entry.definition, entry.definition)
+
+    // 原文件其余字段照旧（不整份重建），只多了 revision／updatedAt 的刷新
+    const after = JSON.parse(await readFile(join(dir, 'a.json'), 'utf-8'))
+    assert.equal(after.book.title, '停摆之城')
+    assert.equal(after.entries.length, 2, 'upsert 命中同 id：替换不追加')
+
+    const invalid = await store.save({ bookId: 'a', entry: { schema: 'fact.data/v3', layer: 'worldview', name: '' }, operationId: 'save-2' })
     assert.equal(invalid.ok, false)
-    assert.equal(invalid.error.code, NEXT_ERROR_CODES.INVALID_ENTRY)
+    // S2 起写协议失败码按 FactStore 端口：VALIDATION_FAILED（S1 的 INVALID_ENTRY／
+    // WRITE_PROTOCOL_NOT_STARTED 随写协议开闸退役——写不进去就走端口码）。
+    assert.equal(invalid.error.code, 'VALIDATION_FAILED')
     assert.ok(Array.isArray(invalid.error.details.errors) && invalid.error.details.errors.length > 0)
 
-    // 不写任何文件：原文逐字节没变，条目数也没变
-    assert.equal(await readFile(join(dir, 'a.json'), 'utf-8'), before)
-    assert.equal(store.list().total, 3)
+    // 坏信封不写盘：a.json 的 revision 仍是 8
+    const untouched = JSON.parse(await readFile(join(dir, 'a.json'), 'utf-8'))
+    assert.equal(untouched.revision, 8)
   } finally {
     await rm(root, { recursive: true, force: true })
   }
 })
 
-test('factFileStore：remove 同样只到写协议闸前，不删任何文件', async () => {
-  const { root, dir } = await makeFixture()
+test('factFileStore：remove 真删除（按 id），一条都没删到回 NOT_FOUND', async () => {
+  const { root } = await makeFixture()
   try {
     const store = createFactFileStore({ root })
-    const removed = store.remove({ id: worldbookEntry().id })
-    assert.equal(removed.ok, false)
-    assert.equal(removed.error.code, NEXT_ERROR_CODES.WRITE_PROTOCOL_NOT_STARTED)
-    assert.ok((await readdir(dir)).includes('a.json'))
+    const removed = await store.remove({ id: worldbookEntry().id, bookId: 'a', operationId: 'remove-1' })
+    assert.equal(removed.ok, true, JSON.stringify(removed))
+    assert.equal(store.get({ id: worldbookEntry().id }).ok, false)
+    assert.equal(store.list().total, 2)
+
+    const missing = await store.remove({ id: 'ffffffffffff', bookId: 'a', operationId: 'remove-2' })
+    assert.equal(missing.ok, false)
+    assert.equal(missing.error.code, 'NOT_FOUND')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('factFileStore：list/get 不吐 wiki（兄弟 wiki.json 与旧信封两种来源都隔离）', async () => {
+  const { root, dir } = await makeFixture()
+  try {
+    // 存量形态：wiki 在信封里
+    const legacy = { book: { id: 'book-wiki', title: '旧信封' }, revision: 2, entries: [plotEntry({ name: '第9章·旧' })], wiki: { version: 'wiki-enrich@3' } }
+    await writeFile(join(dir, 'legacy.json'), JSON.stringify(legacy), 'utf-8')
+    // S2 形态：兄弟文件（list 必须把它当派生档跳过，不混进清单）
+    await writeFile(join(dir, 'legacy.wiki.json'), JSON.stringify({ derivedFrom: { factRevision: 1, schema: 'pinax-wiki-derived@1' }, version: 'wiki-enrich@3' }), 'utf-8')
+
+    const store = createFactFileStore({ root })
+    const listed = store.list()
+    assert.equal(listed.ok, true)
+    assert.equal(listed.total, 4, '2(a)＋1(b)＋1(legacy)；wiki.json 不算一份拆解')
+    assert.ok(listed.entries.every((entry) => !('wiki' in entry)), 'list 的条目里没有 wiki 段')
+    const got = store.get({ id: plotEntry({ name: '第9章·旧' }).id })
+    assert.equal(got.ok, true)
+    assert.ok(!('wiki' in got.entry))
   } finally {
     await rm(root, { recursive: true, force: true })
   }

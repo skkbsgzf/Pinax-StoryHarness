@@ -16,7 +16,9 @@
  */
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { existsSync, readdirSync as readdirSyncCompat } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { writeFactFile } from '../next/kernel/factFileStore.mjs'
 import { segmentText, segmentStats } from '../next/fact/domain/segmentBuckets.js'
 import { detectPerspective, isIdentityTitle } from '../next/fact/usecases/pipeline/perspectiveTitles.js'
 import { detectFirstPersonProtagonist, normalizeVocativeToName } from '../next/fact/usecases/pipeline/protagonistDetect.js'
@@ -425,6 +427,14 @@ export async function extractBook(book, index, profile, env = {}) {
     entries: compiled.entries,
     index: compiled.index,
     pruning: compiled.pruning,
+    // 数据质量读数（确定性，审计 2026-11-14 补）：事件正文能在原文逐字找到的比例。
+    // 之前这条只在旧管线里算，重跑后整字段丢失 → wiki 显示 0.0%。
+    quality: (() => {
+      const events = compiled.entries.filter((entry) => entry.layer === 'plot').flatMap((entry) => entry.events ?? [])
+      const normBody = body.replace(/\s+/gu, '')
+      const traceable = events.filter((event) => normBody.includes(String(event.content ?? '').replace(/\s+/gu, ''))).length
+      return { events: events.length, traceable, traceableRate: events.length ? Number((traceable / events.length).toFixed(4)) : null }
+    })(),
     extractor: 'fact-chain/v1'
   }
 }
@@ -448,7 +458,15 @@ async function main() {
     try {
       const result = await extractBook(book, index, profile.value)
       const outPath = join(OUT_DIR, `${id}.json`)
-      await writeFile(outPath, JSON.stringify(result, null, 2), 'utf8')
+      // 唯一写入口（S2 · WO-S2-02）：整份抽取产物走 writeFactFile（patch.entries 整份替换），
+      // revision 自增、operationId 旁路日志留痕——本脚本不再直接 writeFile 拆解真源。
+      const written = await writeFactFile({
+        root: LIB,
+        bookId: id,
+        patch: result,
+        operationId: `extract-${id}-${randomUUID()}`
+      })
+      if (!written.ok) throw new Error(`拆解文件写入失败（${written.error.code}）：${written.error.message}`)
       summary.push({
         id, title: book.title, words: book.word_count, ms: Date.now() - startedAt,
         segments: result.source.segments, blocks: result.source.blocks,
@@ -457,6 +475,7 @@ async function main() {
         relations: result.relationLanded,
         accepted: result.accepted, rejected: result.rejected.length,
         hallucinated: result.bindStats.hallucinated,
+        revision: written.revision,
         outPath
       })
       console.log(`✓ ${book.title} (${book.word_count}字) → ${result.entries.length} 条，${result.calls} 次调用，${Math.round((Date.now() - startedAt) / 1000)}s`)

@@ -128,14 +128,16 @@ export const IPC_CHANNELS = Object.freeze({
   // 载荷只认 {prompt, system?, maxTokens?}——model／cwd／command 由主进程配置钉死，渲染层指定不了；
   // 进程与凭据都在内核侧，渲染层只收 {text, usage}。不注入时如实报缺，戏剧✦层缺席不阻塞必然/命运。
   factLlmComplete: 'pinax:agent:fact:llm-complete',
-  // S0 冻结 · S1 接线：拆解数据四通道（fact.data/v3 条目从 `拆解/*.json` 直接上屏）。
+  // S0 冻结 · S1 接线 · S2 写协议收口：拆解数据四通道（fact.data/v3 条目从 `拆解/*.json` 直接上屏）。
   // 四条都**显式收 root**，不进 REQUIRED_PROJECT_CHANNELS——不依赖 session 当前项目，
   // 同一进程里可以给不同库读清单（库管理器/多窗口将来用得上）。
   //   list  → { root, layer?, slot?, status?, offset?, limit? } → { ok, entries, total, warnings }
   //   get   → { root, id } → { ok, entry, revision }
-  //   save  → { root, entry, operationId, expectedRevision? } → S1 阶段 typed fail WRITE_PROTOCOL_NOT_STARTED
+  //   save  → { root, entry, operationId, expectedRevision? } → { ok, entry, revision, duplicate }
   //   search→ { root, q, layer?, limit? } → { ok, hits:[{id,name,score,snippet}] }
-  // 成功载荷是扁平的（不套 value），与 S0 契约表逐字一致；失败仍走 fail() 的 {ok:false,error}。
+  // S2 起 save 真落盘：转调 writeFactFile（按 entry.id upsert，tmp＋rename 原子替换、revision 自增、
+  // operationId 幂等）；operationId 缺失回 OPERATION_ID_REQUIRED，expectedRevision 不符回 REVISION_MISMATCH。
+  // 成功载荷是扁平的（不套 value），与 S0 契约表逐字一致；失败仍走 {ok:false, error:{code,message,details}}。
   factList: 'pinax:agent:fact:list',
   factGet: 'pinax:agent:fact:get',
   factSave: 'pinax:agent:fact:save',
@@ -751,7 +753,8 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
       case IPC_CHANNELS.factSave: {
         const store = factStoreForRequest(input)
         if (typeof store?.save !== 'function') return store
-        // S1 阶段 store.save 只校验信封，过验后如实回 WRITE_PROTOCOL_NOT_STARTED（写协议在 S2）。
+        // S2 起 store.save 真落盘（writeFactFile：upsert＋revision 自增＋operationId 幂等）。
+        // operationId 的必填校验在写协议里做（OPERATION_ID_REQUIRED），通道层不代填。
         return store.save({
           entry: input.entry,
           operationId: input.operationId,

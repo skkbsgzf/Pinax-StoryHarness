@@ -12,8 +12,10 @@
  *
  * 用法：node devtools/wiki-enrich-run.mjs --lib=D:/Qbook/短篇选题库 --books=<id>[,<id>]
  */
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { writeFactFile } from '../next/kernel/factFileStore.mjs'
 import { dispatchDotsCompletion } from '../next/runtime/factLlmService.mjs'
 import { derivePseudoChapters, hasRealChapters } from './lib/pseudoChapters.mjs'
 
@@ -485,7 +487,17 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     characterProfiles,
     failures
   }
-  await writeFile(join(lib, '拆解', `${id}.json`), JSON.stringify(result, null, 2), 'utf8')
+  // 唯一写入口（S2 · WO-S2-02/03）：只补 wiki 一栏，主 JSON 的 entries/book 一字不动；
+  // writeFactFile 把 wiki 搬进兄弟 `<id>.wiki.json`（derivedFrom 记写前 revision），revision 自增。
+  // expectedRevision 用读到的版本——期间别的写者推进过就 REVISION_MISMATCH，不覆盖不合并。
+  const written = await writeFactFile({
+    root: lib,
+    bookId: id,
+    patch: { wiki: result.wiki },
+    operationId: `wiki-enrich-${id}-${randomUUID()}`,
+    expectedRevision: Number.isSafeInteger(result.revision) ? result.revision : undefined
+  })
+  if (!written.ok) throw new Error(`wiki 写入失败（${written.error.code}）：${written.error.message}`)
 
   const slotsLanded = [gimmick, plotDesign, intro, style].filter(Boolean).length
   return {
