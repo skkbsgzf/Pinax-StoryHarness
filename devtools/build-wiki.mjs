@@ -290,22 +290,32 @@ function buildBook(id, ds) {
   // 词条（world 层；当前为空）
   const terms = deriveTerms(result.entries, plots, wiki)
 
-  // 关系图：节点 = 人物（+词条）；边 = 去重（无向对），两端都已知才收
-  const knownNames = new Set([...characters.map((c) => c.name), ...terms.map((t) => t.name)])
+  // 知识图谱（作者 2026-11-14：一等公民，人物/事件/场景/道具四类都要）
+  // 节点：人物（半径∝出场）＋事件（半径∝剧情点）＋场景/道具（半径∝出现章数）
+  // 边：关系窄窗（实线）＋同场共现（浅线）＋**事件↔在场人物/场景/道具**（结构性边，权重=出现次数）
+  const pairKey = (a, b) => [a, b].sort().join('|')
+  const unitLabel = usePseudo ? '节' : '章'
+  const eventNodeId = (no) => `事件·第${no}${unitLabel}`
   const graphEdges = []
   const edgeSeen = new Set()
+  const addEdge = (a, b, type, weight) => {
+    if (a === b) return
+    const key = pairKey(a, b)
+    if (edgeSeen.has(key)) return
+    edgeSeen.add(key)
+    graphEdges.push({ a, b, type, weight })
+  }
+
+  // ① 关系窄窗（两端都已知才收）
+  const knownNames = new Set([...characters.map((c) => c.name), ...terms.map((t) => t.name)])
   for (const plot of plots) {
     for (const edge of plot.relations ?? []) {
       if (!knownNames.has(edge.from) || !knownNames.has(edge.to)) continue
-      const pair = [edge.from, edge.to].sort().join('|')
-      if (edgeSeen.has(pair)) continue
-      edgeSeen.add(pair)
-      graphEdges.push({ a: edge.from, b: edge.to, type: edge.type })
+      addEdge(edge.from, edge.to, edge.type)
     }
   }
-  // 同场边（确定性）：两人同段共现 ≥2 次即连边。关系窄窗覆盖低（假千金 50 段才 4 条边），
-  // 单靠它图必断——同场共现是 plot.who 里现成的确定性数据（作者 2026-11-13「图为什么断成这样」）。
-  const pairKey = (a, b) => [a, b].sort().join('|')
+
+  // ② 同场共现（确定性，≥2 次）
   const coCount = new Map()
   for (const plot of plots) {
     const who = [...new Set((plot.who ?? []).filter((name) => knownNames.has(name)))]
@@ -317,19 +327,58 @@ function buildBook(id, ds) {
     }
   }
   const related = new Set(graphEdges.map((edge) => pairKey(edge.a, edge.b)))
-  const coEdges = [...coCount.entries()]
-    .filter(([key, count]) => count >= 2 && !related.has(key))
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 60)
-  for (const [key, count] of coEdges) {
+  for (const [key, count] of [...coCount.entries()].filter(([key, count]) => count >= 2 && !related.has(key)).sort((a, b) => b[1] - a[1]).slice(0, 60)) {
     const [a, b] = key.split('|')
-    graphEdges.push({ a, b, type: '同场', weight: count })
+    addEdge(a, b, '同场', count)
   }
+
+  // ③ 事件 ↔ 人物/场景/道具（结构性边：事件是图谱的一等公民，靠它把场景道具接进来）
+  const eventNodes = []
+  const sceneTermByName = new Map(terms.filter((t) => t.kind === '场景').map((t) => [t.name, t]))
+  const itemTermByName = new Map(terms.filter((t) => t.kind === '道具').map((t) => [t.name, t]))
+  const we = wiki?.worldElements ?? null
+  for (const chapter of chapters) {
+    const chapterPlots = byChapter.get(chapter.no) ?? []
+    // 该节在场人物（按出现次数加权）
+    const presence = new Map()
+    for (const plot of chapterPlots) {
+      for (const who of plot.who ?? []) if (knownNames.has(who)) presence.set(who, (presence.get(who) ?? 0) + 1)
+    }
+    // 该节涉及场景/道具（worldElements 的 chapters 列表）
+    const scenes = (we?.scenes ?? []).filter((scene) => scene.chapters.includes(chapter.no))
+    const items = (we?.items ?? []).filter((item) => item.chapters.includes(chapter.no))
+    const beats = wiki?.chapterSummaries?.find((s) => s.chapter === chapter.no)?.beats ?? 1
+    const nodeId = eventNodeId(chapter.no)
+    eventNodes.push({
+      id: nodeId,
+      kind: 'event',
+      r: 5 + Math.min(6, beats),
+      label: chapter.title,
+      no: chapter.no
+    })
+    for (const [name, count] of presence) addEdge(nodeId, name, '在场', count)
+    for (const scene of scenes) {
+      const target = sceneTermByName.get(scene.name)
+      if (target) addEdge(nodeId, target.name, '发生于', 1)
+    }
+    for (const item of items) {
+      const target = itemTermByName.get(item.name)
+      if (target) addEdge(nodeId, target.name, '使用', 1)
+    }
+  }
+
   const maxApp = Math.max(...characters.map((c) => c.appearances), 1)
+  const maxWeight = Math.max(...terms.map((t) => t.mentions), 1)
   const charGraph = {
     nodes: [
-      ...characters.map((c) => ({ id: c.name, kind: 'person', r: 6 + Math.round(Math.sqrt(c.appearances / maxApp) * 10) })),
-      ...terms.map((t) => ({ id: t.name, kind: 'term', r: 7 }))
+      ...characters.map((c) => ({ id: c.name, kind: 'person', r: 6 + Math.round(Math.sqrt(c.appearances / maxApp) * 10), label: c.name })),
+      ...eventNodes,
+      ...terms.map((t) => ({
+        id: t.name,
+        kind: t.kind === '场景' ? 'scene' : t.kind === '道具' ? 'item' : 'term',
+        r: 6 + Math.round(Math.sqrt((t.mentions ?? 1) / maxWeight) * 7),
+        label: t.name
+      }))
     ],
     edges: graphEdges
   }

@@ -853,123 +853,248 @@ function vTerm(name) {
 }
 
 /* ===== 关系图谱（手写力导向，对齐原版） ===== */
-function catColor(kind) { return kind === 'person' ? C_ACCENT : C_WARN; }
+/* ===== 知识图谱（四类一等公民：人物/事件/场景/道具） ===== */
+var KIND_COLOR = { person: C_ACCENT, event: C_SUCCESS, scene: '#8b5cf6', item: C_WARN, term: C_MUTED };
+var KIND_LABEL = { person: '人物', event: '事件', scene: '场景', item: '道具', term: '设定' };
+var KIND_ORDER = ['person', 'event', 'scene', 'item', 'term'];
+function catColor(kind) { return KIND_COLOR[kind] || C_MUTED; }
 
+/**
+ * 力导向布局（重写版，作者 2026-11-14 反馈「前端有问题」）：
+ *   · 分层初始位置：人物靠内环、事件中环、场景/道具外环——避免孤立点散成堆；
+ *   · 斥力按度数缩放：枢纽节点（如主角、高频场景）不再被推到边缘；
+ *   · 边弹簧按类型调刚度：结构性边（在场/发生于/使用）短，同场边长；
+ *   · 标签智能避让：按节点度数排序，度数高的优先占位，重叠则换到下方/左侧；
+ *   · 孤立节点不画（无边的场景/道具在列表视图看，图上只画有连接的）。
+ */
 function forceLayout(svg, nodes, edges, opt) {
   opt = opt || {};
-  var W = svg.clientWidth || 900, H = svg.clientHeight || 460;
+  var W = svg.clientWidth || 900, H = svg.clientHeight || 520;
   svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
   while (svg.firstChild) svg.removeChild(svg.firstChild);
   if (!nodes.length) {
-    var t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    t.setAttribute('x', W / 2); t.setAttribute('y', H / 2); t.setAttribute('text-anchor', 'middle');
-    t.setAttribute('fill', C_MUTED); t.setAttribute('font-size', '13'); t.textContent = '（暂无可绘制的节点）';
-    svg.appendChild(t); return;
+    var empty = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    empty.setAttribute('x', W / 2); empty.setAttribute('y', H / 2); empty.setAttribute('text-anchor', 'middle');
+    empty.setAttribute('fill', C_MUTED); empty.setAttribute('font-size', '13'); empty.textContent = '（暂无可绘制的节点）';
+    svg.appendChild(empty); return;
   }
   var NS = 'http://www.w3.org/2000/svg';
   var map = {};
   nodes.forEach(function (n) { map[n.id] = n; });
   edges = edges.filter(function (e) { return map[e.a] && map[e.b]; });
+
+  // 度数统计（决定斥力与标签优先级）
+  var degree = {};
+  edges.forEach(function (e) { degree[e.a] = (degree[e.a] || 0) + 1; degree[e.b] = (degree[e.b] || 0) + 1; });
   var focus = opt.focus;
-  nodes.forEach(function (n, i) {
-    var a = (i / nodes.length) * Math.PI * 2;
-    n.x = W / 2 + Math.cos(a) * (focus ? 90 : 160) + Math.random() * 40;
-    n.y = H / 2 + Math.sin(a) * (focus ? 70 : 130) + Math.random() * 40;
-    n.vx = 0; n.vy = 0;
+
+  // 分层初始位置：人物内环 → 事件中环 → 场景/道具外环
+  var rings = { person: 0.34, event: 0.62, scene: 0.92, item: 0.92, term: 0.92 };
+  var groups = {};
+  nodes.forEach(function (n) { (groups[n.kind] = groups[n.kind] || []).push(n); });
+  var focusRatio = focus ? 0.45 : 1;
+  Object.keys(groups).forEach(function (kind) {
+    var ring = (rings[kind] || 0.8) * Math.min(W, H) * 0.46 * focusRatio;
+    groups[kind].forEach(function (n, i) {
+      var angle = (i / groups[kind].length) * Math.PI * 2 + (kind === 'event' ? 0.3 : kind === 'scene' ? 0.7 : 0);
+      n.x = W / 2 + Math.cos(angle) * ring + (Math.random() - 0.5) * 24;
+      n.y = H / 2 + Math.sin(angle) * ring * 0.82 + (Math.random() - 0.5) * 24;
+      n.vx = 0; n.vy = 0;
+    });
   });
-  var iters = nodes.length > 200 ? 80 : 140;
+
+  var iters = nodes.length > 120 ? 260 : 320;
+  var stiffness = { '在场': 0.055, '发生于': 0.075, '使用': 0.075, '同场': 0.008 };
   for (var it = 0; it < iters; it++) {
+    var cooling = 1 - it / iters * 0.7;
+    // 斥力：度数越高斥力越弱（枢纽留在中心）；节点越多整体加强
+    var repulseBase = (nodes.length > 150 ? 2600 : 1900) * cooling;
     for (var i = 0; i < nodes.length; i++) {
       var a = nodes[i];
       for (var j = i + 1; j < nodes.length; j++) {
         var b = nodes[j];
-        var dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
+        var dx = a.x - b.x, dy = a.y - b.y;
+        var d2 = dx * dx + dy * dy;
         if (d2 < 1) { d2 = 1; dx = Math.random() - 0.5; dy = Math.random() - 0.5; }
-        var f = (nodes.length > 150 ? 500 : 900) / d2, d = Math.sqrt(d2);
-        a.vx += dx / d * f * 0.008; a.vy += dy / d * f * 0.008;
-        b.vx -= dx / d * f * 0.008; b.vy -= dy / d * f * 0.008;
+        var d = Math.sqrt(d2);
+        var da = 1 + (degree[a.id] || 0) * 0.35, db = 1 + (degree[b.id] || 0) * 0.35;
+        var f = repulseBase / (d2 * Math.max(1, Math.min(da, db) * 0.55));
+        a.vx += dx / d * f; a.vy += dy / d * f;
+        b.vx -= dx / d * f; b.vy -= dy / d * f;
       }
     }
+    // 弹簧：结构性边短（事件↔人/场景/道具），同场边长
     edges.forEach(function (e) {
       var a2 = map[e.a], b2 = map[e.b];
       if (!a2 || !b2) return;
-      var dx = b2.x - a2.x, dy = b2.y - a2.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
-      var f2 = (d - 60) * 0.02;
-      a2.vx += dx / d * f2; b2.vx -= dx / d * f2;
-      a2.vy += dy / d * f2; b2.vy -= dy / d * f2;
+      var k = stiffness[e.type] ?? 0.02;
+      var rest = e.type === '同场' ? 150 : 84;
+      var dx = b2.x - a2.x, dy = b2.y - a2.y;
+      var d = Math.sqrt(dx * dx + dy * dy) || 1;
+      var f2 = (d - rest) * k * cooling;
+      a2.vx += dx / d * f2; a2.vy += dy / d * f2;
+      b2.vx -= dx / d * f2; b2.vy -= dy / d * f2;
+    });
+    // 向心力（防止整体漂移散开）
+    nodes.forEach(function (n) {
+      n.vx += (W / 2 - n.x) * 0.0016;
+      n.vy += (H / 2 - n.y) * 0.0016;
+      n.vx *= 0.62; n.vy *= 0.62;
+      n.x += n.vx; n.y += n.vy;
     });
   }
+  // 中心区最小间距（作者 2026-11-14「标签叠在一起」）：布局后做一轮硬分离，
+  // 只对半径大或度数高的节点生效——把枢纽拉开，事件小点允许靠近。
+  for (var pass = 0; pass < 24; pass++) {
+    var moved = false;
+    for (var m = 0; m < nodes.length; m++) {
+      var na = nodes[m];
+      if ((degree[na.id] || 0) < 3 && na.kind !== 'person') continue;
+      for (var q = m + 1; q < nodes.length; q++) {
+        var nb = nodes[q];
+        if ((degree[nb.id] || 0) < 3 && nb.kind !== 'person') continue;
+        var minGap = (na.r || 7) + (nb.r || 7) + 22;
+        var ddx = nb.x - na.x, ddy = nb.y - na.y;
+        var dist = Math.sqrt(ddx * ddx + ddy * ddy) || 0.1;
+        if (dist >= minGap) continue;
+        var push = (minGap - dist) / 2;
+        var ux = ddx / dist, uy = ddy / dist;
+        na.x -= ux * push; na.y -= uy * push;
+        nb.x += ux * push; nb.y += uy * push;
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+
+  var pad = 26;
   nodes.forEach(function (n) {
-    n.x = Math.max(30, Math.min(W - 30, n.x));
-    n.y = Math.max(24, Math.min(H - 24, n.y));
+    n.x = Math.max(pad + 30, Math.min(W - pad - 30, n.x));
+    n.y = Math.max(pad + 12, Math.min(H - pad - 12, n.y));
   });
+
+  // 边：按类型区分配色/虚实/粗细
   edges.forEach(function (e) {
     var a2 = map[e.a], b2 = map[e.b];
     if (!a2 || !b2) return;
     var line = document.createElementNS(NS, 'line');
     line.setAttribute('x1', a2.x); line.setAttribute('y1', a2.y);
     line.setAttribute('x2', b2.x); line.setAttribute('y2', b2.y);
-    line.setAttribute('stroke', e.type === '同场' ? C_BORDER : C_MUTED);
-    line.setAttribute('stroke-width', '1.2');
+    var structural = e.type === '在场' || e.type === '发生于' || e.type === '使用';
+    line.setAttribute('stroke', structural ? '#c7d2e8' : e.type === '同场' ? '#dbe4f0' : '#9fb0cc');
+    line.setAttribute('stroke-width', structural ? String(0.8 + Math.min(2.4, (e.weight || 1) * 0.35)) : '1');
+    if (e.type === '同场') line.setAttribute('stroke-dasharray', '3 3');
     var tip = document.createElementNS(NS, 'title');
-    tip.textContent = (e.type || '关联') + (e.weight ? ' · ' + e.weight + ' 段同场' : '');
+    tip.textContent = (e.type || '关联') + (e.weight ? ' · ' + e.weight : '');
     line.appendChild(tip);
     svg.appendChild(line);
   });
-  // 节点视觉升级：径向渐变球体（高光）＋白描边＋标签带底衬（避免压线）
+
+  // 节点渐变定义（四类）
   var defs = document.createElementNS(NS, 'defs');
-  ['person', 'term'].forEach(function (kind, index) {
+  KIND_ORDER.forEach(function (kind) {
+    if (!KIND_COLOR[kind]) return;
     var grad = document.createElementNS(NS, 'radialGradient');
     grad.setAttribute('id', 'ng-' + kind);
     grad.setAttribute('cx', '34%'); grad.setAttribute('cy', '30%'); grad.setAttribute('r', '72%');
-    var base = kind === 'person' ? C_ACCENT : C_WARN;
-    var stop1 = document.createElementNS(NS, 'stop');
-    stop1.setAttribute('offset', '0'); stop1.setAttribute('stop-color', mixWhite(base, 0.42));
-    var stop2 = document.createElementNS(NS, 'stop');
-    stop2.setAttribute('offset', '1'); stop2.setAttribute('stop-color', base);
-    grad.appendChild(stop1); grad.appendChild(stop2);
+    var base = KIND_COLOR[kind];
+    var s1 = document.createElementNS(NS, 'stop');
+    s1.setAttribute('offset', '0'); s1.setAttribute('stop-color', mixWhite(base, 0.45));
+    var s2 = document.createElementNS(NS, 'stop');
+    s2.setAttribute('offset', '1'); s2.setAttribute('stop-color', base);
+    grad.appendChild(s1); grad.appendChild(s2);
     defs.appendChild(grad);
   });
   svg.appendChild(defs);
+
+  // 标签避让：度数高者优先占位，检测重叠后换位置
+  var placed = [];
+  var labelOrder = nodes.slice().sort(function (x, y) { return (degree[y.id] || 0) - (degree[x.id] || 0); });
+  var labelPos = {};
+  labelOrder.forEach(function (n) {
+    var text = n.id;
+    var estW = text.length * 7.2;
+    // 候选位置优先「径向朝外」（相对画布中心的法线方向）——中心密集区标签才不会压在一起
+    var vx = n.x - W / 2, vy = n.y - H / 2;
+    var vlen = Math.sqrt(vx * vx + vy * vy) || 1;
+    var off = (n.r || 7) + 9;
+    var rdx = vx / vlen * off, rdy = vy / vlen * off;
+    var radialAnchor = Math.abs(vx) < vlen * 0.35 ? 'middle' : (vx > 0 ? 'start' : 'end');
+    var candidates = [
+      { dx: rdx, dy: rdy + 4, anchor: radialAnchor },
+      { dx: 0, dy: -(n.r || 7) - 8, anchor: 'middle' },
+      { dx: 0, dy: (n.r || 7) + 15, anchor: 'middle' },
+      { dx: (n.r || 7) + 8, dy: 4, anchor: 'start' },
+      { dx: -(n.r || 7) - 8, dy: 4, anchor: 'end' }
+    ];
+    var best = candidates[0];
+    for (var c = 0; c < candidates.length; c++) {
+      var cand = candidates[c];
+      var cx = n.x + cand.dx, cy = n.y + cand.dy;
+      var x1 = cand.anchor === 'middle' ? cx - estW / 2 : cand.anchor === 'start' ? cx : cx - estW;
+      var box = { x1: x1, x2: x1 + estW, y1: cy - 8, y2: cy + 3 };
+      var hit = placed.some(function (p) { return !(box.x2 < p.x1 || box.x1 > p.x2 || box.y2 < p.y1 || box.y1 > p.y2); });
+      if (!hit) { best = cand; placed.push(box); break; }
+      if (c === candidates.length - 1) placed.push(box); // 都撞就接受最后一个
+    }
+    labelPos[n.id] = { dx: best.dx, dy: best.dy, anchor: best.anchor };
+  });
+
+  // 节点
   nodes.forEach(function (n) {
     var g = document.createElementNS(NS, 'g');
-    // 光晕（密集图里帮助分离节点）
     var halo = document.createElementNS(NS, 'circle');
     halo.setAttribute('cx', n.x); halo.setAttribute('cy', n.y); halo.setAttribute('r', (n.r || 7) + 5);
-    halo.setAttribute('fill', n.kind === 'person' ? C_ACCENT : C_WARN);
-    halo.setAttribute('fill-opacity', '0.10');
+    halo.setAttribute('fill', catColor(n.kind)); halo.setAttribute('fill-opacity', '0.10');
     g.appendChild(halo);
     var c = document.createElementNS(NS, 'circle');
     c.setAttribute('cx', n.x); c.setAttribute('cy', n.y); c.setAttribute('r', n.r || 7);
     c.setAttribute('fill', 'url(#ng-' + n.kind + ')');
     c.setAttribute('stroke', '#fff'); c.setAttribute('stroke-width', '1.6');
-    if (focus === n.id) { c.setAttribute('stroke', C_FG); c.setAttribute('stroke-width', '2.5'); }
+    if (n.kind === 'event') c.setAttribute('stroke-dasharray', '2.5 1.5');
+    if (focus === n.id) { c.setAttribute('stroke', '#0b1220'); c.setAttribute('stroke-width', '2.6'); }
     g.appendChild(c);
     var label = document.createElementNS(NS, 'text');
-    var labelY = n.y - (n.r || 7) - 7;
-    label.setAttribute('x', n.x); label.setAttribute('y', labelY);
-    label.setAttribute('text-anchor', 'middle'); label.setAttribute('font-size', '11');
-    label.setAttribute('font-weight', '600');
-    label.setAttribute('fill', C_FG);
+    var pos = labelPos[n.id] || { dx: 0, dy: -(n.r || 7) - 8, anchor: 'middle' };
+    label.setAttribute('x', n.x + pos.dx); label.setAttribute('y', n.y + pos.dy);
+    label.setAttribute('text-anchor', pos.anchor);
+    label.setAttribute('font-size', n.kind === 'event' ? '10' : '11');
+    label.setAttribute('font-weight', n.kind === 'person' ? '600' : '500');
+    label.setAttribute('fill', n.kind === 'event' ? '#0f766e' : C_FG);
     label.setAttribute('paint-order', 'stroke');
     label.setAttribute('stroke', '#fff'); label.setAttribute('stroke-width', '3');
     label.setAttribute('stroke-linejoin', 'round');
-    label.textContent = n.id;
+    // 事件节点太密（脱轨 38 个）：默认只显示圆点，hover 时显形——否则标签挤成一团遮住中心人物。
+    var denseEvents = nodes.filter(function (x) { return x.kind === 'event'; }).length > 12;
+    if (n.kind === 'event' && denseEvents && focus !== n.id) label.setAttribute('opacity', '0');
+    label.textContent = n.kind === 'event' && n.label ? n.label : n.id;
     g.appendChild(label);
+    var tip = document.createElementNS(NS, 'title');
+    tip.textContent = (KIND_LABEL[n.kind] || '') + ' · ' + n.id + (degree[n.id] ? `（${degree[n.id]} 条关联）` : '');
+    g.appendChild(tip);
     g.style.cursor = 'pointer';
-    g.addEventListener('mouseenter', function () { halo.setAttribute('fill-opacity', '0.24'); c.setAttribute('r', (n.r || 7) + 1.5); });
-    g.addEventListener('mouseleave', function () { halo.setAttribute('fill-opacity', '0.10'); c.setAttribute('r', n.r || 7); });
+    g.addEventListener('mouseenter', function () { halo.setAttribute('fill-opacity', '0.26'); c.setAttribute('r', (n.r || 7) + 1.8); label.setAttribute('opacity', '1'); });
+    g.addEventListener('mouseleave', function () { halo.setAttribute('fill-opacity', '0.10'); c.setAttribute('r', n.r || 7); if (n.kind === 'event' && denseEvents && focus !== n.id) label.setAttribute('opacity', '0'); });
     g.addEventListener('click', function (ev) {
       ev.stopPropagation();
-      if (focus === n.id) go(n.kind === 'person' ? 'char' : 'term', n.id);
-      else drawRelationGraph(n.id);
+      if (focus === n.id) {
+        if (n.kind === 'person') go('char', n.id);
+        else if (n.kind === 'event' && n.no) go('chapter', n.no);
+        else go('term', n.id);
+      } else drawRelationGraph(n.id);
     });
     svg.appendChild(g);
   });
 }
 
 function vGraph() {
-  var h = '<h1>关系图谱</h1><div class="meta">点节点聚焦邻域 → 再点同节点进人物页；点空白复位全图。共 ' + DETAIL.charGraph.nodes.length + ' 节点 / ' + DETAIL.charGraph.edges.length + ' 边（实线=关系，浅线=同场≥2段，悬停可看）</div>';
+  var nodes = DETAIL.charGraph.nodes;
+  var edges = DETAIL.charGraph.edges;
+  var counts = {};
+  nodes.forEach(function (n) { counts[n.kind] = (counts[n.kind] || 0) + 1; });
+  var h = '<h1>知识图谱</h1><div class="meta">四类一等公民：'
+    + KIND_ORDER.filter(function (k) { return counts[k]; }).map(function (k) { return KIND_LABEL[k] + ' ' + counts[k]; }).join(' · ')
+    + ' · 边 ' + edges.length + ' 条（实线=关系/结构，虚线=同场共现）· 点节点聚焦邻域，再点进详情</div>';
   h += '<svg id="relSvg" class="relation"></svg><div id="relLegend" class="legend"></div>';
   return h;
 }
@@ -981,25 +1106,32 @@ function drawRelationGraph(focus) {
   var nodes = DETAIL.charGraph.nodes;
   var edges = DETAIL.charGraph.edges;
   var meta = document.querySelector('#view .meta');
-  var fullMeta = '点节点聚焦邻域 → 再点同节点进人物页；点空白复位全图。共 ' + DETAIL.charGraph.nodes.length + ' 节点 / ' + DETAIL.charGraph.edges.length + ' 边（实线=关系，浅线=同场≥2段，悬停可看）';
+  var fullMeta = meta ? meta.innerHTML : '';
   if (focus) {
     var nb = new Set([focus]);
     edges.forEach(function (e) { if (e.a === focus) nb.add(e.b); if (e.b === focus) nb.add(e.a); });
     nodes = nodes.filter(function (n) { return nb.has(n.id); });
     edges = edges.filter(function (e) { return nb.has(e.a) && nb.has(e.b); });
-    if (meta) meta.innerHTML = '聚焦「' + escHtml(focus) + '」的邻域（' + nodes.length + ' 节点 / ' + edges.length + ' 边）——再点同节点进人物页，点空白复位';
+    if (meta) meta.innerHTML = '聚焦「' + escHtml(focus) + '」的邻域（' + nodes.length + ' 节点 / ' + edges.length + ' 边）——再点同节点进详情，点空白复位';
   } else {
-    var deg = {};
-    edges.forEach(function (e) { deg[e.a] = (deg[e.a] || 0) + 1; deg[e.b] = (deg[e.b] || 0) + 1; });
-    nodes = nodes.slice().sort(function (a, b) { return (deg[b.id] || 0) - (deg[a.id] || 0); }).slice(0, 70);
-    edges = edges.filter(function (e) { return nodes.some(function (n) { return n.id === e.a; }) && nodes.some(function (n) { return n.id === e.b; }); });
+    var degree = {};
+    edges.forEach(function (e) { degree[e.a] = (degree[e.a] || 0) + 1; degree[e.b] = (degree[e.b] || 0) + 1; });
+    // 只画有连接的节点（孤立节点在列表里看）；枢纽优先保留，上限 90
+    nodes = nodes.filter(function (n) { return degree[n.id]; })
+      .sort(function (a, b) { return (degree[b.id] || 0) - (degree[a.id] || 0); })
+      .slice(0, 90);
+    var keep = new Set(nodes.map(function (n) { return n.id; }));
+    edges = edges.filter(function (e) { return keep.has(e.a) && keep.has(e.b); });
     if (meta) meta.innerHTML = fullMeta;
-    var lg = document.getElementById('relLegend');
-    if (lg) lg.innerHTML = '<span><span class="dot" style="background:' + C_ACCENT + '"></span>人物</span><span><span class="dot" style="background:' + C_WARN + '"></span>设定/物品</span>';
   }
-  forceLayout(svg, nodes, edges.map(function (e) { return { a: e.a, b: e.b, type: e.type, weight: e.weight }; }), { focus: focus || null });
+  var lg = document.getElementById('relLegend');
+  if (lg) {
+    lg.innerHTML = KIND_ORDER.map(function (k) {
+      return '<span><span class="dot" style="background:' + KIND_COLOR[k] + '"></span>' + KIND_LABEL[k] + '</span>';
+    }).join('') + '<span style="margin-left:14px;color:' + C_MUTED + '">虚线=同场共现 · 事件节点点开进单章</span>';
+  }
+  forceLayout(svg, nodes, edges, { focus: focus || null });
 }
-
 /* ===== 主渲染分发 ===== */
 function renderMain() {
   var v = document.getElementById('view');
