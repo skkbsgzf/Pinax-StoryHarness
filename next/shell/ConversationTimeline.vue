@@ -2,7 +2,8 @@
 import { computed } from 'vue'
 import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import { describeTrailEvent } from './agentSessions.mjs'
-import { TIMELINE_ICON_NAMES, timelineSummary } from './conversationTimeline.mjs'
+import { TIMELINE_ICON_NAMES, timelineElapsed, timelineSummary } from './conversationTimeline.mjs'
+import { humanizeError } from './errorWords.mjs'
 
 /**
  * 消息内处理时间线（批次77 任务4）：**只摆**。
@@ -24,13 +25,36 @@ const props = defineProps({
   flat: { type: Boolean, default: false },
   expanded: { type: Boolean, default: false },
   /** 折叠态内存 Map 的键。 */
-  path: { type: String, default: '' }
+  path: { type: String, default: '' },
+  /**
+   * 〔P9 · 作者 2026-11-13 UX 审计裁定〕失败那一问的原文错误。
+   * 主文案在 AssistantDialog 里已翻成人话；原文只放在这一层「过程」折叠里，供反馈开发者。
+   */
+  errorText: { type: String, default: '' }
 })
 
 const emit = defineEmits(['toggle'])
 
 const summaryLine = computed(() => timelineSummary(props.trail, { streaming: props.streaming }))
 const hasThinking = computed(() => props.blocks.some((block) => block.kind === 'thinking'))
+
+/**
+ * 〔P9 · E3〕收工后不足 0.1 秒的那行「已处理（不足 0.1 秒）」是零信息量的机制话，整行不摆；
+ * 读数 ≥0.1 秒才保留。流中那一句是状态语，照旧显示。
+ * `timelineElapsed.seconds` 已按 0.1 秒取整，所以这里读的是屏上真会出现的那个数。
+ */
+const showSummary = computed(() => {
+  if (props.streaming) return true
+  const elapsed = timelineElapsed(props.trail)
+  return !(elapsed.hasTimeDiff && elapsed.seconds !== null && elapsed.seconds < 0.1)
+})
+
+/** 错误块的标题先过人话层：原始码／英文错误不占块头（原文仍在下面的过程行里）。 */
+function headlineOf(block) {
+  if (!block) return ''
+  if (block.state !== 'error') return block.headline
+  return humanizeError(block.headline).title || block.headline
+}
 
 /**
  * 壳子选型（工单第 4 条）：**同一叠块，两种摆法**——
@@ -64,8 +88,9 @@ function onToggle(event) {
 
 <template>
   <div class="nx-timeline" :class="{ 'is-flat': flat }" data-test="conversation-timeline">
-    <!-- 顶部那一条状态行：收工后合成「已处理 N 秒 · 工具累计 Xms」；流中就报实时那一句。 -->
-    <p class="nx-timeline__summary" data-test="timeline-summary">{{ summaryLine }}</p>
+    <!-- 顶部那一条状态行：收工后合成「已处理 N 秒 · 工具累计 Xms」；流中就报实时那一句。
+         〔P9 · E3〕不足 0.1 秒时整行不摆（showSummary）。 -->
+    <p v-if="showSummary" class="nx-timeline__summary" data-test="timeline-summary">{{ summaryLine }}</p>
 
     <!-- 块的那一叠只有一份：收工后套原生 details（缺省收起），在途那问直接平铺（换壳不换内容）。 -->
     <component :is="shell" class="nx-timeline__body" :class="shellClass" v-bind="shellProps" @toggle="onToggle">
@@ -73,6 +98,9 @@ function onToggle(event) {
         <summary><WorkbenchIcon name="chevron-down" :size="12" />过程（{{ blocks.length }} 段）</summary>
         <p class="nx-timeline__fold-hint">展开看这一问真实跑过哪几步；默认收起，屏上只留问—答主线。</p>
       </template>
+
+      <!-- 〔P9〕失败那一问的原文错误只活在这一层折叠里：主文案说人话，技术原文留给反馈开发者。 -->
+      <p v-if="errorText" class="nx-timeline__error-raw" data-test="timeline-error-raw">{{ errorText }}</p>
 
       <ol v-if="blocks.length" class="nx-timeline__list">
       <li
@@ -84,7 +112,7 @@ function onToggle(event) {
       >
         <p class="nx-timeline__head">
           <WorkbenchIcon v-if="iconName(block)" :name="iconName(block)" :size="12" />
-          <span class="nx-timeline__title">{{ block.headline }}</span>
+          <span class="nx-timeline__title">{{ headlineOf(block) }}</span>
           <span v-if="block.kind === 'tool-group'" class="nx-timeline__count">{{ block.items.length }} 项</span>
         </p>
 
@@ -154,6 +182,8 @@ function onToggle(event) {
 .authoring-knowledge__trail-stage { flex: none; color: var(--text-secondary); }
 .authoring-knowledge__trail-detail { min-width: 0; color: var(--text-muted); font-variant-numeric: tabular-nums; word-break: break-word; }
 .nx-timeline__note { margin: 2px 0 0; font-size: var(--nx-fs-2xs); line-height: 1.6; color: var(--text-muted); }
+/* 〔P9〕技术原文行：只在过程折叠里出现，小一号、可折行，不抢主线的读。 */
+.nx-timeline__error-raw { margin: 2px 0 0; padding: 4px 6px; border-radius: var(--nx-radius-xs); background: color-mix(in srgb, var(--archive-paper) 70%, transparent); color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.6; word-break: break-word; }
 /* 折叠那一层：批次29 的类名留在 details 上（别处的 querySelector 认它），度量也照批次29 那条抄——
    父组件的 scoped 样式进不了子组件内部，所以这一层的 summary 长相在本文件里再讲一遍，词与数不变。 */
 .nx-timeline__body { margin: 2px 0 0; color: var(--text-muted); font-size: var(--nx-fs-2xs); }

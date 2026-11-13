@@ -48,6 +48,12 @@ body {
   --nx-radius-xs: 6px; /* 小号图标按钮（28px 级） */
   --nx-radius-lg: 14px; /* 〔P6〕卡片与弹窗内大块面（demo --radius-md 14px 映射） */
   --nx-radius-pill: 9999px; /* 〔P6 按 demo 对齐〕胶囊档：蓝链 .tag 皮、类型胶囊与药丸钮共用 */
+  /* 〔P9 · S3-04 看板栅格收敛〕世界书三栏宽度令牌（断点声明紧跟在 .next-shell 块后）：
+     树宽固定 260px；信息卡 1280–1599 给 min(38%, 430px)，≥1600 给 min(40%, 480px)，
+     1024–1279 收 min(34%, 380px)，<1024 沿用既有窄折（见文末 @media）。
+     尺寸是布局 px（允许）；信息卡不许再在别处写第二份 min(...)。 */
+  --nx-board-tree-w: 260px;
+  --nx-board-info-w: min(38%, 430px);
   display: flex;
   /* 标题栏（工单F）是根节点里的第一行；三栏本体吃掉剩下的高度。 */
   flex: 1 1 auto;
@@ -57,6 +63,18 @@ body {
   color: var(--archive-ink);
   font-family: var(--font-interface);
   font-size: var(--nx-fs-md);
+}
+
+/* 〔P9 · S3-04〕信息卡三档断点：只改令牌，不动三栏结构（同一份版式口径）。 */
+@media (min-width: 1600px) {
+  .next-shell {
+    --nx-board-info-w: min(40%, 480px);
+  }
+}
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .next-shell {
+    --nx-board-info-w: min(34%, 380px);
+  }
 }
 
 /* —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
@@ -944,9 +962,10 @@ input.doc-title {
 }
 
 /* —— 世界书三栏维基阅读版式（批次68-R2 · 任务二，参照作者自有 NovelPedia 版式语言） ————
-   工单死口径：树 : 阅读 : 信息卡 起排 `260px : 1fr : min(46%, 430px)`；
+   〔P9 · S3-04 收敛〕树 : 阅读 : 信息卡 的宽度改由令牌给：
+   树＝--nx-board-tree-w（260px），信息卡＝--nx-board-info-w（三档断点，声明见 .next-shell）。
    不做拖拽分隔（本批不定分隔条语义）；信息卡可一钮收起（收起后阅读列吃满，flex 自然给出）；
-   窄窗口时信息卡折到阅读列下方（见文末 @media）。批次44／60 的两段式（上图表下详情、
+   窄窗口时信息卡折到阅读列下方（<1024 的 @media）。批次44／60 的两段式（上图表下详情、
    左肥右窄 detail 320px）随结构翻案退役。 */
 .nx-entries-workspace {
   display: flex;
@@ -965,7 +984,7 @@ input.doc-title {
   min-height: 0;
 }
 .nx-wiki-tree {
-  flex: 0 0 260px;
+  flex: 0 0 var(--nx-board-tree-w);
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -988,7 +1007,7 @@ input.doc-title {
   overflow-y: auto;
 }
 .nx-wiki-infobox {
-  flex: 0 0 min(46%, 430px);
+  flex: 0 0 var(--nx-board-info-w);
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
@@ -1004,7 +1023,7 @@ input.doc-title {
 /* 〔调度方补刀〕窄容器（主组被对半分屏挤压）下不许任何一栏把行撑爆：
    树允许压缩到 180px 保底、收起态窄条瘦身——横滚条只在真装不下时出现。 */
 .nx-wiki-cols.is-infobox-collapsed .nx-wiki-tree {
-  flex: 0 1 260px;
+  flex: 0 1 var(--nx-board-tree-w);
   min-width: 180px;
 }
 .nx-wiki-infobox.is-collapsed .nx-wiki-infobox-expand {
@@ -1217,6 +1236,34 @@ input.doc-title {
 /* 条目间蓝链的胶囊皮见下面 .nx-wikilink 基础规则之后（特异度更高，位置无所谓；
    放在那里是为了 .nx-wikilink { 这条基础规则保持「文件里第一个同名规则」的读数锚点）。 */
 
+/* 〔P9 · S3-04〕世界书三栏 <1024 的窄折（原挂在 860 块里，跟着断点收敛一起提前）：
+   信息卡整段折到阅读列下方（工单②的 @media 语义），树列收窄、阅读列吃掉一行剩余。
+   折叠行为与视觉一字未动，只是触发的视口上界从 860 提到 1023——1024 起走三档令牌。 */
+@media (max-width: 1023px) {
+  .nx-wiki-cols {
+    flex-wrap: wrap;
+  }
+  .nx-wiki-tree {
+    flex: 0 0 40%;
+    min-width: 180px;
+  }
+  .nx-wiki-center {
+    flex: 1 1 45%;
+    min-height: 140px;
+  }
+  /* 窄屏的关系图卡不再钉 340px：整行折到标题下方，hover 放大也留在列内。 */
+  .nx-wiki-corner {
+    flex: 1 1 100%;
+    min-width: 0;
+    max-width: none;
+    margin-inline-start: 0;
+  }
+  .nx-wiki-infobox {
+    order: 3;
+    flex: 1 1 100%;
+  }
+}
+
 /* —— 窄屏（手机）：桌面那三栏在 390px 上会挤成一团，作者在手机侧要能真试 ——————
    竖条转成横条、正文占满上半、Agent 对话固定在下半屏，索引窗改成覆盖式抽屉。
    桌面形态一行没动：这里只是窄屏另走一套排布。 */
@@ -1263,30 +1310,6 @@ input.doc-title {
     width: 100% !important;
     flex: 0 0 auto;
     height: 52vh;
-  }
-  /* 世界书三栏在窄屏翻折：信息卡整段折到阅读列下方（工单②的 @media 语义），
-     树列收窄、阅读列吃掉一行剩余。 */
-  .nx-wiki-cols {
-    flex-wrap: wrap;
-  }
-  .nx-wiki-tree {
-    flex: 0 0 40%;
-    min-width: 180px;
-  }
-  .nx-wiki-center {
-    flex: 1 1 45%;
-    min-height: 140px;
-  }
-  /* 窄屏的关系图卡不再钉 340px：整行折到标题下方，hover 放大也留在列内。 */
-  .nx-wiki-corner {
-    flex: 1 1 100%;
-    min-width: 0;
-    max-width: none;
-    margin-inline-start: 0;
-  }
-  .nx-wiki-infobox {
-    order: 3;
-    flex: 1 1 100%;
   }
   .dock {
     border-left: 0;

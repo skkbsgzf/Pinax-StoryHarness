@@ -898,14 +898,23 @@ test('批次59：布局模板是宿主词汇；folder 有树，web／gallery 没
   assert.ok(index.includes('nx-context-menu'), '大纲／章节自己的右键菜单仍在（内容操作，不是窗口动作）')
 })
 
-test('〔批次68-R2 任务二／W5〕世界书三栏维基阅读版：死口径 260px:1fr:min(46%,430px)、图谱卡右上角、窄屏折下、wiki 皮挂对容器', async () => {
+test('〔批次68-R2 任务二／W5〕世界书三栏维基阅读版：栅格令牌（P9 收敛）、图谱卡右上角、窄屏折下、wiki 皮挂对容器', async () => {
   // 新增判据随登记进册（工单禁止边界口径）：这条只钉版式声明与挂载词汇，不放宽任何既有守卫。
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
 
   // ① 三栏死口径（工单原文：「树:阅读:Infobox 起排 260px : 1fr : min(46%,430px)」）。
-  assert.match(ruleBody(layout, '.nx-wiki-tree {'), /flex:\s*0 0 260px/u, '树列起排 260px')
+  //    〔作者 2026-11-13 UX 审计裁定，推翻 68-R2 的裸 px 硬编码〕原判据「260px / min(46%, 430px)
+  //    写死在 flex 里」改判：两处宽度都改成令牌，三档断点的值单列在 .next-shell 里钉死。
+  //    树宽与信息卡宽度仍走同一份布局口径，只是值不再散落在 flex 声明里。
+  assert.match(ruleBody(layout, '.nx-wiki-tree {'), /flex:\s*0 0 var\(--nx-board-tree-w\)/u, '树列宽走 --nx-board-tree-w')
   assert.match(ruleBody(layout, '.nx-wiki-center {'), /flex:\s*1 1 auto/u, '阅读列吃剩余')
-  assert.match(ruleBody(layout, '.nx-wiki-infobox {'), /flex:\s*0 0 min\(46%, 430px\)/u, '信息卡 min(46%,430px)')
+  assert.match(ruleBody(layout, '.nx-wiki-infobox {'), /flex:\s*0 0 var\(--nx-board-info-w\)/u, '信息卡宽走 --nx-board-info-w')
+  // 令牌本体与三档断点（S3-04）：1280–1599 为基档，≥1600 与 1024–1279 各一档，<1024 走窄折。
+  const tokens = ruleBody(layout, '.next-shell {')
+  assert.match(tokens, /--nx-board-tree-w:\s*260px/u, '树宽令牌 260px')
+  assert.match(tokens, /--nx-board-info-w:\s*min\(38%,\s*430px\)/u, '信息卡基档 min(38%, 430px)')
+  assert.match(layout, /@media \(min-width: 1600px\) \{[\s\S]*?--nx-board-info-w:\s*min\(40%,\s*480px\)/u, '≥1600 信息卡 min(40%, 480px)')
+  assert.match(layout, /@media \(min-width: 1024px\) and \(max-width: 1279px\) \{[\s\S]*?--nx-board-info-w:\s*min\(34%,\s*380px\)/u, '1024–1279 信息卡 min(34%, 380px)')
   // 收起态只收窄自己——阅读列吃满是 flex 自然给出，不许借收起改三栏其它声明。
   assert.match(ruleBody(layout, '.nx-wiki-infobox.is-collapsed {'), /flex:\s*0 0 auto/u, '信息卡收起＝一钮收窄')
   // 〔批次 W5〕关系图从信息卡竖栏搬进阅读列右上角：卡片宽 ≈300–360px、画布 210px、
@@ -921,6 +930,8 @@ test('〔批次68-R2 任务二／W5〕世界书三栏维基阅读版：死口径
 
   // ② 窄窗口语义：信息卡折到阅读列下方（工单②「@media 语义」）。
   assert.match(layout, /@media[^{]*\{[\s\S]*?\.nx-wiki-infobox\s*\{[^}]*order:\s*3[^}]*\}/u, '窄屏信息卡要折到阅读列下方')
+  // 〔P9 · S3-04〕窄折的触发上界从 860 提到 1023：1024 起三栏走三档令牌，不留 861–1023 的空档。
+  assert.match(layout, /@media \(max-width: 1023px\) \{[\s\S]*?\.nx-wiki-infobox\s*\{[^}]*order:\s*3/u, '<1024 信息卡折到下方')
 
   // ③ wiki 皮只加在渲染产物上（mdRender 管线一字不动）：规则全部挂 .entry-text.nx-wiki-article——
   //    .entry-text 在展示体白名单族内（68-R1 闸⑯），这里不许出现新的 --font-display 声明。
@@ -969,7 +980,7 @@ test('〔批次68-R2 任务二／W5〕世界书三栏维基阅读版：死口径
   assert.equal(graph.includes("'infobox'"), false, 'infobox 挂载位退役')
 })
 
-test('〔批次68-R2 任务三〕composer 卡片三层钉死：＋ 单通路、状态排真读数、模型 chip 无清单不可点、不摆麦克风死钮、停止占发送位', async () => {
+test('〔批次68-R2 任务三／P9〕composer 卡片三层钉死：＋ 单通路、状态排真读数、模型 chip 可点去配置、不摆麦克风死钮、停止占发送位', async () => {
   // 新增判据随登记进册：这条钉结构锚点与数据口径，不放宽任何既有守卫。
   const dialog = stripComments(await readFile(join(shellDir, 'AssistantDialog.vue'), 'utf-8'))
 
@@ -989,9 +1000,15 @@ test('〔批次68-R2 任务三〕composer 卡片三层钉死：＋ 单通路、�
   // ② 麦克风不摆死钮（语音后端本批不做，屏上连字都不许出现；模板注释里的这句话不算上屏）。
   assert.ok(!dialog.replace(/<!--[\s\S]*?-->/gu, '').includes('麦克风') && !dialog.includes('composer-mic'), '麦克风不该作为钮/锚点出现')
 
-  // ③ 模型 chip：无清单＝disabled（只显示不可点——不编造）。
-  assert.match(dialog, /class="control-quiet nx-composer-model"[\s\S]{0,200}:disabled="!modelNames\.length"/u,
-    '模型 chip 无清单时必须不可点（并落在共享控件词汇 control-quiet 里）')
+  // ③ 模型 chip：〔作者 2026-11-13 UX 审计裁定，推翻 68-R2「无清单不可点」〕
+  //    无清单时它不再是死钮：点它发 open-settings 去设置里配模型（文案「未配置模型」、提示「点这里去配置模型」）；
+  //    有清单时维持原行为（点开只摆清单）。控件词汇仍落在 control-quiet 里。
+  assert.match(dialog, /class="control-quiet nx-composer-model"[\s\S]{0,300}@click="onModelChip"/u,
+    '模型 chip 必须可点（落在共享控件词汇 control-quiet 里）')
+  assert.equal(/:disabled="!modelNames\.length"/u.test(dialog), false, '无清单不许再画成 disabled 死钮')
+  assert.match(dialog, /function onModelChip\(\)[\s\S]{0,260}emit\('open-settings'\)/u,
+    '无清单时点 chip 要发 open-settings（去设置·偏好与模型）')
+  assert.match(dialog, /'点这里去配置模型'/u, '无清单 chip 的提示语要说清点它做什么')
 
   // ④ 停止钮只在 busy 时出现，且就站在发送钮那一格（v-if/v-else 同一位）。
   assert.match(dialog, /v-if="busy"[\s\S]{0,200}data-test="composer-stop"[\s\S]*?v-else[\s\S]{0,120}authoring-knowledge__send/u,

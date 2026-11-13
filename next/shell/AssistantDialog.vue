@@ -20,6 +20,7 @@ import {
 import { formatRelativeTime, messageStatus } from './agentSessions.mjs'
 import { buildTimelineBlocks, timelinePath } from './conversationTimeline.mjs'
 import ConversationTimeline from './ConversationTimeline.vue'
+import { humanizeError } from './errorWords.mjs'
 import { renderMarkdown } from './mdRender.mjs'
 
 /**
@@ -86,12 +87,13 @@ const props = defineProps({
   /** 统一二级页开着时为 true：Esc 先归它（照 FloatingWidget 的 suspendEsc 先例）。 */
   suspendEsc: { type: Boolean, default: false },
   /**
-   * 〔批次68-R2 任务三〕模型 chip 的清单数据源：运行时模型面真名（surface 侧有清单才传）。
-   * 本批探针只有 endpoint 与状态、没有模型名 → 缺省空数组，界面按「无清单时只显示不可点」如实画。
+   * 〔批次68-R2 任务三／P9 裁定改口径〕模型 chip 的清单数据源：运行时模型面真名（surface 侧有清单才传）。
+   * 本批探针只有 endpoint 与状态、没有模型名 → 缺省空数组，界面画「未配置模型」；
+   * 〔作者 2026-11-13 UX 审计裁定〕此时 chip 不再是死钮——点它发 open-settings 去设置里配模型。
    */
   modelNames: { type: Array, default: () => [] }
 })
-const emit = defineEmits(['send', 'retry', 'stop', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate', 'branch', 'switch-branch'])
+const emit = defineEmits(['send', 'retry', 'stop', 'update:mode', 'new-session', 'switch-session', 'rename-session', 'remove-session', 'edit', 'regenerate', 'branch', 'switch-branch', 'open-settings'])
 
 const draft = ref('')
 const threadRef = ref(null)
@@ -342,7 +344,32 @@ function pickInsert(trigger) {
  */
 const modelOpen = ref(false)
 const modelRoot = ref(null)
-const modelChipText = computed(() => (props.modelNames.length ? String(props.modelNames[0] ?? '') : '模型未回报'))
+const modelChipText = computed(() => (props.modelNames.length ? String(props.modelNames[0] ?? '') : '未配置模型'))
+
+/**
+ * 〔P9 · 作者 2026-11-13 UX 审计裁定，推翻 68-R2「无清单只显示不可点」〕
+ * 没模型时这枚 chip 不再是死钮：点它去设置「偏好与模型」配一个（发出 open-settings，宿主接线）。
+ * 有清单时维持原行为——点开只是把清单摆出来读，切模型不归这块界面管。
+ */
+function onModelChip() {
+  if (props.modelNames.length) {
+    modelOpen.value = !modelOpen.value
+    return
+  }
+  emit('open-settings')
+}
+
+/** 发送钮的提示语：没模型时先说「先配置模型再提问」，别让作者以为是键盘坏了。 */
+const sendHint = computed(() => {
+  if (!props.modelNames.length) return '先配置模型再提问'
+  if (props.disabled) return '渲染层未接主进程桥，先接上再发'
+  return draft.value.trim() ? '发送问题' : '写好问题再发送'
+})
+
+/** 失败回答的人话三件套（P9）：主文案只摆 title／hint，detail 原文进「过程」折叠。 */
+function errorWords(message) {
+  return humanizeError(message?.text ?? '')
+}
 
 /**
  * 〔批次77 任务3〕宿主键位表落点（六条里除「提案审阅」走原生菜单外，这五条都归对话框）：
@@ -798,8 +825,12 @@ onBeforeUnmount(() => {
                    老的 failed 布尔还在，兼容期两种写法都能出同一个字。 -->
               <span class="authoring-knowledge__answer-status" :data-status="statusOf(message)">{{ statusLabel(message) }}</span>
             </div>
-            <div v-if="message.failed" class="authoring-knowledge__error" role="alert">
-              <span>{{ message.text }}</span>
+            <!-- 〔P9 · 作者 2026-11-13 UX 审计裁定〕错误回答只摆人话：主句＋下一步；原文进下方「过程」折叠。 -->
+            <div v-if="message.failed" class="authoring-knowledge__error" role="alert" data-test="assistant-error">
+              <div class="authoring-knowledge__error-words">
+                <p class="authoring-knowledge__error-title" data-test="assistant-error-title">{{ errorWords(message).title }}</p>
+                <p v-if="errorWords(message).hint" class="authoring-knowledge__error-hint" data-test="assistant-error-hint">{{ errorWords(message).hint }}</p>
+              </div>
               <button type="button" class="authoring-knowledge__error-retry" @click="emit('retry')">重试</button>
             </div>
             <template v-else>
@@ -865,8 +896,14 @@ onBeforeUnmount(() => {
               :trail="message.trail"
               :expanded="isOpen(message.id)"
               :path="timelinePath(message.id)"
+              :error-text="message.failed ? errorWords(message).detail : ''"
               @toggle="onTimelineToggle"
             />
+            <!-- 失败但没留下轨迹（多半是发问前就断了）：原文也得有个「过程」折叠可收，不能摊在主文案里。 -->
+            <details v-else-if="message.failed" class="authoring-knowledge__error-process" data-test="assistant-error-process">
+              <summary>过程</summary>
+              <p class="authoring-knowledge__error-raw" data-test="assistant-error-detail">{{ errorWords(message).detail }}</p>
+            </details>
           </article>
         </template>
 
@@ -973,17 +1010,17 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="nx-composer-controls-secondary">
-            <!-- 模型 chip：显示当前模型名，点开列运行时模型面清单——**无清单时只显示不可点（不编造）**。
-                 本批探针通路只有 endpoint 与状态、没有模型名，运行时多半传下来空数组，画的就是那行如实的「模型未回报」。 -->
+            <!-- 模型 chip：显示当前模型名，点开列运行时模型面清单。
+                 〔P9 · 作者 2026-11-13 UX 审计裁定〕无清单时画「未配置模型」且**可点**——
+                 点它去设置·偏好与模型配一个，不是一枚死钮。 -->
             <div ref="modelRoot" class="nx-composer-model-wrap">
               <button
                 type="button"
                 class="control-quiet nx-composer-model"
                 data-test="composer-model-chip"
-                :disabled="!modelNames.length"
-                :aria-expanded="modelOpen ? 'true' : 'false'"
-                :title="modelNames.length ? '运行时模型面清单' : '运行时未回报模型清单（只显示，不当死钮）'"
-                @click="modelOpen = !modelOpen"
+                :aria-expanded="modelNames.length ? (modelOpen ? 'true' : 'false') : undefined"
+                :title="modelNames.length ? '运行时模型面清单' : '点这里去配置模型'"
+                @click="onModelChip"
               >{{ modelChipText }}<span v-if="modelNames.length" aria-hidden="true" class="nx-composer-caret">▾</span></button>
               <ul v-if="modelOpen && modelNames.length" class="nx-composer-model-list" data-test="composer-model-list">
                 <li v-for="name in modelNames" :key="name">{{ name }}</li>
@@ -1008,6 +1045,7 @@ onBeforeUnmount(() => {
               type="button"
               class="authoring-knowledge__send"
               aria-label="发送问题"
+              :title="sendHint"
               :disabled="disabled || !draft.trim()"
               @click="submit"
             >
@@ -1095,7 +1133,16 @@ onBeforeUnmount(() => {
 .authoring-knowledge__live-trail { margin-top: 4px; }
 .authoring-knowledge__thinking span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-primary, var(--accent)); animation: knowledge-pulse 900ms ease-in-out infinite alternate; }
 .authoring-knowledge__error { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: var(--archive-paper); color: var(--text-secondary); font-size: var(--nx-fs-md); text-align: start; }
-.authoring-knowledge__error-retry { border: 0; background: transparent; color: var(--accent-primary, var(--accent-text)); cursor: pointer; }
+/* 〔P9〕错误回答的三层：主句＋下一步＋「过程」折叠（原文只活在那里）。 */
+.authoring-knowledge__error-words { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-width: 0; }
+.authoring-knowledge__error-title { margin: 0; font-weight: 600; color: var(--archive-ink); }
+.authoring-knowledge__error-hint { margin: 0; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.6; }
+.authoring-knowledge__error-retry { flex: none; border: 0; background: transparent; color: var(--accent-primary, var(--accent-text)); cursor: pointer; }
+/* 失败但无轨迹时的那一层「过程」折叠：长相照批次29 的老折叠，原文小一号、可折行。 */
+.authoring-knowledge__error-process { margin: 2px 0 0; color: var(--text-muted); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__error-process > summary { display: flex; min-height: 24px; align-items: center; cursor: pointer; list-style: none; }
+.authoring-knowledge__error-process > summary::-webkit-details-marker { display: none; }
+.authoring-knowledge__error-raw { margin: 2px 0 0; color: var(--text-muted); line-height: 1.6; word-break: break-word; }
 </style>
 
 <style scoped>

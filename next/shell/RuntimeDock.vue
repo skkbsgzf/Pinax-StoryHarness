@@ -41,6 +41,7 @@ import { legacyLocalStorage, migrateLegacySessions } from './sessionMigration.mj
  *      两支的消息一个字都不动。截断只有 store.dropFrom 这一个入口，与「编辑重发」共用。
  * 工具面之类的开发者向事实折在对话框底部的折叠层里——老版就是这么处理的。
  */
+const emit = defineEmits(['open-settings'])
 const props = defineProps({
   runtime: { type: Object, required: true },
   bridge: { type: Object, default: null },
@@ -523,6 +524,7 @@ function removeSession(id) {
       :hotkeys="hotkeyBindings"
       :suspend-esc="suspendEsc"
       @send="ask"
+      @open-settings="emit('open-settings')"
       @retry="retry"
       @stop="stopAsk"
       @edit="editQuestion"

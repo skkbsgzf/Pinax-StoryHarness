@@ -24,8 +24,9 @@ import {
 /**
  * 世界书看板区（批次68-R2 · 三栏维基版式；批次 W3 · 数据源切 fact.data/v1 hub）。
  *
- * 版式口径（工单死口径，参照 NovelPedia demo）：树 : 阅读 : 条目信息卡 起排
- * `260px : 1fr : min(46%, 430px)`；窄窗口时信息卡折到阅读列下方（@media）。
+ * 版式口径（参照 NovelPedia demo；〔P9 · S3-04〕宽度已令牌化，见 next-shell.css）：
+ * 树 : 阅读 : 条目信息卡 ＝ `--nx-board-tree-w : 1fr : --nx-board-info-w`；
+ * 信息卡三档断点（≥1600 / 1280–1599 / 1024–1279），<1024 时信息卡折到阅读列下方（@media）。
  *   ① 左条目树＝hub 分组（layer → domain → 槽位 → 条目，每级带条目数）；
  *      世界观用 11 个中文槽位名；人物／剧情两层的「小说／剧本锚点占位组」始终在场；
  *   ② 中央阅读列＝选中条目的 wiki 阅读版式（EntryDetailPanel wiki 态，正文仍是 md 原文）；
@@ -366,7 +367,7 @@ const infoboxTier = computed(() => {
 <template>
   <section class="nx-entries-board" data-test="entries-board">
     <div ref="colsRef" class="nx-wiki-cols" data-test="entries-wiki-cols" :class="{ 'is-infobox-collapsed': infoboxCollapsed }">
-      <!-- ① 左条目树（≈260px）：layer → domain → 槽位 → 条目，每级带条目数；行前缀层级 dot。 -->
+      <!-- ① 左条目树（宽走 --nx-board-tree-w，260px）：layer → domain → 槽位 → 条目，每级带条目数；行前缀层级 dot。 -->
       <div class="nx-wiki-tree" data-test="entries-tree-col">
         <header class="nx-entries-board-head">
           <!-- 视图切换：中栏在 阅读／表格／图谱 之间循环。 -->
@@ -577,7 +578,7 @@ const infoboxTier = computed(() => {
         </EntryDetailPanel>
       </div>
 
-      <!-- ③ 右信息卡（min(46%,430px)）：hub 字段＋关系列表（图谱已搬到阅读列右上角）。可一钮收起。 -->
+      <!-- ③ 右信息卡（宽走 --nx-board-info-w，三档断点）：hub 字段＋关系列表（图谱已搬到阅读列右上角）。可一钮收起。 -->
       <aside v-if="data.entry || infoboxCollapsed" class="nx-wiki-infobox" :class="{ 'is-collapsed': infoboxCollapsed }" data-test="entries-infobox">
         <button
           v-if="infoboxCollapsed"

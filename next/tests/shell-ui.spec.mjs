@@ -7,6 +7,7 @@ import AssistantDialog from '../shell/AssistantDialog.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
 import WorldbookGroupedTree from '../shell/WorldbookGroupedTree.vue'
 import IndexWindow from '../shell/IndexWindow.vue'
+import ProposalsSection from '../shell/settings/ProposalsSection.vue'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from '../shell/ipcContract.mjs'
 import { hostWorkspace, resetWorkspace } from '../shell/workspace.mjs'
 import { CUSTOM_VIEW_TYPE, hostViewRegistry } from '../shell/viewRegistry.mjs'
@@ -1263,11 +1264,15 @@ describe('运行时栏', () => {
     settle({ ok: false, error: { code: 'PINAX_DEPENDENCY_UNMET', message: '未检测到可用模型。请先启动 pi-agent 任务面（serve:pinax）。' } })
     await flushPromises()
 
+    // 〔作者 2026-11-13 UX 审计裁定，推翻批次29 判据〕错误行只摆人话主句＋阶段提示；
+    // 「断在：模型第 1 轮」与错误码原文不再上主文案，统一折进答下方的「过程」折叠。
     const error = wrapper.find('.authoring-knowledge__error').text()
     expect(error).toContain('未检测到可用模型')
-    expect(error).toContain('断在：模型第 1 轮')
+    expect(error).toContain('模型第 1 轮')
+    expect(error).not.toContain('断在：模型第 1 轮')
     const trail = wrapper.find('details.authoring-knowledge__trail')
     expect(trail.exists()).toBe(true)
+    expect(trail.text()).toContain('断在：模型第 1 轮')
     expect(trail.text()).toContain('AGENT_PROVIDER_CONFIG_INVALID')
     wrapper.unmount()
   })
@@ -1575,9 +1580,11 @@ describe('运行时栏', () => {
     expect(card.find('.authoring-knowledge__mode-badge').exists()).toBe(true)
     expect(card.find('[data-test="composer-model-chip"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('麦克风')
-    // 模型 chip：无清单时只显示不可点——不编造。
-    expect(wrapper.find('[data-test="composer-model-chip"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.find('[data-test="composer-model-chip"]').text()).toBe('模型未回报')
+    // 模型 chip：〔作者 2026-11-13 UX 审计裁定，推翻 68-R2「无清单不可点」〕
+    // 无清单时文案改成「未配置模型」，但仍可点——点它去设置里配模型（见下面单独的用例）。
+    expect(wrapper.find('[data-test="composer-model-chip"]').attributes('disabled')).toBeUndefined()
+    expect(wrapper.find('[data-test="composer-model-chip"]').text()).toBe('未配置模型')
+    expect(wrapper.find('[data-test="composer-model-chip"]').attributes('title')).toBe('点这里去配置模型')
 
     expect(wrapper.find('[data-test="composer-status"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="composer-more"]').exists()).toBe(false)
@@ -1592,6 +1599,103 @@ describe('运行时栏', () => {
     expect(wrapper.find('.authoring-knowledge__input-row textarea').element.value).toBe('/')
     expect(wrapper.find('[data-test="composer-menu"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="composer-plus-menu"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+})
+
+/**
+ * 〔P9 · 作者 2026-11-13 UX 审计裁定〕错误人话层的展示点验收。
+ * 纯函数规则在 next/tests/error-words.test.mjs 钉死；这里只验屏上真摆对了——
+ * 主文案没有错误码／工具 id，原文在折叠层里，零信息量的耗时行不出现。
+ */
+describe('错误人话层（P9）', () => {
+  it('提案审阅：没打开库时主文案说人话，MCP 码与工具 id 只进「技术详情」', async () => {
+    const data = {
+      loadProposals: async () => {},
+      proposalsError: '工具 pinax_proposal_list 的进程内调用失败：MCP error -32602: MCP error -32602: Tool pinax_proposal_list not found'
+    }
+    const wrapper = mount(ProposalsSection, { props: { data } })
+    await flushPromises()
+
+    const banner = wrapper.find('[data-test="proposals-error"]')
+    expect(banner.exists()).toBe(true)
+    const mainCopy = `${banner.find('[data-test="proposals-error-title"]').text()} ${banner.find('[data-test="proposals-error-hint"]').text()}`
+    expect(mainCopy).toContain('这个功能还没接上当前库')
+    expect(mainCopy).toContain('先新建或打开一个库')
+    expect(mainCopy).not.toContain('MCP')
+    expect(mainCopy).not.toContain('pinax_proposal_list')
+    // 重试仍在；原文折进「技术详情」，且 MCP 前缀只折一层。
+    expect(banner.find('.proposals-retry').exists()).toBe(true)
+    const detail = banner.find('[data-test="proposals-error-detail"]')
+    expect(detail.exists()).toBe(true)
+    expect(detail.text()).toContain('pinax_proposal_list')
+    expect(detail.text()).toContain('MCP error -32602')
+    expect(detail.text()).not.toContain('MCP error -32602: MCP error -32602')
+    wrapper.unmount()
+  })
+
+  it('助手错误回答：主文案「连不上模型服务」＋下一步，原文（fetch failed／阶段）折进「过程」', async () => {
+    const wrapper = mount(AssistantDialog, {
+      props: {
+        messages: [
+          { id: 'q1', role: 'user', text: '帮我写一句', at: '10:00' },
+          { id: 'a1', role: 'agent', text: '运行时执行失败：fetch failed（断在：组装上下文）', at: '10:01', failed: true }
+        ]
+      }
+    })
+    const banner = wrapper.find('[data-test="assistant-error"]')
+    const mainCopy = `${banner.find('[data-test="assistant-error-title"]').text()} ${banner.find('[data-test="assistant-error-hint"]').text()}`
+    expect(mainCopy).toContain('连不上模型服务')
+    expect(mainCopy).toContain('偏好与模型')
+    expect(mainCopy).not.toContain('fetch failed')
+    expect(mainCopy).not.toContain('组装上下文')
+    // 没有轨迹也有一层「过程」可以收原文。
+    const process = wrapper.find('[data-test="assistant-error-process"]')
+    expect(process.exists()).toBe(true)
+    expect(process.find('[data-test="assistant-error-detail"]').text()).toContain('fetch failed')
+    wrapper.unmount()
+  })
+
+  it('E3：收工后不足 0.1 秒不摆摘要行；≥0.1 秒照旧保留读数', async () => {
+    const mountWithTrail = (trail) => mount(AssistantDialog, {
+      props: {
+        messages: [
+          { id: 'q1', role: 'user', text: '问', at: '10:00' },
+          { id: 'a1', role: 'agent', text: '答', at: '10:01', trail }
+        ]
+      }
+    })
+    const fast = mountWithTrail([{ stage: 'envelope', blocks: 1, at: 1000 }, { stage: 'answer', at: 1030 }])
+    expect(fast.find('[data-test="timeline-summary"]').exists()).toBe(false)
+    fast.unmount()
+
+    const slow = mountWithTrail([{ stage: 'envelope', blocks: 1, at: 1000 }, { stage: 'answer', at: 1200 }])
+    expect(slow.find('[data-test="timeline-summary"]').text()).toContain('已处理 0.2 秒')
+    slow.unmount()
+  })
+
+  it('模型 chip：无清单时文案「未配置模型」、可点并发 open-settings；有清单时点开清单', async () => {
+    const wrapper = mount(AssistantDialog, { props: { messages: [] } })
+    const chip = wrapper.find('[data-test="composer-model-chip"]')
+    expect(chip.text()).toBe('未配置模型')
+    expect(chip.attributes('disabled')).toBeUndefined()
+    expect(chip.attributes('title')).toBe('点这里去配置模型')
+    await chip.trigger('click')
+    expect(wrapper.emitted('open-settings')).toHaveLength(1)
+    expect(wrapper.find('[data-test="composer-model-list"]').exists()).toBe(false)
+    wrapper.unmount()
+
+    const listed = mount(AssistantDialog, { props: { messages: [], modelNames: ['pinax-writer'] } })
+    expect(listed.find('[data-test="composer-model-chip"]').text()).toContain('pinax-writer')
+    await listed.find('[data-test="composer-model-chip"]').trigger('click')
+    expect(listed.find('[data-test="composer-model-list"]').text()).toContain('pinax-writer')
+    expect(listed.emitted('open-settings')).toBeUndefined()
+    listed.unmount()
+  })
+
+  it('发送钮：没配置模型时提示语先说「先配置模型再提问」', () => {
+    const wrapper = mount(AssistantDialog, { props: { messages: [] } })
+    expect(wrapper.find('.authoring-knowledge__send').attributes('title')).toBe('先配置模型再提问')
     wrapper.unmount()
   })
 })
@@ -5302,13 +5406,14 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
   })
 
   /**
-   * 批次44 · 排布 → 批次68-R2 · 任务二翻案（工单死口径：「树 : 阅读 : Infobox 起排
-   * `260px : 1fr : min(46%,430px)`」，参照作者自有 NovelPedia 版式语言）。
+   * 批次44 · 排布 → 批次68-R2 · 任务二翻案（「树 : 阅读 : Infobox」三栏，参照作者自有 NovelPedia 版式语言）
+   * → 〔P9 · S3-04〕宽度令牌化（树＝--nx-board-tree-w，信息卡＝--nx-board-info-w 三档断点；
+   * 声明层读数归 visual-contract.test.mjs，这条 jsdom 用例只核 DOM 结构与收起钮语义）。
    *
    * 原判据「上图表列、下详情」两段竖排随三栏阅读版退役（断言事实翻案、判定密度只增不减）：
    * 工作区单块交给 EntriesBoard，板内是三栏（树／阅读／信息卡），信息卡可一钮收起。
    */
-  it('批次68-R2：世界书三栏维基阅读版——树260px、阅读1fr、信息卡min(46%,430px)，可收起', async () => {
+  it('批次68-R2：世界书三栏维基阅读版——树/信息卡宽度走栅格令牌、阅读1fr，可收起（P9 令牌化，DOM 结构不动）', async () => {
     globalThis.localStorage?.clear()
     const bridge = writingBridge({ entries: CATEGORIZED, categories: [...CATEGORIES] })
     const wrapper = mount(AppNext, { props: { bridge } })

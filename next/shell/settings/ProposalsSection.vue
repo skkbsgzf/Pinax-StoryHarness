@@ -1,6 +1,7 @@
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { IPC_EVENT } from '../ipcContract.mjs'
+import { humanizeError } from '../errorWords.mjs'
 
 /**
  * 提案审阅 Section（工单B1：协议 v1.1-B 的落点）。
@@ -78,6 +79,13 @@ function openProposal(item) {
   if (typeof props.open === 'function') props.open(item)
 }
 
+/**
+ * 〔P9 · 作者 2026-11-13 UX 审计裁定〕错误条先过人话层：
+ * 主文案只说「这个功能还没接上当前库」这类作者语言，错误码与工具 id 折进「技术详情」。
+ * 内核/载体返回的原话仍原样留在 detail 里，供反馈开发者，不吞错。
+ */
+const errorWords = computed(() => humanizeError(props.data?.proposalsError ?? ''))
+
 /** 行的 createdAt 短格式（模型写提案的时刻，精确到分钟就够认了；解析不了就原样退回空串）。 */
 function shortStamp(value) {
   const date = new Date(String(value ?? ''))
@@ -101,9 +109,16 @@ function statusText(status) {
     </p>
 
     <p v-if="loading" class="proposals-state" role="status">正在读取提案…</p>
-    <div v-else-if="data?.proposalsError" class="proposals-state is-error" role="alert">
-      <span>{{ data.proposalsError }}</span>
+    <div v-else-if="data?.proposalsError" class="proposals-state is-error" role="alert" data-test="proposals-error">
+      <div class="proposals-error-words">
+        <p class="proposals-error-title" data-test="proposals-error-title">{{ errorWords.title }}</p>
+        <p v-if="errorWords.hint" class="proposals-error-hint" data-test="proposals-error-hint">{{ errorWords.hint }}</p>
+      </div>
       <button type="button" class="control-secondary proposals-retry" @click="reload()">重试</button>
+      <details class="proposals-error-detail" data-test="proposals-error-detail">
+        <summary>技术详情</summary>
+        <p>{{ errorWords.detail }}</p>
+      </details>
     </div>
     <template v-else>
       <p v-if="!data?.proposals?.length" class="proposals-state proposals-empty" title="模型改稿或运行时写下的提案会落在这里">
@@ -155,6 +170,41 @@ function statusText(status) {
   align-items: center;
   gap: 10px;
   color: var(--control-danger);
+}
+/* 〔P9〕主文案／副句／技术详情三层：错误码与工具 id 只出现在收起的那一层。 */
+.proposals-error-words {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.proposals-error-title,
+.proposals-error-hint {
+  margin: 0;
+}
+.proposals-error-title {
+  color: var(--control-danger);
+  font-weight: 600;
+}
+.proposals-error-hint {
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.proposals-error-detail {
+  flex: 1 1 100%;
+  color: var(--text-muted);
+  font-size: var(--nx-fs-2xs);
+}
+.proposals-error-detail summary {
+  min-height: 24px;
+  cursor: pointer;
+  line-height: 24px;
+}
+.proposals-error-detail p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  word-break: break-word;
 }
 .proposals-empty {
   padding: 10px 2px;

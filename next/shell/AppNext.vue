@@ -2934,6 +2934,7 @@ onBeforeUnmount(() => {
           :project-root="project?.root ?? ''"
           :references="referenceCatalog"
           :suspend-esc="settingsOpen"
+          @open-settings="openSection('prefs')"
         />
       </div>
 
