@@ -1,6 +1,7 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { IPC_CHANNELS } from '../ipcContract.mjs'
+import { fieldStyleVars, saveModelNote, SAVE_MODEL } from './fields.mjs'
 
 /**
  * 服务与通知（批次49 · 设置页「应用」组）。
@@ -10,6 +11,9 @@ import { IPC_CHANNELS } from '../ipcContract.mjs'
  * 每一行＝一个声明的服务或外部 MCP：载体名、id、端口／传输、四色状态、最近 5 条日志尾巴；
  * 「重启」只对服务出现（重启走既有 runtimeServiceRestart，外部 MCP 没有这条手动口），
  * 「知道了」把确认水位推到当下（只落应用级偏好，不进项目 .pinax/），橙色点随之回落。
+ *
+ * 〔工单 P2-2〕保存模型写在本节开头：确认水位是即时保存——点「知道了」就写，
+ * 回执用既有 .prefs-state chip 摆两秒后自己退场（不另造一套保存条）。
  */
 const props = defineProps({
   bridge: { type: Object, default: null },
@@ -21,6 +25,26 @@ const props = defineProps({
 
 const busy = ref(false)
 const feedback = ref(null)
+const fieldVars = fieldStyleVars()
+const saveModelText = saveModelNote(SAVE_MODEL.instant)
+let feedbackTimer = null
+
+/** 即时保存的回执：写既有 chip，两秒后退场（新消息进来时重计时，不叠两条）。 */
+function showFeedback(next, autoHide = false) {
+  if (feedbackTimer) globalThis.clearTimeout(feedbackTimer)
+  feedbackTimer = null
+  feedback.value = next
+  if (!autoHide) return
+  feedbackTimer = globalThis.setTimeout(() => {
+    feedback.value = null
+    feedbackTimer = null
+  }, 2000)
+}
+
+onBeforeUnmount(() => {
+  if (feedbackTimer) globalThis.clearTimeout(feedbackTimer)
+  feedbackTimer = null
+})
 
 const rows = computed(() => {
   const carriers = Array.isArray(props.snapshot?.carriers) ? props.snapshot.carriers : []
@@ -59,10 +83,11 @@ async function acknowledge() {
   const result = await request(IPC_CHANNELS.runtimeServiceLogAck, { upToAt: new Date().toISOString() })
   busy.value = false
   if (!result?.ok) {
-    feedback.value = { kind: 'error', text: result?.error?.message ?? '确认失败。' }
+    showFeedback({ kind: 'error', text: result?.error?.message ?? '确认失败。' })
     return
   }
-  feedback.value = { kind: 'ok', text: '已确认：这之前的通知不再算待确认。' }
+  // 即时保存：写进去就摆回执，两秒后退场（规格口径同「已保存」chip）。
+  showFeedback({ kind: 'ok', text: '已确认：这之前的通知不再算待确认。' }, true)
   await props.reload?.()
 }
 
@@ -73,16 +98,17 @@ async function restart(item) {
   const result = await request(IPC_CHANNELS.runtimeServiceRestart, { id: item.id })
   busy.value = false
   if (!result?.ok) {
-    feedback.value = { kind: 'error', text: result?.error?.message ?? `重启 ${item.id} 失败。` }
+    showFeedback({ kind: 'error', text: result?.error?.message ?? `重启 ${item.id} 失败。` })
     return
   }
-  feedback.value = { kind: 'ok', text: `已请求重启 ${item.id}：状态一变，这一行会跟着更新。` }
+  showFeedback({ kind: 'ok', text: `已请求重启 ${item.id}：状态一变，这一行会跟着更新。` })
   await props.reload?.()
 }
 </script>
 
 <template>
-  <div class="services-section">
+  <div class="services-section" :style="fieldVars">
+    <p class="settings-save-model" data-test="services-save-model">{{ saveModelText }}</p>
     <p class="wizard-note" title="「知道了」只记在这台机器的应用偏好里，不进项目；确认水位之前的通知不再计为未读">这里看服务和外部连接当前通不通、最近日志，以及有没有等你确认的通知。</p>
     <p v-if="!rows.length" class="pane-hint" data-test="services-empty">当前项目没有声明任何服务或外部 MCP</p>
     <div v-else class="prefs-grid">
@@ -140,6 +166,15 @@ async function restart(item) {
 </template>
 
 <style scoped>
+/* 〔工单 P2-2〕节首那句保存模型：与字段标签同一档（2xs／600／muted），不抢正文。
+   这一节没有可编辑的设置字段（只有「知道了」「重启」两个动作），所以不走字段行的
+   标签—控件—说明三段式；动作回执仍用既有 .prefs-state chip。 */
+.settings-save-model {
+  margin: 0 0 8px;
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  color: var(--text-muted);
+}
 /* 行内是「名字 → 元信息 → 状态 → 日志尾巴 → 动作」五段；日志尾巴独占一行（窄屏也不挤掉动作）。 */
 .services-row {
   display: flex;

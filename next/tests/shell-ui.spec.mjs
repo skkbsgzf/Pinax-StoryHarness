@@ -2212,6 +2212,142 @@ describe('偏好与模型面板（批次8①）', () => {
     delete document.documentElement.dataset.writingFocus
   })
 
+  /* —— 工单 P2：字段规范／恢复本节默认／设置总览 ——————————————————————
+   * 三条都落在「偏好与模型」这一节上跑（prefsBridge 提供真的 prefs:get/prefs:set），
+   * 因为它是本轮唯一有可编辑字段的应用级节；纯函数面另见 next/tests/settings-fields.test.mjs。 */
+
+  it('字段规范（工单 P2-1／P2-2）：每个字段都有可见标签，节首写明「显式保存，改完点保存并生效」', async () => {
+    const handlers = new Map()
+    const wrapper = mount(AppNext, { props: { bridge: prefsBridge({ handlers }) } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="偏好与模型"]')
+
+    // 保存模型一句话（每节都能回答「我改的东西什么时候生效」）。
+    expect(panel.find('[data-test="prefs-save-model"]').text()).toContain('显式保存')
+    expect(panel.find('[data-test="prefs-save-model"]').text()).toContain('保存并生效')
+
+    // 三个字段各有可见标签（不是只靠 placeholder）：主题是 span（单选组），另两个是 label＋for。
+    expect(panel.find('[data-test="prefs-field-theme"]').text()).toContain('外观主题')
+    expect(panel.find('[data-test="prefs-field-endpoint"] .settings-field-label').text()).toBe('模型服务端点')
+    expect(panel.find('[data-test="prefs-field-zoom"] .settings-field-label').text()).toBe('界面缩放')
+    expect(panel.find('#prefs-endpoint').exists()).toBe(true)
+    expect(panel.find('#prefs-zoom').exists()).toBe(true)
+
+    // 规范度量经 CSS 变量注入（与 fields.mjs 同源）：节内 16、控件 36、输入上限 480。
+    const fieldsRoot = panel.find('.settings-fields').element
+    expect(fieldsRoot.style.getPropertyValue('--settings-field-gap')).toBe('16px')
+    expect(fieldsRoot.style.getPropertyValue('--settings-control-height')).toBe('36px')
+    expect(fieldsRoot.style.getPropertyValue('--settings-input-max')).toBe('480px')
+    wrapper.unmount()
+  })
+
+  it('恢复本节默认（工单 P2-3）：一次点击只出二次确认；确认后只发本节两项 patch，其余偏好不动', async () => {
+    const handlers = new Map()
+    const save = vi.fn(async (patch) => ({ ok: true, value: { ...patch } }))
+    handlers.set(IPC_CHANNELS.prefsSet, save)
+    const bridge = prefsBridge({
+      handlers,
+      prefsValue: { modelPlaneEndpoint: 'http://127.0.0.1:8461', uiZoom: 1.4, theme: 'dark', writingFontSize: 19 }
+    })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="偏好与模型"]')
+
+    await panel.find('[data-test="prefs-reset"]').trigger('click')
+    await flushPromises()
+    // 第一下只是请求：确认条出现，一个字节都没写。
+    expect(panel.find('[data-test="prefs-reset-confirm"]').exists()).toBe(true)
+    expect(save).not.toHaveBeenCalled()
+
+    await panel.find('[data-test="prefs-reset-confirm-ok"]').trigger('click')
+    await flushPromises()
+    expect(save).toHaveBeenCalledTimes(1)
+    // 载荷只有本节两个键：写作排版／主题／最近库都不在 patch 里（主题选完即生效，不归这条线）。
+    expect(save).toHaveBeenCalledWith({ modelPlaneEndpoint: null, uiZoom: null })
+    // 默认值回到草稿：端点空、缩放 0.85（存的是 null，生效默认 0.85）。
+    expect(panel.find('.prefs-input').element.value).toBe('')
+    expect(Number(panel.find('.prefs-zoom').element.value)).toBe(0.85)
+    expect(panel.find('.prefs-state.is-ready').text()).toContain('已恢复本节默认')
+    wrapper.unmount()
+  })
+
+  it('显式保存失败（工单 P2-2）：错误摆在字段下方，输入原样保留、不整节重置', async () => {
+    const handlers = new Map()
+    const save = vi.fn(async () => ({ ok: false, error: { code: 'INVALID_INPUT', message: 'uiZoom 必须在 0.5–2 之间，收到：1.1' } }))
+    handlers.set(IPC_CHANNELS.prefsSet, save)
+    // theme 显式给值：缺 theme 时外壳挂载会补写一次默认主题（既有行为），那会把这次计数搅乱。
+    const bridge = prefsBridge({ handlers, prefsValue: { modelPlaneEndpoint: null, uiZoom: 0.85, theme: 'light' } })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="偏好与模型"]')
+
+    await panel.find('.prefs-input').setValue('http://127.0.0.1:9999')
+    await panel.find('.prefs-zoom').setValue('1.1')
+    await panel.find('.control-primary').trigger('click')
+    await flushPromises()
+
+    expect(save).toHaveBeenCalledTimes(1)
+    expect(panel.find('[data-test="prefs-error-zoom"]').text()).toContain('界面缩放没被接受')
+    // 作者刚填的两项都还在（整节重置会把它们抹掉）。
+    expect(panel.find('.prefs-input').element.value).toBe('http://127.0.0.1:9999')
+    expect(Number(panel.find('.prefs-zoom').element.value)).toBe(1.1)
+
+    // 本地校验先拦：越界缩放不发请求，错误同样落在字段下方。
+    save.mockClear()
+    await panel.find('.prefs-zoom').setValue('9')
+    await panel.find('.control-primary').trigger('click')
+    await flushPromises()
+    expect(save).not.toHaveBeenCalled()
+    expect(panel.find('[data-test="prefs-error-zoom"]').text()).toContain('0.5–2')
+    wrapper.unmount()
+  })
+
+  it('设置总览（工单 P2-4）：只读表列出每个应用级键与层／文件，复制为 JSON 给出同一份数据', async () => {
+    const prefsValue = { modelPlaneEndpoint: 'http://127.0.0.1:8461', uiZoom: 0.9, theme: 'dark', writingFontSize: 18 }
+    const handlers = new Map()
+    const bridge = prefsBridge({ handlers, prefsValue })
+    const writeText = vi.fn(async () => {})
+    const originalClipboard = Object.getOwnPropertyDescriptor(globalThis.navigator, 'clipboard')
+    Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const wrapper = mount(AppNext, { props: { bridge } })
+    await flushPromises()
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+
+    await wrapper.find('[data-test="settings-tab-overview"]').trigger('click')
+    await flushPromises()
+    const panel = wrapper.find('[aria-label="设置总览"]')
+    expect(panel.exists()).toBe(true)
+
+    // 每个键一行（11 个偏好键＋theme），四列＝键／所属层／文件／当前值。
+    const rows = panel.findAll('[data-test="overview-table"] tbody tr')
+    expect(rows).toHaveLength(12)
+    const cells = (key) => panel.find(`[data-test="overview-row-${key}"]`).findAll('td').map((td) => td.text())
+    expect(cells('uiZoom')).toEqual(['uiZoom', '应用', 'next-preferences.json', '0.9'])
+    expect(cells('theme')).toEqual(['theme', '应用', 'next-preferences.json', '"dark"'])
+    expect(cells('writingFontSize')).toEqual(['writingFontSize', '应用', 'next-preferences.json', '18'])
+    // 缺值照摆 null（不编一个好看的默认值冒充当前值）。
+    expect(cells('historyIntervalMinutes')).toEqual(['historyIntervalMinutes', '应用', 'next-preferences.json', 'null'])
+
+    await panel.find('[data-test="overview-copy"]').trigger('click')
+    await flushPromises()
+    expect(writeText).toHaveBeenCalledTimes(1)
+    const payload = JSON.parse(writeText.mock.calls[0][0])
+    expect(payload.uiZoom).toEqual({ layer: '应用', file: 'next-preferences.json', value: 0.9 })
+    expect(payload.theme).toEqual({ layer: '应用', file: 'next-preferences.json', value: 'dark' })
+    expect(panel.find('[data-test="overview-copied"]').text()).toBe('已复制')
+
+    wrapper.unmount()
+    if (originalClipboard) Object.defineProperty(globalThis.navigator, 'clipboard', originalClipboard)
+    else delete globalThis.navigator.clipboard
+  })
+
   it('新建走完整向导：位置 → 创作什么（主载体卡）→ 创建并打开（载荷带 root／名字／主载体）', async () => {
     const view = { ...emptyFrameworkView(), needsPrimary: false, openError: null, carriers: [{ id: 'fixture.script', title: '剧本（夹具）', primary: { projectKind: 'screenplay' }, isPrimary: false, isEnabled: false, capabilities: [], requires: [], scopes: [], dataDirs: ['分场'] }] }
     const handlers = new Map()
@@ -3397,7 +3533,9 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     // 内置节按组序排列：应用（偏好与模型/备份与恢复/服务与通知）→ 文档（文档历史…）；「载体管理」随 PR-3 迁模块管理。
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
     // 「载体管理」暂留原组（PR-3 迁模块管理——前端工单 A-7），单节组拍平不出组头。
-    expect(tabs.slice(0, 4)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '库设置（模块管理）'])
+    // 〔工单 P2-4 扩展〕「设置总览」是本轮新登记的应用级只读节，按工单排在「应用」组最底部，
+    // 所以它落在服务与通知之后、库设置之前——切片从 4 扩到 5，不是把旧断言删掉。
+    expect(tabs.slice(0, 5)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '设置总览', '库设置（模块管理）'])
     // 〔批次68-R4 任务1·实测发现1〕组头是纯视觉层：不是 tab、不可聚焦、不参与方向键换节。
     const headers = wrapper.findAll('.settings-navigation .settings-group-label')
     expect(headers).toHaveLength(2)
@@ -3441,6 +3579,22 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await flushPromises()
     expect(wrapper.find('.workbench-modal').exists()).toBe(false)
     expect(document.activeElement).not.toBeNull()
+
+    // ④〔工单 P2 · Esc 三级扩展〕恢复默认的二次确认开着时，Esc 先收确认、弹窗不关；
+    //    再按一次才轮到「没词 → 关弹窗」。这一级住在 PrefsSection 的 window capture 监听里
+    //    （底座 WorkbenchModal 的 Esc 在冒泡阶段，被 stopImmediatePropagation 拦在前面）。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'settings.preferences' })
+    await flushPromises()
+    await wrapper.find('[data-test="prefs-reset"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-test="prefs-reset-confirm"]').exists()).toBe(true)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(true)
+    expect(wrapper.find('[data-test="prefs-reset-confirm"]').exists()).toBe(false)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+    expect(wrapper.find('.workbench-modal').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -3507,8 +3661,8 @@ describe('统一设置二级页（工单B0/C0 · U13）', () => {
     await search.setValue('')
     await flushPromises()
     const tabs = wrapper.findAll('.settings-navigation .settings-tab').map((node) => node.text())
-    // 前端工单 B-1：四节迁出后清单收敛。
-    expect(tabs.slice(0, 4)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '库设置（模块管理）'])
+    // 前端工单 B-1：四节迁出后清单收敛。〔工单 P2-4 扩展〕应用组底部新增只读「设置总览」，切片 4→5。
+    expect(tabs.slice(0, 5)).toEqual(['偏好与模型', '备份与恢复', '服务与通知', '设置总览', '库设置（模块管理）'])
     expect(wrapper.find('[data-test="settings-panel-carrier:fixture.novel:novel.writing"]').exists()).toBe(true)
     wrapper.unmount()
   })

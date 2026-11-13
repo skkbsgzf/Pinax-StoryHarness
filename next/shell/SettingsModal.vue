@@ -3,6 +3,7 @@ import { computed, nextTick, ref, watch, onBeforeUnmount } from 'vue'
 import WorkbenchModal from './WorkbenchModal.vue'
 import CarrierSettingsGeneric from './settings/CarrierSettingsGeneric.vue'
 import SkillsSection from './settings/SkillsSection.vue'
+import OverviewSection from './settings/OverviewSection.vue'
 
 /**
  * SettingsModal（工单C0 · U13 作者裁定）：统一的二级页面。
@@ -146,16 +147,38 @@ const carrierSections = computed(() => props.carriers.flatMap((carrier) => {
  * 分组给「技能」而不是塞进「项目」：组序按首次出现算，插进 项目 会把既有目录的节序整体推后一格——
  * 那条节序是 shell-ui 用例钉着的规格，不是可以顺手挪的排版。
  * 〔批次68-R4 任务1〕这一组只有一节，组头随之拍平（目录里只出「技能库」这一格，不多一行不能点的「技能」）。
+ *
+ * 〔工单 P2-4〕设置总览也在这里注册（只读：层/文件/当前值一张表＋「复制为 JSON」）。
+ * 它挂在「应用」组最底部——组已由宿主注册过，追加到该组尾部即可，不会把别的组整体推后。
+ * 前提判据取「宿主到底注册了应用级节没有」：settingsSections 为空的用法是单节预览
+ * （skills-section／载体设置节的直挂用例），那种场合凭空造一个「应用」组会把目录说错，
+ * 所以此时不挂这一节；真外壳（AppNext）永远有应用级节，总览照常出现。
+ * 不新增设置项：这一节只读 prefs:get 的结果，自身不写任何东西。
  */
-const builtInSections = computed(() => [{
-  id: 'skills',
-  title: '技能库',
-  group: '技能',
-  // 浅匹配词表（批次76 任务4-2 口径：字段标签进词表）。技能域的名字都在这一列，作者搜「编剧」也该找到这格。
-  keywords: ['技能', '技能库', 'skill', '启停', '停用', '导入技能', '方法说明书', '适用任务域', '正文写作', '编剧', '世界书整理', '审阅验收', '未分域', '风格'],
-  component: SkillsSection,
-  props: { bridge: props.bridge }
-}])
+const hostHasAppSections = computed(() => props.sections.some((section) => section?.group === '应用'))
+
+const builtInSections = computed(() => {
+  const list = [{
+    id: 'skills',
+    title: '技能库',
+    group: '技能',
+    // 浅匹配词表（批次76 任务4-2 口径：字段标签进词表）。技能域的名字都在这一列，作者搜「编剧」也该找到这格。
+    keywords: ['技能', '技能库', 'skill', '启停', '停用', '导入技能', '方法说明书', '适用任务域', '正文写作', '编剧', '世界书整理', '审阅验收', '未分域', '风格'],
+    component: SkillsSection,
+    props: { bridge: props.bridge }
+  }]
+  if (hostHasAppSections.value) {
+    list.push({
+      id: 'overview',
+      title: '设置总览',
+      group: '应用',
+      keywords: ['设置总览', '总览', '只读', '排查', '迁移', '当前值', '复制为 JSON', '配置清单'],
+      component: OverviewSection,
+      props: { bridge: props.bridge }
+    })
+  }
+  return list
+})
 
 const allSections = computed(() => [...props.sections, ...builtInSections.value, ...carrierSections.value])
 

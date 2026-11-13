@@ -146,6 +146,7 @@ async function restore() {
 <template>
   <div>
     <!-- 〔批次68-R3 指南层〕节首只留一句白话；机制细节（目录名、文件名、历史仓路径）进「细节」折叠。 -->
+    <p class="settings-save-model" data-test="backup-save-model">动作即执行：备份与恢复都是点下就做，本节没有需要保存的设置。</p>
     <p class="wizard-note">备份＝整份复制项目文件夹；恢复只回空目录，不覆盖现稿。</p>
     <details class="nx-note-details">
       <summary>细节</summary>
@@ -168,6 +169,8 @@ async function restore() {
           <input v-model="includeHistory" type="checkbox" data-test="backup-include-history" :disabled="Boolean(busy) || !project">
           包含历史仓（体积大）
         </label>
+        <!-- P2-1：开关类字段标签与控件同行，说明另起一行。 -->
+        <p class="settings-field-hint">历史仓体积大；不勾选也能完整恢复正文与设定，只是版本时间线不跟着走。</p>
       </div>
       <p v-if="exportedPath" class="prefs-state is-ready" data-test="backup-done">
         已导出到 {{ exportedPath }}（{{ exportedFileCount }} 个文件 · {{ formatBytes(exportedBytes) }}）
@@ -218,6 +221,21 @@ async function restore() {
 </template>
 
 <style scoped>
+/* 〔工单 P2-2〕保存模型：这一节只有结构动作（导出／恢复），没有可保存的设置值，
+   所以不摆「保存」按钮，也不走字段行三段式；说清「点下就做」即可。 */
+.settings-save-model {
+  margin: 0 0 8px;
+  font-size: var(--nx-fs-2xs);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+/* 字段说明（P2-1）：与标签同一档、比正文小一号，开关类字段的说明另起一行。 */
+.settings-field-hint {
+  margin: 0;
+  font-size: var(--nx-fs-2xs);
+  line-height: 1.6;
+  color: var(--text-muted);
+}
 /* 两个动作块之间的留白与勾选行的排布；字号/颜色一律走 token（Next 自写样式禁裸 px 字号与圆角）。 */
 .backup-block {
   display: flex;
