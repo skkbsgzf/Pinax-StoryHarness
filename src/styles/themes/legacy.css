@@ -12,9 +12,15 @@
   --text-primary: #1a1a1a;
   --text-secondary: #575b62;
   --text-muted: #6b7078;
-  --accent: #0078d4;
-  --accent-hover: #106ebe;
-  --accent-light: rgba(0, 120, 212, 0.10);
+  /* 〔P6 · 作者 2026-11-13 按 demo 裁定〕珊瑚红全局上：--accent 只做图标/描边/色块
+     （亮底 3.5:1，够 3:1 线条档、不够 4.5:1 正文档）；正文色走 Next 作用域的
+     --accent-text（见本文件末尾）。 */
+  --accent: #ff385c;
+  --accent-hover: #e31c5f;
+  --accent-light: rgba(255, 56, 92, 0.10);
+  /* 老轨语义：accent 底上的文字色。工单 §2.1 称其为「新令牌」与既有同名字义相反
+     （src 里约 30 处 background:var(--accent); color:var(--accent-text)）——根值保持白，
+     Next 作用域另给红色文字档，既不把老轨钮变成红字红底，也满足 Next 的文字对比度。 */
   --accent-text: #ffffff;
   --accent-purple: #456aa1;
   --accent-purple-light: rgba(69, 106, 161, 0.12);
@@ -61,13 +67,17 @@
   --radius-control: 10px;
   --radius-surface: 24px;
   --radius-popover: 16px;
+  /* demo 的 --leading-tight；页面主标题（库管理器「我的库」）用它，字号走 --nx-fs-3xl。 */
+  --leading-tight: 1.2;
   /* Navigation selection is neutral; focus and links retain independent roles. */
   --workbench-chrome: #f3f3f2;
   --workbench-selected: #e2e3e2;
   --workbench-selected-hover: #d9dbda;
   --workbench-focus: #677580;
-  --workbench-action: #303238;
-  --workbench-action-hover: #46494f;
+  /* 〔P6〕实心主钮＝深一档珊瑚红：白字 4.87:1。这是对 demo 唯一的刻意偏离——
+     demo 的 #ff385c 底配白字只有 3.5:1，不进按钮底色。 */
+  --workbench-action: #e00b41;
+  --workbench-action-hover: #e31c5f;
   --workbench-action-text: #ffffff;
   --signal-primary: #0078d4;
   --signal-secondary: #2b7c78;
@@ -713,9 +723,11 @@
   --text-secondary: #a9adb3;
   --text-muted: #969ba3;
 
-  --accent: #96b1c6;
-  --accent-hover: #b5c9d8;
-  --accent-light: rgba(150, 177, 198, 0.12);
+  /* 〔P6 · 作者 2026-11-13 按 demo 裁定〕暗底 #ff385c 本身 4.9:1，文字可直接用。 */
+  --accent: #ff385c;
+  --accent-hover: #e31c5f;
+  --accent-light: rgba(255, 56, 92, 0.15);
+  /* 老轨语义保持：accent 底上的文字色；Next 作用域在文件末尾覆写为 #ff385c。 */
   --accent-text: #101317;
   --accent-purple: #8fa3e8;
   --accent-purple-light: rgba(143, 163, 232, 0.16);
@@ -765,12 +777,23 @@
   --workbench-selected: #303236;
   --workbench-selected-hover: #3a3d42;
   --workbench-focus: #a9bac6;
-  --workbench-action: #e4e5e7;
-  --workbench-action-hover: #ffffff;
-  --workbench-action-text: #1b1c1e;
+  /* 〔P6〕实心主钮在暗底同样是深一档珊瑚红（白字 4.87:1；hover 4.58:1）。 */
+  --workbench-action: #e00b41;
+  --workbench-action-hover: #e31c5f;
+  --workbench-action-text: #ffffff;
   --signal-primary: #96b1c6;
   --signal-secondary: #38b8c9;
   --signal-warm: #c9a35c;
   --shadow-workbench: 0 2px 8px rgba(0, 0, 0, 0.2);
   --shadow-workbench-float: 0 12px 36px rgba(0, 0, 0, 0.38), 0 2px 8px rgba(0, 0, 0, 0.24);
+}
+
+/* 〔P6 · 作者 2026-11-13 按 demo 裁定〕Next 作用域内的 --accent-text = 「红当文字色」：
+   亮底深一档 #e00b41（4.87:1），暗底 #ff385c（4.9:1）。老轨根值维持「accent 底上的
+   文字色」不变（见亮/暗 token 注释），两套语义只在 .next-shell 子树里分叉。 */
+.theme-legacy .next-shell {
+  --accent-text: #e00b41;
+}
+:root.theme-legacy.theme-dark .next-shell {
+  --accent-text: #ff385c;
 }

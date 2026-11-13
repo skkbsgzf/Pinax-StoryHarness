@@ -138,7 +138,7 @@ function onToggle(event) {
 .nx-timeline__head { display: flex; align-items: center; gap: 4px; margin: 0; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
 .nx-timeline__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nx-timeline__count { flex: none; padding: 0 4px; border-radius: var(--nx-radius-xs); background: var(--nav-hover); font-size: var(--nx-fs-2xs); font-variant-numeric: tabular-nums; }
-.nx-timeline__block[data-state='running'] .nx-timeline__title { color: var(--accent); }
+.nx-timeline__block[data-state='running'] .nx-timeline__title { color: var(--accent-text); }
 .nx-timeline__block[data-state='error'] .nx-timeline__title { color: var(--danger); }
 .nx-timeline__block[data-state='completed'] .nx-timeline__title { color: var(--text-muted); }
 .nx-timeline__group { margin-inline-start: 4px; }

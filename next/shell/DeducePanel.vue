@@ -599,7 +599,7 @@ function jumpTo(name) {
 }
 .nx-deduce-mode.is-active {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .nx-deduce-body {
   display: grid;
@@ -663,7 +663,7 @@ function jumpTo(name) {
   padding: 4px 0;
 }
 .nx-deduce-front[data-status='active'] .nx-deduce-front-clock {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .nx-deduce-front-name {
   min-width: 0;
@@ -682,7 +682,7 @@ function jumpTo(name) {
 .nx-deduce-trigger {
   margin: 6px 0 0;
   font-size: var(--nx-fs-2xs);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .nx-deduce-legend {
   display: flex;
@@ -700,7 +700,7 @@ function jumpTo(name) {
 }
 .nx-deduce-badge {
   font-style: normal;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .nx-deduce-legend-note {
   margin-left: auto;
@@ -783,7 +783,7 @@ function jumpTo(name) {
 .nx-deduce-link {
   width: 100%;
   text-align: left;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .nx-deduce-relation {
   display: flex;

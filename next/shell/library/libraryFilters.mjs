@@ -16,7 +16,7 @@ import { relativeTime } from './relativeTime.mjs'
 export const LIBRARY_FILTER_ALL = 'all'
 export const LIBRARY_FILTER_UNCATEGORIZED = 'uncategorized'
 
-/** 筛选条顺序（工单 P1-1 的字面顺序）；计数为 0 的类别由 buildLibraryFilterTabs 过滤掉。 */
+/** 筛选条顺序（工单 P1-1 的字面顺序）；〔P6〕7 个类别恒渲染（含零计数）。 */
 export const LIBRARY_FILTERS = Object.freeze([
   { id: 'novel', label: '小说' },
   { id: 'script', label: '剧本' },
@@ -49,7 +49,9 @@ export function libraryKindLabel(kind) {
 }
 
 /**
- * 筛选 tab 清单：第一个永远是「全部」；其后只放有内容的类别（计数为 0 不渲染）。
+ * 筛选 tab 清单：第一个永远是「全部」，其后 6 个类别恒渲染（零计数照显）。
+ * 〔P6 · 作者 2026-11-13 按 demo 裁定〕翻案 P1 的「零计数不渲染」沉默层口径：
+ * demo 的类别 tab 是固定清单，空类也摆着（点进去给空态），不随数据消失。
  * 每次从最近清单现算，不缓存、不落盘。
  */
 export function buildLibraryFilterTabs(entries = []) {
@@ -61,8 +63,7 @@ export function buildLibraryFilterTabs(entries = []) {
   }
   const tabs = [{ id: LIBRARY_FILTER_ALL, label: '全部', count: list.length }]
   for (const item of LIBRARY_FILTERS) {
-    const count = counts.get(item.id) ?? 0
-    if (count > 0) tabs.push({ ...item, count })
+    tabs.push({ ...item, count: counts.get(item.id) ?? 0 })
   }
   return tabs
 }

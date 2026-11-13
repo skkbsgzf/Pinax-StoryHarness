@@ -7,7 +7,9 @@ import { relativeTime } from '../shell/library/relativeTime.mjs'
 /**
  * 库管理器（前端重构工单 A）专项用例：空态、列表渲染、键盘可达、移除记录、渲染零 IPC。
  * 失败修复入口（A-5）的用例随 PR-2 的 OpenLibrary 整页视图一起落。
- * 工单 P1：类型筛选条（只出有内容的类别、计数、空态、方向键）与卡片篇数读数。
+ * 工单 P1：类型筛选条（计数、空态、方向键）与卡片篇数读数。
+ * 〔P6 · 作者 2026-11-13 按 demo 裁定〕7 个类别 tab 恒渲染（零计数照显）；
+ * 最近打开的第一张画墨环（aria-current）。
  */
 
 const NOW = new Date('2026-11-11T12:00:00')
@@ -107,16 +109,28 @@ describe('库管理器（前端工单 A）', () => {
     expect(relativeTime('2026-11-09T00:00:00', NOW)).toBe('2 天前')
   })
 
-  it('筛选条（P1-1）：只出现有内容的类别＋全部，tab 带计数', () => {
+  // 〔P6 · 作者 2026-11-13 按 demo 裁定〕翻案 P1「零计数不渲染」：7 个 tab 恒在。
+  it('筛选条（P6）：全部＋6 个类别 tab 恒渲染，零计数也照显', () => {
     const { wrapper } = mountManager()
     const tabs = wrapper.findAll('[role="tab"]')
-    // ENTRIES＝小说 1／剧本 1／未分类 1；漫剧、世界书、资料计数为 0 → 不渲染。
-    expect(tabs.map((tab) => tab.text().replace(/\s+/g, ''))).toEqual(['全部3', '小说1', '剧本1', '未分类1'])
-    expect(wrapper.find('[data-test="library-filter-comic"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="library-filter-worldbook"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="library-filter-reference"]').exists()).toBe(false)
+    // ENTRIES＝小说 1／剧本 1／未分类 1；漫剧、世界书、资料计数为 0，但仍渲染。
+    expect(tabs.map((tab) => tab.text().replace(/\s+/g, ''))).toEqual(['全部3', '小说1', '剧本1', '漫剧0', '世界书0', '资料0', '未分类1'])
+    expect(wrapper.find('[data-test="library-filter-comic"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="library-filter-worldbook"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="library-filter-reference"]').exists()).toBe(true)
     expect(wrapper.find('[role="tablist"]').attributes('aria-label')).toBe('按类型筛选')
     expect(wrapper.find('[data-test="library-filter-all"]').attributes('aria-selected')).toBe('true')
+  })
+
+  it('卡片选中环（P6）：最近打开的第一张 aria-current，其余不标', async () => {
+    const { wrapper } = mountManager()
+    const cards = wrapper.findAllComponents(LibraryCard)
+    expect(cards[0].find('.lib-card').attributes('aria-current')).toBe('true')
+    expect(cards[1].find('.lib-card').attributes('aria-current')).toBeUndefined()
+    expect(cards[2].find('.lib-card').attributes('aria-current')).toBeUndefined()
+    // 筛到「剧本」后，清单第二张（不是最近打开的第一张）不冒充选中。
+    await wrapper.find('[data-test="library-filter-script"]').trigger('click')
+    expect(wrapper.findAllComponents(LibraryCard)[0].find('.lib-card').attributes('aria-current')).toBeUndefined()
   })
 
   it('筛选条（P1-1）：点「剧本」只留剧本卡；切回「全部」恢复三张', async () => {

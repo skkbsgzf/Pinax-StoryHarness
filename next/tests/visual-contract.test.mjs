@@ -306,9 +306,11 @@ test('字号与圆角一律走刻度 token：Next 自写样式不许再出现裸
   assert.deepEqual(offenders, [], `Next 自写样式出现裸 px 字号/圆角（应收进 --nx-* 刻度或 --fs-*/--radius-*）：\n${offenders.join('\n')}`)
 })
 
-test('刻度 token 必须真的定义在布局层：--nx-fs-* 与 --nx-radius-xs 缺一条，var() 就静默失效', async () => {
+test('刻度 token 必须真的定义在布局层：--nx-fs-* 与 --nx-radius-* 缺一条，var() 就静默失效', async () => {
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
-  for (const token of ['--nx-fs-2xs', '--nx-fs-md', '--nx-fs-lg', '--nx-fs-xl', '--nx-fs-2xl', '--nx-radius-xs']) {
+  // 〔P6 · 作者 2026-11-13 按 demo 裁定〕68-R1 的五档收敛翻案开第六档（--nx-fs-3xl 28px），
+  // 并新增卡片大圆角 --nx-radius-lg（14px）；缺定义同样会静默失效，一并钉住。
+  for (const token of ['--nx-fs-2xs', '--nx-fs-md', '--nx-fs-lg', '--nx-fs-xl', '--nx-fs-2xl', '--nx-fs-3xl', '--nx-radius-xs', '--nx-radius-lg']) {
     assert.match(layout, new RegExp(`${token.replace(/-/g, '\\-')}\\s*:`), `next-shell.css 缺刻度 token ${token}`)
   }
 })
@@ -1887,4 +1889,113 @@ test('〔批次 M1-c〕推演场景卡字面量：四字段／三徽章／双模
     assert.match(view, new RegExp(`key: '${key}'`, 'u'), `fact 词表缺局面卡字段 ${key}`)
   }
   assert.match(view, /2d6 /u, 'fact 词表缺命运骰 2d6 trace 文案')
+})
+
+/**
+ * 〔P6 · 作者 2026-11-13 按 demo 裁定〕视觉令牌落地：珊瑚红全局、深一档实心主钮、
+ * Next 作用域的「红当文字色」，以及库管理器的 28px 标题／14px 卡片／药丸钮／墨色选中环。
+ * 对比度在门禁里真算（sRGB 相对亮度），不抄工单数字：正文与按钮文字 ≥4.5:1，
+ * 图标/描边 ≥3:1。demo 的 #ff385c 配白字只有 3.5:1，所以它只许做图标/描边，
+ * 实心钮底一律用深一档 #e00b41——这条也被下面「#ff385c 不达 4.5」的反向断言钉住。
+ */
+function channelLuminance(channel) {
+  const value = channel / 255
+  return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+}
+
+function relativeLuminance(hex) {
+  const [r, g, b] = [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16))
+  return 0.2126 * channelLuminance(r) + 0.7152 * channelLuminance(g) + 0.0722 * channelLuminance(b)
+}
+
+function contrastRatio(a, b) {
+  const [high, low] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x)
+  return (high + 0.05) / (low + 0.05)
+}
+
+function tokenValue(block, name) {
+  assert.ok(block, `token 块缺位，取不到 ${name}`)
+  const hit = block.match(new RegExp(`${name}\\s*:\\s*([^;]+);`, 'u'))
+  return hit ? hit[1].trim() : null
+}
+
+test('〔P6〕视觉令牌：亮/暗两套值 + Next 文字红 + 对比度真算（按钮 ≥4.5、图标 ≥3）', async () => {
+  const legacy = stripComments(await readFile(join(repoRoot, 'src', 'styles', 'themes', 'legacy.css'), 'utf-8'))
+  const light = ruleBody(legacy, ':root.theme-legacy {')
+  const dark = ruleBody(legacy, ':root.theme-legacy.theme-dark {')
+
+  // 亮底：accent 只做图标/描边/色块；实心主钮深一档；老轨 --accent-text 语义不变。
+  assert.equal(tokenValue(light, '--accent'), '#ff385c')
+  assert.equal(tokenValue(light, '--accent-hover'), '#e31c5f')
+  assert.equal(tokenValue(light, '--accent-text'), '#ffffff', '老轨根值＝accent 底上的文字色，不许改成红色文字档')
+  assert.equal(tokenValue(light, '--workbench-action'), '#e00b41')
+  assert.equal(tokenValue(light, '--workbench-action-hover'), '#e31c5f')
+  assert.equal(tokenValue(light, '--workbench-action-text'), '#ffffff')
+  assert.equal(tokenValue(light, '--leading-tight'), '1.2')
+
+  // 暗底：同一颗珊瑚红，文字可以直接用它；主钮与亮底同值（红底白字两套主题一致）。
+  assert.equal(tokenValue(dark, '--accent'), '#ff385c')
+  assert.equal(tokenValue(dark, '--accent-hover'), '#e31c5f')
+  assert.equal(tokenValue(dark, '--accent-text'), '#101317')
+  assert.equal(tokenValue(dark, '--workbench-action'), '#e00b41')
+  assert.equal(tokenValue(dark, '--workbench-action-hover'), '#e31c5f')
+  assert.equal(tokenValue(dark, '--workbench-action-text'), '#ffffff')
+
+  // Next 作用域才把 --accent-text 解成「红当文字色」（老轨根值的同名分叉在 legacy.css 末尾）。
+  assert.equal(tokenValue(ruleBody(legacy, '.theme-legacy .next-shell {'), '--accent-text'), '#e00b41')
+  assert.equal(
+    tokenValue(ruleBody(legacy, ':root.theme-legacy.theme-dark .next-shell {'), '--accent-text'),
+    '#ff385c'
+  )
+
+  // 对比度：白字压实心钮（常态 + hover）都必须 ≥4.5。
+  assert.ok(contrastRatio('#ffffff', '#e00b41') >= 4.5, `白字/#e00b41 = ${contrastRatio('#ffffff', '#e00b41').toFixed(2)}`)
+  assert.ok(contrastRatio('#ffffff', '#e31c5f') >= 4.5, `白字/#e31c5f = ${contrastRatio('#ffffff', '#e31c5f').toFixed(2)}`)
+  // 亮底正文红（Next 作用域）≥4.5；暗底红字 ≥4.5（工作区最深与抬升面都算）。
+  assert.ok(contrastRatio('#e00b41', '#ffffff') >= 4.5)
+  assert.ok(contrastRatio('#ff385c', '#131314') >= 4.5)
+  assert.ok(contrastRatio('#ff385c', '#1b1c1e') >= 4.5)
+  assert.ok(contrastRatio('#ff385c', '#1e1f20') >= 4.5, '暗底抬升面（卡片）上的红字也要 ≥4.5')
+  // 珊瑚红本尊在亮底只够图标/描边：≥3 但 <4.5——这正是它不许当正文、不许做钮底的机器依据。
+  assert.ok(contrastRatio('#ff385c', '#ffffff') >= 3)
+  assert.ok(contrastRatio('#ff385c', '#ffffff') < 4.5)
+
+  // 共享控件词汇自动变红：.control-primary 的底色/字色别名指到 --workbench-action*。
+  const controls = stripComments(await readFile(join(repoRoot, 'src', 'styles', 'workbench-controls.css'), 'utf-8'))
+  const aliases = ruleBody(controls, '.theme-legacy {')
+  assert.match(aliases, /--control-accent-bg:\s*var\(--workbench-action\)/u)
+  assert.match(aliases, /--control-accent-text:\s*var\(--workbench-action-text\)/u)
+})
+
+test('〔P6〕demo 字阶与圆角：28px 第六档、14px 卡片圆角、9999 药丸；库管理器与卡片落到这些 token', async () => {
+  const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
+  assert.match(layout, /--nx-fs-3xl:\s*28px/u)
+  assert.match(layout, /--nx-radius-lg:\s*14px/u)
+  assert.match(layout, /--nx-radius-pill:\s*9999px/u)
+
+  const manager = await readFile(join(shellDir, 'library', 'LibraryManager.vue'), 'utf-8')
+  assert.match(ruleBody(manager, '.lib-title {'), /font-size:\s*var\(--nx-fs-3xl\)/u, '页面主标题应走 28px 第六档')
+  assert.match(ruleBody(manager, '.lib-title {'), /line-height:\s*var\(--leading-tight\)/u, '标题行高应走 demo 的 tight')
+  // 顶栏两枚药丸钮：实心红「新建库」＋白底描边「打开文件夹」；圆角一律 pill。
+  assert.match(manager, /class="control-primary lib-pill"[^>]*data-test="library-new"/u)
+  assert.match(manager, /class="lib-pill-ghost"[^>]*data-test="library-open-folder"/u)
+  assert.match(ruleBody(manager, '.lib-pill-ghost {'), /border-radius:\s*var\(--nx-radius-pill\)/u)
+  assert.match(ruleBody(manager, '.lib-manager .lib-actions button.control-primary.lib-pill {'), /border-radius:\s*var\(--nx-radius-pill\)/u)
+  // 筛选条选中态＝墨色文字＋2px 墨色下划线；demo 的「类别管理」链接按工单不做。
+  const selectedTab = ruleBody(manager, '.lib-filter[aria-selected="true"] {')
+  assert.match(selectedTab, /color:\s*var\(--text-primary\)/u)
+  assert.match(selectedTab, /border-bottom-color:\s*var\(--text-primary\)/u)
+  assert.doesNotMatch(manager, /类别管理/u)
+
+  const card = await readFile(join(shellDir, 'library', 'LibraryCard.vue'), 'utf-8')
+  assert.match(ruleBody(card, '.lib-card {'), /border-radius:\s*var\(--nx-radius-lg\)/u)
+  assert.match(ruleBody(card, '.lib-card:hover {'), /border-color:\s*var\(--text-primary\)/u, '悬停只加深描边')
+  const currentRing = ruleBody(card, '.lib-card[aria-current="true"] {')
+  assert.match(currentRing, /border-color:\s*var\(--text-primary\)/u)
+  assert.match(currentRing, /box-shadow:\s*inset 0 0 0 1px var\(--text-primary\)/u, '最近一张＝墨色 2px 环（描边 + inset）')
+
+  // 筛选清单恒渲染：P1 的「零计数不渲染」已被作者按 demo 翻案，源文件里不再有计数闸。
+  const filters = await readFile(join(shellDir, 'library', 'libraryFilters.mjs'), 'utf-8')
+  assert.match(filters, /for \(const item of LIBRARY_FILTERS\)/u)
+  assert.doesNotMatch(filters, /count\s*>\s*0/u)
 })

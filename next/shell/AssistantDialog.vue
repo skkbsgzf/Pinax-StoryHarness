@@ -1083,7 +1083,7 @@ onBeforeUnmount(() => {
 .authoring-knowledge__markdown :deep(li > p) { margin: .35em 0; }
 .authoring-knowledge__markdown :deep(hr) { margin: 1.3em 0; border: 0; border-top: 1px solid var(--hairline-soft); }
 .authoring-knowledge__markdown :deep(blockquote) { margin: 1em 0; padding-inline-start: 1em; border-inline-start: 2px solid var(--hairline-soft); color: var(--text-secondary); }
-.authoring-knowledge__markdown :deep(a) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.authoring-knowledge__markdown :deep(a) { color: var(--accent-text); text-decoration: underline; text-underline-offset: 3px; }
 .authoring-knowledge__markdown :deep(pre) { max-width: 100%; overflow-x: auto; margin: 1em 0; padding: 12px; background: var(--surface-workbench-muted); border-radius: var(--radius-control); font-size: var(--nx-fs-md); line-height: 1.6; }
 .authoring-knowledge__markdown :deep(code) { font-family: var(--font-mono); font-size: var(--nx-fs-md); white-space: pre-wrap; }
 .authoring-knowledge__markdown :deep(pre code) { white-space: pre; }
@@ -1095,7 +1095,7 @@ onBeforeUnmount(() => {
 .authoring-knowledge__live-trail { margin-top: 4px; }
 .authoring-knowledge__thinking span { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-primary, var(--accent)); animation: knowledge-pulse 900ms ease-in-out infinite alternate; }
 .authoring-knowledge__error { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 10px; padding: 9px 10px; border: 0; border-radius: 12px; background: var(--archive-paper); color: var(--text-secondary); font-size: var(--nx-fs-md); text-align: start; }
-.authoring-knowledge__error-retry { border: 0; background: transparent; color: var(--accent-primary, var(--accent)); cursor: pointer; }
+.authoring-knowledge__error-retry { border: 0; background: transparent; color: var(--accent-primary, var(--accent-text)); cursor: pointer; }
 </style>
 
 <style scoped>
@@ -1142,7 +1142,7 @@ onBeforeUnmount(() => {
 /* 〔批次76 任务4-4〕模式徽标实测 40×23、确认行那两枚 40 上下×22：都差纵向那 1–2px。
    抬到 min-height 24 并 inline-flex 居中（padding 与字号不动，徽标不会被撑成两行）。 */
 .authoring-knowledge__mode-badge { flex: none; display: inline-flex; align-items: center; min-height: 24px; padding: 2px 8px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control, 10px); background: transparent; color: var(--text-muted); font-size: var(--nx-fs-2xs, 11px); cursor: pointer; }
-.authoring-knowledge__mode-badge.is-review { color: var(--accent, var(--accent)); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+.authoring-knowledge__mode-badge.is-review { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
 .authoring-knowledge__mode-badge.is-auto { color: var(--signal-warm, var(--signal-warm)); border-color: color-mix(in srgb, var(--signal-warm) 32%, transparent); }
 .authoring-knowledge__mode-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--signal-warm, currentColor) 32%, transparent); border-radius: var(--nx-radius-xs, 8px); background: color-mix(in srgb, var(--signal-warm, currentColor) 6%, transparent); font-size: var(--nx-fs-2xs, 11px); color: var(--text-muted); }
 .authoring-knowledge__mode-confirm-text { flex: 1 1 180px; }
@@ -1165,7 +1165,7 @@ onBeforeUnmount(() => {
 
 /* 会话弹层：轻量一枚（不是二级页），贴着工具栏下缘。层序走 --z-popover（低于统一二级页）。 */
 .authoring-knowledge__sessions { position: absolute; top: calc(100% - 4px); right: 8px; z-index: var(--z-popover); width: min(280px, 92vw); max-height: 340px; overflow-y: auto; padding: 6px; border: 1px solid var(--hairline-soft); border-radius: var(--radius-control); background: var(--surface-workbench-raised); box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent); scrollbar-width: thin; }
-.authoring-knowledge__session-new { display: flex; width: 100%; min-height: 30px; align-items: center; padding: 5px 8px; margin-bottom: 4px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--accent); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
+.authoring-knowledge__session-new { display: flex; width: 100%; min-height: 30px; align-items: center; padding: 5px 8px; margin-bottom: 4px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--accent-text); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
 .authoring-knowledge__session-new:hover { background: var(--nav-hover); }
 .authoring-knowledge__session-list { list-style: none; margin: 0; padding: 0; }
 .authoring-knowledge__session-row { display: flex; align-items: center; gap: 2px; border-radius: var(--nx-radius-xs); }
@@ -1180,7 +1180,7 @@ onBeforeUnmount(() => {
 .authoring-knowledge__session-rename { width: 100%; min-height: 28px; padding: 2px 8px; border: 1px solid var(--border-strong); border-radius: var(--nx-radius-xs); background: var(--surface-workbench-input); color: var(--text-primary); font-size: var(--nx-fs-md); }
 
 /* 命令徽章与引用标注：一条 user 消息上的两个小字。 */
-.authoring-knowledge__command-badge { margin-right: 6px; padding: 1px 6px; border-radius: var(--nx-radius-xs); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); font-size: var(--nx-fs-2xs); }
+.authoring-knowledge__command-badge { margin-right: 6px; padding: 1px 6px; border-radius: var(--nx-radius-xs); background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent-text); font-size: var(--nx-fs-2xs); }
 p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted); font-size: var(--nx-fs-2xs); line-height: 1.5; }
 
 /* 〔批次77 任务3〕typeahead 弹层：三类触发符共用这一层（老版是 ref-pop 与 slash-hint 两层、两套键盘）。
@@ -1228,7 +1228,7 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .authoring-knowledge__answer-meta > .authoring-knowledge__answer-status { margin-inline-start: auto; color: var(--text-muted); font-weight: 400; font-size: var(--nx-fs-2xs); letter-spacing: .02em; }
 .authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='error'] { color: var(--danger); }
 .authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='stopped'] { color: var(--signal-warm); }
-.authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='streaming'] { color: var(--accent); }
+.authoring-knowledge__answer-meta > .authoring-knowledge__answer-status[data-status='streaming'] { color: var(--accent-text); }
 
 /* 〔批次77 任务3〕停止钮：与发送钮同族同尺寸（命中区走既有 --workspace-control-height，
    不自立一档数值），只是配色取「会被拒」那一支——它是收手，不是提交。 */
@@ -1256,7 +1256,7 @@ p.authoring-knowledge__question-note { margin: 4px 0 0; color: var(--text-muted)
 .nx-composer-plus-menu { position: absolute; z-index: var(--z-popover, 30); bottom: calc(100% + 6px); left: 0; display: flex; min-width: 172px; flex-direction: column; gap: 2px; padding: 6px; border: 1px solid var(--hairline-soft); border-radius: var(--nx-radius-xs); background: var(--surface-workbench-raised); }
 .nx-composer-plus-item { display: flex; align-items: center; gap: 8px; min-height: 28px; padding: 0 8px; border: 0; border-radius: var(--nx-radius-xs); background: transparent; color: var(--text-primary); font-family: var(--font-interface); font-size: var(--nx-fs-md); text-align: start; cursor: pointer; }
 .nx-composer-plus-item:hover { background: var(--nav-hover); }
-.nx-composer-plus-char { flex: none; width: 18px; color: var(--accent); font-family: var(--font-interface); font-size: var(--nx-fs-md); font-weight: 600; text-align: center; }
+.nx-composer-plus-char { flex: none; width: 18px; color: var(--accent-text); font-family: var(--font-interface); font-size: var(--nx-fs-md); font-weight: 600; text-align: center; }
 .nx-composer-caret { margin-left: 4px; font-size: var(--nx-fs-2xs); }
 /* 写模式 chip 的 ▾ 走伪元素：徽标的文本读数被用例钉着「审阅／自动／锁定」三个词，箭头不许混进读数。 */
 .authoring-knowledge__mode-badge::after { content: '▾'; margin-left: 4px; font-size: var(--nx-fs-2xs); }

@@ -9,11 +9,15 @@ import { formatLibraryCardMeta, libraryKindLabel } from './libraryFilters.mjs'
  * 渲染零 IPC：路径/类型/时间/篇数全部来自 props 里的最近清单快照（工单 A-2 验收）。
  * 范围 P1：类型胶囊与筛选条共用 libraryFilters 的同一张映射表；第三行补「N 篇 · 时间」
  * （旧记录没有 count 时只显示时间，不扫盘、不猜数）。
+ * P6（作者 2026-11-13 按 demo 裁定）：卡片圆角 14；悬停＝描边加深不改字色；
+ * 最近打开的第一张画墨色选中环（外层 1px 描边＋inset 1px，合成 demo 的 2px 墨环）。
  */
 const props = defineProps({
   entry: { type: Object, required: true },
   /** 相对时间的基准（默认当下；测试可注入）。 */
-  now: { type: Object, default: null }
+  now: { type: Object, default: null },
+  /** 是否是「最近打开的第一张」（库管理器按整份清单首条算，不按筛选后首条）。 */
+  current: { type: Boolean, default: false }
 })
 const emit = defineEmits(['open', 'reveal', 'remove'])
 
@@ -33,6 +37,7 @@ function metaText() {
       class="lib-card"
       :data-test="`library-card`"
       :title="entry?.path ?? ''"
+      :aria-current="current ? 'true' : undefined"
       @click="emit('open', entry)"
     >
       <span class="lib-card-head">
@@ -59,7 +64,7 @@ function metaText() {
 </template>
 
 <style scoped>
-/* 库卡片（工单 A-3/C-3）：悬停只动描边不动文字色；长名长路径单行省略。字号/颜色全走令牌。 */
+/* 库卡片（工单 A-3/C-3/P6）：悬停只动描边不动文字色；长名长路径单行省略。字号/颜色全走令牌。 */
 .lib-card-wrap {
   position: relative;
   display: flex;
@@ -74,13 +79,19 @@ function metaText() {
   gap: 6px;
   padding: 14px 16px;
   border: 1px solid var(--hairline-soft);
-  border-radius: var(--radius-surface);
+  border-radius: var(--nx-radius-lg);
   background: var(--surface-workbench-raised);
   color: var(--text-secondary);
   text-align: left;
   cursor: pointer;
+  transition: border-color 0.15s ease;
 }
-.lib-card:hover { border-color: var(--text-muted); }
+.lib-card:hover { border-color: var(--text-primary); }
+/* 〔P6〕最近打开的第一张＝墨色选中环：外层描边 1px＋inset 1px，合起来 2px 墨环（demo 原样）。 */
+.lib-card[aria-current="true"] {
+  border-color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--text-primary);
+}
 .lib-card-head {
   display: flex;
   align-items: center;

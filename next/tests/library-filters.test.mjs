@@ -10,9 +10,10 @@ import {
 } from '../shell/library/libraryFilters.mjs'
 
 /**
- * 库管理器筛选与卡片读数（工单 P1）的纯函数用例。
+ * 库管理器筛选与卡片读数（工单 P1／P6）的纯函数用例。
  * 口径：kind 映射 novel/script/comic/worldbook/reference|dossier；其余/缺失＝未分类；
- * tab 只渲染有内容的类别（计数为 0 不渲染）；卡片第三行没有 count 就只显示时间。
+ * 〔P6 · 作者 2026-11-13 按 demo 裁定〕7 个类别 tab 恒渲染（含零计数），
+ * P1 的「零计数不渲染」沉默层口径被推翻；卡片第三行没有 count 就只显示时间。
  */
 
 const NOW = new Date('2026-11-11T12:00:00')
@@ -44,14 +45,20 @@ test('kind 映射：novel/script/comic/worldbook/reference|dossier＋未分类�
   assert.equal(libraryKindLabel(null), '')
 })
 
-test('筛选 tab：全部恒在，其余只出计数 > 0 的类别，顺序固定', () => {
+// 〔P6 · 作者 2026-11-13 按 demo 裁定〕翻案 P1 的「零计数不渲染」：7 个类别 tab 恒在。
+test('筛选 tab：全部＋6 个类别恒渲染（零计数照显），顺序固定', () => {
+  const allIds = ['all', 'novel', 'script', 'comic', 'worldbook', 'reference', 'uncategorized']
   const tabs = buildLibraryFilterTabs(ENTRIES)
-  assert.deepEqual(tabs.map((tab) => tab.id), ['all', 'novel', 'script', 'comic', 'worldbook', 'reference', 'uncategorized'])
+  assert.deepEqual(tabs.map((tab) => tab.id), allIds)
   assert.deepEqual(tabs.map((tab) => tab.count), [8, 2, 1, 1, 1, 2, 1])
   assert.equal(tabs[0].label, '全部')
-  // 空清单只留「全部 0」；有内容的类别才出现。
-  assert.deepEqual(buildLibraryFilterTabs([]), [{ id: 'all', label: '全部', count: 0 }])
-  assert.deepEqual(buildLibraryFilterTabs([{ kind: 'novel' }]).map((tab) => tab.id), ['all', 'novel'])
+  // 空清单也摆全 7 个 tab，计数全 0（不随数据消失）。
+  const empty = buildLibraryFilterTabs([])
+  assert.deepEqual(empty.map((tab) => tab.id), allIds)
+  assert.deepEqual(empty.map((tab) => tab.count), [0, 0, 0, 0, 0, 0, 0])
+  const onlyNovel = buildLibraryFilterTabs([{ kind: 'novel' }])
+  assert.deepEqual(onlyNovel.map((tab) => tab.id), allIds, '只有一类有内容时，其余 5 个空类仍在')
+  assert.deepEqual(onlyNovel.map((tab) => tab.count), [1, 1, 0, 0, 0, 0, 0])
   // 声明的类别全集保持工单字面顺序。
   assert.deepEqual(LIBRARY_FILTERS.map((item) => item.label), ['小说', '剧本', '漫剧', '世界书', '资料', '未分类'])
 })

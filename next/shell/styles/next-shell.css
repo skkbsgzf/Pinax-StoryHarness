@@ -20,6 +20,15 @@ body {
   overflow: hidden;
 }
 
+/* 〔P6 修复〕这三个新令牌必须挂在 :root：库管理器在无项目态渲染于 .next-shell 之外，
+   挂在 .next-shell 上对它不可见（实测 --nx-fs-3xl/--nx-radius-pill 解析失败回落 16px/0）。
+   值与 .next-shell 块内同名令牌一致。 */
+:root {
+  --nx-fs-3xl: 28px;
+  --nx-radius-lg: 14px;
+  --nx-radius-pill: 9999px;
+}
+
 .next-shell {
   /* 悬浮小工具窗的绝对定位以这一层为坐标系（协议 v1.1-C）：top:16px 即标题栏下 16px。 */
   position: relative;
@@ -31,10 +40,14 @@ body {
   --nx-fs-md: 13px;  /* 面板正文与按钮 */
   --nx-fs-lg: 15px;  /* 正文编辑与阅读 */
   --nx-fs-xl: 17px;  /* 卡片标题 */
-  --nx-fs-2xl: 19px; /* 页面主标题 */
-  --nx-fs-hero: 28px; /* 库管理器等一级视图的页面标题（前端工单 C-2：28/1.2） */
+  --nx-fs-2xl: 19px; /* 面板区标题 */
+  /* 〔P6 · 作者 2026-11-13 按 demo 裁定〕开第六档：28px 只给页面主标题用
+     （现唯一消费点＝库管理器「我的库」）。68-R1 曾把刻度收敛到五档，本档是
+     按原型 demo 字阶的翻案，仍走同一本 --nx-fs-* 刻度，不落裸 px。 */
+  --nx-fs-3xl: 28px;
   --nx-radius-xs: 6px; /* 小号图标按钮（28px 级） */
-  --nx-radius-pill: 999px; /* 〔批次68-R2 任务二〕胶囊档：蓝链 .tag 皮与信息卡徽章共用（圆角也进刻度，不落裸值） */
+  --nx-radius-lg: 14px; /* 〔P6〕卡片与弹窗内大块面（demo --radius-md 14px 映射） */
+  --nx-radius-pill: 9999px; /* 〔P6 按 demo 对齐〕胶囊档：蓝链 .tag 皮、类型胶囊与药丸钮共用 */
   display: flex;
   /* 标题栏（工单F）是根节点里的第一行；三栏本体吃掉剩下的高度。 */
   flex: 1 1 auto;
@@ -612,7 +625,7 @@ body {
 .prefs-row-hint { font-size: var(--nx-fs-md); color: var(--text-muted); }
 .prefs-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .prefs-state { margin: 0; padding: 8px 12px; border-radius: var(--radius-control); font-size: var(--nx-fs-md); line-height: 1.7; }
-.prefs-state.is-ready { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent); }
+.prefs-state.is-ready { border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--accent-text); }
 .prefs-state.is-warn { border: 1px solid color-mix(in srgb, var(--signal-warm) 40%, transparent); background: color-mix(in srgb, var(--signal-warm) 10%, transparent); color: var(--signal-warm); }
 .prefs-state.is-error { border: 1px solid color-mix(in srgb, var(--control-danger) 40%, transparent); background: color-mix(in srgb, var(--control-danger) 8%, transparent); color: var(--control-danger); }
 
@@ -628,7 +641,7 @@ body {
   display: inline-block; margin-left: 6px; padding: 1px 8px;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   border-radius: var(--nx-radius-xs);
-  font-size: var(--nx-fs-2xs); color: var(--accent);
+  font-size: var(--nx-fs-2xs); color: var(--accent-text);
 }
 .carriers-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: var(--nx-fs-2xs); color: var(--text-muted); }
 .carriers-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -716,7 +729,7 @@ body {
   border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
   border-radius: var(--radius-control);
   background: color-mix(in srgb, var(--accent) 7%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   line-height: 1.7;
 }
 .pane-error {
@@ -1802,7 +1815,7 @@ input.doc-title {
   color: var(--text-muted);
 }
 .nx-context-mark {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .nx-context-empty {
   margin: 2px 8px 6px;
@@ -1912,10 +1925,10 @@ input.doc-title {
 /* —— Wiki 双链与反向链接（批次38）———————————————————————————————— */
 /* 条目阅读态里其它条目的名字：可点、点开跳那个条目。虚线下划线＝wiki 惯例，hover 才实。 */
 .nx-wikilink {
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
   text-decoration-style: dashed;
-  text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--accent-text) 45%, transparent);
   cursor: pointer;
   /* 〔批次76 任务4-4〕遍历实测「可点链接行」整行只有 19px 高：inline 锚点的可点区就是那一行字。
      inline 元素的纵向 padding 不改行盒高度（排版不动），但会把命中区向上下各扩 3px——
@@ -1976,7 +1989,7 @@ input.doc-title {
 .nx-writing-ask:focus-visible { outline: 0; border-bottom-color: var(--workbench-selected); }
 .nx-writing-hint,
 .nx-writing-busy { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
-.nx-writing-busy { color: var(--accent); }
+.nx-writing-busy { color: var(--accent-text); }
 /* 结果面板：这是「还没落进正文」的一段外来文字，允许有分隔（P18 对面板的豁免），
    但仍是同一页纸上的淡痕——一条上细线，一个极浅的底。 */
 .nx-writing-result {
@@ -2066,7 +2079,7 @@ input.doc-title {
   gap: 12px;
 }
 .nx-review-label { font-size: var(--nx-fs-2xs); color: var(--text-muted); }
-.nx-review-busy { font-size: var(--nx-fs-2xs); color: var(--accent); }
+.nx-review-busy { font-size: var(--nx-fs-2xs); color: var(--accent-text); }
 .nx-review-summary {
   margin: 6px 0 0;
   font-size: var(--nx-fs-md);

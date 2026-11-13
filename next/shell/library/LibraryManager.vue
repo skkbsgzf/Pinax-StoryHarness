@@ -14,7 +14,8 @@ import { LIBRARY_FILTER_ALL, LIBRARY_FILTERS, buildLibraryFilterTabs, filterLibr
  * 通道调用与错误处理留在外壳（与菜单同一条分发口径）。
  *
  * 工单 P1：标题与卡片之间加类型筛选条——类别只读 recentProjects[].kind（libraryFilters 纯函数），
- * 选中态只在会话内记忆、不落盘；计数为 0 的类别不渲染。某一类在移除记录后变空时，
+ * 选中态只在会话内记忆、不落盘。〔P6 · 作者 2026-11-13 按 demo 裁定〕7 个类别 tab 恒渲染
+ * （零计数照显，P1 的「零计数不渲染」沉默层口径被推翻）；某一类在移除记录后变空时，
  * 列表区给「这里还没有这一类库」空态与新建入口，不留白。
  */
 const props = defineProps({
@@ -58,14 +59,16 @@ const lead = () => (props.recents.length ? '接着写，或者开个新的。' :
 const activeFilter = ref(LIBRARY_FILTER_ALL)
 const filterTabs = computed(() => buildLibraryFilterTabs(props.recents))
 const visibleRecents = computed(() => filterLibraryEntries(props.recents, activeFilter.value))
+/** 〔P6〕「最近打开的第一张」＝整份清单第一条；筛选后不在当前类就不画选中环。 */
+const currentPath = computed(() => props.recents[0]?.path ?? null)
 const activeFilterLabel = computed(() => {
   if (activeFilter.value === LIBRARY_FILTER_ALL) return '全部'
   return LIBRARY_FILTERS.find((item) => item.id === activeFilter.value)?.label ?? '全部'
 })
 
 /**
- * roving tabindex 的 0 位（复用 SettingsModal.vue:225-252）：当前类别被移除（计数归零、
- * tab 不再渲染）时落到第一个可见项；选中态仍保留，好让下方空态说明「这一类空了」。
+ * roving tabindex 的 0 位（复用 SettingsModal.vue:225-252）：〔P6〕7 个 tab 恒渲染，
+ * 当前类别总在清单里，正常不触发回退；保留这段只为清单将来再变时焦点不悬空。
  */
 const focusFilterId = computed(() => {
   const ids = filterTabs.value.map((tab) => tab.id)
@@ -141,8 +144,8 @@ function onFilterKeydown(event) {
 
         <p class="lib-lead">{{ lead() }}</p>
         <div class="lib-actions">
-          <button type="button" class="control-primary" data-test="library-new" @click="startCreate(null)">新建库</button>
-          <button type="button" class="control-secondary" data-test="library-open-folder" @click="emit('open-folder')">打开文件夹</button>
+          <button type="button" class="control-primary lib-pill" data-test="library-new" @click="startCreate(null)">新建库</button>
+          <button type="button" class="lib-pill-ghost" data-test="library-open-folder" @click="emit('open-folder')">打开文件夹</button>
           <button type="button" class="control-secondary" data-test="library-import" @click="startImport(null)">导入既有稿</button>
         </div>
 
@@ -176,6 +179,7 @@ function onFilterKeydown(event) {
                 :key="entry.path"
                 :entry="entry"
                 :now="now"
+                :current="entry.path === currentPath"
                 @open="(entryItem) => emit('open', entryItem)"
                 @reveal="(entryItem) => emit('reveal', entryItem)"
                 @remove="(entryItem) => emit('remove', entryItem)"
@@ -193,7 +197,7 @@ function onFilterKeydown(event) {
 </template>
 
 <style scoped>
-/* 库管理器（工单 A／C）：整窗一级视图；间距 4 的倍数；字号全走令牌（页面标题 --nx-fs-hero）。 */
+/* 库管理器（工单 A／C）：整窗一级视图；间距 4 的倍数；字号全走令牌。 */
 .lib-manager {
   display: flex;
   flex-direction: column;
@@ -212,11 +216,12 @@ function onFilterKeydown(event) {
   font-size: var(--nx-fs-md);
   color: var(--text-muted);
 }
+/* 〔P6〕页面主标题开第六档 28px（作者 2026-11-13 按 demo 裁定），行高用 demo 的 tight。 */
 .lib-title {
   flex: 1 1 auto;
   margin: 0;
-  font-size: var(--nx-fs-hero);
-  line-height: 1.2;
+  font-size: var(--nx-fs-3xl);
+  line-height: var(--leading-tight);
   font-weight: 600;
   color: var(--text-primary);
 }
@@ -240,8 +245,35 @@ function onFilterKeydown(event) {
   flex-wrap: wrap;
   gap: 12px;
 }
-/* 筛选条（P1-1）：原型是 Airbnb 式墨色下划线标签，不用色块；计数是角注胶囊。
-   圆角/字号/颜色全走令牌；激活态同时有颜色与下划线，不单靠颜色传达。 */
+/* 〔P6 · 作者 2026-11-13 按 demo 裁定〕顶栏两枚药丸钮：
+   「新建库」吃 control-primary（--workbench-action 深一档红，白字 4.87:1）；
+   「打开文件夹」＝白底细描边药丸。圆角一律走 --nx-radius-pill。 */
+.lib-manager .lib-actions button.control-primary.lib-pill {
+  border-radius: var(--nx-radius-pill);
+}
+.lib-pill-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 7px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--nx-radius-pill);
+  background: var(--surface-workbench-raised);
+  color: var(--text-primary);
+  font-size: var(--nx-fs-md);
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.lib-pill-ghost:hover {
+  border-color: var(--text-primary);
+  background: var(--surface-workbench-muted);
+}
+/* 筛选条（P1-1／P6）：原型是 Airbnb 式墨色下划线标签，不用色块；计数是角注胶囊。
+   圆角/字号/颜色全走令牌；〔P6〕选中态＝文字墨色＋2px 墨色下划线（demo 原样，
+   红色只留给图标/描边/主钮，不再做选中下划线色）。 */
 .lib-filterbar {
   display: flex;
   align-items: center;
@@ -270,7 +302,7 @@ function onFilterKeydown(event) {
 .lib-filter:hover { color: var(--text-primary); }
 .lib-filter[aria-selected="true"] {
   color: var(--text-primary);
-  border-bottom-color: var(--accent);
+  border-bottom-color: var(--text-primary);
 }
 .lib-filter:focus-visible {
   outline: 2px solid var(--accent);
