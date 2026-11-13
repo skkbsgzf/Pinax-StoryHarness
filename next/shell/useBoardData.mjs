@@ -5,6 +5,7 @@ import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIERS, RECORD_CARRIER_KEYS, recordTreeKey } from './recordCarriers.mjs'
 import { applyWritingResult, normalizeSelection, writingActionOf } from './writingActions.mjs'
 import { resolveResourceClaim } from './viewRegistry.mjs'
+import { factEntriesToBoardEntries } from './factEntriesToHub.mjs'
 
 /**
  * 板块数据（章节／大纲／构思／条目／约束／资料）的单一归属。
@@ -132,6 +133,9 @@ export function useBoardData(bridge) {
     proposalWarnings: [],
     proposalsError: null,
     entries: [],
+    /** 条目数据源（S1）：'fact'＝拆解数据（fact:list→factEntriesToBoardEntries），
+     *  'worldbook'＝既有 世界书/*.md（零回归，缺省值就是它）。界面只读，切换到由 loadEntries 判。 */
+    entriesSource: 'worldbook',
     /** 世界书类别（批次34）：世界书/ 下的一级子目录名（列表工具随 categories 带回）。
      *  索引窗按它分组、新建下拉按它出选项；顶层旧项目是空数组（下拉只剩「顶层」，列表一整组）。 */
     categories: [],
@@ -1435,9 +1439,75 @@ export function useBoardData(bridge) {
     await loadProposals()
   }
 
+  /**
+   * 拆解数据源（S1 · WO-S1-04）：库根存在 `拆解/*.json` 且 fact:list 总数 >0 时，
+   * 世界书板条目改走 fact 通道；否则不动（回落到 世界书/*.md，零回归）。
+   *
+   * root 从 view 通道现取：useBoardData 本身不持项目状态，渲染层也没有第二个 root 真源；
+   * 取不到（jsdom 假桥／项目未打开／通道未接）就当这条分支不存在，不发任何多余请求。
+   * 投影层把 v3 条目变成 EntriesBoard 认的运行时条目（版式与组件不动），原 layer/slot/status/
+   * chapters 仍在条目上，S3 换版式时可直接读。
+   */
+  async function loadEntriesFromFact({ syncCurrent = true } = {}) {
+    if (!bridge?.request) return false
+    let root = ''
+    try {
+      const viewed = await bridge.request(IPC_CHANNELS.view, {})
+      root = viewed?.ok === true ? String(viewed.value?.project?.root ?? '').trim() : ''
+    } catch {
+      return false
+    }
+    if (!root) return false
+    let listed = null
+    try {
+      listed = await bridge.request(IPC_CHANNELS.factList, { root })
+    } catch {
+      return false
+    }
+    if (!listed?.ok || !Array.isArray(listed.entries) || !(Number(listed.total) > 0)) return false
+    const book = root.replace(/[\\/]+$/u, '').split(/[\\/]/u).filter(Boolean).pop() || '拆解'
+    const entries = factEntriesToBoardEntries(listed.entries, { book, bookName: book })
+    if (!entries.length) return false
+    // 从世界书切到拆解（或换库）：上一份条目的选中态不跨源沿用（path/id 语义都换了）。
+    if (state.entriesSource !== 'fact') {
+      state.entry = null
+      state.selection = { type: null, item: null }
+    }
+    state.entries = entries
+    state.entriesSource = 'fact'
+    // 拆解数据没有「世界书类别目录」；类别下拉只留「顶层」，不伪造一套目录。
+    state.categories = []
+    state.listWarnings = (Array.isArray(listed.warnings) ? listed.warnings : [])
+      .map((warning) => (typeof warning === 'string' ? warning : String(warning?.message ?? '')).trim())
+      .filter(Boolean)
+    state.loadedTrees.entries = true
+    if (!syncCurrent) return true
+    const current = state.entry?.id ? entries.find((item) => item.id === state.entry.id) : null
+    if (current) {
+      state.entry = current
+      state.selection = { type: 'entry', item: current }
+    } else if (!state.entry) {
+      // 与既有「首条自动打开」同口径：只摆数据面，不额外发读请求（v3 条目已在手）。
+      state.entry = entries[0]
+      state.selection = { type: 'entry', item: entries[0] }
+    }
+    return true
+  }
+
   async function loadEntries({ syncCurrent = true } = {}) {
     state.busy = true
     state.treeError = null
+    const wasFact = state.entriesSource === 'fact'
+    if (await loadEntriesFromFact({ syncCurrent })) {
+      state.busy = false
+      return
+    }
+    // 从拆解源回落世界书：上一份 fact 条目的选中态不能挂到新树上（openEntry 已经按源分叉了）。
+    if (wasFact) {
+      state.entry = null
+      state.selection = { type: null, item: null }
+    }
+    state.entriesSource = 'worldbook'
     // 大纲树不归世界书这一栏（协议 v1.1-A：一载体一棵本域内容树）：这一栏只管条目。
     // 也不在这里清空 state.outline —— 悬浮大纲卡是常驻窗（写作时也可用），
     // 换栏就把它的树清掉会让卡片摊成空树（批次35 空白卡修复的真实成因）。
@@ -1490,6 +1560,18 @@ export function useBoardData(bridge) {
 
   async function openEntry(item) {
     if (!item) return
+    // 拆解数据（S1）：条目整份已在数据面（fact:list 带全字段），不再发 pinax_worldbook_read；
+    // 阅读列／信息卡直接读这一份投影。写路径仍未开（S2），这里只切选中态。
+    if (state.entriesSource === 'fact') {
+      state.busy = false
+      state.error = null
+      state.notice = ''
+      state.saveFeedback = null
+      state.entry = item
+      state.entryWarnings = []
+      state.selection = { type: 'entry', item }
+      return
+    }
     state.busy = true
     state.error = null
     state.notice = ''

@@ -615,11 +615,15 @@ test('界面缩放是产品参数不是巧合：默认 0.85（作者口径）且
   assert.match(mainSource, /zoomFactor:\s*uiZoom/, '窗口 webPreferences 必须落 zoomFactor')
   assert.match(mainSource, /0\.85/, '默认缩放＝作者口径 0.85')
   // 断言同步（工单A · 作者裁定）：视图组整组删掉，菜单不再提供 native zoom
-  // （它与 zoomFactor 双轨冲突，见协议 §0）；缩放入口只剩偏好节的 uiZoom（保存即经 onPrefsApplied 落窗口）。
+  // （它与 zoomFactor 双轨冲突，见协议 §0）；缩放入口只剩 uiZoom（保存即经 onPrefsApplied 落窗口）。
   const menuSource = await readFile(new URL('../shell/menus.mjs', import.meta.url), 'utf-8')
-  assert.doesNotMatch(menuSource, /resetZoom|zoomIn|zoomOut/, '菜单不得再提供 native zoom（缩放只在偏好节）')
+  assert.doesNotMatch(menuSource, /resetZoom|zoomIn|zoomOut/, '菜单不得再提供 native zoom（缩放只在设置页）')
+  // 〔工单 P8 · B-6，作者 2026-11-13 设置图谱裁定〕缩放随主题迁「外观」节：
+  // 入口仍是 uiZoom 这一条，但落点从偏好节换成 AppearanceSection；偏好节只剩模型端点。
+  const appearanceSource = await readFile(new URL('../shell/settings/AppearanceSection.vue', import.meta.url), 'utf-8')
+  assert.match(appearanceSource, /prefs-zoom/, '外观节必须有缩放入口（唯一入口）')
   const prefsSource = await readFile(new URL('../shell/settings/PrefsSection.vue', import.meta.url), 'utf-8')
-  assert.match(prefsSource, /prefs-zoom/, '偏好节必须有缩放入口（唯一入口）')
+  assert.doesNotMatch(prefsSource, /uiZoom/, '缩放已迁外观节：偏好节不再持有缩放入口')
 })
 
 test('偏好通道（批次8①）：读/写/探测三分，写后生效钩子必须被调，存储未注入时如实报缺', async () => {

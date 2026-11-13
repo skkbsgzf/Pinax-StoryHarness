@@ -27,7 +27,13 @@ export const NEXT_ERROR_CODES = Object.freeze({
   PRIMARY_CARRIER_MISSING: 'PINAX_PRIMARY_CARRIER_MISSING',
   PRIMARY_CARRIER_NOT_ENABLED: 'PINAX_PRIMARY_CARRIER_NOT_ENABLED',
   IO_FAILED: 'PINAX_IO_FAILED',
-  INVALID_INPUT: 'PINAX_INVALID_INPUT'
+  INVALID_INPUT: 'PINAX_INVALID_INPUT',
+  // S1 拆解数据接线（factFileStore）。命名沿用 HISTORY_* 的「族名_原因」风格：
+  //   · FACT_NOT_FOUND —— fact:get 按 id 查不到条目（只读查询的 NOT_FOUND 语义）。
+  //   · WRITE_PROTOCOL_NOT_STARTED —— S1 阶段 save/remove 只做到校验；真落盘归 S2 的
+  //     writeFactFile（tmp + os.replace + operationId 旁路日志）。这不是「写失败」，是「写协议还没开」。
+  FACT_NOT_FOUND: 'PINAX_FACT_NOT_FOUND',
+  WRITE_PROTOCOL_NOT_STARTED: 'PINAX_WRITE_PROTOCOL_NOT_STARTED'
 })
 
 export function ok(value) {

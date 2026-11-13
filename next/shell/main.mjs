@@ -30,6 +30,7 @@ import { buildSettingsSchema, createFileCarrierOverridesStore, readCarrierOverri
 import { installAppOriginHeaderRewrite } from './appOriginHeaders.mjs'
 import { createFactHookService } from './factHookService.mjs'
 import { createSkillsService } from '../skills/loadSkills.mjs'
+import { createFactFileStore } from '../kernel/factFileStore.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH, createIpcDispatcher, shellView, slimForIpc } from './ipcContract.mjs'
 import { EXPORT_EXTENSIONS, exportBook, exportDocument } from './exportService.mjs'
 import { MENU_TEMPLATE, RECENT_CLEAR_ID, withRecentProjects } from './menus.mjs'
@@ -764,6 +765,22 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     return hotkeysStore
   }
 
+  // fact 拆解数据只读仓储（S1）：按 resolve 后的库根缓存一个 store 实例。
+  // 路径归一很重要——同一个库经不同写法（尾斜杠／相对段）打开时不能各建一份；
+  // store 只读 `<root>/拆解/*.json`，缓存的是「这份根对应哪家目录」的事实，不是文件内容快照。
+  const factStores = new Map()
+  function factStoreFor(projectRoot) {
+    const root = String(projectRoot ?? '').trim()
+    if (!root) return null
+    const key = resolve(root)
+    let store = factStores.get(key)
+    if (!store) {
+      store = createFactFileStore({ root: key })
+      factStores.set(key, store)
+    }
+    return store
+  }
+
   // 运行器只在主进程装：它把提问接到内核任务面漏斗（进程内，不开端口）。
   // 测试与验收一律不注入，那条「未接模型运行器」的如实失败路径要一直留在 CI 里。
   session = await createNextSession({
@@ -912,6 +929,8 @@ export async function startNextShell({ root = null, env = process.env.NODE_ENV, 
     writingComplete,
     // M 系接线批：推演／抽取／成书渲染的 LlmPort 出口（子 Agent 形态，见 factLlmService 头注）。
     factLlm,
+    // S1 拆解数据：四条 fact:* 通道按请求里的 root 取只读 store（每根一个实例）。
+    factStoreFor,
     settingsStoreFor,
     carrierOverridesFor,
     // P4 S3：fact hook 接线（保存→diffValidate／续写→suggestCompletion／润色→readOnlyQuery）。

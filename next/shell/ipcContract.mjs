@@ -127,7 +127,19 @@ export const IPC_CHANNELS = Object.freeze({
   // M 系接线批：fact 引擎 LlmPort 的主进程出口（推演戏剧✦层／抽取／成书渲染共用这一条）。
   // 载荷只认 {prompt, system?, maxTokens?}——model／cwd／command 由主进程配置钉死，渲染层指定不了；
   // 进程与凭据都在内核侧，渲染层只收 {text, usage}。不注入时如实报缺，戏剧✦层缺席不阻塞必然/命运。
-  factLlmComplete: 'pinax:agent:fact:llm-complete'
+  factLlmComplete: 'pinax:agent:fact:llm-complete',
+  // S0 冻结 · S1 接线：拆解数据四通道（fact.data/v3 条目从 `拆解/*.json` 直接上屏）。
+  // 四条都**显式收 root**，不进 REQUIRED_PROJECT_CHANNELS——不依赖 session 当前项目，
+  // 同一进程里可以给不同库读清单（库管理器/多窗口将来用得上）。
+  //   list  → { root, layer?, slot?, status?, offset?, limit? } → { ok, entries, total, warnings }
+  //   get   → { root, id } → { ok, entry, revision }
+  //   save  → { root, entry, operationId, expectedRevision? } → S1 阶段 typed fail WRITE_PROTOCOL_NOT_STARTED
+  //   search→ { root, q, layer?, limit? } → { ok, hits:[{id,name,score,snippet}] }
+  // 成功载荷是扁平的（不套 value），与 S0 契约表逐字一致；失败仍走 fail() 的 {ok:false,error}。
+  factList: 'pinax:agent:fact:list',
+  factGet: 'pinax:agent:fact:get',
+  factSave: 'pinax:agent:fact:save',
+  factSearch: 'pinax:agent:fact:search'
 })
 
 /**
@@ -362,8 +374,13 @@ export function shellView(session) {
  *                       纯补全（--tools "" 禁工具），进程与凭据都在主进程。通道只转发白名单载荷，
  *                       渲染层指定不了 model／cwd／command。不注入时 fact:llm-complete 如实报缺，
  *                       推演面板的戏剧✦层缺席不阻塞必然▮／命运⚙（失败隔离在 fact 消费侧）。
+ * deps 扩展（S1 拆解数据接线）：
+ *   factStoreFor —— (root) => factFileStore（next/kernel/factFileStore.mjs）。
+ *                       四条 fact:* 通道显式收 root；这里只按 root 取 store（主进程按 resolve 后路径缓存），
+ *                       store 自己读 `<root>/拆解/*.json`，本层不碰 fs。不注入时四通道如实报缺。
+ *                       注意：这不是「当前项目的隐式存储」——root 是请求里那一份，换库换 root。
  */
-export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, recentProjects = null, projectReveal = null, projectRecentRemove = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null, factLlm = null }) {
+export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null, onPrefsApplied = null, onThemeChanged = null, probeModelPlane = null, pickProjectDir = null, recentProjects = null, projectReveal = null, projectRecentRemove = null, history = null, onProjectOpened = null, onProjectClosed = null, importProject = null, outlineImport = null, backupService = null, knowledgeService = null, exportFile = null, pickBookDocument = null, exportBookFile = null, emitRuntimeEvent = null, writingComplete = null, settingsStoreFor = null, carrierOverridesFor = null, serviceLogPool = null, skillsService = null, factHooks = null, factLlm = null, factStoreFor = null }) {
   // 批次62 任务2：这条通道认的 id 集不再是「MENU_TEMPLATE 的拍平结果」这一份死集合，
   // 而是 MENU_TEMPLATE ∪ registry.commands()，每次现算（载体可被启用／停用）。
   // 见下方 acceptedMenuIds —— 全文件只有那一处口径。
@@ -437,6 +454,28 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
   /** 技能四条通道的缺线说法：不注入的是接线，不是功能——渲染层拿不到 fs，也不该拿。 */
   function skillsUnwired() {
     return fail('INVALID_INPUT', '技能服务未接入（主进程未创建 skillsService）：这条通道现在只报缺，不读写任何文件')
+  }
+
+  /**
+   * fact:* 四条通道的仓储解析：root 必须是请求里显式给的非空字符串。
+   * 没注入（jsdom／裸会话／验收）或注入但给不出店时，返回的是 fail 载荷——调用方用
+   * `typeof store?.list !== 'function'` 判出「这不是店，是要原样回给渲染层的失败」。
+   * 这一层不缓存：缓存按 resolve 后路径归主进程（同一条 root 只建一个 store）。
+   */
+  function factStoreForRequest(input) {
+    if (typeof factStoreFor !== 'function') {
+      return fail('INVALID_INPUT', '事实存储未接入（主进程未创建 factFileStore）：这条通道现在只报缺，不读写任何文件')
+    }
+    const root = String(input?.root ?? '').trim()
+    if (!root) return fail('INVALID_INPUT', 'fact:* 通道需要显式带上库根（root）：不接受隐式当前项目')
+    let store = null
+    try {
+      store = factStoreFor(root)
+    } catch (error) {
+      return fail('IO_FAILED', `事实存储创建失败：${String(error?.message || error)}`, { root })
+    }
+    if (!store) return fail('INVALID_INPUT', `事实存储没有为该库根建出实例：${root}`, { root })
+    return store
   }
 
   /** 项目（重新）打开后通知主进程接线；历史接线失败不能把「项目已打开」翻成失败。 */
@@ -690,6 +729,39 @@ export function createIpcDispatcher({ session, onMenuInvoke = null, prefs = null
       case IPC_CHANNELS.factLlmComplete: {
         if (!factLlm?.complete) return fail('INVALID_INPUT', '推演模型通道未接入（主进程未创建 factLlmService）：这条通道现在只报缺，不编任何文字')
         return factLlm.complete({ prompt: input.prompt, system: input.system, maxTokens: input.maxTokens })
+      }
+      // S1 拆解数据四通道：只认请求里显式带的 root（不依赖 session 当前项目），
+      // 四条的返回值都是 store 的扁平 {ok,...}——这里不二次包装、不改签名（S0 冻结）。
+      case IPC_CHANNELS.factList: {
+        const store = factStoreForRequest(input)
+        if (typeof store?.list !== 'function') return store
+        return store.list({
+          layer: input.layer,
+          slot: input.slot,
+          status: input.status,
+          offset: input.offset,
+          limit: input.limit
+        })
+      }
+      case IPC_CHANNELS.factGet: {
+        const store = factStoreForRequest(input)
+        if (typeof store?.get !== 'function') return store
+        return store.get({ id: input.id })
+      }
+      case IPC_CHANNELS.factSave: {
+        const store = factStoreForRequest(input)
+        if (typeof store?.save !== 'function') return store
+        // S1 阶段 store.save 只校验信封，过验后如实回 WRITE_PROTOCOL_NOT_STARTED（写协议在 S2）。
+        return store.save({
+          entry: input.entry,
+          operationId: input.operationId,
+          expectedRevision: input.expectedRevision
+        })
+      }
+      case IPC_CHANNELS.factSearch: {
+        const store = factStoreForRequest(input)
+        if (typeof store?.search !== 'function') return store
+        return store.search({ q: input.q, layer: input.layer, limit: input.limit })
       }
       case IPC_CHANNELS.runtimeToolCall: {
         if (!session.runtime) return fail('INVALID_INPUT', '运行时尚未就绪')
