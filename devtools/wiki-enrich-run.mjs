@@ -127,10 +127,16 @@ export async function enrichBook(id, lib = LIB, options = {}) {
         if (attempt === 1) failures.push({ stage: 'chapter-batch', chapter: batch.map((b) => b.chapter).join(','), reason: String(error?.message ?? error) })
       }
     }
+    // 补救②：整批成功但个别章回了空 summary（实测「年代知青」4/5 章空），
+    // 也要走单章补——单章上下文更聚焦，模型几乎必定给出内容。
+    const emptyChapters = parsed ? batch.filter((item) => {
+      const row = parsed.chapters?.find((c) => Number(c.chapter) === item.chapter)
+      return !row || !String(row.summary ?? '').trim()
+    }) : []
     // 整批失败时逐章单独补（一次只做一章，token 压力减到 1/N，成功率明显更高——
     // 实测整批 parse-failed 后单章重试大多能成）。
-    if (!parsed) {
-      for (const item of batch) {
+    if (!parsed || emptyChapters.length) {
+      for (const item of (parsed ? emptyChapters : batch)) {
         try {
           // 只喂这一章的文本（不重复整批输入），输出格式同批式但只一条
           const singlePrompt = [
@@ -149,7 +155,14 @@ export async function enrichBook(id, lib = LIB, options = {}) {
           const single = await callJson(singlePrompt, 2200)
           const singleParsed = parseReply(single.text)
           if (singleParsed?.chapters?.length) {
-            parsed = { chapters: [...(parsed?.chapters ?? []), ...singleParsed.chapters] }
+            const list = [...(parsed?.chapters ?? [])]
+            for (const row of singleParsed.chapters) {
+              // 替换同章号的空记录（否则后面 find 到的是旧空记录，补了也白补）
+              const index = list.findIndex((existing) => Number(existing.chapter) === Number(row.chapter))
+              if (index >= 0) list[index] = row
+              else list.push(row)
+            }
+            parsed = { chapters: list }
           }
         } catch { /* 单章也失败就记账 */ }
       }
