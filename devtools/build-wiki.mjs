@@ -156,6 +156,7 @@ function deriveCharacter(entry, plots, profile) {
     aliases,
     identity: profile?.identity || entry.identity || '',
     archetype: profile?.archetype || '',
+    goal: profile?.goal || '',
     personality: profile?.personality?.length ? profile.personality : (entry.traits ?? []),
     arc: profile?.arc ?? null,
     keyChoices: profile?.keyChoices ?? [],
@@ -249,7 +250,12 @@ function buildBook(id, ds) {
   const chapterInfo = (no) => wiki?.chapterSummaries?.find((item) => item.chapter === no) ?? null
 
   // 人物派生
-  const characters = characterEntries.map((entry) => deriveCharacter(entry, plots, enrichProfile(entry.name)))
+  const charactersAll = characterEntries.map((entry) => deriveCharacter(entry, plots, enrichProfile(entry.name)))
+  // 碎片降噪（显示侧过滤，不改 fact 数据）：出场 <3 段且无档案（identity/summary/archetype）的
+  // 是绑定噪声（相亲/甚至/心头/司机…），侧栏/矩阵/图谱都不要。真配角有档案或出场足够，保留。
+  // 停用黑名单兜底：时间/副词类 who 偶有出场 ≥3 的（「最后」），形态上就不是人名。
+  const NOISE_NAMES = new Set(['最后', '然后', '突然', '继续', '应该', '生怕', '疑惑', '记得', '招呼', '简洁', '勇气', '心头', '自己', '相亲', '甚至', '许久才', '原来', '终于'])
+  const characters = charactersAll.filter((c) => !NOISE_NAMES.has(c.name) && (c.appearances >= 3 || c.identity || c.summary || c.archetype))
   const firstByChapter = firstAppearances(plots, characters)
 
   // 章数据（大纲/单章/时间线共用）
@@ -381,6 +387,8 @@ function buildBook(id, ds) {
     // 六槽位拆解交付物（kb/deconstruct/protocol）：gimmick / plot-design / intro / 文风九维
     slots: wiki?.slots ?? null,
     excerpts: wiki?.excerpts ?? [],
+    // 状态台账（推演/一致性的终局快照）：谁知道什么 + 关键物/关系状态
+    ledger: wiki?.ledger ?? null,
     // 枚举表（章节功能九类/核心情绪八种/结构六母型）
     enums: wiki?.enums ?? null,
     // OpenDesign dashboard 设计系统（token 真源＋SVG 图表调色板＋来源标识）

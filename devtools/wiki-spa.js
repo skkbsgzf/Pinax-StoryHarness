@@ -362,6 +362,26 @@ function vSlots() {
       h += '<div class="event"><span class="ch">第' + e.chapter + UNIT + '</span> <b>' + escHtml(e.beat) + '</b><div class="quote" style="margin-top:6px">“' + escHtml(e.quote) + '”</div></div>';
     });
   }
+  // 状态台账（continuity：谁知道什么 / 关键物与关系终局）
+  var L = D.ledger;
+  if (L && (L.knowledgeLedger?.length || L.stateLedger?.length)) {
+    h += '<h2>状态台账 <small>一致性与 OOC 判定的底表</small></h2><div class="slotcard">';
+    if (L.knowledgeLedger?.length) {
+      h += '<p style="margin:0 0 6px"><b>知情台账</b></p><table class="kv">';
+      L.knowledgeLedger.forEach(function (item) {
+        h += '<tr><td>' + escHtml(item.character) + '</td><td>知道 ' + escHtml(item.knows) + (item.chapter ? '<span class="arc-range">约第 ' + item.chapter + UNIT + '</span>' : '') + '</td></tr>';
+      });
+      h += '</table>';
+    }
+    if (L.stateLedger?.length) {
+      h += '<p style="margin:12px 0 6px"><b>状态台账</b></p><table class="kv">';
+      L.stateLedger.forEach(function (item) {
+        h += '<tr><td>' + escHtml(item.object) + '</td><td>' + escHtml(item.state) + (item.chapter ? '<span class="arc-range">第 ' + item.chapter + UNIT + ' 确认</span>' : '') + '</td></tr>';
+      });
+      h += '</table>';
+    }
+    h += '</div>';
+  }
   h += '<div id="dsFooter">槽位置信：gimmick ' + escHtml(S.gimmick?.confidence || '—') + ' / plot-design ' + escHtml(S.plotDesign?.structure?.confidence || '—') + ' / intro ' + escHtml(S.intro?.confidence || '—') + '</div>';
   return h;
 }
@@ -574,6 +594,7 @@ function vChar(name) {
   h += '<div class="meta"><span>' + c.appearances + ' 段出场</span>' + (c.chapters.length ? '<span>第 ' + c.chapters[0] + (c.chapters[c.chapters.length - 1] !== c.chapters[0] ? '~' + c.chapters[c.chapters.length - 1] : '') + ' ' + UNIT + '</span>' : '') + (c.castTier ? '<span>剧作档：' + escHtml(c.castTier) + '</span>' : '') + '</div>';
   if (c.aliases.length) h += '<div>' + c.aliases.map(function (a) { return '<span class="tag">别名：' + escHtml(a) + '</span>'; }).join('') + '</div>';
   if (c.identity) h += '<h2>身份</h2><p>' + escHtml(c.identity) + '</p>';
+  if (c.goal) h += '<div class="summary" style="margin:10px 0"><b>动机：</b>' + escHtml(c.goal) + '</div>';
   // 人物卡（kb/deconstruct/protocol 槽位 character）：模式/弧光/关键选择/镜像
   if (c.archetype) h += '<p><span class="chip" style="background:color-mix(in srgb,' + C_WARN + ' 14%,transparent);color:' + C_WARN + ';border-color:transparent">人设模式 ' + escHtml(c.archetype) + '</span></p>';
   if (c.summary) h += '<h2>人物小传</h2><div class="summary">' + escHtml(c.summary) + '</div>';

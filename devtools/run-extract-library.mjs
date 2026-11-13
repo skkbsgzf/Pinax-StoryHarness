@@ -279,7 +279,18 @@ export async function extractBook(book, index, profile, env = {}) {
   let relationLanded = 0
   const relationDropped = { missing: 0, hallucinated: 0, self: 0, titleTarget: 0 }
   const relationFailures = []
-  const multiParty = segments.filter((segment) => new Set(segment.blocks.map((block) => block.speakerHint).filter(Boolean)).size >= 2)
+  // 多主体段判定：绑定后的 who（按段聚合）∪ speakerHint。只用 speakerHint 会漏掉
+  // 「心声/无提示词」类文本（实测穿书女 15 个多主体段 0 触发 → 关系窗 0 调用 0 边）。
+  const whoBySegment = new Map()
+  for (const binding of bindings) {
+    const whos = new Set((binding.blocks ?? []).map((block) => block.who).filter(Boolean))
+    if (!whoBySegment.has(binding.id)) whoBySegment.set(binding.id, whos)
+    else for (const who of whos) whoBySegment.get(binding.id).add(who)
+  }
+  const multiParty = segments.filter((segment) => {
+    const hintWhos = segment.blocks.map((block) => block.speakerHint).filter(Boolean)
+    return new Set([...(whoBySegment.get(segment.id) ?? []), ...hintWhos]).size >= 2
+  })
   for (const segment of multiParty.slice(0, 20)) {
     const prompt = [RELATION_SYSTEM_PROMPT, '', buildRelationPrompt(segment)].join('\n')
     try {
