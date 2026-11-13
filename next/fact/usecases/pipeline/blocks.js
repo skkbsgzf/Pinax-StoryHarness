@@ -265,7 +265,9 @@ export function segmentBlocks(text, options = {}) {
   }
 
   for (const span of spans) {
-    pushNarration(source.slice(cursor, span.start))
+    // 偏移基准必须是「chunk 在段内的真实起点」：原来恒传 0，块切片就从段首开始，
+    // 把前面所有内容重复吞进每块（实测《修仙女配》b1/b5/b7/b10 都含段首那句「干的好事！」）。
+    pushNarration(source.slice(cursor, span.start), cursor)
     const immediate = source.slice(Math.max(0, span.start - 40), span.start)
     // 强调引号（「轻纱」「嘴巴」「1」这种单词语）不是台词：并回叙述，不单独成块。
     // 判据：长度 ≤ SHORT_QUOTE_MAX 且不是疑问/感叹/成句、不以书名号类开头——真台词极少这么短。
@@ -306,7 +308,7 @@ export function segmentBlocks(text, options = {}) {
     })
     cursor = span.end
   }
-  pushNarration(source.slice(cursor))
+  pushNarration(source.slice(cursor), cursor)
   flushPending()
 
   // 尾块过短（< BLOCK_MIN_CHARS/2）且前块也是叙述：并进去，避免最后剩一条碎片。

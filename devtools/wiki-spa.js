@@ -757,18 +757,99 @@ function vOutline() {
 function vChapter(no) {
   var c = CH_BY_NO[no];
   if (!c) return '<p>章节不存在</p>';
+  var chIdx = -1;
+  for (var i = 0; i < DETAIL.chapters.length; i++) { if (DETAIL.chapters[i].no === Number(no)) { chIdx = i; break; } }
+
   var h = '<h1>' + escHtml(c.title) + '</h1>';
-  h += '<div class="meta"><span>' + c.segments + ' 段</span><span>' + c.events + ' 事件</span></div>';
+  h += '<div class="meta"><span>' + c.segments + ' 段</span><span>' + c.events + ' 事件</span>';
+  if (c.function) h += '<span>功能 ' + escHtml(c.function) + '</span>';
+  if (c.emotion) h += '<span>情绪 ' + escHtml(c.emotion) + '</span>';
+  if (c.beats) h += '<span>剧情点 ' + c.beats + '</span>';
+  h += '</div>';
   if (c.summary) h += '<div class="summary">' + escHtml(c.summary) + '</div>';
-  h += sectionChips(no);
-  if (c.foreshadow.length) h += '<h2>本章伏笔</h2><ul>' + c.foreshadow.map(function (f) { return '<li>' + escHtml(f) + '</li>'; }).join('') + '</ul>';
-  h += '<details class="drill" open><summary>原始事件流 · ' + c.events + ' 条（钻取层）</summary>';
+
+  // ① 在场人物（本段出场次数条形）
+  var present = [];
+  if (chIdx >= 0) {
+    for (var r = 0; r < DETAIL.matrix.length; r++) {
+      var count = DETAIL.matrix[r][chIdx];
+      if (count > 0) present.push({ name: DETAIL.characters[r].name, count: count });
+    }
+  }
+  present.sort(function (a, b) { return b.count - a.count; });
+  if (present.length) {
+    h += '<h2>在场人物 <small>' + present.length + ' 人</small></h2>';
+    var maxP = present[0].count || 1;
+    h += hbarRows(present.slice(0, 10).map(function (p) {
+      return { label: p.name, link: true, value: p.count, max: maxP, sub: ' 段' };
+    }));
+  }
+
+  // ② 本章场景与道具（世界要素按章号过滤）
+  var scenes = [], items = [];
+  (DETAIL.terms || []).forEach(function (t) {
+    if ((t.chapters || []).indexOf(Number(no)) < 0) return;
+    if (/场景/.test(t.kind || '')) scenes.push(t);
+    else if (/道具/.test(t.kind || '')) items.push(t);
+  });
+  if (scenes.length || items.length) {
+    h += '<h2>场景与道具 <small>' + scenes.length + ' 场景 / ' + items.length + ' 道具</small></h2><div class="grid">';
+    scenes.forEach(function (s) {
+      h += '<div class="card"><h4>🏛 ' + escHtml(s.name) + '</h4><div class="sub">' + escHtml((s.desc || '').slice(0, 70)) + '</div></div>';
+    });
+    items.forEach(function (it) {
+      h += '<div class="card"><h4>🗝 ' + escHtml(it.name) + '</h4><div class="sub">' + escHtml((it.desc || '').slice(0, 70)) + '</div></div>';
+    });
+    h += '</div>';
+  }
+
+  // ③ 伏笔 + 高光（双栏）
+  var highs = (D.excerpts || []).filter(function (e) { return e.chapter === Number(no); });
+  if (c.foreshadow.length || highs.length) {
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:30px">';
+    if (c.foreshadow.length) {
+      h += '<div><h2>本章伏笔 <small>' + c.foreshadow.length + ' 条</small></h2><ul>';
+      c.foreshadow.forEach(function (f) { h += '<li>' + escHtml(f) + '</li>'; });
+      h += '</ul></div>';
+    }
+    if (highs.length) {
+      h += '<div><h2>高光片段 <small>' + highs.length + ' 处</small></h2>';
+      highs.forEach(function (e) {
+        h += '<div class="event"><b>' + escHtml(e.beat) + '</b>' + (e.quote ? '<div class="quote" style="margin-top:6px">“' + escHtml(e.quote) + '”</div>' : '') + '</div>';
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+  }
+
+  // ④ 事件流：按通道分组（比平铺几十条更易读，原文逐字保留）
+  var groups = { say: [], do: [], think: [], feel: [], perceive: [], state: [], event: [] };
   DETAIL.timeline.filter(function (t) { return t.no === Number(no); }).forEach(function (t) {
     t.events.forEach(function (e) {
-      h += '<div class="event"><span class="who">' + escHtml(e.who || '—') + '</span> <span class="ch">[' + escHtml(e.channel) + ']</span><div>' + escHtml(e.text) + '</div></div>';
+      (groups[e.channel] || groups.state).push(e);
     });
   });
-  return h + '</details>';
+  var meta = {
+    say: ['💬 台词', 'rgba(16,185,129,.10)', '#10b981'],
+    do: ['🏃 动作', 'rgba(245,158,11,.10)', '#b45309'],
+    think: ['💭 心理', 'rgba(122,162,255,.10)', '#0c5cab'],
+    feel: ['💗 感受', 'rgba(239,68,68,.09)', '#dc2626'],
+    perceive: ['👁 感知', 'rgba(139,92,246,.10)', '#7c3aed'],
+    state: ['📄 状态/描写', 'rgba(100,116,139,.10)', '#64748b'],
+    event: ['⚙ 事件', 'rgba(100,116,139,.10)', '#64748b']
+  };
+  h += '<h2>事件流 <small>' + c.events + ' 条 · 按通道分组（原文逐字）</small></h2>';
+  ['say', 'do', 'think', 'feel', 'perceive', 'state', 'event'].forEach(function (key) {
+    var list = groups[key];
+    if (!list.length) return;
+    var m = meta[key];
+    h += '<details class="drill"><summary><span style="background:' + m[1] + ';color:' + m[2] + ';padding:2px 10px;border-radius:999px;font-weight:600">' + m[0] + ' ' + list.length + '</span></summary>';
+    list.forEach(function (e) {
+      h += '<div class="event"><span class="who" style="' + (e.who ? '' : 'opacity:.45;font-weight:400') + '">' + escHtml(e.who || '旁白') + '</span><div>' + escHtml(e.text) + '</div></div>';
+    });
+    h += '</details>';
+  });
+  return h;
 }
 
 /* ===== 时间线 ===== */
@@ -778,7 +859,7 @@ function vTimeline() {
   DETAIL.timeline.forEach(function (t) {
     h += '<details class="drill" id="tl-' + t.no + '"><summary>第 ' + t.no + ' ' + UNIT + ' · ' + escHtml(t.title) + ' · ' + t.events.length + ' 事件</summary>';
     t.events.forEach(function (e) {
-      h += '<div class="event"><span class="who">' + escHtml(e.who || '—') + '</span> <span class="ch">[' + escHtml(e.channel) + ']</span><div>' + escHtml(e.text) + '</div></div>';
+      h += '<div class="event"><span class="who" style="' + (e.who ? '' : 'opacity:.45;font-weight:400') + '">' + escHtml(e.who || '旁白') + '</span> <span class="ch">[' + escHtml(e.channel) + ']</span><div>' + escHtml(e.text) + '</div></div>';
     });
     h += '</details>';
   });

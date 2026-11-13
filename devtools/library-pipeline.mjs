@@ -95,6 +95,16 @@ async function main() {
             ...pipelineEnv,
             RESUME_DIR: resumeDir
           })
+      // 重跑拆解会整份覆盖产物——把上一轮的 wiki 增补（六槽位/台账/世界要素/RAG 派生）接回来，
+      // 否则所有语义层工作被冲掉（实测 16 本重跑后 11 本 wiki 字段丢失）。
+      // 语义层与拆解无强耦合（章号体系由 pseudoChapters 统一），跨轮沿用比重新花钱跑一遍更划算；
+      // 需要刷新时用 --skip-extract 或单独跑 wiki-enrich-run。
+      if (!SKIP_EXTRACT && existsSync(join(OUT_DIR, `${id}.json`))) {
+        try {
+          const previous = JSON.parse(await readFile(join(OUT_DIR, `${id}.json`), 'utf8'))
+          if (previous.wiki && !result.wiki) result.wiki = previous.wiki
+        } catch { /* 旧产物坏了就当没有 */ }
+      }
       await writeFile(join(OUT_DIR, `${id}.json`), JSON.stringify(result, null, 2), 'utf8')
 
       const byLayer = result.entries.reduce((acc, entry) => { acc[entry.layer] = (acc[entry.layer] ?? 0) + 1; return acc }, {})
