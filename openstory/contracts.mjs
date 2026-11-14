@@ -26,7 +26,8 @@ export const API_ERROR_CODES = Object.freeze({
   WRITE_PROTOCOL_INVALID_INPUT: 'WRITE_PROTOCOL_INVALID_INPUT',
   WRITE_PROTOCOL_NOT_FOUND: 'WRITE_PROTOCOL_NOT_FOUND',
   WRITE_PROTOCOL_IO_FAILED: 'WRITE_PROTOCOL_IO_FAILED',
-  // Agent 通道（OS-4 的前置透传）：上游不可达/非 2xx，不冒充模型回答。
+  // Agent 通道（OS-4）：没配端点/模型就发对话；上游不可达/非 2xx 不冒充模型回答。
+  AGENT_NOT_CONFIGURED: 'AGENT_NOT_CONFIGURED',
   AGENT_UPSTREAM_ERROR: 'AGENT_UPSTREAM_ERROR'
 })
 
@@ -104,21 +105,112 @@ export const ENDPOINTS = Object.freeze({
       'WRITE_PROTOCOL_IO_FAILED'
     ]
   },
+  agentConfigGet: {
+    method: 'GET',
+    path: '/api/agent/config',
+    request: { query: {} },
+    // 凭据红线：apiKeyMasked 只有尾号掩码，完整 key 永不出 daemon。
+    response: {
+      ok: 'true',
+      configured: 'boolean',
+      endpoint: 'string?',
+      model: 'string?',
+      apiKeyMasked: 'string?',
+      configPath: 'string'
+    },
+    errors: []
+  },
+  agentConfigPut: {
+    method: 'PUT',
+    path: '/api/agent/config',
+    // 字段缺省＝保留原值；空串＝清除（endpoint 清空即回到未配置）。
+    request: { body: { endpoint: 'string?', model: 'string?', apiKey: 'string?' } },
+    response: {
+      ok: 'true',
+      configured: 'boolean',
+      endpoint: 'string?',
+      model: 'string?',
+      apiKeyMasked: 'string?',
+      configPath: 'string'
+    },
+    errors: ['INVALID_ENTRY']
+  },
+  agentSessions: {
+    method: 'GET',
+    path: '/api/agent/sessions',
+    request: { query: { root: 'string' } },
+    response: { ok: 'true', sessions: 'array' },
+    errors: ['NO_LIBRARY']
+  },
+  agentSessionCreate: {
+    method: 'POST',
+    path: '/api/agent/sessions',
+    request: { body: { root: 'string', title: 'string?' } },
+    response: { ok: 'true', session: 'object' },
+    errors: ['NO_LIBRARY']
+  },
+  agentSessionGet: {
+    method: 'GET',
+    path: '/api/agent/session',
+    request: { query: { root: 'string', id: 'string' } },
+    response: { ok: 'true', session: 'object', items: 'array' },
+    errors: ['NO_LIBRARY', 'NOT_FOUND']
+  },
+  agentSessionRename: {
+    method: 'POST',
+    path: '/api/agent/session/rename',
+    request: { body: { root: 'string', id: 'string', title: 'string' } },
+    response: { ok: 'true', session: 'object' },
+    errors: ['NO_LIBRARY', 'INVALID_ENTRY', 'NOT_FOUND']
+  },
+  agentSessionDelete: {
+    method: 'DELETE',
+    path: '/api/agent/session',
+    request: { query: { root: 'string', id: 'string' } },
+    response: { ok: 'true' },
+    errors: ['NO_LIBRARY', 'NOT_FOUND']
+  },
   agentChat: {
     method: 'POST',
     path: '/api/agent/chat',
-    // 成功响应是 text/event-stream，不是 JSON；response 描述的是「开始流之前的错误形状」之外的口径：
-    // SSE 每一帧原样透传上游 data:，工作台按 OpenAI 兼容 chunk 解析。
+    // 成功响应是 text/event-stream，不是 JSON。帧协议（daemon 自有，非上游透传）：
+    //   data:{"type":"delta","text":"…"}   增量
+    //   data:{"type":"done","sessionId":"…","chars":N}  结束（sessionId 在新建会话时回填给工作台）
+    //   data:{"type":"error","error":{code,message}}    上游失败/中断，如实报
+    // 消息由 daemon 从会话 JSONL 组装；端点/密钥只来自 daemon 本机配置，请求不带 key。
     request: {
       body: {
-        messages: 'messages',
-        model: 'string?',
-        endpoint: 'string?',
-        apiKey: 'string?'
+        root: 'string',
+        sessionId: 'string?',
+        content: 'string',
+        model: 'string?'
       }
     },
     response: { stream: 'string' },
-    errors: ['INVALID_ENTRY', 'AGENT_UPSTREAM_ERROR']
+    errors: ['NO_LIBRARY', 'INVALID_ENTRY', 'NOT_FOUND', 'AGENT_NOT_CONFIGURED', 'AGENT_UPSTREAM_ERROR']
+  },
+  agentCardCreate: {
+    method: 'POST',
+    path: '/api/agent/cards',
+    // 卡创建即取目标正文快照（exists/chars/sha256）——「卡创建→采纳」窗口的修订闸。
+    request: { body: { root: 'string', sessionId: 'string', file: 'string', text: 'string', note: 'string?' } },
+    response: { ok: 'true', card: 'object' },
+    errors: ['NO_LIBRARY', 'PATH_ESCAPE', 'INVALID_ENTRY', 'NOT_FOUND']
+  },
+  agentCardAdopt: {
+    method: 'POST',
+    path: '/api/agent/cards/adopt',
+    // 采纳＝重读正文比对快照，一致才走与 PUT /api/chapter 同一条原子写＋.history 备份。
+    request: { body: { root: 'string', sessionId: 'string', id: 'string' } },
+    response: { ok: 'true', card: 'object', chars: 'integer', savedAt: 'string', backup: 'string?' },
+    errors: ['NO_LIBRARY', 'PATH_ESCAPE', 'INVALID_ENTRY', 'NOT_FOUND', 'REVISION_MISMATCH', 'WRITE_PROTOCOL_IO_FAILED']
+  },
+  agentCardReject: {
+    method: 'POST',
+    path: '/api/agent/cards/reject',
+    request: { body: { root: 'string', sessionId: 'string', id: 'string' } },
+    response: { ok: 'true', card: 'object' },
+    errors: ['NO_LIBRARY', 'INVALID_ENTRY', 'NOT_FOUND']
   }
 })
 

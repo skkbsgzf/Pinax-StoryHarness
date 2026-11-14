@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * OpenStory daemon（OS-1）——轻 Node HTTP 服务，OpenStory 工作台的唯一磁盘层。
+ * OpenStory daemon（OS-1/4）——轻 Node HTTP 服务，OpenStory 工作台的唯一磁盘层。
  *
- * 三件事：
+ * 四件事：
  *   1) 静态托管 `openstory/public/`（index.html ＋ app.js）；
  *   2) 文件绑定 API（库 / 条目 / 正文 / wiki），读走 S1 `factFileStore`，写走 S2 `writeFactFile`
  *      （经 store 的 save/wikiDerive 转调，本文件不重写任何写协议）；
- *   3) Agent SSE 透传（v1 OpenAI 兼容，端点/模型/凭据由请求或环境变量给，daemon 不落盘）。
+ *   3) Agent 通道（OS-4）：会话 JSONL（`agentStore.mjs`）＋ OpenAI 兼容上游流式转发；
+ *      端点/模型/key 只存 daemon 本机配置（%LOCALAPPDATA%/PinaxNext/openstory/agent-config.json），
+ *      任何响应不回显完整 key；待确认卡采纳走正文快照闸（创建→采纳窗口）＋与手工保存同一条原子写。
+ *   4) daemon 不做工具循环：模型读不到库文件，除非作者粘贴（v1 边界，诚实标注）。
  *
  * 三条硬边界：
  *   · 只绑 127.0.0.1（不监外网，对齐 OpenDesign sidecar）；不做 HTTPS/隧道/多用户。
@@ -32,6 +35,26 @@ import {
   validateRequest,
   validateResponse
 } from './contracts.mjs'
+import {
+  appendSession,
+  buildUpstreamMessages,
+  configPublic,
+  createSession,
+  createSseDeltaParser,
+  defaultAgentConfigPath,
+  defaultSessionsDir,
+  deleteSession,
+  fileSnapshot,
+  listSessions,
+  loadAgentConfig,
+  newCardId,
+  newMessageId,
+  readSession,
+  renameSession,
+  saveAgentConfig,
+  snapshotsMatch,
+  updateCard
+} from './agentStore.mjs'
 import { createFactFileStore } from '../next/kernel/factFileStore.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -68,6 +91,7 @@ const STATUS_BY_CODE = Object.freeze({
   WRITE_PROTOCOL_INVALID_INPUT: 400,
   WRITE_PROTOCOL_NOT_FOUND: 404,
   WRITE_PROTOCOL_IO_FAILED: 500,
+  AGENT_NOT_CONFIGURED: 400,
   AGENT_UPSTREAM_ERROR: 502
 })
 
@@ -359,6 +383,35 @@ function authorizeRoot(allowlist, requested) {
   return { ok: true, root }
 }
 
+/**
+ * 正文原子写（tmp＋rename）＋写前 .history 备份。`PUT /api/chapter`（手工保存）与
+ * 待确认卡采纳共用同一条实现，保证两条路的落盘行为完全一致。
+ */
+async function writeChapterWithBackup(root, file, newText) {
+  const resolved = resolveInsideRoot(root, file)
+  if (!resolved.ok) return { ok: false, code: resolved.code, message: resolved.message, details: resolved.details }
+  try {
+    await mkdir(dirname(resolved.path), { recursive: true })
+    let backupRelative = null
+    if (existsSync(resolved.path)) {
+      // v1 粗保护：写前把原内容复制到同目录 .history/。OpenStory 与 Electron 同时写同一库时，
+      // 这里不拦冲突（不做跨进程 revision 闸），只保证「上一版还能捞回来」。
+      // 待确认卡另有快照闸（卡创建→采纳窗口），见 agentStore.fileSnapshot/snapshotsMatch。
+      const backup = historyBackupPath(root, file)
+      if (!backup.ok) return { ok: false, code: backup.code, message: backup.message, details: backup.details }
+      await mkdir(dirname(backup.path), { recursive: true })
+      await copyFile(resolved.path, backup.path)
+      backupRelative = backup.relative
+    }
+    const tmp = `${resolved.path}.tmp-${randomUUID()}`
+    await writeFile(tmp, newText, 'utf-8')
+    await rename(tmp, resolved.path)
+    return { ok: true, chars: newText.length, savedAt: new Date().toISOString(), ...(backupRelative ? { backup: backupRelative } : {}) }
+  } catch (error) {
+    return { ok: false, code: API_ERROR_CODES.WRITE_PROTOCOL_IO_FAILED, message: `正文写入失败：${text(error?.message || error)}`, details: { file } }
+  }
+}
+
 async function handleApi(req, res, url, context) {
   const endpointId = endpointFor(req.method, url.pathname)
   if (!endpointId) {
@@ -402,8 +455,14 @@ async function handleApi(req, res, url, context) {
   }
   const request = checked.value
 
+  // Agent 配置不碰库文件，不做 root 校验。
+  if (endpointId === 'agentConfigGet') return handleAgentConfigGet(res, context)
+  if (endpointId === 'agentConfigPut') return handleAgentConfigPut(res, request, context)
+
   if (endpointId === 'agentChat') {
-    return handleAgentChat(req, res, request, context)
+    const authorized = authorizeRoot(allowlist, request.root)
+    if (!authorized.ok) return sendError(res, authorized.code, authorized.message, authorized.details)
+    return handleAgentChat(req, res, request, context, authorized.root, loaded.libraries)
   }
 
   const authorized = authorizeRoot(allowlist, request.root)
@@ -452,33 +511,54 @@ async function handleApi(req, res, url, context) {
   }
 
   if (endpointId === 'chapterPut') {
-    const resolved = resolveInsideRoot(root, request.file)
-    if (!resolved.ok) return sendError(res, resolved.code, resolved.message, resolved.details)
-    try {
-      await mkdir(dirname(resolved.path), { recursive: true })
-      let backupRelative = null
-      if (existsSync(resolved.path)) {
-        // v1 粗保护：写前把原内容复制到同目录 .history/。OpenStory 与 Electron 同时写同一库时，
-        // 这里不拦冲突（不做 revision 闸），只保证「上一版还能捞回来」。真冲突保护归后续写协议。
-        const backup = historyBackupPath(root, request.file)
-        if (!backup.ok) return sendError(res, backup.code, backup.message, backup.details)
-        await mkdir(dirname(backup.path), { recursive: true })
-        await copyFile(resolved.path, backup.path)
-        backupRelative = backup.relative
-      }
-      const tmp = `${resolved.path}.tmp-${randomUUID()}`
-      await writeFile(tmp, request.text, 'utf-8')
-      await rename(tmp, resolved.path)
-      const savedAt = new Date().toISOString()
-      return sendJson(res, 200, {
-        ok: true,
-        chars: request.text.length,
-        savedAt,
-        ...(backupRelative ? { backup: backupRelative } : {})
-      })
-    } catch (error) {
-      return sendError(res, API_ERROR_CODES.WRITE_PROTOCOL_IO_FAILED, `正文写入失败：${text(error?.message || error)}`, { file: request.file })
-    }
+    const written = await writeChapterWithBackup(root, request.file, request.text)
+    if (!written.ok) return sendError(res, written.code, written.message, written.details)
+    return sendJson(res, 200, {
+      ok: true,
+      chars: written.chars,
+      savedAt: written.savedAt,
+      ...(written.backup ? { backup: written.backup } : {})
+    })
+  }
+
+  if (endpointId === 'agentSessions') {
+    const sessions = await listSessions(context.agentSessionsDir, root)
+    return sendJson(res, 200, { ok: true, sessions })
+  }
+
+  if (endpointId === 'agentSessionCreate') {
+    const session = await createSession(context.agentSessionsDir, root, request.title)
+    return sendJson(res, 200, { ok: true, session })
+  }
+
+  if (endpointId === 'agentSessionGet') {
+    const loaded = await readSession(context.agentSessionsDir, root, request.id)
+    if (!loaded) return sendError(res, API_ERROR_CODES.NOT_FOUND, `会话不存在：${request.id}`)
+    return sendJson(res, 200, { ok: true, session: loaded.session, items: loaded.items })
+  }
+
+  if (endpointId === 'agentSessionRename') {
+    const session = await renameSession(context.agentSessionsDir, root, request.id, request.title)
+    if (!session) return sendError(res, API_ERROR_CODES.NOT_FOUND, `会话不存在：${request.id}`)
+    return sendJson(res, 200, { ok: true, session })
+  }
+
+  if (endpointId === 'agentSessionDelete') {
+    const removed = await deleteSession(context.agentSessionsDir, root, request.id)
+    if (!removed) return sendError(res, API_ERROR_CODES.NOT_FOUND, `会话不存在：${request.id}`)
+    return sendJson(res, 200, { ok: true })
+  }
+
+  if (endpointId === 'agentCardCreate') {
+    return handleAgentCardCreate(res, request, context, root)
+  }
+
+  if (endpointId === 'agentCardAdopt') {
+    return handleAgentCardAdopt(res, request, context, root)
+  }
+
+  if (endpointId === 'agentCardReject') {
+    return handleAgentCardReject(res, request, context, root)
   }
 
   if (endpointId === 'wiki') {
@@ -507,53 +587,105 @@ async function handleApi(req, res, url, context) {
   return sendError(res, API_ERROR_CODES.NOT_FOUND, `端点未实现：${endpointId}`)
 }
 
-const ENDPOINT_HAS_QUERY = new Set(['entries', 'entry', 'chapterGet', 'wiki'])
+const ENDPOINT_HAS_QUERY = new Set(['entries', 'entry', 'chapterGet', 'wiki', 'agentSessions', 'agentSessionGet', 'agentSessionDelete'])
+
+/* ---------- Agent 通道（OS-4）---------- */
+
+function systemPromptFor(root, libraries) {
+  const key = rootKey(root)
+  const record = (Array.isArray(libraries) ? libraries : []).find((library) => rootKey(library.path) === key)
+  const name = record?.name || basename(root) || '未命名库'
+  return [
+    `你是 OpenStory 工作台的写作助手，正在协助作者创作《${name}》（本机磁盘上的一个 Pinax 库）。`,
+    '- 用中文回复。',
+    '- 作者可以把你的回复转成「待确认卡」并采纳写进正文文件：给出正文片段时，请给完整、可直接粘贴的文本，不要只给修改说明。',
+    '- v1 你读不到库里的文件；作者会把需要的上下文粘贴给你，不要假装读过文件。'
+  ].join('\n')
+}
+
+function sseFrame(res, payload) {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`)
+}
+
+async function handleAgentConfigGet(res, context) {
+  const { config } = await loadAgentConfig(context.agentConfigPath)
+  return sendJson(res, 200, configPublic(config, context.agentConfigPath))
+}
+
+async function handleAgentConfigPut(res, request, context) {
+  const config = await saveAgentConfig(context.agentConfigPath, request)
+  return sendJson(res, 200, configPublic(config, context.agentConfigPath))
+}
 
 /**
- * v1 Agent 通道：OpenAI 兼容端点的 SSE 原样透传。
- * 凭据只在本次请求内存里用，不回显、不落盘、不写日志。上游不可达/非 2xx 如实报
- * AGENT_UPSTREAM_ERROR，不伪造回答。
+ * Agent 对话（OS-4）：会话 JSONL ＋ OpenAI 兼容上游流式转发。
+ * 帧协议（daemon 自有）：start（回填 sessionId）→ delta* → done；出错发 error 帧。
+ * 凭据只来自 daemon 本机配置，不回显、不进日志；上游失败如实报，不伪造回答。
  */
-async function handleAgentChat(req, res, request, context) {
-  const target = text(request.endpoint || context.env.OPENSTORY_AGENT_ENDPOINT).trim()
-  if (!target) {
-    return sendError(res, API_ERROR_CODES.INVALID_ENTRY, '没有配置模型端点：请求里带 endpoint，或启动 daemon 时设 OPENSTORY_AGENT_ENDPOINT')
+async function handleAgentChat(req, res, request, context, root, libraries) {
+  const { config } = await loadAgentConfig(context.agentConfigPath)
+  const endpoint = text(config.endpoint).trim()
+  if (!endpoint) {
+    return sendError(res, API_ERROR_CODES.AGENT_NOT_CONFIGURED,
+      '还没配置模型端点：点 Agent 列右上角的齿轮，填 OpenAI 兼容端点（key 只存本机 daemon 配置）')
   }
   let targetUrl
   try {
-    targetUrl = new URL(target)
+    targetUrl = new URL(endpoint)
   } catch {
-    return sendError(res, API_ERROR_CODES.INVALID_ENTRY, `模型端点不是有效 URL：${target}`)
+    return sendError(res, API_ERROR_CODES.INVALID_ENTRY, `配置的模型端点不是有效 URL：${endpoint}`)
   }
   if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
     return sendError(res, API_ERROR_CODES.INVALID_ENTRY, '模型端点只支持 http/https')
   }
 
+  // 会话：sessionId 缺省＝新建（标题取首句）；给了就必须真存在。
+  const sessionsDir = context.agentSessionsDir
+  let loaded = request.sessionId ? await readSession(sessionsDir, root, request.sessionId) : null
+  if (request.sessionId && !loaded) {
+    return sendError(res, API_ERROR_CODES.NOT_FOUND, `会话不存在：${request.sessionId}`)
+  }
+  if (!loaded) {
+    const title = text(request.content).replace(/\s+/gu, ' ').trim().slice(0, 24) || '新会话'
+    const created = await createSession(sessionsDir, root, title)
+    loaded = { session: created, items: [] }
+  }
+  const sessionId = loaded.session.id
+  await appendSession(sessionsDir, root, sessionId, [{
+    t: 'msg', id: newMessageId(), role: 'user', content: request.content, at: new Date().toISOString()
+  }])
+  const history = await readSession(sessionsDir, root, sessionId)
+  const upstreamMessages = buildUpstreamMessages(systemPromptFor(root, libraries), history.items)
+  const model = text(request.model || config.model).trim()
+
   const headers = { 'content-type': 'application/json', accept: 'text/event-stream' }
-  if (text(request.apiKey).trim()) headers.authorization = `Bearer ${text(request.apiKey).trim()}`
-  const model = text(request.model || context.env.OPENSTORY_AGENT_MODEL).trim()
+  if (config.apiKey) headers.authorization = `Bearer ${config.apiKey}`
 
   const controller = new AbortController()
-  req.on('close', () => controller.abort())
+  let clientGone = false
+  // res 'close'＝连接提前断开（工作台点了停止/关页）；正常结束后 res 的 close 不触发 abort。
+  res.on('close', () => {
+    if (!res.writableEnded) {
+      clientGone = true
+      controller.abort()
+    }
+  })
 
   let upstream
   try {
     upstream = await fetch(targetUrl, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        ...(model ? { model } : {}),
-        messages: request.messages,
-        stream: true
-      }),
+      body: JSON.stringify({ ...(model ? { model } : {}), messages: upstreamMessages, stream: true }),
       signal: controller.signal
     })
   } catch (error) {
-    if (controller.signal.aborted) return
+    if (clientGone) return
     return sendError(res, API_ERROR_CODES.AGENT_UPSTREAM_ERROR, `模型端点连不上：${text(error?.message || error)}`)
   }
 
   if (!upstream.ok) {
+    if (clientGone) return
     const detail = text(await upstream.text().catch(() => '')).slice(0, 500)
     return sendError(res, API_ERROR_CODES.AGENT_UPSTREAM_ERROR, `模型端点返回 ${upstream.status}`, { status: upstream.status, detail })
   }
@@ -564,27 +696,156 @@ async function handleAgentChat(req, res, request, context) {
     connection: 'keep-alive',
     'x-accel-buffering': 'no'
   })
+  sseFrame(res, { type: 'start', sessionId })
+
+  const decoder = new TextDecoder()
+  let full = ''
+  const parser = createSseDeltaParser((piece) => {
+    full += piece
+    if (!res.writableEnded) sseFrame(res, { type: 'delta', text: piece })
+  })
+
+  let upstreamError = ''
   try {
     if (upstream.body) {
       for await (const chunk of upstream.body) {
-        res.write(chunk)
+        parser.feed(decoder.decode(chunk, { stream: true }))
       }
+      parser.feed(decoder.decode())
     }
+    parser.end()
   } catch (error) {
-    if (!controller.signal.aborted) res.write(`event: error\ndata: ${JSON.stringify({ message: text(error?.message || error) })}\n\n`)
-  } finally {
-    res.end()
+    if (!clientGone && !controller.signal.aborted) {
+      upstreamError = text(error?.message || error)
+      sseFrame(res, { type: 'error', error: { code: API_ERROR_CODES.AGENT_UPSTREAM_ERROR, message: upstreamError } })
+    }
   }
+
+  // 落档：完整回答、或被停止/中断的部分回答，partial 如实标；空回答不落（错误帧已如实报）。
+  if (full.trim()) {
+    const partial = controller.signal.aborted || Boolean(upstreamError)
+    await appendSession(sessionsDir, root, sessionId, [{
+      t: 'msg', id: newMessageId(), role: 'assistant', content: full,
+      at: new Date().toISOString(), ...(partial ? { partial: true } : {})
+    }])
+  }
+  if (!clientGone && !res.writableEnded) {
+    sseFrame(res, { type: 'done', sessionId, chars: full.length })
+  }
+  res.end()
+}
+
+/** 待确认卡：创建即取目标正文快照——「卡创建→采纳」窗口的修订闸从这里起算。 */
+async function handleAgentCardCreate(res, request, context, root) {
+  const loaded = await readSession(context.agentSessionsDir, root, request.sessionId)
+  if (!loaded) return sendError(res, API_ERROR_CODES.NOT_FOUND, `会话不存在：${request.sessionId}`)
+  const resolved = resolveInsideRoot(root, request.file)
+  if (!resolved.ok) return sendError(res, resolved.code, resolved.message, resolved.details)
+  let snapshot
+  try {
+    snapshot = fileSnapshot(resolved.path)
+  } catch (error) {
+    return sendError(res, API_ERROR_CODES.WRITE_PROTOCOL_IO_FAILED, `目标文件快照失败：${text(error?.message || error)}`, { file: request.file })
+  }
+  const note = text(request.note).trim()
+  const card = {
+    t: 'card',
+    id: newCardId(),
+    state: 'open',
+    file: resolved.relative,
+    text: request.text,
+    ...(note ? { note } : {}),
+    chars: request.text.length,
+    snapshot,
+    createdAt: new Date().toISOString()
+  }
+  await appendSession(context.agentSessionsDir, root, request.sessionId, [card])
+  return sendJson(res, 200, {
+    ok: true,
+    card: {
+      kind: 'card',
+      id: card.id,
+      state: card.state,
+      file: card.file,
+      text: card.text,
+      ...(card.note ? { note: card.note } : {}),
+      chars: card.chars,
+      snapshot: card.snapshot,
+      createdAt: card.createdAt
+    }
+  })
+}
+
+async function findOpenCard(context, root, sessionId, cardId) {
+  const loaded = await readSession(context.agentSessionsDir, root, sessionId)
+  if (!loaded) return { error: { code: API_ERROR_CODES.NOT_FOUND, message: `会话不存在：${sessionId}` } }
+  const card = loaded.items.find((item) => item.kind === 'card' && item.id === cardId)
+  if (!card) return { error: { code: API_ERROR_CODES.NOT_FOUND, message: `待确认卡不存在：${cardId}` } }
+  if (card.state !== 'open') {
+    return { error: { code: API_ERROR_CODES.INVALID_ENTRY, message: `这张卡已处理过（${card.state === 'adopted' ? '已采纳' : '已拒绝'}），不能再改` } }
+  }
+  return { card }
+}
+
+async function handleAgentCardAdopt(res, request, context, root) {
+  const found = await findOpenCard(context, root, request.sessionId, request.id)
+  if (found.error) return sendError(res, found.error.code, found.error.message)
+  const card = found.card
+  const resolved = resolveInsideRoot(root, card.file)
+  if (!resolved.ok) return sendError(res, resolved.code, resolved.message, resolved.details)
+  let current
+  try {
+    current = fileSnapshot(resolved.path)
+  } catch (error) {
+    return sendError(res, API_ERROR_CODES.WRITE_PROTOCOL_IO_FAILED, `正文快照失败：${text(error?.message || error)}`, { file: card.file })
+  }
+  if (!snapshotsMatch(current, card.snapshot)) {
+    return sendError(res, API_ERROR_CODES.REVISION_MISMATCH,
+      `正文在卡片创建后被改过（创建时 ${card.snapshot.exists ? `${card.snapshot.chars} 字` : '不存在'}，现在 ${current.exists ? `${current.chars} 字` : '不存在'}），拒绝覆盖。请重新创建待确认卡。`,
+      { file: card.file, expected: card.snapshot, actual: current })
+  }
+  const written = await writeChapterWithBackup(root, card.file, card.text)
+  if (!written.ok) return sendError(res, written.code, written.message, written.details)
+  const updated = await updateCard(context.agentSessionsDir, root, request.sessionId, request.id, {
+    state: 'adopted',
+    resolvedAt: new Date().toISOString(),
+    ...(written.backup ? { backup: written.backup } : {})
+  })
+  return sendJson(res, 200, {
+    ok: true,
+    card: updated,
+    chars: written.chars,
+    savedAt: written.savedAt,
+    ...(written.backup ? { backup: written.backup } : {})
+  })
+}
+
+async function handleAgentCardReject(res, request, context, root) {
+  const found = await findOpenCard(context, root, request.sessionId, request.id)
+  if (found.error) return sendError(res, found.error.code, found.error.message)
+  const updated = await updateCard(context.agentSessionsDir, root, request.sessionId, request.id, {
+    state: 'rejected',
+    resolvedAt: new Date().toISOString()
+  })
+  return sendJson(res, 200, { ok: true, card: updated })
 }
 
 /* ---------- 服务器 ---------- */
 
-export function createOpenStoryHandler({ publicDir = DEFAULT_PUBLIC_DIR, preferencesPath, extraRoots = [], defaultRoot = '', env = process.env } = {}) {
+export function createOpenStoryHandler({
+  publicDir = DEFAULT_PUBLIC_DIR,
+  preferencesPath,
+  extraRoots = [],
+  defaultRoot = '',
+  agentConfigPath = defaultAgentConfigPath(),
+  agentSessionsDir = defaultSessionsDir(),
+  env = process.env
+} = {}) {
   return async function handler(req, res) {
     const url = new URL(req.url || '/', 'http://127.0.0.1')
     try {
       if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-        return await handleApi(req, res, url, { preferencesPath, extraRoots, defaultRoot, env })
+        return await handleApi(req, res, url, { preferencesPath, extraRoots, defaultRoot, agentConfigPath, agentSessionsDir, env })
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         return sendError(res, API_ERROR_CODES.NOT_FOUND, `静态托管只支持 GET/HEAD：${req.method}`)
@@ -607,6 +868,8 @@ export function startDaemon({
   publicDir = DEFAULT_PUBLIC_DIR,
   preferencesPath,
   extraRoots = [],
+  agentConfigPath = defaultAgentConfigPath(),
+  agentSessionsDir = defaultSessionsDir(),
   env = process.env,
   logger = console
 } = {}) {
@@ -618,6 +881,8 @@ export function startDaemon({
     preferencesPath,
     extraRoots: authorizedExtras,
     defaultRoot: root ? canonicalRoot(root) : '',
+    agentConfigPath,
+    agentSessionsDir,
     env
   })
   const server = createServer((req, res) => {

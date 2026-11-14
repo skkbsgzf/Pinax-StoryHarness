@@ -70,20 +70,70 @@ input, textarea, select { font: inherit; color: inherit; }
 /* ── 主体：Agent 左列 ＋ 中栏 ───────────────────────────── */
 .main { flex: 1; display: flex; min-height: 0; }
 
-/* Agent 左列（OS-4 才接真通道：本批只摆空态，不摆假消息） */
-.agent-col { width: 300px; flex: 0 0 300px; border-right: 1px solid var(--hair); display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+/* Agent 左列（OS-4：会话 JSONL＋流式对话＋待确认卡） */
+.agent-col { width: 320px; flex: 0 0 320px; border-right: 1px solid var(--hair); display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
 .agent-head { padding: 12px 14px 8px; display: flex; align-items: center; gap: 8px; }
 .agent-avatar { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 800; }
 .agent-name { font-weight: 700; }
-.agent-model { font-size: 11px; color: var(--meta); border: 1px solid var(--line); border-radius: var(--pill); padding: 1px 8px; }
-.agent-body { flex: 1; overflow-y: auto; padding: 8px 14px; }
+.agent-model { font-size: 11px; color: var(--meta); border: 1px solid var(--line); border-radius: var(--pill); padding: 1px 8px; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-model.on { color: var(--ok); border-color: var(--ok); }
+.agent-head .sp { flex: 1; }
+.agent-sessions { display: flex; gap: 6px; padding: 2px 12px 8px; overflow-x: auto; flex: 0 0 auto; scrollbar-width: thin; }
+.agent-sessions .s { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: var(--pill); padding: 3px 10px; font-size: 12px; color: var(--muted); max-width: 150px; }
+.agent-sessions .s .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-sessions .s.on { border-color: var(--ink); color: var(--ink); font-weight: 600; }
+.agent-sessions .s:hover { border-color: var(--ink); }
+.agent-sessions .s .x { color: var(--meta); font-size: 12px; padding: 0 2px; }
+.agent-sessions .s .x:hover { color: var(--danger); }
+.agent-sessions .new { border: 1px dashed var(--line); border-radius: var(--pill); padding: 3px 10px; font-size: 12px; color: var(--muted); flex: 0 0 auto; }
+.agent-sessions .new:hover { border-color: var(--ink); color: var(--ink); }
+.agent-body { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
 .agent-empty { margin-top: 18px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .agent-empty strong { color: var(--ink-2); display: block; margin-bottom: 4px; }
-.composer { margin: 10px 14px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px 12px 8px; opacity: .62; }
-.composer textarea { width: 100%; border: 0; resize: none; outline: none; background: none; height: 40px; }
+.bub { max-width: 100%; padding: 9px 12px; border-radius: var(--radius-md); font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bub.user { background: var(--accent-soft); border: 1px solid var(--line); align-self: flex-end; max-width: 92%; }
+.bub.assistant { background: var(--soft); border: 1px solid var(--hair); align-self: flex-start; }
+.bub.assistant .cursor { display: inline-block; width: 7px; height: 14px; background: var(--accent); vertical-align: -2px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.bub .partial-tag { display: block; margin-top: 6px; font-size: 11px; color: var(--danger); }
+.bub-foot { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
+.bub-foot .mini { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: var(--pill); padding: 2px 10px; }
+.bub-foot .mini:hover { border-color: var(--ink); color: var(--ink); }
+.card-block { border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 10px 12px; align-self: stretch; background: var(--bg); font-size: 13px; }
+.card-block .head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.card-block .head b { font-size: 12px; }
+.card-block .head .file { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.card-block .body { font-family: var(--serif); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 200px; overflow-y: auto; color: var(--ink-2); line-height: 1.8; border-top: 1px dashed var(--hair); padding-top: 8px; }
+.card-block .note { font-size: 11px; color: var(--meta); margin-top: 6px; }
+.card-block .ops { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+.card-block .state-chip { font-size: 11px; border-radius: var(--pill); padding: 1px 10px; border: 1px solid var(--line); color: var(--muted); }
+.card-block .state-chip.ok { color: var(--ok); border-color: var(--ok); }
+.card-block .state-chip.dead { color: var(--meta); }
+.card-block .rev-error { margin-top: 8px; font-size: 12px; color: var(--danger); }
+.composer { margin: 10px 14px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px 12px 8px; }
+.composer textarea { width: 100%; border: 0; resize: none; outline: none; background: none; height: 44px; }
 .composer .row { display: flex; align-items: center; gap: 8px; }
 .composer .mode { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: var(--pill); padding: 2px 10px; }
-.composer .send { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; background: var(--line); color: var(--bg); display: grid; place-items: center; cursor: not-allowed; }
+.composer .send { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; background: var(--ink); color: var(--bg); display: grid; place-items: center; }
+.composer .send:hover { background: var(--accent); }
+.composer .send:disabled { background: var(--line); cursor: not-allowed; }
+.composer .send.stop { background: var(--danger); }
+.composer .send[hidden] { display: none; }
+
+/* 弹层（Agent 设置 / 待确认卡） */
+.overlay { position: fixed; inset: 0; background: rgba(20,18,16,.42); display: none; place-items: center; z-index: 90; }
+.overlay.open { display: grid; }
+.modal { width: min(520px, calc(100vw - 40px)); max-height: 84vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius-lg); box-shadow: var(--shadow); padding: 20px 22px; }
+.modal h3 { margin: 0 0 4px; font-size: 17px; }
+.modal .sub { color: var(--muted); font-size: 12px; margin: 0 0 14px; line-height: 1.6; }
+.modal .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+.modal .field label { font-size: 12px; color: var(--muted); }
+.modal .field input, .modal .field textarea { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 10px; outline: none; background: var(--bg); font: inherit; }
+.modal .field textarea { font-family: var(--serif); min-height: 160px; resize: vertical; line-height: 1.8; }
+.modal .field input:focus, .modal .field textarea:focus { border-color: var(--ink); }
+.modal .field .hint { font-size: 11px; color: var(--meta); overflow-wrap: anywhere; }
+.modal .ops { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+.modal .err { color: var(--danger); font-size: 12px; margin: 4px 0 8px; }
 
 /* 中栏 */
 .center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -203,24 +253,28 @@ input, textarea, select { font: inherit; color: inherit; }
   </header>
 
   <div class="main">
-    <!-- Agent 左列：OS-4 才接真通道，本批不摆假消息、不摆死按钮 -->
+    <!-- Agent 左列（OS-4）：会话 JSONL 在 daemon 侧，凭据只存本机配置 -->
     <aside class="agent-col">
       <div class="agent-head">
         <span class="agent-avatar">P</span><span class="agent-name">Pi-Agent</span>
-        <span class="agent-model">OS-4 待接</span>
+        <span class="agent-model" id="agent-model-chip" data-action="agent-settings">未配置模型</span>
+        <span class="sp"></span>
+        <button class="icon-btn" title="模型设置" data-action="agent-settings">⚙</button>
       </div>
-      <div class="agent-body">
+      <div class="agent-sessions" id="agent-sessions"></div>
+      <div class="agent-body" id="agent-thread">
         <div class="agent-empty">
-          <strong>Agent 通道还没接线</strong>
-          本批先把库、拆解条目、正文与 wiki 接到真实文件。对话与待确认卡在 OS-4 单独立项。
+          <strong>问剧情、要一段正文、改设定…</strong>
+          回答可以转成「待确认卡」，采纳后才真正写进正文文件。
         </div>
       </div>
       <div class="composer">
-        <textarea placeholder="OS-4 接入后可用" disabled></textarea>
+        <textarea id="agent-input" placeholder="先选一个库，再和 Agent 聊…" disabled></textarea>
         <div class="row">
-          <span class="mode">审阅</span>
-          <span class="mode">未配置模型</span>
-          <button class="send" title="发送（未接入）" disabled>↑</button>
+          <span class="mode">对话</span>
+          <span class="mode" id="agent-lib-chip">未选库</span>
+          <button class="send" id="agent-send" title="发送" data-action="agent-send" disabled>↑</button>
+          <button class="send stop" id="agent-stop" title="停止" data-action="agent-stop" hidden>■</button>
         </div>
       </div>
     </aside>
@@ -245,6 +299,11 @@ input, textarea, select { font: inherit; color: inherit; }
   <button class="opt on" data-skin="coral"><span class="sw" style="background:#fff"><span style="width:12px;height:12px;border-radius:50%;background:#ff385c"></span></span><span><span class="nm">珊瑚 · Airbnb 系</span><br><span class="ds">白底墨字，单点珊瑚红</span></span></button>
   <button class="opt" data-skin="ink"><span class="sw" style="background:#fbfaf7"><span style="width:12px;height:12px;border-radius:2px;background:#7a5c2e"></span></span><span><span class="nm">纸墨 · 出版排版</span><br><span class="ds">暖白纸感，墨褐强调</span></span></button>
   <button class="opt" data-skin="night"><span class="sw" style="background:#17181c"><span style="width:12px;height:12px;border-radius:50%;background:#ff6b88"></span></span><span><span class="nm">暗夜 · 工作灯</span><br><span class="ds">深底工作灯，夜写不刺眼</span></span></button>
+</div>
+
+<!-- 弹层：Agent 设置 / 转待确认卡（内容由 app.js 注入） -->
+<div class="overlay" id="overlay">
+  <div class="modal" id="modal"></div>
 </div>
 
 <script src="./app.js" defer></script>

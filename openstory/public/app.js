@@ -1,5 +1,5 @@
 /**
- * OpenStory 工作台数据与路由（OS-3）。
+ * OpenStory 工作台数据与路由（OS-3 ＋ OS-4）。
  *
  * 全部数据来自本机 daemon（127.0.0.1）：
  *   GET  /api/libraries → 库卡
@@ -7,8 +7,12 @@
  *   GET  /api/entry     → 单条
  *   GET/PUT /api/chapter→ 正文读/写（PUT 同目录 .history 备份）
  *   GET  /api/wiki、POST /api/wiki/derive → S4 派生 wiki
+ *   GET/PUT /api/agent/config            → 模型端点（key 只存 daemon 本机，这里只拿到掩码）
+ *   GET/POST /api/agent/sessions…        → 会话（JSONL 在 daemon 侧）
+ *   POST /api/agent/chat                 → 流式对话（SSE：start → delta* → done/error）
+ *   POST /api/agent/cards[/adopt|/reject]→ 待确认卡（采纳走正文快照闸）
  *
- * v1 边界：不做 Agent 对话（OS-4）；正文保存不做 revision 闸（与 Electron 同写靠 .history 粗保护）。
+ * v1 边界：Agent 无工具循环（读不到库文件）；正文保存不做跨进程 revision 闸（.history 粗保护）。
  * 这里不内置任何演示数据——读不到就摆空态，不拿假卡片冒充库。
  */
 
@@ -38,7 +42,21 @@ const state = {
   wikiFrom: null,
   wikiLoaded: false,
   loading: false,
-  error: ''
+  error: '',
+  agent: {
+    configured: false,
+    endpoint: '',
+    model: '',
+    apiKeyMasked: '',
+    configPath: '',
+    sessions: [],
+    sessionId: '',
+    items: [],
+    streaming: false,
+    controller: null,
+    cardError: null,
+    lastError: null
+  }
 }
 
 const viewEl = document.getElementById('view')
@@ -441,9 +459,432 @@ function wikiHtml() {
     </div>`
 }
 
+/* ---------- Agent 左列（OS-4）---------- */
+
+const agent = state.agent
+
+function updateAgentChip() {
+  const chip = document.getElementById('agent-model-chip')
+  if (!chip) return
+  chip.textContent = agent.configured ? (agent.model || agent.endpoint) : '未配置模型'
+  chip.classList.toggle('on', agent.configured)
+  chip.title = agent.configured
+    ? `端点：${agent.endpoint}${agent.apiKeyMasked ? `\nkey：${agent.apiKeyMasked}（完整 key 不回显）` : ''}`
+    : '点这里配置模型端点'
+}
+
+function updateComposerState() {
+  const input = document.getElementById('agent-input')
+  const send = document.getElementById('agent-send')
+  const libChip = document.getElementById('agent-lib-chip')
+  if (!input || !send) return
+  input.disabled = !state.current || agent.streaming
+  send.disabled = !state.current || !agent.configured || agent.streaming
+  input.placeholder = !state.current
+    ? '先选一个库，再和 Agent 聊…'
+    : !agent.configured
+      ? '先点右上角齿轮配置模型端点…'
+      : '问问剧情、要一段正文…（Enter 发送，Shift+Enter 换行）'
+  if (libChip) libChip.textContent = state.current ? state.current.name : '未选库'
+}
+
+async function bootAgentConfig() {
+  try {
+    const payload = await api('/api/agent/config')
+    agent.configured = payload.configured === true
+    agent.endpoint = text(payload.endpoint)
+    agent.model = text(payload.model)
+    agent.apiKeyMasked = text(payload.apiKeyMasked)
+    agent.configPath = text(payload.configPath)
+  } catch { /* 读不到就按未配置摆，不拦工作台 */ }
+  updateAgentChip()
+  updateComposerState()
+}
+
+async function loadSessions() {
+  if (!state.current) {
+    agent.sessions = []
+    return
+  }
+  try {
+    const payload = await api(`/api/agent/sessions?root=${encodeURIComponent(state.current.path)}`)
+    agent.sessions = Array.isArray(payload.sessions) ? payload.sessions : []
+  } catch {
+    agent.sessions = []
+  }
+}
+
+async function reloadThread() {
+  if (!agent.sessionId || !state.current) return
+  try {
+    const payload = await api(`/api/agent/session?root=${encodeURIComponent(state.current.path)}&id=${encodeURIComponent(agent.sessionId)}`)
+    agent.items = Array.isArray(payload.items) ? payload.items : []
+  } catch { /* 保留本地视图 */ }
+}
+
+async function openSession(id) {
+  if (agent.streaming) return
+  agent.sessionId = id
+  agent.cardError = null
+  agent.lastError = null
+  await reloadThread()
+  renderAgent()
+}
+
+function newSession() {
+  if (agent.streaming) return
+  agent.sessionId = ''
+  agent.items = []
+  agent.cardError = null
+  agent.lastError = null
+  renderAgent()
+  document.getElementById('agent-input')?.focus()
+}
+
+async function deleteSession(id) {
+  if (agent.streaming) return
+  try {
+    await api(`/api/agent/session?root=${encodeURIComponent(state.current.path)}&id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+    if (agent.sessionId === id) newSession()
+  } catch (error) {
+    rememberAgentError(error)
+  }
+  await loadSessions()
+  renderAgent()
+}
+
+async function renameSession(id, currentTitle) {
+  const title = globalThis.prompt?.('重命名会话', currentTitle)
+  if (title === null) return
+  const next = text(title).trim()
+  if (!next || next === currentTitle) return
+  try {
+    await api('/api/agent/session/rename', {
+      method: 'POST',
+      body: JSON.stringify({ root: state.current.path, id, title: next })
+    })
+    await loadSessions()
+    renderAgent()
+  } catch (error) {
+    rememberAgentError(error)
+    renderAgent()
+  }
+}
+
+function rememberAgentError(error) {
+  agent.lastError = `${error?.code ? `${error.code} · ` : ''}${text(error?.message || error)}`
+}
+
+function sessionsHtml() {
+  const pills = agent.sessions.map((session) => `
+    <span class="s${session.id === agent.sessionId ? ' on' : ''}" data-session-id="${esc(session.id)}" title="${esc(session.title)}（双击重命名）">
+      <span class="tt">${esc(session.title)}</span>
+      <button class="x" data-session-del="${esc(session.id)}" title="删除会话">×</button>
+    </span>`).join('')
+  return `<button class="new" data-action="agent-new-session" title="开始一段新对话">＋新会话</button>${pills}`
+}
+
+function msgHtml(item, index) {
+  if (item.role === 'user') return `<div class="bub user">${esc(item.content)}</div>`
+  const streamingThis = agent.streaming && index === agent.items.length - 1
+  const cursor = streamingThis ? '<span class="cursor"></span>' : ''
+  const partial = item.partial ? '<span class="partial-tag">已停止——这段是不完整回答，以服务器落档为准</span>' : ''
+  const foot = streamingThis ? '' : `<div class="bub-foot"><button class="mini" data-action="card-from" data-msg-index="${index}">转为待确认卡</button></div>`
+  return `<div class="bub assistant">${esc(item.content)}${cursor}${partial}${foot}</div>`
+}
+
+function cardHtml(item) {
+  const open = item.state === 'open'
+  const snapshotNote = item.snapshot?.exists ? `创建时 ${item.snapshot.chars} 字` : '创建时是新文件'
+  const ops = open
+    ? `<div class="ops">
+        <button class="btn-primary" data-action="card-adopt" data-card-id="${esc(item.id)}">采纳写入</button>
+        <button class="btn-ghost" data-action="card-reject" data-card-id="${esc(item.id)}">拒绝</button>
+        <span class="count">采纳＝写「${esc(item.file)}」· ${esc(snapshotNote)}</span>
+      </div>`
+    : `<div class="ops">
+        <span class="state-chip${item.state === 'adopted' ? ' ok' : ' dead'}">${item.state === 'adopted' ? '已写入正文' : '已拒绝'}</span>
+        ${item.backup ? `<span class="count">上一版备份：${esc(item.backup)}</span>` : ''}
+      </div>`
+  const revError = agent.cardError?.cardId === item.id ? `<div class="rev-error">${esc(agent.cardError.message)}</div>` : ''
+  return `<div class="card-block">
+    <div class="head"><b>待确认卡</b><span class="file">${esc(item.file)}</span></div>
+    <div class="body">${esc(item.text)}</div>
+    ${item.note ? `<div class="note">备注：${esc(item.note)}</div>` : ''}
+    ${ops}${revError}
+  </div>`
+}
+
+function threadHtml() {
+  if (!state.current) {
+    return `<div class="agent-empty"><strong>先选一个库</strong>回「我的库」点一张库卡，Agent 就绑定到那个库。</div>`
+  }
+  if (agent.items.length === 0) {
+    return `<div class="agent-empty"><strong>问剧情、要一段正文、改设定…</strong>回答可以转成「待确认卡」，采纳后才真正写进正文文件。</div>`
+  }
+  return agent.items.map((item, index) => item.kind === 'card' ? cardHtml(item) : msgHtml(item, index)).join('')
+}
+
+function renderThread() {
+  const thread = document.getElementById('agent-thread')
+  if (!thread) return
+  const follow = thread.scrollHeight - thread.scrollTop <= thread.clientHeight + 60
+  thread.innerHTML = threadHtml()
+    + (agent.lastError ? `<div class="error-box">${esc(agent.lastError)}</div>` : '')
+  if (follow) thread.scrollTop = thread.scrollHeight
+}
+
+function renderAgent() {
+  const strip = document.getElementById('agent-sessions')
+  if (strip) strip.innerHTML = sessionsHtml()
+  renderThread()
+  updateComposerState()
+}
+
+function handleChatFrame(frame) {
+  const line = frame.split('\n').find((row) => row.startsWith('data:'))
+  if (!line) return
+  let payload
+  try {
+    payload = JSON.parse(line.slice(5).trim())
+  } catch {
+    return
+  }
+  if (payload?.type === 'start') {
+    agent.sessionId = payload.sessionId
+  } else if (payload?.type === 'delta') {
+    const last = agent.items[agent.items.length - 1]
+    if (last?.kind === 'msg' && last.role === 'assistant') {
+      last.content += text(payload.text)
+      renderThread()
+    }
+  } else if (payload?.type === 'error') {
+    rememberAgentError({ code: payload.error?.code, message: payload.error?.message })
+  }
+}
+
+async function sendAgentMessage() {
+  if (!state.current || agent.streaming) return
+  if (!agent.configured) {
+    openSettingsModal('先配好模型端点再开始对话。')
+    return
+  }
+  const input = document.getElementById('agent-input')
+  const content = text(input?.value).trim()
+  if (!content) return
+  if (input) input.value = ''
+  agent.lastError = null
+  agent.cardError = null
+  agent.items.push({ kind: 'msg', id: 'local-user', role: 'user', content, at: '' })
+  agent.items.push({ kind: 'msg', id: 'streaming', role: 'assistant', content: '', at: '' })
+  agent.streaming = true
+  const controller = new AbortController()
+  agent.controller = controller
+  renderAgent()
+  try {
+    const response = await fetch('/api/agent/chat', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        root: state.current.path,
+        ...(agent.sessionId ? { sessionId: agent.sessionId } : {}),
+        content
+      })
+    })
+    if (!response.ok || !response.body) {
+      let payload = null
+      try { payload = await response.json() } catch { payload = null }
+      throw Object.assign(new Error(payload?.error?.message || `请求失败（HTTP ${response.status}）`), { code: payload?.error?.code || '' })
+    }
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let index
+      while ((index = buffer.indexOf('\n\n')) >= 0) {
+        handleChatFrame(buffer.slice(0, index))
+        buffer = buffer.slice(index + 2)
+      }
+    }
+  } catch (error) {
+    if (error?.name !== 'AbortError') rememberAgentError(error)
+  }
+  agent.streaming = false
+  agent.controller = null
+  await loadSessions()
+  await reloadThread() // 以服务器落档为准（停止/新建会话的 sessionId 都在这里回填）
+  renderAgent()
+}
+
+/* ---------- 弹层（Agent 设置 / 待确认卡）---------- */
+
+function openModal(html) {
+  document.getElementById('modal').innerHTML = html
+  document.getElementById('overlay').classList.add('open')
+}
+
+function closeModal() {
+  document.getElementById('overlay').classList.remove('open')
+  document.getElementById('modal').innerHTML = ''
+}
+
+function openSettingsModal(note = '') {
+  openModal(`
+    <h3>Agent 模型设置</h3>
+    <p class="sub">填任意 OpenAI 兼容端点（…/chat/completions）。key 只存本机 daemon 配置
+      <span class="hint">${esc(agent.configPath || '%LOCALAPPDATA%\\PinaxNext\\openstory\\agent-config.json')}</span>，
+      工作台只显示尾号，不回显完整 key。</p>
+    ${note ? `<p class="sub">${esc(note)}</p>` : ''}
+    <div class="field"><label>端点</label>
+      <input id="cfg-endpoint" placeholder="https://api.deepseek.com/v1/chat/completions" value="${esc(agent.endpoint)}">
+    </div>
+    <div class="field"><label>模型</label>
+      <input id="cfg-model" placeholder="deepseek-chat" value="${esc(agent.model)}">
+    </div>
+    <div class="field"><label>API Key${agent.apiKeyMasked ? `（已设置 ${esc(agent.apiKeyMasked)}，留空＝保留）` : ''}</label>
+      <input id="cfg-key" type="password" placeholder="${agent.apiKeyMasked ? '留空保留原 key' : 'sk-…'}">
+    </div>
+    <div class="err" id="modal-err"></div>
+    <div class="ops">
+      <button class="btn-ghost" data-action="modal-close">取消</button>
+      <button class="btn-primary" data-action="agent-config-save">保存</button>
+    </div>
+  `)
+}
+
+async function saveAgentSettings() {
+  const errEl = document.getElementById('modal-err')
+  const endpoint = document.getElementById('cfg-endpoint').value.trim()
+  const model = document.getElementById('cfg-model').value.trim()
+  const key = document.getElementById('cfg-key').value
+  try {
+    const payload = await api('/api/agent/config', {
+      method: 'PUT',
+      body: JSON.stringify({ endpoint, model, ...(key.trim() ? { apiKey: key } : {}) })
+    })
+    agent.configured = payload.configured === true
+    agent.endpoint = text(payload.endpoint)
+    agent.model = text(payload.model)
+    agent.apiKeyMasked = text(payload.apiKeyMasked)
+    agent.configPath = text(payload.configPath)
+    closeModal()
+    updateAgentChip()
+    updateComposerState()
+  } catch (error) {
+    if (errEl) errEl.textContent = `${error?.code ? `${error.code} · ` : ''}${text(error?.message || error)}`
+  }
+}
+
+function openCardModal(msgIndex) {
+  const item = agent.items[Number(msgIndex)]
+  if (!item || item.kind !== 'msg' || item.role !== 'assistant') return
+  if (!agent.sessionId) {
+    rememberAgentError('这段对话还没有落档会话，先发一条消息再转卡片。')
+    renderAgent()
+    return
+  }
+  const options = state.chapterFiles
+    .map((file) => `<option value="${esc(file)}"${file === state.chapterFile ? ' selected' : ''}>${esc(file)}</option>`)
+    .join('')
+  openModal(`
+    <h3>转为待确认卡</h3>
+    <p class="sub">创建时记录目标正文的快照；采纳时如果文件已被改过（比如在 Pinax 里保存过），会拒绝写入而不是覆盖。</p>
+    <div class="field"><label>目标正文文件（库内相对路径）</label>
+      ${options ? `<select id="card-file-select">${options}</select>` : ''}
+      <input id="card-file-input" placeholder="正文/xxx.md" value="${esc(state.chapterFile)}">
+    </div>
+    <div class="field"><label>写入内容</label>
+      <textarea id="card-text">${esc(item.content)}</textarea>
+    </div>
+    <div class="field"><label>备注（可选）</label>
+      <input id="card-note" placeholder="这段是什么、为什么这么写">
+    </div>
+    <div class="err" id="modal-err"></div>
+    <div class="ops">
+      <button class="btn-ghost" data-action="modal-close">取消</button>
+      <button class="btn-primary" data-action="card-create">创建卡片</button>
+    </div>
+  `)
+  const select = document.getElementById('card-file-select')
+  if (select) {
+    select.addEventListener('change', () => {
+      const input = document.getElementById('card-file-input')
+      if (input) input.value = select.value
+    })
+  }
+}
+
+async function submitCard() {
+  const errEl = document.getElementById('modal-err')
+  const file = document.getElementById('card-file-input').value.trim()
+  const cardText = document.getElementById('card-text').value
+  const note = document.getElementById('card-note').value
+  if (!agent.sessionId) {
+    if (errEl) errEl.textContent = '先开始一段对话，再把回答转卡片。'
+    return
+  }
+  if (!file || !cardText.trim()) {
+    if (errEl) errEl.textContent = '目标文件和内容都要填。'
+    return
+  }
+  try {
+    await api('/api/agent/cards', {
+      method: 'POST',
+      body: JSON.stringify({ root: state.current.path, sessionId: agent.sessionId, file, text: cardText, note })
+    })
+    closeModal()
+    agent.cardError = null
+    await reloadThread()
+    renderAgent()
+  } catch (error) {
+    if (errEl) errEl.textContent = `${error?.code ? `${error.code} · ` : ''}${text(error?.message || error)}`
+  }
+}
+
+async function adoptCard(cardId) {
+  agent.cardError = null
+  try {
+    await api('/api/agent/cards/adopt', {
+      method: 'POST',
+      body: JSON.stringify({ root: state.current.path, sessionId: agent.sessionId, id: cardId })
+    })
+    // 正文被 Agent 改了：正文页签缓存作废，正开着就重读。
+    state.chapterLoaded = false
+    state.savedAt = ''
+    if (state.view === 'write' && state.chapterFile) loadChapter(state.chapterFile)
+  } catch (error) {
+    if (error?.code === 'REVISION_MISMATCH') {
+      agent.cardError = { cardId, message: text(error?.message || error) }
+    } else {
+      rememberAgentError(error)
+    }
+  }
+  await reloadThread()
+  renderAgent()
+}
+
+async function rejectCard(cardId) {
+  agent.cardError = null
+  try {
+    await api('/api/agent/cards/reject', {
+      method: 'POST',
+      body: JSON.stringify({ root: state.current.path, sessionId: agent.sessionId, id: cardId })
+    })
+  } catch (error) {
+    rememberAgentError(error)
+  }
+  await reloadThread()
+  renderAgent()
+}
+
 /* ---------- 数据加载 ---------- */
 
 async function boot() {
+  bootAgentConfig()
   try {
     const payload = await api('/api/libraries')
     state.libraries = Array.isArray(payload.libraries) ? payload.libraries : []
@@ -457,6 +898,7 @@ async function boot() {
   } catch (error) {
     rememberError(error)
   }
+  renderAgent()
   render()
 }
 
@@ -484,8 +926,17 @@ async function openLibrary(path) {
   state.search = ''
   state.error = ''
   state.view = 'entries'
+  // Agent 列跟库走：换库＝换会话集。
+  agent.sessions = []
+  agent.sessionId = ''
+  agent.items = []
+  agent.cardError = null
+  agent.lastError = null
+  renderAgent()
   render()
   await ensureEntries()
+  await loadSessions()
+  renderAgent()
 }
 
 async function ensureEntries({ append = false } = {}) {
@@ -690,9 +1141,17 @@ function go(view) {
 }
 
 document.addEventListener('click', (event) => {
-  const target = event.target.closest('[data-view], [data-go], [data-action], [data-skin], [data-lib-path], [data-entry-id], [data-layer], [data-kind], [data-load-more]')
+  const target = event.target.closest('[data-view], [data-go], [data-action], [data-skin], [data-lib-path], [data-entry-id], [data-layer], [data-kind], [data-load-more], [data-session-id], [data-session-del]')
   if (!target) return
 
+  if (target.dataset.sessionDel) {
+    deleteSession(target.dataset.sessionDel)
+    return
+  }
+  if (target.dataset.sessionId) {
+    openSession(target.dataset.sessionId)
+    return
+  }
   if (target.dataset.view) {
     go(target.dataset.view)
     return
@@ -740,6 +1199,26 @@ document.addEventListener('click', (event) => {
     saveChapter()
   } else if (action === 'derive-wiki') {
     deriveWiki()
+  } else if (action === 'agent-settings') {
+    openSettingsModal()
+  } else if (action === 'agent-new-session') {
+    newSession()
+  } else if (action === 'agent-stop') {
+    agent.controller?.abort()
+  } else if (action === 'agent-send') {
+    sendAgentMessage()
+  } else if (action === 'card-from') {
+    openCardModal(target.dataset.msgIndex)
+  } else if (action === 'card-create') {
+    submitCard()
+  } else if (action === 'card-adopt') {
+    adoptCard(target.dataset.cardId)
+  } else if (action === 'card-reject') {
+    rejectCard(target.dataset.cardId)
+  } else if (action === 'agent-config-save') {
+    saveAgentSettings()
+  } else if (action === 'modal-close') {
+    closeModal()
   }
 })
 
@@ -785,7 +1264,27 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && event.target.id === 'chapter-file') {
     event.preventDefault()
     loadChapter(event.target.value)
+    return
   }
+  if (event.key === 'Enter' && event.target.id === 'agent-input' && !event.shiftKey) {
+    event.preventDefault()
+    sendAgentMessage()
+    return
+  }
+  if (event.key === 'Escape') closeModal()
+})
+
+// 会话双击重命名
+document.addEventListener('dblclick', (event) => {
+  const pill = event.target.closest('.agent-sessions .s[data-session-id]')
+  if (!pill || agent.streaming) return
+  const session = agent.sessions.find((item) => item.id === pill.dataset.sessionId)
+  if (session) renameSession(session.id, session.title)
+})
+
+// 点弹层遮罩空白处＝关闭
+document.addEventListener('mousedown', (event) => {
+  if (event.target.id === 'overlay') closeModal()
 })
 
 function setSkin(name) {

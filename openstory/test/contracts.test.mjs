@@ -76,8 +76,8 @@ async function makeFixture() {
   return { base, root, preferencesPath }
 }
 
-test('契约：8 个端点都带 method/path/request/response/errors，路径可反查', () => {
-  assert.equal(Object.keys(ENDPOINTS).length, 8)
+test('契约：端点都带 method/path/request/response/errors，路径可反查', () => {
+  assert.equal(Object.keys(ENDPOINTS).length, 18)
   for (const [id, endpoint] of Object.entries(ENDPOINTS)) {
     assert.ok(endpoint.method, `${id} 缺 method`)
     assert.ok(endpoint.path.startsWith('/api/'), `${id} 路径不是 /api/`)
@@ -87,6 +87,9 @@ test('契约：8 个端点都带 method/path/request/response/errors，路径可
   }
   assert.equal(endpointFor('GET', '/api/libraries/'), 'libraries')
   assert.equal(endpointFor('PUT', '/api/chapter'), 'chapterPut')
+  assert.equal(endpointFor('POST', '/api/agent/chat'), 'agentChat')
+  assert.equal(endpointFor('GET', '/api/agent/sessions'), 'agentSessions')
+  assert.equal(endpointFor('DELETE', '/api/agent/session'), 'agentSessionDelete')
   assert.equal(endpointFor('POST', '/api/nope'), null)
 })
 
@@ -125,12 +128,14 @@ test('契约校验：chapterPut 的 text 必须是字符串', () => {
   assert.ok(result.errors.some((error) => error.field === 'text'))
 })
 
-test('契约校验：agentChat 拒绝空消息数组与坏消息项', () => {
-  assert.equal(validateRequest('agentChat', { messages: [] }).ok, false)
-  const broken = validateRequest('agentChat', { messages: [{ role: 'user' }] })
-  assert.equal(broken.ok, false)
-  assert.ok(broken.errors.some((error) => error.field.startsWith('messages')))
-  assert.equal(validateRequest('agentChat', { messages: [{ role: 'user', content: '你好' }] }).ok, true)
+test('契约校验：agentChat 必须带 root＋content，sessionId/model 可选', () => {
+  assert.equal(validateRequest('agentChat', { content: '你好' }).ok, false)
+  assert.equal(validateRequest('agentChat', { root: '/tmp/x' }).ok, false)
+  const ok = validateRequest('agentChat', { root: '/tmp/x', content: '你好' })
+  assert.equal(ok.ok, true)
+  assert.equal(validateRequest('agentChat', { root: '/tmp/x', sessionId: 's-1', content: '你好', model: 'm1' }).ok, true)
+  // OS-4 起 key 不再走请求：endpoint/apiKey 字段退役
+  assert.equal(validateRequest('agentChat', { root: '/tmp/x', content: '你好', apiKey: 'sk-x' }).ok, true) // 多余字段不拦（形状校验只查契约列出的字段）
 })
 
 test('契约校验：libraries 响应形状通过；缺 libraries 被拒', () => {
