@@ -142,3 +142,28 @@
 - 本报告基于打包产物的静态逆向（结构/清单/导出面）；**sidecar 与 web 的运行时协议细节（SSE 帧格式/会话握手）未动态抓包**——需要的话下一步挂代理抓。
 - OpenDesign 版本 0.27.1，演进快，契约词表会漂。
 - `@open-design/*` 全部 private 未发布 npm——只能逆向不能引用。
+
+
+---
+
+## 七、DSH 会话挖掘（REA 第二层：作者与 DSH 的设计演进史全记录）
+
+来源：~/.dsh/sessions/（DSH CLI 会话，zstd 多帧拼接，Node zlib 逐帧解压）；4b493fc7 项目（＝原型包 UUID）下 2 会话、1771 帧、16316KB 解压、3239 行事件；真对话 45 条（其余为系统注入/压缩检查点/工具调用 597 条）。
+
+### 7.1 设计演进全弧线（从检查点还原）
+
+1. 起点：「帮我看下 Pinax-next 这个目录下的一些前端问题」→ 升级为「全面产品诊断，对标 Obsidian」→「先捋清项目管理和用户生命周期，再谈布局」→「@Airbnb 画一版草图」→「搞一个试试」→「加项目类别管理（剧本/小说/漫剧），继续往下做」→「脱离我的原始代码了，结合已有面板再设计」→「这不是真实的面板，我的原版是 wiki-like 的 web——需要条目页，不是桌面 IDE 壳」。
+2. 产出：pinax-writing-screen（已演进到 **8 板**：novel/outline/world/material/dossier/comic/trpg/deduce——DSH 已把推演/漫画/跑团三板做进原型，含 demo 数据与交互）、pinax-agent-first（Agent 全高左列）、library-view 修复（撤 drawer+scrim→栈列两视图、三组展开、状态保留、min-height 修复）、设置（外观/界面缩放/模型服务/自动快照/写作偏好/技能库 六节）。
+3. **确立的设计哲学**（作者与 DSH 达成，与我们 P 系完全同向）：「settings contain preferences only; commands belong to menus, library, or panels」；Agent 列全高三档响应式（≥1240 全宽/1080–1240 收 320/<1080 隐藏）；极简主面＋插件补全；作者拒绝过：环形设置导航、单列极简设置、发明模块字段。
+
+### 7.2 DSH 沙箱限制（如实）
+
+- D:Pinax-next 沙箱内只读（写 EPERM）——DSH 的实现产物全留在 OD 项目目录；读侧只读了 ~2000 行（<1%）并如实声明。
+- 无法截图（Electron 拒 --no-sandbox、headless Edge 拒绝访问、无 VM）——「用户截图 remain unread; state this honestly」。
+- 与我们 P 系的关系：**同一设计弧线的两条平行实现**——P 系落在产品代码，DSH 线落在原型 HTML；二者已收敛到同一形态（Agent 在左/极简顶栏/wiki-like/珊瑚红）。未重复劳动的部分＝DSH 的 8 板原型（我们的载体板实现可照其交互规格做）。
+
+## 八、结论修订（并入 §四 R 系）
+
+- R 系不变，追加一条：**载体板（推演/漫画/跑团）的 Vue 实现可直接照 pinax-writing-screen.html 最新版（8 板形态）的交互规格做**——DSH 已把设计做完并获作者逐轮点头，省一轮设计工。
+- 世界书 HTML 嵌入（§2.3）维持：S4-02 五页签降级为对照实现。
+- DSH（agent-runtimes/deepseek-harness）是 OpenDesign 的内置运行时＝**R4 可插拔运行时的现成参照**（manifest: packageName/sha256/schemaVersion）。
