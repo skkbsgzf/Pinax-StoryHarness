@@ -95,7 +95,30 @@ function featuresOf(book, result) {
     arcCount: (wiki.characterProfiles ?? []).filter((p) => p.arc?.end).length,
     hasGimmick: Boolean(wiki.slots?.gimmick),
     hasStyle: Boolean(wiki.slots?.style),
-    ledgerKnows: wiki.ledger?.knowledgeLedger?.length ?? 0
+    ledgerKnows: wiki.ledger?.knowledgeLedger?.length ?? 0,
+    // 叙事架构 v2：动机层级与因果结构（采集侧已在 wiki-enrich-run 里产出）
+    profiles: (wiki.characterProfiles ?? []).map((p) => ({
+      name: p.name,
+      needs: Array.isArray(p.needs) ? p.needs : [],
+      chapterCount: Array.isArray(p.chapters) ? p.chapters.length : 0
+    })),
+    causalNodes: wiki.causalGraph?.nodes?.length ?? 0,
+    causalEdges: wiki.causalGraph?.edges?.length ?? 0,
+    causalThreads: wiki.causalGraph?.threads?.length ?? 0,
+    causalClosedRate: (() => {
+      const threads = wiki.causalGraph?.threads
+      if (!Array.isArray(threads) || !threads.length) return null
+      return threads.filter((t) => t?.closed === true).length / threads.length
+    })(),
+    causalCoupling: (() => {
+      const edges = wiki.causalGraph?.edges
+      if (!Array.isArray(edges) || !edges.length) return null
+      const chapters = [...new Set((wiki.causalGraph?.nodes ?? []).map((n) => n.chapter).filter(Number.isFinite))].sort((a, b) => a - b)
+      if (!chapters.length) return null
+      const tail = new Set(chapters.slice(Math.floor(chapters.length * 0.8)))
+      const converging = edges.filter((e) => tail.has(e.toChapter)).length
+      return converging / edges.length
+    })()
   }
 }
 
@@ -165,7 +188,32 @@ function main() {
     { name: '情绪种类数', key: (b) => (b.emotionKinds <= 2 ? '1–2 种' : b.emotionKinds <= 4 ? '3–4 种' : '5+ 种') },
     { name: '节奏密度（平均剧情点）', key: (b) => (b.avgBeats <= 2 ? '≤2' : b.avgBeats <= 3 ? '2–3' : b.avgBeats <= 4 ? '3–4' : '>4') },
     { name: '伏笔总数', key: (b) => (b.hookCount <= 5 ? '≤5' : b.hookCount <= 15 ? '6–15' : b.hookCount <= 30 ? '16–30' : '>30') },
-    { name: '人物规模', key: (b) => (b.charCount <= 3 ? '≤3' : b.charCount <= 6 ? '4–6' : b.charCount <= 10 ? '7–10' : '>10') }
+    { name: '人物规模', key: (b) => (b.charCount <= 3 ? '≤3' : b.charCount <= 6 ? '4–6' : b.charCount <= 10 ? '7–10' : '>10') },
+    // 叙事架构 v2 新维度（2026-11-14）：需求层级分布与因果结构
+    {
+      name: '主角需求层级',
+      key: (b) => {
+        const main = (b.profiles ?? []).slice().sort((x, y) => (y.chapterCount ?? 0) - (x.chapterCount ?? 0))[0]
+        const level = main?.needs?.[0]?.level
+        return level ? 'L' + level + ' ' + ({ 1: '生理', 2: '安全', 3: '归属', 4: '尊重', 5: '自我实现' }[level] ?? '') : '未标注'
+      }
+    },
+    {
+      name: '需求层级数（主角）',
+      key: (b) => {
+        const main = (b.profiles ?? []).slice().sort((x, y) => (y.chapterCount ?? 0) - (x.chapterCount ?? 0))[0]
+        const count = main?.needs?.length ?? 0
+        return count === 0 ? '未标注' : count === 1 ? '1 层（单一驱动）' : count === 2 ? '2 层（有迁移）' : '3+ 层（复杂）'
+      }
+    },
+    {
+      name: '因果闭环率',
+      key: (b) => (b.causalClosedRate == null ? '未产出' : b.causalClosedRate >= 0.8 ? '≥80% 高' : b.causalClosedRate >= 0.5 ? '50–80% 中' : '<50% 低')
+    },
+    {
+      name: '因果耦合度',
+      key: (b) => (b.causalCoupling == null ? '未产出' : b.causalCoupling >= 0.5 ? '≥50% 收束型' : b.causalCoupling >= 0.25 ? '25–50%' : '<25% 发散型')
+    }
   ]
 
   const findings = []

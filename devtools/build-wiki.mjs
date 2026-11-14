@@ -21,6 +21,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readFactWiki } from '../next/kernel/factFileStore.mjs'
 import { derivePseudoChapters, hasRealChapters } from './lib/pseudoChapters.mjs'
+import { causalSummary } from './lib/causalMetrics.mjs'
 
 function argOf(prefix, fallback = null) {
   const hit = process.argv.slice(2).find((item) => item.startsWith(`${prefix}=`))
@@ -189,6 +190,9 @@ function deriveCharacter(entry, plots, profile, totalChapters, chapterOfPlot) {
     identity: profile?.identity || entry.identity || '',
     archetype: profile?.archetype || '',
     goal: profile?.goal || '',
+    // 需求层级（马斯洛，叙事架构第二期）：原样透传，渲染侧只负责画刻度尺。
+    // 这里不做裁剪/排序——层级的语义由采集侧定，展示层擅自重排会让「弧光」判断失真。
+    needs: Array.isArray(profile?.needs) ? profile.needs : [],
     personality: profile?.personality?.length ? profile.personality : (entry.traits ?? []),
     arc: profile?.arc ?? null,
     keyChoices: profile?.keyChoices ?? [],
@@ -488,6 +492,11 @@ function buildBook(id, ds) {
     ledger: wiki?.ledger ?? null,
     // 枚举表（章节功能九类/核心情绪八种/结构六母型）
     enums: wiki?.enums ?? null,
+    // 因果图（C1 底座）：节点/边/情节线原样透传，读数在构建期算一次（前端只渲染不再算）。
+    // 空图时 causalStats 是全零对象（closedRate/coupling 为 null）——SPA 判的是三张表都空，
+    // 不是判 causalStats 为 null，所以「未产出因果图」空态不会漏。
+    causalGraph: wiki?.causalGraph ?? null,
+    causalStats: causalSummary(wiki?.causalGraph ?? null),
     // OpenDesign dashboard 设计系统（token 真源＋SVG 图表调色板＋来源标识）
     ds: { id: 'dashboard', title: 'Dashboard', summary: ds.summary, source: ds.source, palette: ds.palette }
   }
@@ -711,6 +720,69 @@ details.drill[open] summary { border-bottom:1px solid var(--border-soft); paddin
 .curve-head { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
 .curve-head b { font-size:14px; }
 .curve-head span { font-size:11.5px; color:var(--muted); }
+
+/* ---------- 因果链视图（C1：这个故事够不够紧） ---------- */
+/* 情节线：一行一条线。收口状态是这一行唯一的结论，所以放最右并用色差强对比，
+   扫一眼就能数出「还有几条没收」——这正是作者最痛的「埋了不收」。 */
+.causal-threads { display:flex; flex-direction:column; gap:8px; margin:12px 0 4px; }
+.causal-thread { display:grid; grid-template-columns:1.3fr 2fr auto; gap:12px; align-items:center;
+  background:var(--surface); border:1px solid var(--hairline); border-radius:12px; padding:11px 16px;
+  box-shadow:var(--shadow-1); transition:box-shadow .18s ease; }
+.causal-thread:hover { box-shadow:var(--shadow-2); }
+.causal-thread-name { font-family:var(--serif); font-size:14.5px; font-weight:650; color:var(--ink); }
+.causal-thread-chapters { font-size:12.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.causal-thread-state { font-size:12px; font-weight:650; white-space:nowrap; }
+.causal-thread-state.closed { color:var(--success); }
+.causal-thread-state.open { color:var(--danger); }
+
+/* 因果边表：强度给一条细进度条而不是纯数字——「差不多 0.7」比「0.68」更快读 */
+.causal-table { background:var(--surface); border:1px solid var(--hairline); border-radius:14px;
+  overflow:hidden; box-shadow:var(--shadow-1); margin-top:12px; }
+.causal-row { display:grid; grid-template-columns:1.4fr .8fr 1fr 2.4fr; gap:12px; align-items:center;
+  padding:10px 16px; font-size:13px; border-top:1px solid var(--border-soft); color:var(--ink-2); }
+.causal-row:first-child { border-top:none; }
+.causal-head { background:color-mix(in srgb,var(--accent) 5%,var(--paper)); font-size:11px; letter-spacing:.1em;
+  color:var(--muted); text-transform:uppercase; font-weight:600; }
+.causal-link { font-variant-numeric:tabular-nums; white-space:nowrap; }
+.causal-link i { font-style:normal; color:var(--accent); padding:0 6px; }
+.causal-type { display:inline-block; font-size:11.5px; padding:1px 8px; border-radius:999px;
+  background:color-mix(in srgb,var(--accent) 10%,transparent); color:var(--accent); }
+.causal-strength { display:flex; align-items:center; gap:8px; }
+.causal-strength-track { flex:1; min-width:48px; height:5px; border-radius:3px; background:var(--border-soft); overflow:hidden; }
+.causal-strength-fill { height:100%; border-radius:3px;
+  background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 50%,var(--surface))); }
+.causal-strength b { min-width:30px; text-align:right; font-size:11.5px; font-weight:600; color:var(--muted); font-variant-numeric:tabular-nums; }
+.causal-evidence { font-size:12px; color:var(--muted); line-height:1.6; }
+.causal-empty { background:var(--surface); border:1px dashed var(--border); border-radius:14px;
+  padding:28px 20px; text-align:center; color:var(--muted); font-size:13.5px; }
+
+/* ---------- 人物页：需求层级刻度尺（马斯洛 1–5） ---------- */
+/* 需求不该排成一列文字：它在「哪一层」才是结论。刻度尺让横条的位置自己说话——
+   卡在归属层还是已经到自我实现，读者不需要读数字。 */
+.needs-list { display:flex; flex-direction:column; gap:14px; margin-top:12px; }
+.needs-item { background:var(--surface); border:1px solid var(--hairline); border-radius:14px;
+  padding:14px 18px 8px; box-shadow:var(--shadow-1); }
+.needs-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 14px; margin-bottom:12px; }
+.needs-level { font-family:var(--serif); font-size:14.5px; font-weight:700; color:var(--ink); }
+.needs-level em { font-style:normal; font-size:11px; letter-spacing:.1em; color:var(--accent);
+  margin-right:7px; vertical-align:middle; }
+.needs-object { font-size:13px; color:var(--ink-2); }
+.needs-object::before { content:"需要 "; color:var(--muted); font-size:11.5px; }
+.needs-fear { font-size:12.5px; color:var(--danger); }
+.needs-fear::before { content:"恐惧 "; color:var(--muted); font-size:11.5px; }
+/* 左右留 34px：横条以中心点对齐 level/5，1 层与 5 层的半条要能落回卡片内 */
+.needs-scale { position:relative; height:30px; margin:0 34px 14px; }
+.needs-scale::before { content:""; position:absolute; left:0; right:0; top:10px; height:2px; border-radius:2px;
+  background:linear-gradient(90deg,var(--border),color-mix(in srgb,var(--accent) 45%,var(--border))); }
+.needs-tick { position:absolute; top:0; width:34px; transform:translateX(-50%); text-align:center;
+  font-size:10px; color:var(--muted); line-height:1; }
+.needs-tick::before { content:""; display:block; width:2px; height:10px; margin:0 auto 4px;
+  background:var(--border); border-radius:1px; }
+.needs-bar { position:absolute; top:3px; width:56px; height:16px; transform:translateX(-50%); border-radius:8px;
+  background:linear-gradient(90deg,color-mix(in srgb,var(--accent) 16%,transparent),color-mix(in srgb,var(--accent) 38%,transparent));
+  border:1px solid color-mix(in srgb,var(--accent) 45%,var(--hairline)); box-shadow:var(--shadow-1); }
+.needs-bar b { display:block; font-size:10.5px; font-weight:700; color:var(--accent); line-height:14px;
+  text-align:center; letter-spacing:.04em; font-variant-numeric:tabular-nums; }
 
 /* 六槽位卡（kb/deconstruct/protocol 对齐） */
 .slotcard { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 18px; margin:10px 0; }

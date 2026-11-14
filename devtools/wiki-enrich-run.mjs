@@ -7,7 +7,12 @@
  *   · 文风学习协议九维（kb/deconstruct/style-learning）：情绪笔墨密度/句式节奏/信息控制/对话权力关系/动作代心理…
  *   · 溯源纪律（block 级）：章号证据、三态区分（事实/推断/未确认）、不虚构未读取情节
  *
- * 调用预算：章批（5 章/批，五合一输出）＋ gimmick 1 ＋ plot-design 1 ＋ intro 1 ＋ 文风 1-2 ＋ 人物档案 top12。
+ * 2026-11-14 采集窗（因果图＋动机层级）：
+ *   · causalGraph 因果图：只收「A 导致/阻止/揭示 B」的真因果，时序不进图；章纲过长时对半劈两批，1-2 calls。
+ *   · needs 马斯洛需求：不新开窗，改造现有人物档案窗的 prompt —— 输入不变，0 增调用。
+ *
+ * 调用预算：章批（5 章/批，五合一输出）＋ gimmick 1 ＋ plot-design 1 ＋ intro 1 ＋ 文风 1-2 ＋ 人物档案 top12
+ *           ＋ 因果图 1-2。
  * 事件正文恒为原文切片（fact 层不动）；语义槽位全部落 wiki 字段（wiki-enrich@3）。
  *
  * 用法：node devtools/wiki-enrich-run.mjs --lib=D:/Qbook/短篇选题库 --books=<id>[,<id>]
@@ -49,6 +54,163 @@ const TRACE_HEADER = [
 const STRUCTURE_TYPES = ['复仇', '救猫咪', '逆袭升级', '双线交叉', '倒钩回归', '单元宿命', '复合（须注明主辅）']
 const CHAPTER_FUNCTIONS = ['建立', '铺垫', '叠加', '误导', '打击', '觉醒', '对峙', '揭露', '收束']
 const EMOTIONS = ['甜', '痛', '爽', '悔', '疑', '燃', '压迫', '释然']
+
+// 马斯洛五层：level 是模型给数的锚，need 落中文层名。用表反查而不是信模型自报，
+// 因为模型常把 level 写成 0/6 或把 need 写成英文单词，那样下游没法按层聚合。
+const MASLOW_LEVELS = { 1: '生理', 2: '安全', 3: '归属', 4: '尊重', 5: '自我实现' }
+const CAUSAL_KINDS = ['action', 'revelation', 'decision', 'accident']
+const CAUSAL_EDGE_TYPES = ['trigger', 'cause', 'enables', 'prevents', 'reveals']
+const CAUSAL_EDGE_LIMIT = 40
+
+/** 层名归一：接受 1-5、数字串、中文层名、英文 need 名，统一成 {level, need}。 */
+function normalizeNeedLevel(rawLevel, rawNeed) {
+  const text = String(rawNeed ?? '').trim()
+  const byName = Object.entries(MASLOW_LEVELS).find(([, name]) => name === text)
+  if (byName) return { level: Number(byName[0]), need: text }
+  const level = Math.round(Number(rawLevel))
+  if (Number.isInteger(level) && MASLOW_LEVELS[level]) return { level, need: MASLOW_LEVELS[level] }
+  // level 与层名都不可用：认英文 key，认不出就给 null，交给调用方丢弃
+  const alias = { physiological: 1, safety: 2, belonging: 3, esteem: 4, 'self-actualization': 5, selfactualization: 5 }
+  const hit = alias[text.toLowerCase()]
+  return hit ? { level: hit, need: MASLOW_LEVELS[hit] } : null
+}
+
+/**
+ * 解析人物卡里的 needs（1-3 条，按重要性排序）。
+ * evidence 必须带章号——这是溯源纪律的硬要求；写不出章号的需求宁可丢，
+ * 也不落一条下游无法回查的依据。
+ */
+function parseNeeds(raw) {
+  if (!Array.isArray(raw)) return []
+  return raw.slice(0, 3).map((item) => {
+    const norm = normalizeNeedLevel(item?.level, item?.need)
+    if (!norm) return null
+    const evidence = String(item?.evidence ?? '').slice(0, 80)
+    return {
+      level: norm.level,
+      need: norm.need,
+      object: String(item?.object ?? '').slice(0, 40),
+      fear: String(item?.fear ?? '').slice(0, 40),
+      cost: String(item?.cost ?? '').slice(0, 40),
+      evidence
+    }
+  }).filter((item) => item && item.need && /第\s*\d+/u.test(item.evidence))
+}
+
+/**
+ * 因果图单批归一（不做跨批校验）。
+ *
+ * 归一本身就够宽：kind/type 不在枚举里退成默认值，strength 缺省给 0.5，
+ * 因为模型偶尔会漏字段——为这点瑕疵丢掉整条边，图就断了。
+ * @param {unknown} raw 模型解析出的一批 JSON
+ */
+function normalizeCausal(raw) {
+  const nodes = (Array.isArray(raw?.nodes) ? raw.nodes : []).map((item) => {
+    // Number('') / Number(null) 都是 0——不挡的话模型回个空串就会造出「第0章」节点
+    const chapter = Math.round(Number(item?.chapter))
+    const kind = String(item?.kind ?? '')
+    return {
+      chapter: Number.isInteger(chapter) && chapter >= 1 ? chapter : null,
+      event: String(item?.event ?? '').slice(0, 40),
+      kind: CAUSAL_KINDS.includes(kind) ? kind : 'action'
+    }
+  }).filter((item) => item.chapter !== null && item.event)
+
+  const edges = (Array.isArray(raw?.edges) ? raw.edges : []).map((item) => {
+    const fromChapter = Math.round(Number(item?.fromChapter))
+    const toChapter = Math.round(Number(item?.toChapter))
+    const type = String(item?.type ?? '')
+    const strength = Number(item?.strength)
+    return {
+      fromChapter,
+      toChapter,
+      type: CAUSAL_EDGE_TYPES.includes(type) ? type : 'cause',
+      strength: Number.isFinite(strength) ? Math.max(0, Math.min(1, strength)) : 0.5,
+      evidence: String(item?.evidence ?? '').slice(0, 60)
+    }
+  })
+
+  const threads = (Array.isArray(raw?.threads) ? raw.threads : []).map((item) => ({
+    name: String(item?.name ?? '').slice(0, 20),
+    chapters: Array.isArray(item?.chapters) ? item.chapters.map(Number).filter(Number.isInteger).sort((a, b) => a - b) : [],
+    closed: item?.closed === true
+  }))
+
+  return { nodes, edges, threads }
+}
+
+/**
+ * 因果图合并＋清洗（跨批之后做）。
+ *
+ * 两条硬门槛都在这里，因为它们需要全书的章号全集：
+ *   1) 边的两端必须都是已有节点的章号——模型爱给「第0章/序章」这类不存在的端点，
+ *      落进图里就是一个孤儿箭头；分批时另一半的章号也要算，所以只能在合并后判。
+ *   2) 同一 (from,to,type) 只留一条——模型会换个措辞把同一条因果说两遍。
+ * 上限 40 条按 strength 取前四十：不足 30 不补假边，超了才截断。
+ * @param {{nodes:Array, edges:Array, threads:Array, focus?:Set<number>}[]} parts 各批结果
+ */
+function finalizeCausal(parts) {
+  // 一章一个主事件（多节点会让图在单章处炸成一簇）。分批时同一章可能被两批各描述一次，
+  // 优先留「本批重点章」那条——那是模型被要求重点看的那批，事件描述更贴本章。
+  const nodeByChapter = new Map()
+  for (const part of parts) {
+    for (const node of part.nodes) {
+      const existing = nodeByChapter.get(node.chapter)
+      const isFocus = part.focus ? part.focus.has(node.chapter) : false
+      if (!existing) nodeByChapter.set(node.chapter, { node, isFocus })
+      else if (isFocus && !existing.isFocus) nodeByChapter.set(node.chapter, { node, isFocus })
+    }
+  }
+  const nodes = [...nodeByChapter.values()].map((entry) => entry.node).sort((a, b) => a.chapter - b.chapter)
+
+  const chapterSet = new Set(nodes.map((node) => node.chapter))
+  const edgeSeen = new Set()
+  const edges = []
+  let dropped = 0
+  for (const part of parts) {
+    for (const edge of part.edges) {
+      const valid = Number.isInteger(edge.fromChapter) && Number.isInteger(edge.toChapter)
+        && edge.fromChapter >= 1 && edge.toChapter >= 1
+        && edge.fromChapter !== edge.toChapter
+        && chapterSet.has(edge.fromChapter) && chapterSet.has(edge.toChapter)
+        && Boolean(edge.evidence)
+      if (!valid) { dropped++; continue }
+      const key = `${edge.fromChapter}->${edge.toChapter}:${edge.type}`
+      if (edgeSeen.has(key)) continue
+      edgeSeen.add(key)
+      edges.push(edge)
+    }
+  }
+  edges.sort((a, b) => b.strength - a.strength)
+  const keptEdges = edges.slice(0, CAUSAL_EDGE_LIMIT)
+
+  const threads = []
+  for (const part of parts) {
+    for (const thread of part.threads) {
+      if (!thread.name || thread.chapters.length < 2) continue
+      // 两批可能各报一次同一条线：同名的取章号并集（分批时它本来就被截断成两半）
+      const existing = threads.find((item) => item.name === thread.name)
+      if (existing) {
+        existing.chapters = [...new Set([...existing.chapters, ...thread.chapters])].sort((a, b) => a - b)
+        existing.closed = existing.closed || thread.closed
+        continue
+      }
+      threads.push(thread)
+    }
+  }
+
+  // 下游（wiki-spa 的 vCausal / causalMetrics 的注释）按 `node.id` 与 `thread.nodes`（节点 id 数组）取数。
+  // 任务书的字段是 chapter/chapters，不能改；这里只做加法补一份派生字段，
+  // 否则情节线在页面上会显示成「无章号锚点」。id 就用章号，本图一章一节点，天然唯一。
+  const idOf = (chapter) => `ch-${chapter}`
+  const landedNodes = nodes.map((node) => ({ ...node, id: idOf(node.chapter) }))
+  const landedThreads = threads.slice(0, 5).map((thread) => ({
+    ...thread,
+    nodes: thread.chapters.map(idOf)
+  }))
+
+  return { graph: { nodes: landedNodes, edges: keptEdges, threads: landedThreads }, dropped }
+}
 
 /**
  * 单本增补（六槽位版）。
@@ -309,7 +471,9 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     } catch (error) { failures.push({ stage: 'style', reason: String(error?.message ?? error) }) }
   }
 
-  /* ---------- 槽位 character：人物卡（模式/弧光/关键选择/镜像） ---------- */
+  /* ---------- 槽位 character：人物卡（模式/弧光/关键选择/镜像）＋ needs（马斯洛需求） ---------- */
+  // needs 不新开窗：该窗的输入本来就是「该角色全书台词与行为」，正是推需求所需的全部证据；
+  // 另起一窗只会重复喂同样的上下文。所以只扩 prompt、只加解析，调用数不变。
   const characterProfiles = []
   for (const person of personInputs) {
     const prompt = [
@@ -321,9 +485,15 @@ export async function enrichBook(id, lib = LIB, options = {}) {
       ' "personality": ["性格词 2–4 个"],',
       ' "arc": { "start": "起点状态", "end": "终点状态", "turnChapter": 转变章号或 null, "evidence": "转变依据（引章号）" },',
       ' "keyChoices": [ { "chapter": 章, "choice": "关键选择 ≤25 字" } ],',
+      ' "needs": [ { "level": 1-5, "need": "生理|安全|归属|尊重|自我实现", "object": "这个需求具体指向谁/什么 ≤20 字", "fear": "满足不了会怎样（恐惧）≤20 字", "cost": "为满足它愿意付出什么代价 ≤20 字", "evidence": "第N节/章的行为依据" } ],',
       ' "mirror": "镜像/对立人物是谁、如何互为镜像（没有就空串）",',
       ' "summary": "2–3 句人物小传"',
       '}',
+      '',
+      'needs 说明（马斯洛需求层级，1 生理 / 2 安全 / 3 归属 / 4 尊重 / 5 自我实现）：',
+      '· 一个角色 1–3 条，按对行为的驱动力从强到弱排序；只写有行为证据的，推不出就给空数组；',
+      '· 层级按「这个需求真正在驱动什么」判，不按表面处境：为被爱而自毁仍是归属不是安全；',
+      `· evidence 必须带${usePseudo ? '节' : '章'}号，写清是哪个行为/台词暴露了这条需求。`,
       '',
       TRACE_HEADER,
       '',
@@ -335,6 +505,12 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     try {
       const answer = await callJson(prompt, 1800)
       const parsed = parseReply(answer.text)
+      const needs = parseNeeds(parsed?.needs)
+      // 模型给了 needs 却一条都过不了校验（最常见：evidence 没写章号）——这是数据缺口不是正常空值，
+      // 必须记账；模型明说「推不出」给空数组的情况才安静放过。
+      if (Array.isArray(parsed?.needs) && parsed.needs.length && !needs.length) {
+        failures.push({ stage: 'needs', name: person.name, reason: 'all-dropped-no-chapter-evidence' })
+      }
       characterProfiles.push({
         name: person.name,
         chapters: person.chapters,
@@ -352,12 +528,103 @@ export async function enrichBook(id, lib = LIB, options = {}) {
           chapter: Number(item?.chapter) || null,
           choice: String(item?.choice ?? '').slice(0, 40)
         })).filter((item) => item.choice) : [],
+        needs,
         mirror: String(parsed?.mirror ?? ''),
         summary: String(parsed?.summary ?? '')
       })
     } catch (error) {
       failures.push({ stage: 'character', name: person.name, reason: String(error?.message ?? error) })
-      characterProfiles.push({ name: person.name, identity: '', archetype: '', personality: [], arc: null, keyChoices: [], mirror: '', summary: '' })
+      characterProfiles.push({ name: person.name, identity: '', archetype: '', personality: [], arc: null, keyChoices: [], needs: [], mirror: '', summary: '' })
+    }
+  }
+
+  /* ---------- 窗一：因果图 causalGraph ---------- */
+  // 输入刻意用「章纲＋伏笔＋弧光」而不是原文：因果判断需要的是每章的『功能/情绪/剧情点』这三样，
+  // 原文切片只会把预算烧在复述情节上。伏笔清单告诉我们哪些线还没收，弧光告诉我们人物在哪转了向。
+  let causalGraph = null
+  {
+    const usable = chapterSummaries.filter((item) => item.summary)
+    if (!usable.length) {
+      failures.push({ stage: 'causalGraph', reason: 'no-chapter-summary' })
+    } else {
+      const hookLines = foreshadows.slice(0, 20).map((hook) => `第${hook.chapter}${usePseudo ? '节' : '章'}：${hook.text}`)
+      const arcLines = characterProfiles
+        .filter((profile) => profile.arc?.start || profile.arc?.end)
+        .map((profile) => `${profile.name}：${profile.arc.start || '？'} → ${profile.arc.end || '？'}${profile.arc.turnChapter ? `（第${profile.arc.turnChapter}${usePseudo ? '节' : '章'}转向）` : ''}`)
+      const outlineOf = (list) => list.map((item) => (
+        `第${item.chapter}${usePseudo ? '节' : '章'}「${item.title || '无题'}」[${item.function || '未定'}/${item.emotion || '未定'}/剧情点${item.beats ?? '?'}]：${item.summary}`
+      )).join('\n')
+
+      const buildPrompt = (focus, full) => [
+        '你是因果图构建器。输入是一本小说的章纲、伏笔清单与人物弧光。',
+        '要建的是「因果图」，不是时间线：',
+        '· 只有「A 导致 / 阻止 / 使能 / 揭示 B」才连边；「A 之后发生 B」不算因果，不要连。',
+        '· 拿不准就问自己：没有 A，B 还会发生吗？会 → 不是因果；不会或明显不同 → 是因果。',
+        '· strength 0–1，表示「无此因则果不成立」的程度：1=没它就没有 B，0.3=只是加速或加重了 B。',
+        '· 整本 30–40 条边（本批至少 8 条，章本身少于 6 章可更少）；只收推动主线或人物转向的，不复述琐事。',
+        '',
+        '输出 JSON：{',
+        ' "nodes": [ { "chapter": 章号, "event": "该章的关键事件 ≤15 字", "kind": "action|revelation|decision|accident" } ],',
+        ' "edges": [ { "fromChapter": 章号, "toChapter": 章号, "type": "trigger|cause|enables|prevents|reveals", "strength": 0.8, "evidence": "为什么是因果，≤30 字，如「第3节剪发→第7节态度转变」" } ],',
+        ' "threads": [ { "name": "情节线名（如 身份真相线）", "chapters": [贯穿章号], "closed": true } ]',
+        '}',
+        '规则：nodes 每个关键章一条（一章只出一条主事件）；threads 2–5 条，是贯穿全书的情节线，不是单章事件。',
+        '本批重点章：' + focus.map((item) => `第${item.chapter}${usePseudo ? '节' : '章'}`).join('、'),
+        '',
+        TRACE_HEADER,
+        '',
+        `【全书章纲（可用于分析跨章因果）】\n${outlineOf(full)}`,
+        `【伏笔清单】\n${hookLines.join('\n') || '（无）'}`,
+        `【人物弧光】\n${arcLines.join('\n') || '（无）'}`
+      ].join('\n')
+
+      // 章多才劈两批：每批仍是全书章纲（跨章因果不能瞎），只把「重点章」收窄，
+      // 让它把注意力留给本批，同时允许它连到任何一章——两批的边合并后是一张图。
+      const batches = usable.length > 16
+        ? [usable.slice(0, Math.ceil(usable.length / 2)), usable.slice(Math.ceil(usable.length / 2))]
+        : [usable]
+      const parts = []
+      for (const focus of batches) {
+        const prompt = buildPrompt(focus, usable)
+        const focusTag = focus.map((item) => item.chapter).join(',')
+        // 「解析失败」有两种：JSON 读不出来，或读出来了但 nodes/edges 全空。
+        // 后者在实测里同样常见（模型只会讲道理不落结构），所以两者都算失败、都重试一次。
+        let parsed = null
+        let lastError = ''
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            const answer = await callJson(prompt, 3200)
+            parsed = parseReply(answer.text)
+            lastError = parsed ? '' : 'parse-failed'
+            if (parsed?.nodes?.length || parsed?.edges?.length) break
+            parsed = null
+            lastError = lastError || 'empty'
+            if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 5000))
+          } catch (error) { lastError = String(error?.message ?? error) }
+        }
+        if (!parsed) {
+          failures.push({ stage: 'causalGraph', chapters: focusTag, reason: `${lastError || 'empty'}-single-retry` })
+          continue
+        }
+        parts.push({ ...normalizeCausal(parsed), focus: new Set(focus.map((item) => item.chapter)) })
+      }
+
+      if (parts.length) {
+        const finalized = finalizeCausal(parts)
+        if (finalized.dropped) failures.push({ stage: 'causalGraph', reason: `dropped-invalid-edges:${finalized.dropped}` })
+        if (!finalized.graph.nodes.length) failures.push({ stage: 'causalGraph', reason: 'empty-nodes' })
+        else {
+          // 结构缺口也记账：章够多却只有一条线/没有边，说明这一窗基本没出活，
+          // 下游拿到的会是一张没信息量的图——这必须能在日志里看见，不能当成「本来就少」。
+          if (finalized.graph.nodes.length >= 6 && finalized.graph.threads.length < 2) {
+            failures.push({ stage: 'causalGraph', reason: `threads-below-2:${finalized.graph.threads.length}` })
+          }
+          if (finalized.graph.nodes.length >= 6 && !finalized.graph.edges.length) {
+            failures.push({ stage: 'causalGraph', reason: 'no-edges' })
+          }
+          causalGraph = finalized.graph
+        }
+      }
     }
   }
 
@@ -484,6 +751,7 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     chapterSummaries,
     foreshadows,
     excerpts,
+    causalGraph,
     characterProfiles,
     failures
   }
@@ -514,6 +782,11 @@ export async function enrichBook(id, lib = LIB, options = {}) {
     ledger: ledger ? `${ledger.knowledgeLedger.length}知/${ledger.stateLedger.length}态` : '—',
     world: worldElements ? `${worldElements.scenes.length}景/${worldElements.items.length}物` : '—',
     slots: `${slotsLanded}/4`,
+    // 采集窗计数：让管线日志一眼看出因果图/需求是不是真空了，不用翻 wiki.json
+    causalNodes: causalGraph?.nodes.length ?? 0,
+    causalEdges: causalGraph?.edges.length ?? 0,
+    threadCount: causalGraph?.threads.length ?? 0,
+    needsCount: characterProfiles.reduce((sum, profile) => sum + (profile.needs?.length ?? 0), 0),
     failures: failures.length,
     storySummary: Boolean(storySummary)
   }
@@ -524,6 +797,6 @@ if (process.argv[1] && process.argv[1].endsWith('wiki-enrich-run.mjs')) {
     const startedAt = Date.now()
     const summary = await enrichBook(id)
     summary.sec = Math.round((Date.now() - startedAt) / 1000)
-    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.summaries}/${summary.chapters}，功能 ${summary.functions}，情绪 ${summary.emotions}，高光 ${summary.excerpts}，弧光 ${summary.arcs}/${summary.profiles}，动机 ${summary.goals}，台账 ${summary.ledger}，世界 ${summary.world}，槽位 ${summary.slots}，失败 ${summary.failures}，${summary.sec}s`)
+    console.log(`✓ ${summary.title}: ${summary.chapters} ${summary.pseudo ? '节' : '章'}，梗概 ${summary.summaries}/${summary.chapters}，功能 ${summary.functions}，情绪 ${summary.emotions}，高光 ${summary.excerpts}，弧光 ${summary.arcs}/${summary.profiles}，动机 ${summary.goals}，因果 ${summary.causalNodes}点/${summary.causalEdges}边/${summary.threadCount}线，需求 ${summary.needsCount}，台账 ${summary.ledger}，世界 ${summary.world}，槽位 ${summary.slots}，失败 ${summary.failures}，${summary.sec}s`)
   }
 }

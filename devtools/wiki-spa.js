@@ -286,6 +286,7 @@ function renderSide() {
     ['outline', '📖 章节大纲'],
     ['timeline', '⏱ 时间线'],
     ['graph', '🔗 关系图谱'],
+    ['causal', '🧩 因果链'],
     ['foreshadow', '🎣 伏笔']
   ];
   var h = '<div class="nav"><h3>面板</h3>';
@@ -545,6 +546,31 @@ function vChar(name) {
 
   // ③ 动机
   if (c.goal) h += '<h2>动机</h2><div class="summary">' + escHtml(c.goal) + '</div>';
+
+  // ③' 需求层级（马斯洛 1–5）：goal 是一句话，needs 才是可定位的坐标。
+  // 横条位置 = level/5，卡在第 2 层（安全）还是第 5 层（自我实现）一眼看出来。
+  if (c.needs && c.needs.length) {
+    h += '<h2>需求层级 <small>' + c.needs.length + ' 条，横条位置即层级</small></h2>';
+    h += '<div class="needs-list">' + c.needs.map(function (need) {
+      var level = Number(need.level);
+      level = isFinite(level) ? Math.max(1, Math.min(5, level)) : null;
+      // 刻度尺左右各留 34px 内边距（见 CSS），这里按 0–100% 线性铺 5 个刻度
+      var scale = '';
+      for (var t = 1; t <= 5; t++) {
+        scale += '<span class="needs-tick" style="left:' + ((t - 1) * 25) + '%">' + t + '</span>';
+      }
+      var bar = level == null ? ''
+        : '<span class="needs-bar" style="left:' + ((level - 1) * 25) + '%"><b>' + level + '</b></span>';
+      return '<div class="needs-item">'
+        + '<div class="needs-head">'
+        + '<span class="needs-level"><em>L' + (level == null ? '?' : level) + '</em>' + escHtml(need.need || '未命名需求') + '</span>'
+        + (need.object ? '<span class="needs-object">' + escHtml(need.object) + '</span>' : '')
+        + (need.fear ? '<span class="needs-fear">' + escHtml(need.fear) + '</span>' : '')
+        + '</div>'
+        + '<div class="needs-scale">' + scale + bar + '</div>'
+        + '</div>';
+    }).join('') + '</div>';
+  }
 
   // ④ 关键选择（带章号，这是「他为什么这么做」的锚点）
   if (c.keyChoices.length) {
@@ -987,6 +1013,147 @@ function vGraph() {
   return h;
 }
 
+/* ===== 因果链（C1：这个故事够不够紧） ===== */
+/* 一问一答：闭环率回答「埋了收没收」，耦合度回答「线是不是都汇到结局」，
+   断点影响回答「哪一步是命门」。读数在构建期由 lib/causalMetrics.mjs 算好，
+   这里只负责摆——前端再算一遍必然与推演器/市场分析的口径漂移。 */
+function pctText(value) {
+  return (typeof value === 'number' && isFinite(value)) ? Math.round(value * 100) + '%' : '—';
+}
+
+/** 节点 id → 章号（因果边和情节线都存节点 id，展示要落到「第几章」）。 */
+function causalChapterOf(chapterMap, nodeId) {
+  var chapter = chapterMap[nodeId];
+  return (typeof chapter === 'number' && isFinite(chapter)) ? chapter : null;
+}
+
+/** 边端点 → 章号：先查节点表；早期手写数据直接写 fromChapter/toChapter，也接。 */
+function causalEndChapter(chapterMap, nodeId, directChapter) {
+  var chapter = causalChapterOf(chapterMap, String(nodeId));
+  if (chapter != null) return chapter;
+  return (typeof directChapter === 'number' && isFinite(directChapter)) ? directChapter : null;
+}
+
+/** 章号 → 可点击的内联「第N章」；该章不在大纲里就退化成纯文本。 */
+function causalChapterLink(no) {
+  if (no == null) return '<span style="color:' + C_MUTED + '">—</span>';
+  var label = '第' + no + UNIT;
+  return CH_BY_NO[no] ? '<a data-go="chapter" data-no="' + no + '">' + label + '</a>' : label;
+}
+
+function vCausal() {
+  var G = DETAIL.causalGraph;
+  var S = DETAIL.causalStats;
+  var h = '<h1>因果链</h1>';
+
+  var nodes = (G && G.nodes) || [];
+  var edges = (G && G.edges) || [];
+  var threads = (G && G.threads) || [];
+  if (!nodes.length && !edges.length && !threads.length) {
+    return h + '<div class="meta">本书拆解未产出因果图</div>'
+      + '<div class="causal-empty">本书未产出因果图</div>';
+  }
+
+  h += '<div class="meta"><span>节点 ' + nodes.length + '</span><span>因果边 ' + edges.length + '</span>'
+    + '<span>情节线 ' + threads.length + '</span>'
+    + (S && S.hasCycles ? '<span style="color:' + C_DANGER + '">检测到因果环（可能是采集时序错误）</span>' : '')
+    + '</div>';
+
+  // ① 四个指标卡（复用概览的 .skeleton/.sk-card）
+  var stats = S || {};
+  var cards = [
+    {
+      label: '闭环率',
+      value: pctText(stats.closedRate),
+      note: stats.closedRate == null ? '没有情节线数据'
+        : (stats.threadCount || 0) + ' 条线里 ' + Math.round((stats.closedRate || 0) * (stats.threadCount || 0)) + ' 条已收口'
+    },
+    {
+      label: '耦合度',
+      value: pctText(stats.coupling),
+      note: stats.coupling == null ? '没有因果边数据' : '汇入结局的边占比，越高越「所有线收束于一点」'
+    },
+    {
+      label: '最大断点影响',
+      value: stats.maxImpact == null ? '—' : stats.maxImpact + ' ' + UNIT,
+      note: stats.maxImpact ? '断开一条边后失联的章节数（推演改动的命门）' : '没有单条边能切断因果链'
+    },
+    {
+      label: '情节线数',
+      value: String(stats.threadCount == null ? threads.length : stats.threadCount),
+      note: (stats.closedRate == null ? '—' : Math.round((stats.closedRate || 0) * (stats.threadCount || 0)) + ' 收口 / '
+        + ((stats.threadCount || 0) - Math.round((stats.closedRate || 0) * (stats.threadCount || 0))) + ' 未收口')
+    }
+  ];
+  h += '<div class="skeleton">' + cards.map(function (card) {
+    return '<div class="sk-card">'
+      + '<div class="sk-label">' + escHtml(card.label) + '</div>'
+      + '<div class="sk-value">' + escHtml(card.value) + '</div>'
+      + '<div class="sk-note">' + escHtml(card.note) + '</div>'
+      + '</div>';
+  }).join('') + '</div>';
+
+  // 节点表（id → 章号），边与情节线共用
+  var chapterMap = {};
+  nodes.forEach(function (node) {
+    if (node && node.id != null) chapterMap[String(node.id)] = node.chapter;
+  });
+
+  // ② 情节线：一条线一行，收口状态是唯一结论
+  h += '<h2>情节线 <small>哪几条还悬着</small></h2>';
+  if (!threads.length) {
+    h += '<div class="causal-empty">没有情节线数据</div>';
+  } else {
+    h += '<div class="causal-threads">' + threads.map(function (thread) {
+      var chapters = [];
+      (thread.nodes || []).forEach(function (id) {
+        var no = causalEndChapter(chapterMap, id, NaN);
+        if (no != null && chapters.indexOf(no) < 0) chapters.push(no);
+      });
+      chapters.sort(function (a, b) { return a - b; });
+      var chapterText = chapters.length ? chapters.map(function (no) { return '第' + no + UNIT; }).join(' → ') : '无章号锚点';
+      return '<div class="causal-thread">'
+        + '<span class="causal-thread-name">' + escHtml(thread.name || thread.id || '未命名情节线') + '</span>'
+        + '<span class="causal-thread-chapters">' + escHtml(chapterText) + '</span>'
+        + '<span class="causal-thread-state ' + (thread.closed === true ? 'closed' : 'open') + '">'
+        + (thread.closed === true ? '✓ 已收口' : '⚠ 未收口') + '</span>'
+        + '</div>';
+    }).join('') + '</div>';
+  }
+
+  // ③ 因果边表：只给强度最高的 15 条（全表是数据库，不是判断）
+  h += '<h2>因果边 <small>' + Math.min(15, edges.length) + ' / ' + edges.length + ' 条，按强度排序</small></h2>';
+  if (!edges.length) {
+    h += '<div class="causal-empty">没有因果边数据</div>';
+    return h;
+  }
+  var topEdges = edges.slice().sort(function (a, b) {
+    var sa = (typeof a.strength === 'number' && isFinite(a.strength)) ? a.strength : -1;
+    var sb = (typeof b.strength === 'number' && isFinite(b.strength)) ? b.strength : -1;
+    return sb - sa;
+  }).slice(0, 15);
+  h += '<div class="causal-table">'
+    + '<div class="causal-row causal-head"><span>从 → 到</span><span>类型</span><span>强度</span><span>证据</span></div>';
+  topEdges.forEach(function (edge) {
+    var strength = (typeof edge.strength === 'number' && isFinite(edge.strength))
+      ? Math.max(0, Math.min(1, edge.strength)) : null;
+    var fromNo = causalEndChapter(chapterMap, edge.from, edge.fromChapter);
+    var toNo = causalEndChapter(chapterMap, edge.to, edge.toChapter);
+    h += '<div class="causal-row">'
+      + '<span class="causal-link">' + causalChapterLink(fromNo) + '<i>→</i>' + causalChapterLink(toNo) + '</span>'
+      + '<span><span class="causal-type">' + escHtml(edge.type || '未标注') + '</span></span>'
+      + '<span class="causal-strength">'
+      + '<span class="causal-strength-track"><span class="causal-strength-fill" style="width:'
+      + (strength == null ? 0 : Math.round(strength * 100)) + '%"></span></span>'
+      + '<b>' + (strength == null ? '—' : strength.toFixed(2)) + '</b>'
+      + '</span>'
+      + '<span class="causal-evidence">' + escHtml(edge.evidence || '—') + '</span>'
+      + '</div>';
+  });
+  h += '</div>';
+  return h;
+}
+
 function drawRelationGraph(focus) {
   var svg = document.getElementById('relSvg');
   if (!svg) return;
@@ -1029,6 +1196,7 @@ function renderMain() {
   else if (CUR.view === 'timeline') v.innerHTML = vTimeline();
   else if (CUR.view === 'foreshadow') v.innerHTML = vForeshadow();
   else if (CUR.view === 'graph') v.innerHTML = vGraph();
+  else if (CUR.view === 'causal') v.innerHTML = vCausal();
   else if (CUR.view === 'char') v.innerHTML = vChar(CUR.name);
   else if (CUR.view === 'term') v.innerHTML = vTerm(CUR.name);
   else if (CUR.view === 'chapter') v.innerHTML = vChapter(Number(CUR.name));
