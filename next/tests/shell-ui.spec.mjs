@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import { flushPromises, mount as vueMount } from '@vue/test-utils'
 import AppNext from '../shell/AppNext.vue'
-import ActivityRail from '../shell/ActivityRail.vue'
 import RuntimeDock from '../shell/RuntimeDock.vue'
 import AssistantDialog from '../shell/AssistantDialog.vue'
 import CenterSlotHost from '../shell/CenterSlotHost.vue'
@@ -121,9 +120,9 @@ describe('空框架外壳', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 无项目＝库管理器（前端工单 A-1）：整窗一级视图；竖条/索引/页签/Agent 全部不渲染。
+    // 无项目＝库管理器（前端工单 A-1）：整窗一级视图；载体横排/索引/页签/Agent 全部不渲染。
     expect(wrapper.find('[data-test="library-manager"]').exists()).toBe(true)
-    expect(wrapper.find('.nx-ribbon').exists(), '竖条不渲染').toBe(false)
+    expect(wrapper.find('[data-test="carrier-strip"]').exists(), '载体横排不渲染').toBe(false)
     expect(wrapper.find('.nx-index-window').exists(), '索引窗不渲染').toBe(false)
     expect(wrapper.find('.col-dock').exists(), 'Agent 列不渲染').toBe(false)
     expect(wrapper.find('.nx-titlebar').exists(), '工作区标题栏不渲染').toBe(false)
@@ -1705,26 +1704,47 @@ describe('错误人话层（P9）', () => {
 })
 
 describe('Obsidian 三栏', () => {
-  it('竖条是纯图标的一格一板，点它开索引窗，再点同一格收起', async () => {
+  it('〔工单 P10〕载体横排＝图标＋名，一格一板；点它开索引窗，再点同一格收起', async () => {
     const bridge = stubBridge(carrierView())
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    const rail = wrapper.findComponent(ActivityRail)
-    expect(rail.findAll('.nx-ribbon-item')).toHaveLength(2) // 一格是小说板，一格是主题开关
-    expect(rail.find('.nx-ribbon-item').attributes('aria-label')).toBe('小说（夹具）')
-    expect(rail.find('.nx-ribbon-item').classes()).toContain('is-active')
+    const strip = wrapper.find('[data-test="carrier-strip"]')
+    expect(strip.exists(), '顶栏有载体横排').toBe(true)
+    const items = strip.findAll('.nx-carrier-item')
+    // 只列已激活载体：小说板（启用）在，剧本（停用）不在。
+    expect(items).toHaveLength(1)
+    expect(items[0].attributes('aria-label')).toBe('小说（夹具）')
+    expect(items[0].text()).toContain('小说（夹具）')
+    expect(items[0].find('svg').exists()).toBe(true)
+    expect(items[0].classes()).toContain('is-active')
     expect(wrapper.find('.nx-index-window').exists()).toBe(true)
 
     // 再点同一格＝收起索引窗（Obsidian 的行为）。
-    await rail.find('.nx-ribbon-item').trigger('click')
+    await items[0].trigger('click')
     await flushPromises()
     expect(wrapper.find('.nx-index-window').exists()).toBe(false)
     expect(wrapper.findAll('.resizer')).toHaveLength(1)
 
-    await rail.find('.nx-ribbon-item').trigger('click')
+    await items[0].trigger('click')
     await flushPromises()
     expect(wrapper.find('.nx-index-window').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('〔工单 P10〕未激活载体不上顶栏：停用的剧本留在设置·库设置里启停', async () => {
+    const wrapper = mount(AppNext, { props: { bridge: stubBridge(carrierView()) } })
+    await flushPromises()
+
+    const labels = wrapper.findAll('.nx-carrier-item').map((node) => node.attributes('aria-label'))
+    expect(labels).toContain('小说（夹具）')
+    expect(labels, '未激活载体不占顶栏').not.toContain('剧本（夹具）')
+    // 但它在库设置（模块管理）里仍有一行可启停。
+    await wrapper.find('[data-test="titlebar-settings"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-test="settings-tab-carriers"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="库设置（模块管理）"]').text()).toContain('剧本（夹具）')
     wrapper.unmount()
   })
 
@@ -1869,7 +1889,7 @@ describe('Obsidian 三栏', () => {
     wrapper.unmount()
   })
 
-  it('中栏在某块板的内容里时，竖条上那块板标成当前', async () => {
+  it('中栏在某块板的内容里时，顶栏载体横排上那块板标成当前', async () => {
     const view = {
       ...carrierView(),
       left: [
@@ -1881,10 +1901,12 @@ describe('Obsidian 三栏', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 默认落在主载体那块板——竖条上的「书稿」得标成当前。
-    const railItems = wrapper.findAll('.nx-ribbon-item')
+    // 默认落在主载体那块板——顶栏横排里的「书稿」得标成当前（板标题取 pane 声明的 title）；
+    // 夹具里剧本虽还投影着一块 left pane，但 carrier 已停用，不占顶栏（工单 P10）。
+    const railItems = wrapper.findAll('.nx-carrier-item')
+    expect(railItems).toHaveLength(1)
+    expect(railItems[0].attributes('aria-label')).toBe('书稿')
     expect(railItems[0].classes()).toContain('is-active')
-    expect(railItems[1].classes()).not.toContain('is-active')
     wrapper.unmount()
   })
 
@@ -3302,58 +3324,65 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     orphan.unmount()
   })
 
-  it('页内菜单行：顶层与 MENU_TEMPLATE 一致，菜单项走 menuInvoke；打开项目＝选目录→projectOpen→refresh；Esc/点外部收起', async () => {
-    // 前端工单 A：页内菜单行长在工作区标题栏上——无项目时整个让位给库管理器，用例改在有项目态跑。
+  it('〔工单 P10〕菜单行绝迹；右簇＝推演＋设置齿轮（落上次节）；「我的库」关项目回库管理器', async () => {
     const view = carrierView()
-    const pick = vi.fn(async () => ({ ok: true, value: { picked: true, path: 'D:/books/大梦' } }))
-    const open = vi.fn(async () => ({ ok: true, value: {} }))
-    const bridge = stubBridge(view, {
-      [IPC_CHANNELS.projectPickDir]: pick,
-      [IPC_CHANNELS.projectOpen]: open
+    let opened = true
+    const request = vi.fn(async (channel) => {
+      if (channel === IPC_CHANNELS.view) {
+        return {
+          ok: true,
+          value: opened ? view : { ...view, project: null, needsPrimary: false, left: [], center: [], primary: null }
+        }
+      }
+      if (channel === IPC_CHANNELS.projectClose) {
+        opened = false
+        return { ok: true, value: {} }
+      }
+      if (channel === IPC_CHANNELS.projectRecentList) {
+        return { ok: true, value: { recents: [{ path: 'D:/books/大梦', name: '大梦', at: null }] } }
+      }
+      return { ok: true, value: {} }
     })
-    const wrapper = mount(AppNext, { props: { bridge } })
+    const wrapper = mount(AppNext, { props: { bridge: { request, channels: IPC_CHANNELS } } })
     await flushPromises()
 
-    // 页内菜单行不是第二份清单：顶层标签就是 MENU_TEMPLATE 的那四个（工单A 精简后）。
-    expect(wrapper.findAll('.nx-menu-trigger').map((node) => node.text()))
-      .toEqual(['项目', '编辑', '设置', '帮助'])
-
-    await wrapper.find('[data-menu="项目"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-menu-popup').exists()).toBe(true)
-    expect(wrapper.find('[data-menu="项目"]').attributes('aria-expanded')).toBe('true')
-
-    // 打开项目文件夹…：走 menuInvoke 分发，同时选目录→projectOpen→refresh 一条链落完。
-    const viewCallsBefore = bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length
-    await wrapper.find('[data-menu-id="project.open"]').trigger('click')
-    await flushPromises()
-    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'project.open' })
-    expect(pick).toHaveBeenCalledWith({})
-    expect(open).toHaveBeenCalledWith({ root: 'D:/books/大梦' })
-    expect(bridge.request.mock.calls.filter(([channel]) => channel === IPC_CHANNELS.view).length).toBeGreaterThan(viewCallsBefore)
-    // 点完一项就收起下拉。
+    // 退役判据：页内菜单行一行都不许回来。
+    expect(wrapper.find('.nx-menubar').exists()).toBe(false)
+    expect(wrapper.find('.nx-menu-trigger').exists()).toBe(false)
     expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
 
-    // Esc 收起下拉。
-    await wrapper.find('[data-menu="设置"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.find('.nx-menu-popup').exists()).toBe(true)
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-    await flushPromises()
-    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+    // 右簇：推演＋设置齿轮，齿轮是应用控件的最后一枚（其后只有原生窗控占位）。
+    const actions = wrapper.find('.nx-titlebar-actions')
+    expect(actions.exists()).toBe(true)
+    expect(actions.find('[data-test="deduce-toggle"]').exists()).toBe(true)
+    expect(actions.findAll('button').map((node) => node.attributes('data-test'))).toEqual(['deduce-toggle', 'titlebar-settings'])
+    expect(actions.element.lastElementChild.getAttribute('data-test')).toBe('titlebar-settings')
 
-    // 点击菜单外部收起下拉。
-    await wrapper.find('[data-menu="设置"]').trigger('click')
+    // 齿轮开 SettingsModal；默认落偏好与模型。
+    await wrapper.find('[data-test="titlebar-settings"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-menu-popup').exists()).toBe(true)
-    document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    expect(wrapper.find('[role="dialog"][aria-label="设置"]').exists()).toBe(true)
+    expect(wrapper.find('[aria-label="偏好与模型"]').exists()).toBe(true)
+
+    // 切到「文档历史」后关窗，再点齿轮＝回到上次停留节（不重置到 prefs）。
+    await wrapper.find('[data-test="settings-tab-history"]').trigger('click')
     await flushPromises()
-    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+    wrapper.findComponent({ name: 'SettingsModal' }).vm.$emit('close')
+    await flushPromises()
+    await wrapper.find('[data-test="titlebar-settings"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[aria-label="文档历史"]').exists(), '齿轮落上次停留节').toBe(true)
+
+    // 「我的库」：关项目 → 库管理器整窗；最近打开清单由库管理器承接。
+    await wrapper.find('[data-test="titlebar-library"]').trigger('click')
+    await flushPromises()
+    expect(request).toHaveBeenCalledWith(IPC_CHANNELS.projectClose, {})
+    expect(wrapper.find('[data-test="library-manager"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="library-manager"]').text()).toContain('大梦')
     wrapper.unmount()
   })
 
-  it('最近打开的项目（作者 2026-11-10 点单）：项目组拼「组头＋条目＋清空」，点条目走 projectOpen 不发 menuInvoke，点清空发 menuInvoke', async () => {
-    // 前端工单 A：项目组菜单长在工作区标题栏上——用例改在有项目态跑（库管理器的最近列表另有用例）。
+  it('〔工单 P10〕最近打开从页内菜单退役：清单仍加载，原生不可见菜单的条目仍走 projectOpen、清空归主进程直办', async () => {
     const view = carrierView()
     const handlers = new Map()
     const recents = [
@@ -3373,82 +3402,67 @@ describe('标题栏与页内菜单行（工单F · 作者反馈①②）', () =>
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    await wrapper.find('[data-menu="项目"]').trigger('click')
-    await flushPromises()
-    const popupItems = wrapper.findAll('.nx-menu-popup .nx-menu-item')
-    // 组头是禁用行（无 id），两条最近项目在「打开项目文件夹…」之后、「导入既有稿…」之前。
-    expect(popupItems.filter((row) => row.attributes('data-menu-id') === undefined).map((row) => row.text())).toEqual(['最近打开'])
-    expect(popupItems.filter((row) => row.attributes('disabled') !== undefined).map((row) => row.text())).toEqual(['最近打开'])
-    const recentRows = wrapper.findAll('[data-menu-id="project.recent"]')
-    expect(recentRows).toHaveLength(2)
-    expect(recentRows[0].text()).toBe('D:/Projects/大梦')
-    expect(recentRows[0].classes()).toContain('is-recent')
-    expect(recentRows[0].attributes('title')).toBe('D:/Projects/大梦')
-    const menuIds = popupItems.map((row) => row.attributes('data-menu-id'))
-    expect(menuIds.indexOf('project.open')).toBeLessThan(menuIds.indexOf('project.recent'))
-    expect(menuIds.indexOf('project.recent')).toBeLessThan(menuIds.indexOf('project.backup'))
-    expect(menuIds).toContain('project.recentClear')
+    // 清单照拉（库管理器吃这一份），但页内不再有「最近打开」菜单段。
+    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.projectRecentList, {})
+    expect(wrapper.findAll('[data-menu-id="project.recent"]')).toHaveLength(0)
+    expect(wrapper.find('.nx-menubar').exists()).toBe(false)
 
-    // 点一条：只走 projectOpen（主进程那条打开链），不发 menuInvoke——主进程对它没有可代劳的事。
-    await recentRows[1].trigger('click')
+    // 原生（不可见）菜单点某一条：menuInvoked 带 root → 渲染层走既有 project:open 链。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.recent', root: 'D:/books/旧稿' })
     await flushPromises()
     expect(open).toHaveBeenCalledWith({ root: 'D:/books/旧稿' })
     expect(bridge.request).not.toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'project.recent' })
-    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
 
-    // 清空：走 menuInvoke 交给主进程（清偏好→重建菜单→推渲染层），渲染层自己不动清单。
-    await wrapper.find('[data-menu="项目"]').trigger('click')
+    // 原生菜单「清除最近打开」由主进程在菜单点击时自行 dispatch（main.mjs buildMenu），
+    // 渲染层不再回发 menuInvoke——退役的是页内菜单行，不是原生菜单本身。
+    handlers.get(IPC_EVENT.menuInvoked)({ id: 'project.recentClear' })
     await flushPromises()
-    await wrapper.find('[data-menu-id="project.recentClear"]').trigger('click')
-    await flushPromises()
-    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'project.recentClear' })
+    expect(bridge.request).not.toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'project.recentClear' })
 
-    // 主进程推一份新清单（清空后的空表）：菜单里整块消失，不靠刷新页面。
+    // 主进程推空表：渲染层镜像随之清空（库管理器列表据此变空）。
     handlers.get(IPC_PUSH.recentProjectsChanged)({ recents: [] })
     await flushPromises()
-    await wrapper.find('[data-menu="项目"]').trigger('click')
-    await flushPromises()
-    expect(wrapper.findAll('[data-menu-id="project.recent"]')).toHaveLength(0)
-    expect(wrapper.findAll('.nx-menu-popup .nx-menu-item').map((row) => row.text())).not.toContain('最近打开')
     wrapper.unmount()
   })
 
-  it('编辑组的项都有 id、页内点得动；帮助组里从视图迁来的 role 项仍是禁用行', async () => {
-    const bridge = stubBridge(carrierView())
+  it('〔工单 P10〕服务状态点跟着载体横排走：有服务声明的载体画点，没声明的不画', async () => {
+    const handlers = new Map()
+    const bridge = {
+      request: vi.fn(async (channel) => {
+        if (channel === IPC_CHANNELS.view) return { ok: true, value: carrierView() }
+        if (channel === IPC_CHANNELS.projectRecentList) return { ok: true, value: { recents: [] } }
+        return { ok: true, value: {} }
+      }),
+      onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }
+    }
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 工单A：编辑组补 id 后，页内菜单行不再把撤销/剪贴板画成禁用行——点了走 menuInvoke
-    // （主进程落到当前窗口 webContents 的编辑命令）。
-    await wrapper.find('[data-menu="编辑"]').trigger('click')
-    await flushPromises()
-    const editRows = wrapper.findAll('.nx-menu-popup .nx-menu-item')
-    expect(editRows).toHaveLength(6)
-    expect(editRows.every((row) => row.attributes('disabled') === undefined)).toBe(true)
-    expect(editRows.map((row) => row.attributes('data-menu-id'))).toEqual([
-      'edit.undo', 'edit.redo', 'edit.cut', 'edit.copy', 'edit.paste', 'edit.selectAll'
-    ])
-    await wrapper.find('[data-menu-id="edit.undo"]').trigger('click')
-    await flushPromises()
-    expect(bridge.request).toHaveBeenCalledWith(IPC_CHANNELS.menuInvoke, { id: 'edit.undo' })
-    expect(wrapper.find('.nx-menu-popup').exists()).toBe(false)
+    // 竖条退役（批次49 的状态点职责不能跟着丢）：点长在顶栏对应的载体格上。
+    const strip = wrapper.find('[data-test="carrier-strip"]')
+    const novel = strip.findAll('.nx-carrier-item').find((node) => node.attributes('aria-label') === '小说（夹具）')
+    expect(novel.find('.nx-rail-status-dot').exists()).toBe(false)
 
-    // 帮助组里从视图组迁来的「开发者工具/重载」是 role 项（没有 id）：原生菜单与快捷键提供，
-    // 页内仍渲染成禁用行，不假装点了有用。
-    await wrapper.find('[data-menu="帮助"]').trigger('click')
+    handlers.get(IPC_PUSH.runtimeServiceLogChanged)({
+      at: '2026-11-14T09:00:00.000Z',
+      ackedAt: null,
+      carriers: [{ carrierId: 'fixture.novel', color: 'orange', unackedNotices: 2 }],
+      entries: []
+    })
     await flushPromises()
-    const helpRows = wrapper.findAll('.nx-menu-popup .nx-menu-item')
-    expect(helpRows).toHaveLength(4)
-    const roleRows = helpRows.filter((row) => row.attributes('data-menu-id') === undefined)
-    expect(roleRows).toHaveLength(2)
-    expect(roleRows.every((row) => row.attributes('disabled') !== undefined)).toBe(true)
-    expect(roleRows.map((row) => row.text())).toEqual(['开发者工具', '重载'])
+
+    const dot = novel.find('.nx-rail-status-dot')
+    expect(dot.exists()).toBe(true)
+    expect(dot.classes()).toContain('is-orange')
+    expect(dot.attributes('data-status')).toBe('orange')
+    // 点只长在声明了服务的载体上，且每格最多一枚。
+    expect(strip.findAll('.nx-rail-status-dot')).toHaveLength(1)
     wrapper.unmount()
   })
 })
 
-describe('无项目时的竖条（工单F · 作者反馈③）', () => {
-  it('无项目＝库管理器整窗（前端工单 A-1）：竖条不渲染，新建/打开/导入入口在开始页上', async () => {
+describe('无项目时的载体横排（工单F · 作者反馈③；工单 P10 竖条并上顶栏）', () => {
+  it('无项目＝库管理器整窗（前端工单 A-1）：载体横排不渲染，新建/打开/导入入口在开始页上', async () => {
     const view = { ...carrierView(), project: null, needsPrimary: false, openError: null, left: [], center: [], primary: null }
     const pick = vi.fn(async () => ({ ok: true, value: { picked: false, path: null } }))
     const open = vi.fn(async () => ({ ok: true, value: {} }))
@@ -3459,8 +3473,9 @@ describe('无项目时的竖条（工单F · 作者反馈③）', () => {
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
-    // 前端工单 A-1：竖条整个不渲染（灰格退役的终局），新建/打开入口落在库管理器开始页上。
-    expect(wrapper.find('.nx-ribbon').exists()).toBe(false)
+    // 前端工单 A-1：顶栏与载体横排整个不渲染（灰格退役的终局），新建/打开入口落在库管理器开始页上。
+    expect(wrapper.find('[data-test="carrier-strip"]').exists()).toBe(false)
+    expect(wrapper.find('.nx-titlebar').exists()).toBe(false)
     expect(wrapper.find('[data-test="library-manager"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="library-new"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="library-open-folder"]').exists()).toBe(true)
@@ -4093,7 +4108,7 @@ describe('页底座：开窗缺省＝切页（批次61）', () => {
   }
 
   function railByName(wrapper, name) {
-    return wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === name)
+    return wrapper.findAll('.nx-carrier-item').find((node) => node.attributes('aria-label') === name)
   }
 
   async function openOutlineBoard(wrapper) {
@@ -5269,7 +5284,7 @@ describe('大纲编辑器主体与世界书条目表格（批次28）', () => {
   }
 
   async function openBoard(wrapper, label) {
-    const rail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === label)
+    const rail = wrapper.findAll('.nx-carrier-item').find((node) => node.attributes('aria-label') === label)
     expect(rail, `竖条应有「${label}」这一格`).toBeTruthy()
     await rail.trigger('click')
     await flushPromises()
@@ -6134,7 +6149,7 @@ describe('大纲转换（批次30）', () => {
     const bridge = outlineBridge()
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
-    const rail = wrapper.findAll('.nx-ribbon-item').find((node) => node.attributes('aria-label') === '大纲')
+    const rail = wrapper.findAll('.nx-carrier-item').find((node) => node.attributes('aria-label') === '大纲')
     expect(rail, '竖条应有大纲栏').toBeTruthy()
     await rail.trigger('click')
     await flushPromises()
@@ -6203,19 +6218,20 @@ describe('故障隔离：全部载体停用（批次63 任务2）', () => {
     return { request, onEvent: (channel, handler) => { handlers.set(channel, handler); return () => handlers.delete(channel) }, channels: IPC_CHANNELS, handlers }
   }
 
-  it('一块板都没有：三栏不塌、竖条不没、话要说得出来，状态栏照旧报数', async () => {
+  it('一块板都没有：三栏不塌、载体横排不没、话要说得出来，状态栏照旧报数', async () => {
     const bridge = disabledBridge()
     const wrapper = mount(AppNext, { props: { bridge } })
     await flushPromises()
 
     // 不白屏：骨架四件俱全。
-    expect(wrapper.find('.nx-ribbon').exists(), '竖条是宿主的，不随载体消失').toBe(true)
+    expect(wrapper.find('[data-test="carrier-strip"]').exists(), '顶栏载体横排是宿主的，不随载体消失').toBe(true)
     expect(wrapper.find('.nx-index-window').exists()).toBe(true)
     expect(wrapper.find('.col-center').exists()).toBe(true)
     expect(wrapper.find('.col-dock').exists(), '右栏运行时是公共池，与载体停用无关').toBe(true)
-    // 竖条上没有载体格（一块都没启用），但底部那枚主题钮还在——整条没被清空。
-    expect(wrapper.findAll('.nx-ribbon-item')).toHaveLength(1)
-    expect(wrapper.find('.nx-ribbon-item.is-bottom').exists()).toBe(true)
+    // 横排上没有载体格（一块都没启用），但右簇的推演/设置钮还在——顶栏没被清空。
+    expect(wrapper.findAll('[data-test="carrier-strip"] .nx-carrier-item')).toHaveLength(0)
+    expect(wrapper.find('[data-test="deduce-toggle"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="titlebar-settings"]').exists()).toBe(true)
     // 空态要说话，不是留一片白。
     expect(wrapper.text()).toContain('当前没有已启用的载体板块')
 

@@ -358,17 +358,16 @@ async function openBoard(wrapper, title) {
 }
 
 /**
- * 打开统一二级页的「文档 → 提案审阅」节（工单B1）：走页内菜单的同一份 MENU_TEMPLATE，
- * 点「项目 → 提案审阅…」——与用户真点的那条路一致，不直接调外壳内部函数。
+ * 打开统一二级页的「文档 → 提案审阅」节（工单B1）。
+ * 〔工单 P10〕页内菜单行退役：项目动作经顶栏设置齿轮进入，与作者真点的那条路一致，
+ * 不直接调外壳内部函数。
  */
 async function openProposalsSection(wrapper) {
-  const trigger = wrapper.findAll('.nx-menu-trigger').find((node) => node.text() === '项目')
-  expect(trigger, '页内菜单有「项目」组').toBeTruthy()
-  await trigger.trigger('click')
+  await wrapper.find('[data-test="titlebar-settings"]').trigger('click')
   await flushPromises()
-  const item = wrapper.find('[data-menu-id="project.reviewProposals"]')
-  expect(item.exists(), '菜单里有「提案审阅…」').toBe(true)
-  await item.trigger('click')
+  const tab = wrapper.find('[data-test="settings-tab-proposals"]')
+  expect(tab.exists(), '设置里有「提案审阅」节').toBe(true)
+  await tab.trigger('click')
   await flushPromises()
 }
 

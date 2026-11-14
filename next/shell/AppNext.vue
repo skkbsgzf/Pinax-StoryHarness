@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, provide, reactive, ref, watch } from 'vue'
-import ActivityRail from './ActivityRail.vue'
+import WorkbenchIcon from '../../src/components/workbench/WorkbenchIcon.vue'
 import IndexWindow from './IndexWindow.vue'
 import CarrierPaneHost from './CarrierPaneHost.vue'
 import PaneWindow from './PaneWindow.vue'
@@ -25,7 +25,7 @@ import { useBoardData } from './useBoardData.mjs'
 import { refreshTargetsFor } from './projectEventRefresh.mjs'
 import { RECORD_CARRIER_KEYS, recordCarrierOfPaneId, recordTreeKey } from './recordCarriers.mjs'
 import { IPC_CHANNELS, IPC_EVENT, IPC_PUSH } from './ipcContract.mjs'
-import { MENU_TEMPLATE, flattenMenuEntries, RECENT_MENU_ID, withRecentProjects } from './menus.mjs'
+import { MENU_TEMPLATE, flattenMenuEntries, RECENT_MENU_ID } from './menus.mjs'
 import {
   HOTKEY_COLLAPSE_TOP,
   HOTKEY_PALETTE_OPEN,
@@ -51,11 +51,12 @@ import { hostViewRegistry } from './viewRegistry.mjs'
 import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs'
 
 /**
- * Next 外壳根组件：Obsidian 三栏（图标竖条／索引窗／核心区）＋右栏运行时 ＋ 统一设置二级页。
+ * Next 外壳根组件：Obsidian 三栏（索引窗／核心区）＋右栏运行时 ＋ 统一设置二级页。
  *
  * 分工（作者口径：正文是核心，不能被别的页面挤到旁边）：
- *   - 竖条：一格＝一块板（一个载体），纯图标，44px 宽；
- *   - 索引窗：竖条右边那一栏，列这块板的目录树（会话管理／文件结构管理那件事）；
+ *   - 顶栏（工单 P10 · 作者 2026-11-14）：品牌＋项目信息＋已激活载体的横排＋右簇（推演／设置）；
+ *     原左竖条退役——「把左侧的载体栏移到上面去，激活了的放上去，没有激活的留在设置里」；
+ *   - 索引窗：载体横排下面那一栏，列这块板的目录树（会话管理／文件结构管理那件事）；
  *   - 核心区：只挂 center 槽的 pane，正文在这里，宽的那一栏就是它；
  *   - 右栏：Pi-Agent 运行时独占（一级公民，插件抢不走）；
  *   - 设置（工单C0 · U13）：偏好／载体管理／新建项目／主载体选择一律收进
@@ -73,7 +74,7 @@ import { applyScheme, isValidScheme, readScheme, writeScheme } from './theme.mjs
  *     ② 收起态不再在右缘排一竖列文字标签，统一收进右下角悬浮球（CollapseOrb），
  *     放出来回到**收起前**那一档（workspace 的 expand 读页记录的 restore 格）。
  *     左树不再是每载体标配：folder 模板才渲染 IndexWindow，web／gallery 由宿主模板决定
- *     （layoutTemplates.mjs）。竖条点击＝开／还原该载体的文档窗。
+ *     （layoutTemplates.mjs）。载体横排点击＝开／还原该载体的文档窗。
  *
  * 不引 vue-router、不引 Pinia、不 import src/ 的页面——零插件时外壳仍要能起来（M1 判据）。
  * 唯一从老前端拿的是 CSS 本体与三个叶子组件（图标／提示／提示宿主），风格与控件不另起一套。
@@ -601,6 +602,14 @@ function openSettings() {
   openSection('prefs')
 }
 
+/**
+ * 顶栏 ⚙ 设置钮（工单 P10）：落在**上次停留的那一节**（首次为偏好与模型），
+ * 不每次重置回 prefs——作者从文档历史出来再点齿轮，期望回到文档历史。
+ */
+function openSettingsFromTitlebar() {
+  openSection(activeSection.value || 'prefs')
+}
+
 /** 载体管理面：先 refresh 拿最新 view，别让面板摊着一份上一秒的启停状态。 */
 async function openCarriers() {
   if (!project.value) return
@@ -712,20 +721,23 @@ async function openProjectRoot(root) {
   await refresh()
 }
 
-/* —— 标题栏与页内菜单行（工单F · 作者反馈①②）————————————————————
- * 原生应用菜单保留（accelerator 仍由主进程的 Menu.setApplicationMenu 提供）；
- * 可见的菜单行改成页内渲染，数据源就是同一份 MENU_TEMPLATE（./menus.mjs）——
- * 菜单项不另立第二份清单；点击一律经 menuInvoke 通道（与原生菜单同一条分发），
- * 页面内的落点（开弹窗／换主题／打开项目）与原生菜单事件共用 menuActions。 */
-const openMenuLabel = ref(null)
-const menubarRoot = ref(null)
+/* —— 顶栏动作落点（工单 P10 · 作者 2026-11-14）——————————————————————————
+ * 原生应用菜单保留（accelerator 仍由主进程的 Menu.setApplicationMenu 提供，不可见）；
+ * 页面内不再渲染菜单行。菜单功能去向（作者裁定）：
+ *   项目→新建／打开／导入 → 库管理器；关库经 chip 旁「我的库」文字钮（本批选的入口形态）。
+ *   项目→备份与恢复／当前文档历史／提案审阅／打开提案目录 → ⚙设置钮 → SettingsModal 对应节。
+ *   项目→退出 → 原生 role:quit（不可见）＋系统窗控关闭钮。
+ *   编辑→撤销／重做／剪切／复制／粘贴／全选 → 原生 role 加速器（不可见）。
+ *   设置→偏好与模型／载体管理／切换明暗主题 → ⚙设置钮（偏好节／库设置节／外观节）。
+ *   帮助→Next 规范／M1 门禁／开发者工具／重载 → 退役（后两者仍由原生不可见加速器提供）。
+ * 原生菜单事件（menuInvoked）仍经 runMenuAction 落到这些既有函数上——一条分发，不是第二套。 */
 /** 壳层根节点：手势的捕获监听挂在这里（批次62 任务五）。 */
 const shellRoot = ref(null)
 
 /* —— 最近打开的项目（作者 2026-11-10 点单）————————————————————————————————
  * 真值在主进程（应用级偏好 recentProjects），这里只有一份只读镜像：
  * 启动经 recent-list 通道拉一次（防首推赶在订阅之前），此后每次变化吃整份推送。
- * 渲染时与原生菜单走同一个 withRecentProjects——动态段不另立第二份菜单清单。
+ * 页内菜单行退役后，这份镜像只喂库管理器的最近列表与原生菜单（不可见）。
  */
 const recentProjects = ref([])
 let offRecentProjects = null
@@ -738,21 +750,6 @@ async function loadRecentProjects() {
   } catch {
     // 拉不到就先不显示：菜单里少一块，不代表打开项目不可用。
   }
-}
-
-/** 菜单行渲染的数据源：静态模板拼上最近项目动态段（清单为空时 withRecentProjects 原样返回）。 */
-const renderedMenu = computed(() => withRecentProjects(MENU_TEMPLATE, recentProjects.value))
-
-/** 模板里的角色项没有 label（原生菜单由 Electron 自己取名），页内菜单行补一份人话。 */
-const ROLE_LABELS = Object.freeze({
-  undo: '撤销', redo: '重做', cut: '剪切', copy: '复制', paste: '粘贴', selectAll: '全选',
-  minimize: '最小化', zoom: '缩放', close: '关闭窗口',
-  resetZoom: '重置缩放', zoomIn: '放大', zoomOut: '缩小',
-  toggleDevTools: '开发者工具', reload: '重新加载', quit: '退出'
-})
-
-function menuLabel(item) {
-  return item?.label ?? ROLE_LABELS[item?.role] ?? String(item?.role ?? '')
 }
 
 /**
@@ -781,16 +778,6 @@ const isMac = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform
 function acceleratorHint(accelerator) {
   if (!accelerator) return ''
   return isMac ? accelerator.replace('CmdOrCtrl', '⌘') : accelerator.replace('CmdOrCtrl', 'Ctrl')
-}
-
-function toggleTopMenu(label) {
-  openMenuLabel.value = openMenuLabel.value === label ? null : label
-}
-function hoverTopMenu(label) {
-  openMenuLabel.value = label
-}
-function closeTopMenu() {
-  openMenuLabel.value = null
 }
 
 /** 菜单动作的页面内落点：原生菜单事件（menuInvoked）与页内菜单点击共用这一份。
@@ -828,13 +815,11 @@ async function runMenuAction(id, root = null) {
 }
 
 /**
- * 页内菜单项点击：先落页面内动作，再经 menuInvoke 通道交给主进程分发（与原生菜单同一条路）。
- * 只读角色项（撤销／复制／最小化…）没有 IPC id，按钮本身是禁用态——原生菜单与快捷键照常可用。
+ * 菜单动作的统一入口（命令面板的 `menu:` 前缀与原生 menuInvoked 都落在这里）。
  * 最近项目的具体条目（item.root 在手）是渲染层落点：打开走既有 project:open 链，
  * 不再发 menuInvoke——主进程对这个 id 没有可代劳的事，发了只会收到一条假失败。
  */
 async function invokeMenu(item) {
-  closeTopMenu()
   if (!item?.id) return
   if (item.root) {
     void runMenuAction(item.id, item.root)
@@ -1010,16 +995,6 @@ async function runPaletteCommand(entry) {
   data.notice = `命令「${entry.title}」未接线：落点 ${String(entry.run || '（空）')} 不是既有动作`
 }
 
-/** Esc 与点击外部收起下拉（页内菜单不能挡着内容）。 */
-function onTitlebarKeydown(event) {
-  if (event.key === 'Escape' && openMenuLabel.value) closeTopMenu()
-}
-function onTitlebarPointerDown(event) {
-  if (!openMenuLabel.value) return
-  if (menubarRoot.value?.contains?.(event.target)) return
-  closeTopMenu()
-}
-
 /**
  * 世界书历史版本是整份文件（含契约 frontmatter）；载体的 save 只收正文，
  * frontmatter 由工具按当前文件原样保留。这里只剥历史文本的头，不重写契约字段。
@@ -1167,6 +1142,12 @@ const boards = computed(() => {
 })
 
 const activeBoard = computed(() => boards.value.find((board) => board.id === activeBoardId.value) ?? boards.value[0] ?? null)
+/**
+ * 〔工单 P10 · 作者 2026-11-14〕顶栏只展示**已激活载体**；没有激活的留在设置·库设置里启停。
+ * 视图里 left/center 本来就只投影已启用载体的 pane，这里再按 carriers[].isEnabled 兜一道：
+ * 停用与解注册之间那一拍（面板尚未收到新视图）也不把停用过的载体摆回顶栏。
+ */
+const activeBoards = computed(() => boards.value.filter((board) => carriers.value.find((carrier) => carrier.id === board.id)?.isEnabled !== false))
 
 /**
  * 协议 v1.1-C：启用的载体声明的 overlay pane（一载体至多一个实例）。
@@ -2254,7 +2235,7 @@ function collapseTopWindow() {
  * 上层（面板／二级页／菜单下拉）开着就整体让位：Esc 同时是「关面板」和「收窗」时，先关面板。
  */
 function onWindowKeydown(event) {
-  if (paletteOpen.value || settingsOpen.value || openMenuLabel.value) return
+  if (paletteOpen.value || settingsOpen.value) return
   const id = matchHotkey(event, hotkeyBindings.value)
   if (!id) return
   event.preventDefault()
@@ -2270,17 +2251,17 @@ function onWindowKeydown(event) {
 }
 
 /* —— 手势入口（批次62 任务五）——————————————————————————————————
- * 竖条与页签这两个组件不在本工单的允许文件里，所以入口不写进它们内部，而是在壳层用
+ * 载体横排与页签的入口不写进各自组件内部，而是在壳层用
  * **捕获阶段**的监听器认领那两个修饰：普通点击照常冒泡给组件自己（一次都不拦），
  * 只有带手势的那一下被这里吃掉并 preventDefault＋stopPropagation。
- * 认元素靠组件已有的稳定钩子：页签带 `data-page-instance`，竖条格带 `aria-label＝板块标题`。
+ * 认元素靠组件已有的稳定钩子：页签带 `data-page-instance`，载体格带 `aria-label＝板块标题`。
  */
 function gestureTabInstance(event) {
   const tab = event.target?.closest?.('.nx-page-tab[data-page-instance]')
   return tab?.getAttribute?.('data-page-instance') ?? null
 }
 
-/** Alt＋点击：竖条图标／页签 → 以浮窗态执行同一个动作（值就交给 openTarget 的 gesture 形参）。 */
+/** Alt＋点击：载体横排格／页签 → 以浮窗态执行同一个动作（值就交给 openTarget 的 gesture 形参）。 */
 function onGestureKeyClick(event) {
   if (event.button !== 0 || !event.altKey || event.defaultPrevented) return
   const instance = gestureTabInstance(event)
@@ -2292,7 +2273,7 @@ function onGestureKeyClick(event) {
     void routeOpen({ pane: entry.pane, resource: entry.resource ?? null, gesture: { form: 'floating' } })
     return
   }
-  const rail = event.target?.closest?.('.nx-ribbon-item[aria-label]')
+  const rail = event.target?.closest?.('.nx-carrier-item[aria-label]')
   const title = rail?.getAttribute?.('aria-label') ?? ''
   const board = boards.value.find((item) => item.title === title)
   const pane = board ? chosenCenterPaneFor(board) : null
@@ -2585,8 +2566,7 @@ onMounted(() => {
   narrowQuery?.addEventListener?.('change', (event) => {
     indexOpen.value = !event.matches
   })
-  // 应用菜单走主进程（文件／编辑／视图／运行时／窗口／帮助／设置），这里只接自己关心的那几条。
-  // 工单F：页内菜单行的点击也收敛到同一个 runMenuAction——两条入口，一份落点。
+  // 原生应用菜单（不可见）走主进程，这里只接自己关心的那几条——与命令面板共用 runMenuAction。
   props.bridge?.onEvent?.(IPC_EVENT.menuInvoked, (payload) => { void runMenuAction(payload?.id, payload?.root ?? null) })
   // 最近打开的项目：启动拉一次（防首推赶在订阅之前），此后吃整份推送（退订在 onBeforeUnmount）。
   void loadRecentProjects()
@@ -2603,9 +2583,6 @@ onMounted(() => {
       serviceSnapshot.value = payload && Array.isArray(payload.carriers) ? payload : { ...EMPTY_SERVICE_LOG }
     })
   }
-  // 页内菜单行的收起手势挂在 document 上：Esc 与点击菜单外都收（下拉不许一直挂着）。
-  document.addEventListener('keydown', onTitlebarKeydown)
-  document.addEventListener('pointerdown', onTitlebarPointerDown)
   // Esc 收起叠序最高的窗口（统一二级页先走自己的 Esc）。
   window.addEventListener('keydown', onWindowKeydown, true)
   // 批次62 任务五：手势入口挂在壳层的捕获阶段——竖条与页签这两个组件不在本工单的允许文件里，
@@ -2646,8 +2623,6 @@ onBeforeUnmount(() => {
     clearTimeout(appCopyTimer)
     appCopyTimer = null
   }
-  document.removeEventListener('keydown', onTitlebarKeydown)
-  document.removeEventListener('pointerdown', onTitlebarPointerDown)
   window.removeEventListener('keydown', onWindowKeydown, true)
   shellRoot.value?.removeEventListener?.('click', onGestureKeyClick, true)
   shellRoot.value?.removeEventListener?.('mousedown', onGestureMiddleDown, true)
@@ -2660,12 +2635,12 @@ onBeforeUnmount(() => {
   <!-- 〔工单 P7 → 2026-11-14〕Agent 在左已是默认列序（next-shell.css 列序段，CSS order），
        模板里的挂载顺序一字不动（零重挂载：Agent 会话状态不因换位丢失）。 -->
   <div ref="shellRoot" class="nx-shell-root">
-    <!-- —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
-         全宽一条：左侧应用名＋页内菜单行（数据源＝menus.mjs 的 MENU_TEMPLATE，与原生菜单同一份），
-         中间项目信息 chip，右侧给原生窗控 overlay 留空（主进程 titleBarOverlay，约 138px）。
-         整条可拖动窗口（-webkit-app-region:drag）；只有按钮与下拉回到 no-drag（样式见
-         next-shell.css 的标题栏段）。 -->
-    <!-- 无项目＝库管理器（一级整窗视图，前端工单 A-1）：竖条/索引/页签/Agent 全部不渲染。 -->
+    <!-- —— 标题栏（工单F · 作者反馈①②；工单 P10 重排 · 作者 2026-11-14）——————————
+         全宽一条：应用名＋「我的库」＋项目信息 chip，中间是载体横排（原左竖条上栏、只列激活载体），
+         右簇＝推演开关＋设置齿轮，最右给原生窗控 overlay 留空（titleBarOverlay，约 138px）。
+         页内菜单行整体退役；动作落点见上方「顶栏动作落点」注释块，快捷键仍由原生不可见菜单提供。
+         整条可拖动窗口（-webkit-app-region:drag）；只有按钮回到 no-drag（样式见 next-shell.css）。 -->
+    <!-- 无项目＝库管理器（一级整窗视图，前端工单 A-1）：载体横排/索引/页签/Agent 全部不渲染。 -->
     <LibraryManager
       v-if="!project"
       :bridge="bridge"
@@ -2688,46 +2663,57 @@ onBeforeUnmount(() => {
     <template v-else>
     <header class="nx-titlebar">
       <span class="nx-titlebar-brand">Pinax · Next</span>
+      <span class="nx-titlebar-divider" aria-hidden="true"></span>
 
-      <nav ref="menubarRoot" class="nx-menubar" aria-label="应用菜单">
-        <div v-for="(top, topIndex) in renderedMenu" :key="`menu-${topIndex}`" class="nx-menu">
-          <button
-            type="button"
-            class="control-quiet nx-menu-trigger"
-            :class="{ 'is-open': openMenuLabel === top.label }"
-            :data-menu="top.label"
-            aria-haspopup="menu"
-            :aria-expanded="(openMenuLabel === top.label).toString()"
-            @click="toggleTopMenu(top.label)"
-            @mouseenter="hoverTopMenu(top.label)"
-          >{{ top.label }}</button>
-          <ul v-if="openMenuLabel === top.label" class="nx-menu-popup" role="menu" :aria-label="top.label">
-            <template v-for="(item, itemIndex) in top.submenu" :key="`${topIndex}-${itemIndex}`">
-              <li v-if="item.type === 'separator'" class="nx-menu-separator" role="separator"></li>
-              <li v-else role="none">
-                <!-- 有 id 的项走 menuInvoke 通道（与原生菜单同一条分发）；只有 role 的项由原生菜单
-                     与快捷键提供，页内渲染成禁用行，不假装点了有用。「最近打开」的组头（无 id 无 role）
-                     同样是禁用行——它只是分组标签，不是动作。 -->
-                <button
-                  type="button"
-                  class="control-quiet nx-menu-item"
-                  :class="{ 'is-recent': !!item.root }"
-                  :data-menu-id="item.id"
-                  role="menuitem"
-                  :disabled="!item.id"
-                  :title="item.root ?? (item.role ? '由系统菜单与快捷键提供' : null)"
-                  @click="invokeMenu(item)"
-                >
-                  <span class="nx-menu-label">{{ menuLabel(item) }}</span>
-                  <span v-if="item.accelerator" class="nx-menu-accelerator">{{ acceleratorHint(item.accelerator) }}</span>
-                </button>
-              </li>
-            </template>
-          </ul>
-        </div>
-        <!-- 推演入口：挂在菜单栏内（.nx-menubar 已是 no-drag 区，真窗可点）。
-             〔工单 P7 → 2026-11-14〕语义回归本义＝开/关推演浮层（Agent 在左已是默认列序）；
-             不开第二套页态、不移动任何组件在模板里的位置。 -->
+      <!-- 关库回库管理器（工单 P10）：chip 旁一枚文字钮；不把 chip 本身做成按钮，
+           因为它只是项目信息读数，不该带动作语义。 -->
+      <button
+        type="button"
+        class="control-quiet nx-titlebar-library"
+        data-test="titlebar-library"
+        @click="closeToLibrary"
+      >我的库</button>
+      <span
+        class="nx-titlebar-chip"
+        :class="{ 'is-empty': !project }"
+        data-test="titlebar-project-chip"
+      >{{ projectChip }}</span>
+
+      <!-- 载体横排（工单 P10 · 作者 2026-11-14）：原左竖条整条移上来，只列已激活载体；
+           未激活的留在设置·库设置（模块管理）里启停。点击语义与竖条一致——开／还原该板文档窗，
+           再点同一格收索引窗（selectBoard 一条落点，不新开第二条换板逻辑）。
+           `nx-ribbon-item` 是既有验收与宿主手势认载体格的稳定钩子（视觉上由 nx-carrier-item 定）。 -->
+      <nav class="nx-carrier-strip" data-test="carrier-strip" aria-label="载体">
+        <button
+          v-for="board in activeBoards"
+          :key="board.id"
+          type="button"
+          class="control-quiet nx-carrier-item nx-ribbon-item"
+          :class="{ 'is-active': board.id === activeBoard?.id }"
+          :aria-pressed="(board.id === activeBoard?.id).toString()"
+          :aria-expanded="(board.id === activeBoard?.id && indexOpen).toString()"
+          aria-controls="nx-index-window"
+          :aria-label="board.title"
+          @click="selectBoard(board.id)"
+          @contextmenu.prevent
+        >
+          <WorkbenchIcon :name="board.icon" :size="15" />
+          <span class="nx-carrier-name">{{ board.title }}</span>
+          <!-- 服务状态点（批次49）：只在载体声明了服务／外部 MCP 时出现。 -->
+          <span
+            v-if="serviceStatus[board.id]?.color"
+            class="nx-rail-status-dot"
+            :class="`is-${serviceStatus[board.id].color}`"
+            :data-status="serviceStatus[board.id].color"
+            aria-hidden="true"
+          />
+        </button>
+      </nav>
+
+      <span class="nx-titlebar-drag" aria-hidden="true"></span>
+      <!-- 右侧簇（工单 P10）：「推演」开关迁位（aria-pressed 语义不变）＋设置齿轮。
+           齿轮落 SettingsModal 的上次停留节（首次＝偏好与模型），见 openSettingsFromTitlebar。 -->
+      <div class="nx-titlebar-actions">
         <button
           type="button"
           class="control-quiet nx-deduce-toggle"
@@ -2735,33 +2721,20 @@ onBeforeUnmount(() => {
           :aria-pressed="deduceOpen.toString()"
           @click="toggleDeduce"
         >推演</button>
-      </nav>
-
-      <span
-        class="nx-titlebar-chip"
-        :class="{ 'is-empty': !project }"
-        data-test="titlebar-project-chip"
-      >{{ projectChip }}</span>
-
-      <span class="nx-titlebar-drag" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="control-quiet nx-titlebar-settings"
+          data-test="titlebar-settings"
+          aria-label="设置"
+          title="设置"
+          @click="openSettingsFromTitlebar"
+        ><WorkbenchIcon name="settings" :size="16" /></button>
+      </div>
       <!-- 原生窗控浮层占位：主进程 titleBarOverlay 盖在这块约 138px 上，页面上不放可点元素。 -->
       <span class="nx-titlebar-window-controls" aria-hidden="true"></span>
     </header>
 
     <div class="next-shell app-shell" :data-dragging="dragging">
-      <ActivityRail
-        :boards="boards"
-        :project="project"
-        :active-id="activeBoardId"
-        :open-id="indexOpen ? activeBoardId : null"
-        :scheme="scheme"
-        :service-status="serviceStatus"
-        @select="selectBoard"
-        @toggle-theme="toggleTheme"
-        @open-project="openProjectFolder"
-        @new-project="void closeToLibrary"
-      />
-
       <!-- 左树是 folder 模板的一个 pane：web／gallery 载体不渲染 IndexWindow（铁律四）。 -->
       <template v-if="showIndexWindow">
         <IndexWindow

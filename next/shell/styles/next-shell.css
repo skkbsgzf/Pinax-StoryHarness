@@ -77,11 +77,12 @@ body {
   }
 }
 
-/* —— 标题栏（工单F · 作者反馈①②）——————————————————————————————
-   窗口走 titleBarStyle:'hidden' + titleBarOverlay（next/shell/main.mjs 的 TITLEBAR_OVERLAY），
-   这条全宽行就是那层「顶栏」：应用名／页内菜单行（MENU_TEMPLATE 渲染）／项目信息 chip／
-   原生窗控占位。高度 36 与 overlay 的 height 对齐（--nx-titlebar-height 只在本文件用）。
-   整条可拖动窗口；按钮与下拉回到 no-drag，否则点不动。 */
+/* —— 顶栏（工单 P10 · 作者 2026-11-14 裁定）————————————————————————————
+   窗口走 titleBarStyle:'hidden' + titleBarOverlay（next/shell/main.mjs 的 TITLEBAR_OVERLAY）。
+   目标形态：品牌＋项目信息｜已激活载体横排｜弹性空隙｜推演／设置右簇｜原生窗控占位。
+   页内菜单行与左竖条已整条退役（菜单功能去向见 AppNext 顶栏注释）。
+   高度 36 与 overlay 的 height 对齐（--nx-titlebar-height 只在本文件用）。
+   整条可拖动窗口；按钮与载体格回到 no-drag，否则点不动。 */
 .nx-shell-root {
   display: flex;
   flex-direction: column;
@@ -92,7 +93,7 @@ body {
   --nx-titlebar-height: 36px; /* 与 next/shell/main.mjs 的 TITLEBAR_OVERLAY.height 同步 */
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   flex: 0 0 var(--nx-titlebar-height);
   height: var(--nx-titlebar-height);
   padding-inline: 12px;
@@ -111,78 +112,108 @@ body {
   color: var(--archive-ink);
   white-space: nowrap;
 }
-.nx-menubar {
+/* 品牌与项目信息之间那道细竖线：demo 的面包屑分隔语言。 */
+.nx-titlebar-divider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 16px;
+  background: var(--hairline-soft);
+}
+.nx-titlebar-library,
+.nx-titlebar .nx-deduce-toggle,
+.nx-titlebar .nx-titlebar-settings {
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+/* 老版 .control-quiet 的命中区会顶满标题栏；13px 字号收回 --nx-fs-md 一档。
+   与 .control-* 的四段同权重、并且后置（legacy.mjs 里 next-shell.css 最后引）。 */
+.theme-legacy .nx-titlebar .nx-titlebar-library,
+.theme-legacy .nx-titlebar .nx-deduce-toggle {
+  min-height: 26px;
+  padding: 3px 9px;
+  font-size: var(--nx-fs-md);
+  white-space: nowrap;
+}
+.theme-legacy .nx-titlebar .nx-titlebar-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: var(--nx-radius-xs);
+}
+.nx-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+/* —— 载体横排：一格＝图标＋名（demo writing 屏顶部语言），只列已激活载体 ——
+   这是原左竖条的替代面；窄屏横向滚动，不折行、不挤压右侧簇。 */
+.nx-carrier-strip {
   display: flex;
   align-items: center;
   gap: 2px;
   flex: 0 1 auto;
   min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
   -webkit-app-region: no-drag;
 }
-.nx-menu {
+.nx-carrier-strip::-webkit-scrollbar {
+  display: none;
+}
+.nx-carrier-item {
   position: relative;
-}
-.nx-titlebar .nx-menu-trigger,
-.nx-titlebar .nx-menu-item {
-  -webkit-app-region: no-drag;
-}
-/* 老版 .control-quiet 的 36px 命中区正好铺满标题栏；字号收回 --nx-fs-md 一档。
-   选择器与 .control-* 的四段同权重、并且后置（legacy.mjs 里 next-shell.css 最后引），
-   不用 !important 也能覆盖。 */
-.theme-legacy .nx-titlebar .nx-menu .nx-menu-trigger {
-  padding: 4px 10px;
-  font-size: var(--nx-fs-md);
-  white-space: nowrap;
-}
-.nx-menu-popup {
-  position: absolute;
-  top: calc(100% + 2px);
-  left: 0;
-  z-index: var(--z-popover);
-  min-width: 220px;
-  margin: 0;
-  padding: 4px;
-  list-style: none;
-  border: 1px solid var(--hairline-soft);
-  border-radius: var(--radius-control);
-  background: var(--surface-workbench-raised);
-  box-shadow: 0 10px 28px color-mix(in srgb, var(--archive-ink) 18%, transparent);
-  -webkit-app-region: no-drag;
-}
-.theme-legacy .nx-titlebar .nx-menu-popup .nx-menu-item {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-  width: 100%;
-  min-height: 32px;
-  padding: 6px 10px;
-  font-size: var(--nx-fs-md);
-  text-align: left;
-  white-space: nowrap;
-}
-.nx-menu-item:disabled {
-  cursor: not-allowed;
-}
-.nx-menu-label {
-  min-width: 0;
-}
-/* 「最近打开」条目（作者 2026-11-10 点单）：路径可能很长，收在与标题栏 chip 同档的宽度里，
-   溢出省略；完整路径在按钮的 title 上（menus.mjs withRecentProjects 拼装时带上）。 */
-.nx-menu-item.is-recent .nx-menu-label {
-  max-width: 360px;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.nx-menu-accelerator {
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 3px 9px;
+  border-radius: var(--nx-radius-xs);
   color: var(--text-muted);
-  font-size: var(--nx-fs-2xs);
+  font-size: var(--nx-fs-md);
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
 }
-.nx-menu-separator {
-  height: 1px;
-  margin: 4px 8px;
-  background: var(--hairline-soft);
+.nx-carrier-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.nx-carrier-item:hover {
+  background: var(--nav-hover);
+  color: var(--text-primary);
+}
+/* 当前板＝强选中：沿用老版竖条那枚 token（--nav-primary-selected＝--workbench-selected）。 */
+.nx-carrier-item.is-active {
+  background: var(--nav-primary-selected);
+  color: var(--text-primary);
+}
+.nx-carrier-item:focus-visible {
+  outline: 2px solid var(--workbench-focus);
+  outline-offset: -2px;
+}
+/* 服务状态点（批次49）：6px 圆点，贴在名后；颜色语义见 next/runtime/serviceLogPool.mjs 头注释。
+   四色只走 token；灰点用描边不填充。没声明服务／MCP 的载体不出点。 */
+.nx-rail-status-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.nx-rail-status-dot.is-green { background: var(--success); }
+.nx-rail-status-dot.is-orange { background: var(--signal-warm); }
+.nx-rail-status-dot.is-red { background: var(--control-danger); }
+.nx-rail-status-dot.is-gray {
+  background: transparent;
+  border: 1px solid var(--text-muted);
 }
 .nx-titlebar-chip {
   flex: 0 1 auto;
@@ -220,7 +251,7 @@ body {
   -webkit-app-region: no-drag;
 }
 
-/* —— 行按钮 primitive：清单行与竖条行共用一个形态 ————————————————
+/* —— 行按钮 primitive：清单行共用一个形态 ————————————————
    选它＝看它，所以行本身也是按钮；但行不是「命令」，
    因此不套 .control-*（那套是命令语义），单独走这一条。
    行高沿用老版侧栏导航行：--nav-row-height 42px（src/styles/workspace-navigation.css:13）。 */
@@ -284,82 +315,6 @@ body {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
   border-color: transparent;
-}
-
-/* —— 图标竖条：抄老前端 .workspace-activity-bar ————————————————————
-   老版那几条规则写在 SFC 的 scoped 样式里（src/components/workbench/WorkspaceContentGroups.vue:190-196），
-   scoped 样式没法 import，所以这里按同一条度量抄一份；
-   44/46/4/8 这几个数字由 next/tests/visual-contract.test.mjs 直接回老文件核对，抄歪了门禁就红。 */
-.nx-ribbon {
-  display: flex;
-  flex: 0 0 44px;
-  flex-direction: column;
-  align-items: stretch;
-  padding-top: 4px;
-  background: var(--workbench-chrome);
-  border-inline-end: 1px solid transparent;
-}
-.nx-ribbon-item {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 46px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-.nx-ribbon-item.is-bottom {
-  margin-top: auto;
-  margin-bottom: 8px;
-}
-.nx-ribbon-item:hover {
-  color: var(--text-primary);
-  background: var(--nav-hover);
-}
-/* 当前板＝强选中：老版竖条用 --workbench-selected，这里走老版给的那枚 token
-   （--nav-primary-selected 就是它，workspace-navigation.css:10）。 */
-.nx-ribbon-item.is-active {
-  color: var(--text-primary);
-  background: var(--nav-primary-selected);
-}
-.nx-ribbon-item:focus-visible {
-  outline: 2px solid var(--workbench-focus);
-  outline-offset: -3px;
-}
-/* 无项目形态（工单F · 反馈③）：载体格保留形状但不可点——压暗一档，悬停不长高亮，
-   让「打开项目后可用」这件事从视觉上就成立。 */
-.nx-ribbon-item.is-disabled,
-.nx-ribbon-item[aria-disabled='true'] {
-  color: var(--text-muted);
-  opacity: 0.45;
-  cursor: default;
-}
-.nx-ribbon-item[aria-disabled='true']:hover {
-  background: transparent;
-  color: var(--text-muted);
-}
-/* 服务状态点（批次49）：8px 圆点，贴竖条格右上角；颜色语义见 next/runtime/serviceLogPool.mjs 头注释。
-   四色只走 token（--success／--signal-warm／--control-danger／--text-muted）；
-   灰点用描边不填充，免得在 chrome 底上跟图标糊成一片。没声明服务／MCP 的载体不出点。 */
-.nx-rail-status-dot {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  pointer-events: none;
-}
-.nx-rail-status-dot.is-green { background: var(--success); }
-.nx-rail-status-dot.is-orange { background: var(--signal-warm); }
-.nx-rail-status-dot.is-red { background: var(--control-danger); }
-.nx-rail-status-dot.is-gray {
-  background: transparent;
-  border: 1px solid var(--text-muted);
 }
 
 /* —— 索引窗 ————————————————————————————————————————————————
@@ -492,13 +447,12 @@ body {
 /* —— 列序（工单 P7 → 作者 2026-11-14 裁定「左侧布局更合理」，Agent 在左升级为全局默认）———
    同一批 DOM，只用 flex order 换位——零重挂载铁律：模板里组件的位置一个都不许动，
    Agent 会话（在途提问／轨迹）挂在 RuntimeDock 内部，组件一旦重挂载就丢。
-   竖条最左（-3），Agent 列紧随其后（-2），它的拖拽把手（DOM 里在 .col-dock 之前那枚
-   .resizer-dock，见 AppNext 模板）随列同位（-1）；索引窗/中栏保持 0——
+   载体横排迁入顶栏后（工单 P10），工作区只剩索引窗／中栏／Agent 列：
+   Agent 列（-2）紧随索引窗之前，它的拖拽把手（-1）随列同位，中栏（1）收尾——
    宽度仍走既有 dockWidth（320–680）拖拽记忆；把手移到 Agent 列右缘后，
    拖拽方向在 AppNext.startDrag 里翻为「往右拖＝变宽」（几何变了，符号跟着翻）。
    窄屏（≤860px）那套竖排不参与：本段只在桌面宽度成立。 */
 @media (min-width: 861px) {
-  .next-shell .nx-ribbon { order: -3; }
   .next-shell .col-dock { order: -2; }
   .next-shell .resizer-dock { order: -1; }
   .next-shell .col-center { order: 1; }
@@ -1265,34 +1219,17 @@ input.doc-title {
 }
 
 /* —— 窄屏（手机）：桌面那三栏在 390px 上会挤成一团，作者在手机侧要能真试 ——————
-   竖条转成横条、正文占满上半、Agent 对话固定在下半屏，索引窗改成覆盖式抽屉。
-   桌面形态一行没动：这里只是窄屏另走一套排布。 */
+   载体已在顶栏横排（工单 P10），窄屏只剩正文占满上半、Agent 对话固定在下半屏，
+   索引窗改成覆盖式抽屉。桌面形态一行没动：这里只是窄屏另走一套排布。 */
 @media (max-width: 860px) {
   .next-shell {
     position: relative;
     flex-direction: column;
   }
-  .nx-ribbon {
-    flex: 0 0 44px;
-    width: 100%;
-    height: 44px;
-    flex-direction: row;
-    padding-top: 0;
-    border-inline-end: 0;
-    border-bottom: 1px solid var(--hairline-soft);
-  }
-  .nx-ribbon-item {
-    height: 44px;
-  }
-  .nx-ribbon-item.is-bottom {
-    margin-top: 0;
-    margin-bottom: 0;
-    margin-left: auto;
-  }
   .nx-index-window {
     position: absolute;
     z-index: 4;
-    top: 44px;
+    top: 0;
     bottom: 52vh;
     left: 0;
     width: 78vw !important;

@@ -14,11 +14,11 @@ import test from 'node:test'
  *      （防止 var(--x) 写错名字后静默失效）；
  *   3. Next 不许另立一套配色——除了自己的 --nx-* 布局变量，不许重新定义任何老 token；
  *   4. 每个 <button> 都得落在共享词汇里（原版 .control-*、行按钮 .nx-row、
- *      老版导航行 .workspace-nav-item、老版竖条 .nx-ribbon-item）；
+ *      老版导航行 .workspace-nav-item、顶栏载体格 .nx-carrier-item）；
  *   5. 风格层引的是老前端 CSS 的本体（不是拷贝），文件得真的在；
  *   6. 外壳根节点挂着 theme-legacy（颜色与控件词汇都靠这个 class 生效）；
  *   7. 选中色分级全部来自老版原件——Next 一个公式都不许重定义；
- *   8. 竖条的度量必须是老前端那份数字，抄歪了门禁就红。
+ *   8. 顶栏（工单 P10）＝载体横排只列激活载体＋右簇设置钮，页内菜单行与左竖条绝迹。
  */
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
 const shellDir = join(repoRoot, 'next', 'shell')
@@ -41,11 +41,12 @@ const LEGACY_CSS = [
  *   control-*        → 老版命令按钮（workbench-controls.css）
  *   nx-row           → Next 自己的行按钮 primitive（度量沿用老版侧栏行）
  *   workspace-nav-item → 老版侧栏导航行（workspace-navigation.css:21-75）
- *   nx-ribbon-item   → 老版图标竖条按钮（WorkspaceContentGroups.vue:190-196 的镜像）
+ *   nx-carrier-item  → 顶栏载体格（工单 P10：原 .nx-ribbon-item 并上顶栏后的新词汇；
+ *      .nx-ribbon-item 作为既有测试与宿主手势的兼容钩子暂时并存）
  *   authoring-knowledge__* → 老版作品资料助手的会话控件
  *     （AuthoringKnowledgeAssistant.vue，Next 右栏的对话框整块抽自它）
  */
-const SHARED_BUTTON_CLASSES = ['control-', 'nx-row', 'workspace-nav-item', 'nx-ribbon-item', 'authoring-knowledge__', 'lib-']
+const SHARED_BUTTON_CLASSES = ['control-', 'nx-row', 'workspace-nav-item', 'nx-carrier-item', 'nx-ribbon-item', 'authoring-knowledge__', 'lib-']
 
 /** 允许出现的颜色关键字：这三个不是「写死的颜色」。 */
 const COLOR_ALLOWED = new Set(['transparent', 'currentcolor', 'inherit'])
@@ -263,25 +264,29 @@ test('选中色分级全部来自老版原件：Next 不许抄一份公式', asy
   const copied = [...stripComments(layout).matchAll(/(--nav-[a-zA-Z0-9-]+)\s*:/g)].map((match) => match[1])
   assert.deepEqual(copied, [], `Next 抄了老版的选中色公式：${copied.join(' ')}`)
 
-  // 竖条的当前板走老版的强选中（--nav-primary-selected 就是 --workbench-selected）。
-  const ribbon = ruleBody(layout, '.nx-ribbon-item.is-active')
-  assert.ok(ribbon, 'next-shell.css 里没有 .nx-ribbon-item.is-active 规则')
-  assert.match(ribbon, /background:\s*var\(--nav-primary-selected\)/, '竖条的当前项应走老版的强选中色')
-  assert.match(ruleBody(layout, '.nx-ribbon-item:hover'), /var\(--nav-hover\)/, '竖条的悬停应走老版的 hover 色')
+  // 载体格的当前板走老版的强选中（--nav-primary-selected 就是 --workbench-selected）。
+  const ribbon = ruleBody(layout, '.nx-carrier-item.is-active')
+  assert.ok(ribbon, 'next-shell.css 里没有 .nx-carrier-item.is-active 规则')
+  assert.match(ribbon, /background:\s*var\(--nav-primary-selected\)/, '载体格的当前项应走老版的强选中色')
+  assert.match(ruleBody(layout, '.nx-carrier-item:hover'), /var\(--nav-hover\)/, '载体格的悬停应走老版的 hover 色')
 
   // 索引窗的行不写自己的选中色：它用老版的 .workspace-nav-item 词汇，选中色由原件那份 CSS 给。
   const index = await readFile(join(shellDir, 'IndexWindow.vue'), 'utf-8')
   assert.match(index, /class="workspace-nav-item workspace-nav-item--tree nx-tree-row[ "]/, '索引窗的行必须用老版的 .workspace-nav-item 词汇')
 })
 
-test('图标竖条的度量抄的是老前端那份：两个文件里的数字必须一致', async () => {
-  const legacy = await readFile(join(repoRoot, 'src', 'components', 'workbench', 'WorkspaceContentGroups.vue'), 'utf-8')
+test('〔工单 P10〕顶栏载体横排的形态：一行横排可横滚、一格一板，字体与圆角走刻度 token', async () => {
   const layout = await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8')
-  // 老版那几条规则在 SFC 的 scoped 样式里，scoped 没法 import，所以 Next 抄了一份——数字必须一样。
-  for (const needle of ['flex: 0 0 44px', 'width: 44px', 'height: 46px', 'padding-top: 4px', 'margin-bottom: 8px']) {
-    assert.ok(legacy.includes(needle), `老前端竖条里没有 ${needle}，Next 抄的基准没了`)
-    assert.ok(layout.includes(needle), `next-shell.css 的竖条少了 ${needle}`)
-  }
+  // 左竖条退役（工单 P10）：整条样式不许回来；载体格改用新词汇。
+  assert.doesNotMatch(layout, /\.nx-ribbon(?!-item)/u, '左竖条样式回潮（工单 P10：载体并上顶栏）')
+  const strip = ruleBody(layout, '.nx-carrier-strip') ?? ''
+  assert.match(strip, /display:\s*flex/u, '载体横排不是一行 flex')
+  assert.match(strip, /overflow-x:\s*auto/u, '载体多时横排要能横滚，不许换行挤压顶栏')
+  const item = ruleBody(layout, '.nx-carrier-item') ?? ''
+  assert.ok(item, 'next-shell.css 里没有 .nx-carrier-item 规则')
+  assert.match(item, /inline-flex/u, '载体格应是图标＋名的行内块')
+  assert.match(item, /font-size:\s*var\(--nx-fs-/u, '载体格字号走刻度 token')
+  assert.match(item, /border-radius:\s*var\(--nx-radius-/u, '载体格圆角走刻度 token')
 })
 
 /**
@@ -1827,12 +1832,13 @@ test('〔批次 M1-c〕推演面板＝AppNext 直接挂载的中栏覆盖层：�
   const col = app.slice(colStart, colEnd)
   assert.ok(col.indexOf('deduceOpen') > col.indexOf('<CollapseOrb'), '推演层没挂在 .col-center 内、CollapseOrb 之后')
 
-  // ③ 标题栏开关在 .nx-menubar（no-drag 区，真窗可点），且只用共享控件词汇 control-quiet。
-  const menubarStart = app.indexOf('class="nx-menubar"')
-  const menubar = app.slice(menubarStart, app.indexOf('</nav>', menubarStart))
-  assert.match(menubar, /data-test="deduce-toggle"/u, '标题栏没有「推演」开关')
-  assert.match(menubar, /class="control-quiet nx-deduce-toggle"/u, '开关没用共享控件词汇 control-quiet')
-  assert.match(menubar, /@click="toggleDeduce"/u, '开关没接 toggleDeduce')
+  // ③ 标题栏右簇（工单 P10：页内菜单行退役后「推演」迁到这里），只用共享控件词汇 control-quiet。
+  const actionsStart = app.indexOf('class="nx-titlebar-actions"')
+  assert.ok(actionsStart >= 0, '标题栏没有右簇 .nx-titlebar-actions')
+  const actions = app.slice(actionsStart, app.indexOf('</div>', actionsStart))
+  assert.match(actions, /data-test="deduce-toggle"/u, '标题栏没有「推演」开关')
+  assert.match(actions, /class="control-quiet nx-deduce-toggle"/u, '开关没用共享控件词汇 control-quiet')
+  assert.match(actions, /@click="toggleDeduce"/u, '开关没接 toggleDeduce')
 
   // ④ 回执只并入既有 serviceSnapshot（服务与通知那份镜像），不建新通道、不碰桥。
   const receiptFn = (app.match(/function onDeduceReceipt\([\s\S]*?\n\}/u) ?? [])[0] ?? ''
@@ -1853,7 +1859,7 @@ test('〔批次 M1-c〕推演面板＝AppNext 直接挂载的中栏覆盖层：�
 
 /**
  * 〔工单 P7 → 作者 2026-11-14 裁定「左侧布局更合理」〕Agent 在左从「推演模式」升格为**默认列序**：
- * 换位只许 CSS（flex order），零重挂载。判据：竖条 -3 最左，Agent 列 -2 紧随其后，
+ * 换位只许 CSS（flex order），零重挂载。判据：Agent 列 -2 最左（工单 P10 后左竖条已并上顶栏），
  * 它的拖拽把手（.resizer-dock）-1 随列同位，索引窗/中栏 0——把手正好落在 Agent 列右缘。
  * 拖拽方向随几何翻转（startDrag 对非 index 目标改「往右拖＝变宽」）。
  * 模板侧：RuntimeDock／CollapseOrb 挂载处零 v-if（守卫⑰④）；DeducePanel 显隐仍归 deduceOpen。
@@ -1863,9 +1869,9 @@ test('〔工单 P7 → 2026-11-14〕Agent 在左＝默认列序（CSS order）+ 
   const clean = stripComments(app).replace(/<!--[\s\S]*?-->/gu, '')
   const layout = stripComments(await readFile(join(shellDir, 'styles', 'next-shell.css'), 'utf-8'))
 
-  // ① 列序声明：竖条 -3、Agent 列 -2、它的把手 -1、中栏 1——把手正好落在 Agent 列右缘。
-  assert.match(ruleBody(layout, '.next-shell .nx-ribbon') ?? '', /order:\s*-3/u, '竖条没钉在最左（order:-3）')
-  assert.match(ruleBody(layout, '.next-shell .col-dock') ?? '', /order:\s*-2/u, 'Agent 列没换到竖条之后（order:-2）')
+  // ① 列序声明：Agent 列 -2、它的把手 -1、中栏 1——把手正好落在 Agent 列右缘。
+  // （工单 P10：原左竖条整条并上顶栏，不再占列序；Agent 列成为最左的一列。）
+  assert.match(ruleBody(layout, '.next-shell .col-dock') ?? '', /order:\s*-2/u, 'Agent 列没占到最左（order:-2）')
   assert.match(ruleBody(layout, '.next-shell .resizer-dock') ?? '', /order:\s*-1/u, 'Agent 列的把手没随列同位（order:-1）')
   assert.match(ruleBody(layout, '.next-shell .col-center') ?? '', /order:\s*1/u, '中栏没抬到 Agent 列之后（order:1），把手会被挤到最右缘')
   assert.doesNotMatch(layout, /\.nx-deduce-mode/u, '模式类已退役：Agent 在左是默认列序，不再有第二形态（作者 2026-11-14）')
@@ -1877,7 +1883,7 @@ test('〔工单 P7 → 2026-11-14〕Agent 在左＝默认列序（CSS order）+ 
   // ③ 只在桌面宽度成立：窄屏（≤860px）那套竖排不动。
   const desktop = layout.indexOf('@media (min-width: 861px)')
   assert.ok(desktop >= 0, '找不到桌面宽度的媒体查询')
-  assert.ok(layout.indexOf('.next-shell .nx-ribbon { order: -3') > desktop, '列序没收在桌面宽度媒体查询里（窄屏竖排会被重排）')
+  assert.ok(layout.indexOf('.next-shell .col-dock { order: -2; }') > desktop, '列序没收在桌面宽度媒体查询里（窄屏竖排会被重排）')
 
   // ④ 挂载处零 v-if：换位不许包条件分支（Agent 会话与 Esc 分层都挂在这次挂载上）。
   const runtimeTag = (clean.match(/<RuntimeDock[\s\S]{0,400}?\/>/u) ?? [])[0] ?? ''
@@ -1885,6 +1891,44 @@ test('〔工单 P7 → 2026-11-14〕Agent 在左＝默认列序（CSS order）+ 
   assert.equal(/v-if/u.test(runtimeTag), false, 'RuntimeDock 挂载处不得出现 v-if（换位只许 CSS）')
   assert.equal(/<CollapseOrb\s+v-if=/u.test(clean), false, 'CollapseOrb 挂载处不得出现 v-if（守卫⑰④）')
   assert.match(clean, /<DeducePanel\s+v-if="deduceOpen"/u, 'DeducePanel 的显隐仍归既有开关（本批回归面板开关本义）')
+})
+
+/**
+ * 〔工单 P10 · 作者 2026-11-14 裁定〕顶栏重排：载体上栏＋菜单收敛＋设置钮右置。
+ * 声明级判据（跑起来那一面在 shell-ui.spec 的 P10 组）：
+ *   · 载体横排只渲染 activeBoards（已激活载体），停用的留在设置·库设置；
+ *   · 页内菜单行（.nx-menubar/.nx-menu-trigger）绝迹，左竖条不再挂载；
+ *   · 右簇最右是设置齿轮，点它开统一设置；
+ *   · 原生不可见菜单仍在（menus.mjs 模板不删，快捷键与 role 照常）。
+ */
+test('〔工单 P10〕顶栏＝载体横排（只显激活）＋右簇设置齿轮；页内菜单行绝迹、原生菜单保留', async () => {
+  const app = await readFile(join(shellDir, 'AppNext.vue'), 'utf-8')
+  const clean = stripComments(app).replace(/<!--[\s\S]*?-->/gu, '')
+  const menus = await readFile(join(shellDir, 'menus.mjs'), 'utf-8')
+
+  // ① 载体横排只吃 activeBoards（按 carriers[].isEnabled 过滤）。
+  assert.match(clean, /const activeBoards = computed\([\s\S]{0,240}isEnabled !== false/u, 'activeBoards 没按 isEnabled 过滤')
+  const stripStart = clean.indexOf('data-test="carrier-strip"')
+  assert.ok(stripStart >= 0, '找不到载体横排')
+  const strip = clean.slice(stripStart, clean.indexOf('</nav>', stripStart))
+  assert.match(strip, /v-for="board in activeBoards"/u, '载体横排没遍历 activeBoards')
+  assert.match(strip, /@click="selectBoard\(board\.id\)"/u, '载体格点击没走 selectBoard（与竖条同一落点）')
+
+  // ② 页内菜单行绝迹；左竖条不再挂载。
+  assert.equal(clean.includes('nx-menubar'), false, '页内菜单栏回潮')
+  assert.equal(clean.includes('nx-menu-trigger'), false, '页内菜单触发钮回潮')
+  assert.equal(clean.includes('<ActivityRail'), false, '左竖条仍被挂载（工单 P10：载体并上顶栏）')
+
+  // ③ 右簇最右＝设置齿轮，点它开统一设置。
+  const actionsStart = clean.indexOf('class="nx-titlebar-actions"')
+  assert.ok(actionsStart >= 0, '找不到标题栏右簇')
+  const actions = clean.slice(actionsStart, clean.indexOf('</div>', actionsStart))
+  assert.match(actions, /data-test="titlebar-settings"/u, '右簇没有设置齿轮')
+  assert.ok(actions.lastIndexOf('data-test="titlebar-settings"') > actions.lastIndexOf('data-test="deduce-toggle"'), '设置齿轮必须是右簇最后一枚')
+  assert.match(actions, /@click="openSettingsFromTitlebar"/u, '齿轮没接统一设置入口')
+
+  // ④ 原生不可见菜单不删：模板仍是唯一键位来源（快捷键与 role 由 Electron 直办）。
+  assert.match(menus, /export const MENU_TEMPLATE/u, '原生菜单模板被删（快捷键会一起丢）')
 })
 
 

@@ -436,7 +436,8 @@ test('批次62 手势界面入口：Alt／中键两条都在壳层接上，值�
   assert.match(app, /<CommandPalette[\s\S]{0,400}:entries="commandEntries"/u, '面板的数据来自 commandEntries（＝command:list ∪ 当前页动作）')
   assert.match(app, /@run="runPaletteCommand"/u, '执行一律回宿主经 command 通路')
   assert.match(app, /const id = matchHotkey\(event, hotkeyBindings\.value\)/u, '键盘总线读的是 hotkeys 那张表，不是散在各处的硬编码键')
-  assert.match(app, /if \(paletteOpen\.value \|\| settingsOpen\.value \|\| openMenuLabel\.value\) return/u, '上层开着时整体让位：同一次 Esc 不许既关面板又收窗')
+  // 〔工单 P10〕页内菜单行退役（openMenuLabel 随之下线）：上层只剩面板与设置二级页。
+  assert.match(app, /if \(paletteOpen\.value \|\| settingsOpen\.value\) return/u, '上层开着时整体让位：同一次 Esc 不许既关面板又收窗')
 })
 
 test('批次62 命令落点词表与 AppNext 的解释一一对应（清单那半张表在这里有另一半）', async () => {
