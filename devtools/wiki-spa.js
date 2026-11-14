@@ -278,121 +278,12 @@ function svgRadar(dims) {
     + labels + '</svg>';
 }
 
-/** 人物×章 出场热力图（SVG 矩形阵列，委托悬停读数） */
-function svgHeat(host, rowNames, values) {
-  var W = Math.max(320, host.clientWidth - 32);
-  var rows = rowNames.length, cols = values[0] ? values[0].length : 0;
-  if (!rows || !cols) return;
-  var H = rows * 22 + 46;
-  var padL = 72, padT = 8;
-  var cw = (W - padL - 10) / cols, chh = 22;
-  var max = 1;
-  for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) max = Math.max(max, values[r][c]);
-  var cells = '', labels = '';
-  for (var r2 = 0; r2 < rows; r2++) {
-    labels += '<text x="' + (padL - 8) + '" y="' + (padT + r2 * chh + chh / 2 + 4) + '" text-anchor="end" font-size="11" fill="' + C_FG + '">' + escHtml(rowNames[r2]) + '</text>';
-    for (var c2 = 0; c2 < cols; c2++) {
-      var t = values[r2][c2] / max;
-      var fill = t > 0 ? 'rgba(' + ACCENT_RGB + ',' + (0.10 + 0.82 * t).toFixed(3) + ')' : C_TRACK;
-      cells += '<rect data-r="' + r2 + '" data-c="' + c2 + '" x="' + (padL + c2 * cw + 1).toFixed(1) + '" y="' + (padT + r2 * chh + 1).toFixed(1) + '" width="' + Math.max(1, cw - 2).toFixed(1) + '" height="' + (chh - 2) + '" rx="2" fill="' + fill + '"/>';
-    }
-  }
-  var colLabels = '';
-  var every = Math.ceil(cols / Math.max(4, Math.floor((W - padL) / 34)));
-  for (var c3 = 0; c3 < cols; c3++) {
-    if (c3 % every === 0 || c3 === cols - 1) {
-      colLabels += '<text x="' + (padL + c3 * cw + cw / 2).toFixed(1) + '" y="' + (H - 22) + '" text-anchor="middle" font-size="10" fill="' + C_MUTED + '">' + DETAIL.chapters[c3].no + '</text>';
-    }
-  }
-  var svg = '<svg id="heatSvg" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;overflow:visible">'
-    + cells + labels + colLabels + '</svg>';
-  host.insertAdjacentHTML('beforeend', svg);
-  var el = document.getElementById('heatSvg');
-  el.onmousemove = function (ev) {
-    var t2 = ev.target;
-    if (!t2 || t2.dataset.r === undefined) return;
-    var r3 = +t2.dataset.r, c4 = +t2.dataset.c;
-    var hv = document.getElementById('mxHover');
-    if (hv) {
-      hv.textContent = rowNames[r3] + ' × 第' + DETAIL.chapters[c4].no + UNIT + ' · ' + values[r3][c4] + ' 段';
-      hv.style.opacity = '1';
-    }
-  };
-  el.onmouseleave = function () {
-    var hv = document.getElementById('mxHover');
-    if (hv) hv.style.opacity = '0.35';
-  };
-}
-
-/* ===== 拆解报告（六槽位交付物） ===== */
-function vSlots() {
-  var S = D.slots;
-  var h = '<h1>拆解报告</h1><div class="meta">对齐 author 拆书总协议（kb/deconstruct/protocol）六槽位 · 三态置信显式标注 · 引用≤40 字</div>';
-  if (!S) return h + '<p class="sub">本书尚未跑六槽位增补（wiki-enrich@3）。</p>';
-  // plot-design：阶段＋转折
-  if (S.plotDesign) {
-    h += '<h2>plot-design · 结构骨架</h2><div class="slotcard">';
-    (S.plotDesign.stages || []).forEach(function (st) {
-      h += '<div class="outline-ch"><h3>' + escHtml(st.phase) + (st.chapters && st.chapters.length ? '<span class="arc-range">第 ' + st.chapters[0] + '~' + st.chapters[st.chapters.length - 1] + ' ' + UNIT + '</span>' : '') + '</h3><div>' + escHtml(st.job || '') + '</div></div>';
-    });
-    if (S.plotDesign.turningPoints?.length) {
-      h += '<h2 style="font-size:15px">转折点</h2><ul>' + S.plotDesign.turningPoints.map(function (tp) {
-        return '<li><span class="tag">第' + tp.chapter + UNIT + '</span> ' + escHtml(tp.event) + '</li>';
-      }).join('') + '</ul>';
-    }
-    h += '</div>';
-  }
-  // 文风九维
-  if (S.style) {
-    h += '<h2>文风画像（文学层·九维） <small>产物=可直接执行的写手规则</small></h2><div class="slotcard">';
-    var dims = [['density', '情绪笔墨密度'], ['sentence', '句式与段落节奏'], ['pov', '视角与信息控制'], ['dialogue', '对话写法'], ['action', '动作写法'], ['character', '人物写法'], ['environment', '环境写法'], ['transition', '转场与时间'], ['ending', '章节收束']];
-    h += '<table class="kv">';
-    dims.forEach(function (d) {
-      if (S.style[d[0]]) h += '<tr><td>' + d[1] + '</td><td>' + escHtml(S.style[d[0]]) + '</td></tr>';
-    });
-    h += '</table>';
-    if (S.style.rules?.length) h += '<p style="margin:12px 0 0"><b>执行规则</b></p><ul>' + S.style.rules.map(function (r) { return '<li>' + escHtml(r) + '</li>'; }).join('') + '</ul>';
-    h += '</div>';
-  }
-  // 高光片段（槽位 excerpt）
-  var ex = D.excerpts || [];
-  if (ex.length) {
-    h += '<h2>excerpt · 高光片段（' + ex.length + '） <small>概括＋极短引用</small></h2>';
-    ex.forEach(function (e) {
-      h += '<div class="event"><span class="ch">第' + e.chapter + UNIT + '</span> <b>' + escHtml(e.beat) + '</b><div class="quote" style="margin-top:6px">“' + escHtml(e.quote) + '”</div></div>';
-    });
-  }
-  // 状态台账（continuity：谁知道什么 / 关键物与关系终局）
-  var L = D.ledger;
-  if (L && (L.knowledgeLedger?.length || L.stateLedger?.length)) {
-    h += '<h2>状态台账 <small>一致性与 OOC 判定的底表</small></h2><div class="slotcard">';
-    if (L.knowledgeLedger?.length) {
-      h += '<p style="margin:0 0 6px"><b>知情台账</b></p><table class="kv">';
-      L.knowledgeLedger.forEach(function (item) {
-        h += '<tr><td>' + escHtml(item.character) + '</td><td>知道 ' + escHtml(item.knows) + (item.chapter ? '<span class="arc-range">约第 ' + item.chapter + UNIT + '</span>' : '') + '</td></tr>';
-      });
-      h += '</table>';
-    }
-    if (L.stateLedger?.length) {
-      h += '<p style="margin:12px 0 6px"><b>状态台账</b></p><table class="kv">';
-      L.stateLedger.forEach(function (item) {
-        h += '<tr><td>' + escHtml(item.object) + '</td><td>' + escHtml(item.state) + (item.chapter ? '<span class="arc-range">第 ' + item.chapter + UNIT + ' 确认</span>' : '') + '</td></tr>';
-      });
-      h += '</table>';
-    }
-    h += '</div>';
-  }
-  h += '<div id="dsFooter">槽位置信：gimmick ' + escHtml(S.gimmick?.confidence || '—') + ' / plot-design ' + escHtml(S.plotDesign?.structure?.confidence || '—') + ' / intro ' + escHtml(S.intro?.confidence || '—') + '</div>';
-  return h;
-}
-
 /* ===== 侧边导航 ===== */
 function renderSide() {
   var nav = [
     ['overview', '📊 概览'],
     ['slots', '📋 拆解报告'],
     ['outline', '📖 章节大纲'],
-    ['matrix', '🧊 人物矩阵'],
     ['timeline', '⏱ 时间线'],
     ['graph', '🔗 关系图谱'],
     ['foreshadow', '🎣 伏笔']
@@ -427,316 +318,252 @@ function sectionChips(no) {
   if (ch.function) h += functionChip(ch.function);
   h += emotionChip(ch.emotion);
   if (ch.beats) h += '<span class="chip">剧情点 ' + ch.beats + '</span>';
-  var top = -1, topV = 0;
-  for (var r = 0; r < DETAIL.matrix.length; r++) {
-    if (DETAIL.matrix[r][chIdx] > topV) { topV = DETAIL.matrix[r][chIdx]; top = r; }
-  }
-  if (top >= 0 && topV > 0) h += '<span class="chip">峰值 <b>' + escHtml(DETAIL.characters[top].name) + '</b> ' + topV + ' 段</span>';
+  // 本章主角（在场段数最多者，从 timeline 现算——不再依赖整本矩阵）
+  var presence = {};
+  (DETAIL.timeline.find(function (t) { return t.no === ch.no; }) || { events: [] }).events.forEach(function (event) {
+    if (event.who) presence[event.who] = (presence[event.who] || 0) + 1;
+  });
+  var topEntry = Object.entries(presence).sort(function (a, b) { return b[1] - a[1]; })[0];
+  if (topEntry) h += '<span class="chip">主角 <b>' + escHtml(topEntry[0]) + '</b> ' + topEntry[1] + ' 条</span>';
   if (ch.newChars.length) h += '<span class="chip green">新登场 ' + escHtml(ch.newChars.slice(0, 3).join('、')) + '</span>';
   if (ch.foreshadow.length) h += '<span class="chip red">伏笔 +' + ch.foreshadow.length + '</span>';
-  h += '<span class="chip">' + ch.events + ' 事件 / ' + ch.segments + ' 段</span>';
   return h + '</div>';
 }
 
 /* ===== KPI 卡片行（前半 vs 后半 delta，确定性） ===== */
-function kpiCards() {
-  var n = DETAIL.chapters.length;
-  var evs = DETAIL.chapters.map(function (c) { return c.events; });
-  var half = Math.floor(n / 2);
-  var sum = function (arr, a, b) { var s = 0; for (var i = a; i < b; i++) s += arr[i]; return s; };
-  var evTotal = sum(evs, 0, n);
-  var ev1 = sum(evs, 0, half), ev2 = sum(evs, half, n);
-  var evDelta = ev1 > 0 ? Math.round((ev2 - ev1) / ev1 * 100) : 0;
-  var hooks = DETAIL.chapters.map(function (c) { return c.foreshadow.length; });
-  var hookTotal = sum(hooks, 0, n);
-  var h1v = sum(hooks, 0, half), h2v = sum(hooks, half, n);
-  var hookDelta = h1v > 0 ? Math.round((h2v - h1v) / h1v * 100) : 0;
-  // 后半新登场人物数
-  var lateNew = 0;
-  DETAIL.chapters.slice(half).forEach(function (c) { lateNew += c.newChars.length; });
-  var chip = function (d, suffix) {
-    if (d > 0) return '<span class="k-delta up">▲ ' + d + '%' + (suffix || '') + '</span>';
-    if (d < 0) return '<span class="k-delta down">▼ ' + (-d) + '%' + (suffix || '') + '</span>';
-    return '<span class="k-delta flat">前后半持平</span>';
-  };
-  var trace = DETAIL.quality.traceableRate;
-  // 迷你折线（sparkline）：把序列压成 72×22 的 SVG 路径
-  var spark = function (values, color) {
-    if (!values.length) return '';
-    var w = 72, hh = 22, max = Math.max.apply(null, values.concat([1])), min = Math.min.apply(null, values);
-    var span = max - min || 1;
-    var pts = values.map(function (v, i) {
-      var x = values.length === 1 ? w / 2 : (i / (values.length - 1)) * w;
-      return x.toFixed(1) + ',' + (hh - ((v - min) / span) * (hh - 3) - 1.5).toFixed(1);
-    });
-    return '<svg class="spark" width="' + w + '" height="' + hh + '" viewBox="0 0 ' + w + ' ' + hh + '">'
-      + '<polyline points="' + pts.join(' ') + '" fill="none" stroke="' + color + '" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>'
-      + '<circle cx="' + pts[pts.length - 1].split(',')[0] + '" cy="' + pts[pts.length - 1].split(',')[1] + '" r="2" fill="' + color + '"/></svg>';
-  };
-  var appSeries = DETAIL.matrix.length ? DETAIL.matrix[0] : evs; // 主角在场曲线
-  var hookSeries = hooks;
-  return '<div class="kpis">'
-    + '<div class="kpi"><div class="k-label">事件总量</div><div class="k-value">' + evTotal.toLocaleString() + '</div>' + chip(evDelta, ' · 后半 vs 前半') + spark(evs, 'var(--accent)') + '</div>'
-    + '<div class="kpi"><div class="k-label">人物</div><div class="k-value">' + DETAIL.characters.length + '</div><span class="k-delta flat">后半新登场 ' + lateNew + ' 人</span>' + spark(appSeries, 'var(--warn)') + '</div>'
-    + '<div class="kpi"><div class="k-label">伏笔</div><div class="k-value">' + hookTotal + '</div>' + chip(hookDelta, ' · 后半 vs 前半') + spark(hookSeries, 'var(--danger)') + '</div>'
-    + '<div class="kpi"><div class="k-label">事件可溯源</div><div class="k-value">' + (trace != null ? (trace * 100).toFixed(1) + '%' : '—') + '</div><span class="k-delta flat">逐字对回原文</span></div>'
-    + '</div>';
+/* ===== 视图体系重设计（作者 2026-11-14） =====
+ * 原则：一视图回答一个问题，只给关键节点，不做低信息量报表。
+ *   概览   → 这本书讲什么？（内核 + 五维骨架，不要报表）
+ *   人物   → 这个人物的弧光是什么？（三节点：首次/退出/高光 + 动机弧光）
+ *   章节   → 这一章发生了什么？（功能/情绪/剧情点/梗概/伏笔/高光）
+ *   伏笔   → 埋了什么、收了没有？
+ *   图谱   → 关系与因果结构长什么样？
+ * 已删除：人物×章出场热力图（只告诉你人物在哪章出现）、出场节奏曲线、屏份份额环形图。
+ */
+
+/** 故事骨架五维卡（概览用）：每个维度一个「判断」，不是一个数字。 */
+function skeletonCards() {
+  var S = D.slots;
+  var plots = DETAIL.chapters;
+  var totalBeats = plots.reduce(function (sum, c) { return sum + (c.beats || 0); }, 0);
+  var emotions = {};
+  plots.forEach(function (c) { if (c.emotion) emotions[c.emotion] = (emotions[c.emotion] || 0) + 1; });
+  var dominant = Object.entries(emotions).sort(function (a, b) { return b[1] - a[1]; })[0];
+  var hookCount = plots.reduce(function (sum, c) { return sum + c.foreshadow.length; }, 0);
+  var mainChar = DETAIL.characters.slice().sort(function (a, b) { return b.appearances - a.appearances; })[0];
+  var items = [
+    {
+      label: '内核',
+      value: (S && S.gimmick && S.gimmick.emotionPromise ? String(S.gimmick.emotionPromise).split(/[，。；—]/)[0].slice(0, 14) : (dominant ? dominant[0] + ' 为主' : '—')),
+      note: S && S.plotDesign && S.plotDesign.structure ? '结构：' + S.plotDesign.structure.picked : '',
+      link: 'slots'
+    },
+    {
+      label: '主角',
+      value: mainChar ? mainChar.name : '—',
+      note: mainChar && mainChar.arc && mainChar.arc.end ? '弧光：' + (mainChar.arc.start || '').slice(0, 12) + ' → ' + String(mainChar.arc.end).slice(0, 12) : '',
+      link: mainChar ? 'char:' + mainChar.name : 'characters'
+    },
+    {
+      label: '节奏',
+      value: plots.length + ' ' + UNIT + ' / ' + totalBeats + ' 剧情点',
+      note: dominant ? '主导情绪 ' + dominant[0] + '（' + dominant[1] + ' ' + UNIT + '）' : '',
+      link: 'timeline'
+    },
+    {
+      label: '悬念',
+      value: hookCount + ' 条伏笔',
+      note: hookCount ? '分布 ' + plots.filter(function (c) { return c.foreshadow.length; }).length + ' ' + UNIT : '—',
+      link: 'foreshadow'
+    },
+    {
+      label: '世界',
+      value: (DETAIL.terms.length || 0) + ' 条设定',
+      note: DETAIL.terms.filter(function (t) { return t.kind === '场景'; }).length + ' 场景 / ' + DETAIL.terms.filter(function (t) { return t.kind === '道具'; }).length + ' 道具',
+      link: 'graph'
+    }
+  ];
+  return '<div class="skeleton">' + items.map(function (item) {
+    return '<div class="sk-card">'
+      + '<div class="sk-label">' + escHtml(item.label) + '</div>'
+      + '<div class="sk-value">' + escHtml(item.value) + '</div>'
+      + (item.note ? '<div class="sk-note">' + escHtml(item.note) + '</div>' : '')
+      + '</div>';
+  }).join('') + '</div>';
 }
 
-/* ===== 概览（数据面板） ===== */
+/** 情绪曲线（B1）：横轴进度，纵轴强度（用剧情点数代理），颜色=情绪类型。只标峰值，不画全部点。 */
+function emotionCurve() {
+  var chapters = DETAIL.chapters.filter(function (c) { return c.emotion; });
+  if (chapters.length < 2) return '';
+  var maxBeats = Math.max.apply(null, chapters.map(function (c) { return c.beats || 1; }).concat([1]));
+  var W = 760, H = 132, pad = { l: 10, r: 10, t: 14, b: 22 };
+  var iw = W - pad.l - pad.r, ih = H - pad.t - pad.b;
+  var step = iw / Math.max(1, chapters.length - 1);
+  var pts = chapters.map(function (c, i) {
+    return {
+      x: pad.l + i * step,
+      y: pad.t + ih - ((c.beats || 1) / maxBeats) * ih,
+      color: EMOTION_COLOR[c.emotion] || C_MUTED,
+      chapter: c.no, emotion: c.emotion, beats: c.beats, title: c.title
+    };
+  });
+  // 折线（淡淡一条，只是连接）
+  var line = pts.map(function (p) { return p.x.toFixed(1) + ',' + p.y.toFixed(1); }).join(' ');
+  var svg = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;width:100%;overflow:visible">';
+  svg += '<polyline points="' + line + '" fill="none" stroke="' + C_TRACK + '" stroke-width="1.5"/>';
+  // 只标「峰」：强度 ≥ 该点前后邻域最大
+  pts.forEach(function (p, i) {
+    var isPeak = true;
+    for (var k = Math.max(0, i - 2); k <= Math.min(pts.length - 1, i + 2); k++) {
+      if (pts[k].beats > p.beats) { isPeak = false; break; }
+    }
+    var r = isPeak ? 5.5 : 3;
+    svg += '<circle cx="' + p.x.toFixed(1) + '" cy="' + p.y.toFixed(1) + '" r="' + r + '" fill="' + p.color + '" fill-opacity="' + (isPeak ? 0.95 : 0.5) + '" stroke="#fff" stroke-width="1.2">'
+      + '<title>第' + p.chapter + UNIT + '「' + escHtml(p.title) + '」· ' + p.emotion + ' · 剧情点 ' + p.beats + '</title></circle>';
+  });
+  // 只给峰值加标签（最多 4 个）
+  pts.forEach(function (p, i) {
+    var isPeak = true;
+    for (var k = Math.max(0, i - 2); k <= Math.min(pts.length - 1, i + 2); k++) {
+      if (pts[k].beats > p.beats) { isPeak = false; break; }
+    }
+    if (!isPeak) return;
+    svg += '<text x="' + p.x.toFixed(1) + '" y="' + (p.y - 10).toFixed(1) + '" text-anchor="middle" font-size="10" font-weight="600" fill="' + p.color + '" stroke="#fff" stroke-width="3" paint-order="stroke">' + escHtml(p.emotion) + '</text>';
+  });
+  svg += '</svg>';
+  return '<div class="chartbox" style="padding:14px 18px 6px">'
+    + '<div class="curve-head"><b>情绪曲线</b><span>' + chapters.length + ' ' + UNIT + '有情绪标注 · 纵轴=剧情强度 · 只标峰值</span></div>'
+    + svg + '</div>';
+}
+
+/* ===== 概览：这本书讲什么（答案式，不堆报表） ===== */
 function vOverview() {
-  // 封面主视觉（编辑设计：书名衬线大字＋logline＋标签云＋暗色渐变）
   var g = (D.slots && D.slots.gimmick) || null;
   var h = '<section class="hero">';
   h += '<div class="h-eyebrow">世界书 · World Book' + (D.enrich.perspective ? ' · ' + escHtml(D.enrich.perspective.perspective) + ' 人称' : '') + '</div>';
   h += '<h1>' + escHtml(D.book.title) + '</h1>';
   h += '<div class="h-meta"><span><b>' + escHtml(D.book.author) + '</b></span><span><b>' + (D.book.words || 0).toLocaleString() + '</b> 字</span>'
-    + '<span><b>' + D.chapters.length + '</b> ' + UNIT + '</span>'
-    + '<span><b>' + D.characters.length + '</b> 人物</span>'
-    + '<span><b>' + DETAIL.charGraph.edges.length + '</b> 关系边</span>'
+    + '<span><b>' + D.chapters.length + '</b> ' + UNIT + '</span><span><b>' + D.characters.length + '</b> 人物</span>'
     + '<span><b>' + (D.quality.traceableRate != null ? (D.quality.traceableRate * 100).toFixed(1) + '%' : '—') + '</b> 可溯源</span></div>';
   if (g && g.logline) h += '<div class="h-logline">' + escHtml(g.logline) + '</div>';
-  else if (D.enrich.storySummary) h += '<div class="h-logline">' + escHtml(D.enrich.storySummary.slice(0, 110)) + '…</div>';
   if (g && g.elements && g.elements.length) h += '<div class="h-tags">' + g.elements.slice(0, 8).map(function (e) { return '<span>' + escHtml(e) + '</span>'; }).join('') + '</div>';
   h += '</section>';
-  h += kpiCards();
-  if (D.enrich.storySummary) h += '<h2>剧情梗概</h2><div class="summary">' + escHtml(D.enrich.storySummary) + '</div>';
 
-  // 六槽位卡（kb/deconstruct/protocol：gimmick / plot-design / intro）
-  var S = D.slots;
-  if (S && S.gimmick) {
-    h += '<h2>槽位 · gimmick（梗） <small>一句话卖点与情绪承诺</small></h2><div class="slotcard">';
-    h += '<div class="logline">「' + escHtml(S.gimmick.logline) + '」</div>';
-    if (S.gimmick.elements?.length) h += '<div style="margin:8px 0 0">' + S.gimmick.elements.map(function (e) { return '<span class="tag">' + escHtml(e) + '</span>'; }).join('') + '</div>';
-    h += '<table class="kv"><tr><td>共情点</td><td>' + escHtml(S.gimmick.empathy || '—') + '</td></tr>'
-      + '<tr><td>爽点内核</td><td>' + escHtml(S.gimmick.coolPoint || '—') + '</td></tr>'
-      + '<tr><td>情绪承诺</td><td>' + escHtml(S.gimmick.emotionPromise || '—') + '</td></tr>'
-      + '<tr><td>置信</td><td>' + escHtml(S.gimmick.confidence || '—') + '</td></tr></table></div>';
-  }
-  if (S && S.plotDesign) {
-    h += '<h2>槽位 · plot-design（结构选型） <small>六母型 ＋ 章号证据</small></h2><div class="slotcard">';
-    h += '<div class="logline" style="font-size:17px">' + escHtml(S.plotDesign.structure.picked) + '</div>';
-    h += '<table class="kv"><tr><td>判定依据</td><td>' + escHtml(S.plotDesign.structure.evidence || '—') + '</td></tr>'
-      + '<tr><td>主线</td><td>' + escHtml(S.plotDesign.mainline || '—') + '</td></tr>'
-      + (S.plotDesign.subplot ? '<tr><td>支线</td><td>' + escHtml(S.plotDesign.subplot) + '</td></tr>' : '')
-      + '<tr><td>置信</td><td>' + escHtml(S.plotDesign.structure.confidence || '—') + '</td></tr></table>';
-    h += '<p class="sub">完整阶段/转折见 <a data-go="slots">拆解报告 →</a></p></div>';
-  }
-  if (S && S.intro) {
-    h += '<h2>槽位 · intro（开局钩子）</h2><div class="slotcard">';
-    h += '<table class="kv"><tr><td>切入</td><td>' + escHtml(S.intro.entry || '—') + '</td></tr>'
-      + '<tr><td>钩子类型</td><td>' + escHtml(S.intro.hookType || '—') + '</td></tr>'
-      + '<tr><td>第一拍</td><td>' + escHtml(S.intro.firstBeat || '—') + '</td></tr>'
-      + '<tr><td>建立期待</td><td>' + escHtml(S.intro.expectation || '—') + '</td></tr></table></div>';
-  }
+  // ① 骨架五维（一屏看完这本书的构图）
+  h += '<h2>故事骨架 <small>五个维度各一句判断</small></h2>';
+  h += skeletonCards();
 
-  // 情绪带：每章核心情绪（细化层产出）
-  var emoChapters = D.chapters.filter(function (c) { return c.emotion; });
-  if (emoChapters.length) {
-    var counts = {};
-    emoChapters.forEach(function (c) { counts[c.emotion] = (counts[c.emotion] || 0) + 1; });
-    h += '<h2>情绪曲线 <small>每' + UNIT + '核心情绪 · 悬停看章</small></h2><div class="sharebar" style="height:22px">';
-    D.chapters.forEach(function (c) {
-      var color = EMOTION_COLOR[c.emotion] || C_TRACK;
-      h += '<span class="seg" style="width:' + (100 / D.chapters.length) + '%;background:' + color + '" title="第' + c.no + UNIT + ' · ' + escHtml(c.emotion || '—') + ' · ' + escHtml(c.title) + '"></span>';
-    });
-    h += '</div><div class="legend">';
-    Object.keys(counts).forEach(function (emo) {
-      h += '<span><span class="dot" style="background:' + (EMOTION_COLOR[emo] || C_MUTED) + '"></span>' + escHtml(emo) + ' × ' + counts[emo] + '</span>';
+  // ② 剧情梗概（全书一句话展开）
+  if (D.enrich.storySummary) h += '<h2>全书梗概</h2><div class="summary">' + escHtml(D.enrich.storySummary) + '</div>';
+
+  // ③ 情绪曲线（B1 的横轴×纵轴，只标峰值）
+  var curve = emotionCurve();
+  if (curve) { h += '<h2>情绪走向 <small>进度 × 强度 × 情绪类型</small></h2>'; h += curve; }
+
+  // ④ 故事结构四阶段（plot-design stages）
+  var pd = D.slots && D.slots.plotDesign;
+  if (pd && pd.stages && pd.stages.length) {
+    h += '<h2>结构阶段 <small>' + escHtml(pd.structure ? pd.structure.picked : '') + '</small></h2>';
+    h += '<div class="stages">';
+    pd.stages.forEach(function (stage, index) {
+      var range = stage.chapters && stage.chapters.length ? '第 ' + stage.chapters[0] + '~' + stage.chapters[stage.chapters.length - 1] + ' ' + UNIT : '';
+      h += '<div class="stage"><span class="stage-no">' + (index + 1) + '</span>'
+        + '<div class="stage-body"><b>' + escHtml(stage.phase) + '</b>'
+        + (range ? '<em>' + range + '</em>' : '')
+        + '<div>' + escHtml(stage.job || '') + '</div></div></div>';
     });
     h += '</div>';
+    if (pd.turningPoints && pd.turningPoints.length) {
+      h += '<div class="turns"><b>转折点</b><ul>' + pd.turningPoints.map(function (tp) {
+        return '<li><span class="tag">第' + tp.chapter + UNIT + '</span> ' + escHtml(tp.event) + '</li>';
+      }).join('') + '</ul></div>';
+    }
   }
 
-  h += '<h2>节奏曲线 <small>每' + UNIT + '事件量 · 实线=事件量 · 虚线=滑动平均 · 点击跳单章</small></h2>';
-  h += '<div class="chartbox"><div class="hover-read" id="paceHover">悬停查看读数</div></div>';
+  // ⑤ 人物速览：只给三节点（首次/退出/高光），不给逐章分布
+  h += '<h2>人物骨架 <small>首次出场 · 退出 · 高光</small></h2>';
+  h += characterBoneTable(DETAIL.characters.slice().sort(function (a, b) { return b.appearances - a.appearances; }).slice(0, 8));
 
-  // 屏份份额（环形图）
-  var sorted = DETAIL.characters.slice().sort(function (a, b) { return b.appearances - a.appearances; });
-  var totalApp = sorted.reduce(function (s, c) { return s + c.appearances; }, 0);
-  var donutItems = sorted.slice(0, 8).map(function (c, i) { return ({ label: c.name, value: c.appearances, color: CATE[i] }); });
-  if (sorted.length > 8) donutItems.push({ label: '其余 ' + (sorted.length - 8) + ' 人', value: totalApp - donutItems.reduce(function (s, it) { return s + it.value; }, 0), color: C_MUTED });
-  h += '<h2>屏份份额 <small>出场段数占比</small></h2><div style="display:flex;align-items:center;gap:28px;flex-wrap:wrap">';
-  h += svgDonut(donutItems, '出场段');
-  h += '<div class="legend" style="margin:0">';
-  donutItems.forEach(function (it) {
-    var pct = totalApp ? (it.value / totalApp * 100).toFixed(1) : '0';
-    h += '<span><span class="dot" style="background:' + it.color + '"></span><a data-go="char" data-name="' + escHtml(it.label) + '">' + escHtml(it.label) + '</a> ' + pct + '%</span>';
-  });
-  h += '</div></div>';
-
-  var hookCounts = DETAIL.chapters.map(function (c) { return c.foreshadow.length; });
-  if (hookCounts.some(function (x) { return x > 0; })) {
-    h += '<h2>伏笔密度 <small>每' + UNIT + '埋设条数</small></h2>';
-    h += '<div class="chartbox"><div class="hover-read" id="hookHover">悬停查看读数</div></div>';
-  }
-
-  if (D.enrich.arc && D.enrich.arc.length) {
-    h += '<h2>故事结构</h2>';
-    D.enrich.arc.forEach(function (p) {
-      h += '<div class="outline-ch"><h3>' + escHtml(p.phase) + (p.chapters && p.chapters.length ? '<span class="arc-range">第 ' + p.chapters[0] + '~' + p.chapters[p.chapters.length - 1] + ' ' + UNIT + '</span>' : '') + '</h3><div>' + escHtml(p.text) + '</div></div>';
-    });
-  }
-
-  h += '<h2>人物榜 <small>按出场段数</small></h2>';
-  var maxApp = sorted.length ? sorted[0].appearances : 1;
-  h += hbarRows(sorted.slice(0, 10).map(function (c) {
-    return { label: c.name, link: true, value: c.appearances, max: maxApp, sub: c.identity ? '· ' + c.identity : '' };
-  }));
-  if (sorted.length > 10) h += '<p class="sub">其余 ' + (sorted.length - 10) + ' 人见侧栏。</p>';
-
-  h += '<h2>章纲速览 <small>前 ' + Math.min(8, D.chapters.length) + ' ' + UNIT + ' · 全量见章节大纲</small></h2>';
-  D.chapters.slice(0, 8).forEach(function (c) {
-    h += '<div class="outline-ch"><h3><a data-go="chapter" data-no="' + c.no + '">' + escHtml(c.title) + '</a></h3>';
-    if (c.summary) h += '<div class="summary">' + escHtml(c.summary) + '</div>';
-    h += sectionChips(c.no);
-    h += '<div>' + c.chars.slice(0, 8).map(function (n) { return charLink(n); }).join(' ') + '</div></div>';
-  });
-  if (D.chapters.length > 8) h += '<p><a data-go="outline">查看全部 ' + D.chapters.length + ' ' + UNIT + '大纲 →</a></p>';
-  h += '<div id="dsFooter">Design System: ' + escHtml((DETAIL.ds && DETAIL.ds.title) || 'Dashboard') + ' · ' + escHtml((DETAIL.ds && DETAIL.ds.source) || 'embedded') + ' · 图表 inline SVG（OpenDesign dashboard skill 约定）</div>';
+  h += '<div id="dsFooter">Design System: ' + escHtml((DETAIL.ds && DETAIL.ds.title) || 'Dashboard') + ' · ' + escHtml((DETAIL.ds && DETAIL.ds.source) || 'embedded') + ' · 图表 inline SVG</div>';
   return h;
 }
 
-function drawOverviewCharts() {
-  var paceHost = document.querySelector('#view .chartbox');
-  if (paceHost) {
-    svgAreaChart(paceHost, DETAIL.chapters.map(function (c) { return c.events; }), {
-      height: 200, svgId: 'paceSvg', hoverEl: document.getElementById('paceHover'), unitLabel: ' 事件',
-      onClickIdx: function (i) { go('chapter', DETAIL.chapters[i].no); }
-    });
-  }
-  var hookBox = document.getElementById('hookHover');
-  if (hookBox && hookBox.parentElement) {
-    svgBars(hookBox.parentElement, DETAIL.chapters.map(function (c) { return c.foreshadow.length; }), {
-      height: 150, color: C_DANGER, svgId: 'hookSvg', hoverEl: hookBox, unitLabel: ' 条伏笔',
-      onClickIdx: function (i) { go('foreshadow'); }
-    });
-  }
+/** 人物骨架表：三节点（首次/退出/高光）——取代出场热力图。 */
+function characterBoneTable(characters) {
+  var h = '<div class="bone-table">';
+  h += '<div class="bone-row bone-head"><span>人物</span><span>身份</span><span>首次</span><span>退出</span><span>高光</span><span>弧光</span></div>';
+  characters.forEach(function (c) {
+    var arcText = '—';
+    if (c.arc && c.arc.end) {
+      var startText = String(c.arc.start || '').split(/[，。；]/)[0].slice(0, 12);
+      var endText = String(c.arc.end || '').split(/[，。；]/)[0].slice(0, 12);
+      arcText = (startText || '—') + ' → ' + (endText || '—');
+    }
+    h += '<div class="bone-row">'
+      + '<span class="bone-name"><a data-go="char" data-name="' + escHtml(c.name) + '">' + escHtml(c.name) + '</a></span>'
+      + '<span class="bone-id">' + escHtml((c.identity || '').slice(0, 18) || '—') + '</span>'
+      + '<span>' + (c.firstChapter != null ? '第' + c.firstChapter + UNIT : '—') + '</span>'
+      + '<span>' + (c.exitChapter != null ? '第' + c.exitChapter + UNIT : '<em class="muted">贯穿</em>') + '</span>'
+      + '<span>' + (c.highlightChapter != null ? '<a data-go="chapter" data-no="' + c.highlightChapter + '">第' + c.highlightChapter + UNIT + '</a>' : '—') + '</span>'
+      + '<span class="bone-arc">' + escHtml(arcText) + '</span>'
+      + '</div>';
+  });
+  h += '</div>';
+  return h;
 }
 
-/* ===== 人物页 ===== */
+/* ===== 人物页：这个人的弧光是什么（三节点 + 动机弧光，不给逐章曲线） ===== */
 function vChar(name) {
   var c = CHARS[name];
   if (!c) return '<p>人物不存在</p>';
   var h = '<h1>' + escHtml(c.name) + '</h1>';
-  h += '<div class="meta"><span>' + c.appearances + ' 段出场</span>' + (c.chapters.length ? '<span>第 ' + c.chapters[0] + (c.chapters[c.chapters.length - 1] !== c.chapters[0] ? '~' + c.chapters[c.chapters.length - 1] : '') + ' ' + UNIT + '</span>' : '') + (c.castTier ? '<span>剧作档：' + escHtml(c.castTier) + '</span>' : '') + '</div>';
-  if (c.aliases.length) h += '<div>' + c.aliases.map(function (a) { return '<span class="tag">别名：' + escHtml(a) + '</span>'; }).join('') + '</div>';
-  if (c.identity) h += '<h2>身份</h2><p>' + escHtml(c.identity) + '</p>';
-  if (c.goal) h += '<div class="summary" style="margin:10px 0"><b>动机：</b>' + escHtml(c.goal) + '</div>';
-  // 人物卡（kb/deconstruct/protocol 槽位 character）：模式/弧光/关键选择/镜像
-  if (c.archetype) h += '<p><span class="chip" style="background:color-mix(in srgb,' + C_WARN + ' 14%,transparent);color:' + C_WARN + ';border-color:transparent">人设模式 ' + escHtml(c.archetype) + '</span></p>';
-  if (c.summary) h += '<h2>人物小传</h2><div class="summary">' + escHtml(c.summary) + '</div>';
+  h += '<div class="meta">' + (c.identity ? '<span>' + escHtml(c.identity) + '</span>' : '')
+    + (c.archetype ? '<span>' + escHtml(c.archetype) + '</span>' : '')
+    + (c.castTier ? '<span>剧作档 ' + escHtml(c.castTier) + '</span>' : '') + '</div>';
+  if (c.aliases.length) h += '<div>' + c.aliases.map(function (a) { return '<span class="tag">别名 ' + escHtml(a) + '</span>'; }).join('') + '</div>';
+
+  // ① 三节点时间轴（首次→高光→退出，一条线看完这个人的故事跨度）
+  h += '<h2>出场跨度 <small>首次 · 高光 · 退出</small></h2>';
+  h += '<div class="lifeline">'
+    + '<div class="lf-node"><b>首次出场</b><span>' + (c.firstChapter != null ? '第 ' + c.firstChapter + ' ' + UNIT : '—') + '</span></div>'
+    + '<div class="lf-bar"></div>'
+    + '<div class="lf-node highlight"><b>高光</b><span>' + (c.highlightChapter != null ? '第 ' + c.highlightChapter + ' ' + UNIT : '—') + '</span></div>'
+    + '<div class="lf-bar"></div>'
+    + '<div class="lf-node"><b>' + (c.exitChapter != null ? '退出' : '贯穿至结局') + '</b><span>' + (c.exitChapter != null ? '第 ' + c.exitChapter + ' ' + UNIT : '—') + '</span></div>'
+    + '</div>';
+  if (c.highlightQuote) h += '<div class="quote hl-quote">“' + escHtml(c.highlightQuote) + '”</div>';
+
+  // ② 弧光：起点→终点（一句判断，不是数据）
   if (c.arc && (c.arc.start || c.arc.end)) {
-    h += '<h2>人物弧光 <small>起点 → 终点</small></h2><div class="slotcard">';
-    h += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:14px">'
-      + '<span>' + escHtml(c.arc.start || '—') + '</span>'
-      + '<span style="color:' + C_ACCENT + ';font-weight:700">→</span>'
-      + '<span>' + escHtml(c.arc.end || '—') + '</span>'
-      + (c.arc.turnChapter ? '<span class="tag">转变于第 ' + c.arc.turnChapter + UNIT + '</span>' : '') + '</div>';
-    if (c.arc.evidence) h += '<p class="sub" style="margin:8px 0 0">依据：' + escHtml(c.arc.evidence) + '</p>';
+    h += '<h2>弧光 <small>需求层级的迁移</small></h2><div class="arc-block">';
+    h += '<div class="arc-line"><span>' + escHtml(c.arc.start || '—') + '</span><i>→</i><span>' + escHtml(c.arc.end || '—') + '</span></div>';
+    if (c.arc.turnChapter) h += '<div class="arc-turn">转变于第 ' + c.arc.turnChapter + ' ' + UNIT + '</div>';
+    if (c.arc.evidence) h += '<div class="arc-evidence">' + escHtml(c.arc.evidence) + '</div>';
     h += '</div>';
   }
+
+  // ③ 动机
+  if (c.goal) h += '<h2>动机</h2><div class="summary">' + escHtml(c.goal) + '</div>';
+
+  // ④ 关键选择（带章号，这是「他为什么这么做」的锚点）
   if (c.keyChoices.length) {
-    h += '<h2>关键选择 <small>带章号证据</small></h2><ul>' + c.keyChoices.map(function (k) {
-      return '<li><span class="tag">第' + k.chapter + UNIT + '</span> ' + escHtml(k.choice) + '</li>';
-    }).join('') + '</ul>';
-  }
-  if (c.mirror) h += '<h2>镜像关系</h2><p>' + escHtml(c.mirror) + '</p>';
-  if (c.personality.length) h += '<h2>性格</h2><div>' + c.personality.map(function (w) { return '<span class="tag warm">' + escHtml(w) + '</span>'; }).join('') + '</div>';
-
-  // 出场节奏（个人面积图）
-  h += '<h2>出场节奏 <small>逐' + UNIT + '在场段数 · 点击跳单章</small></h2>';
-  h += '<div class="chartbox"><div class="hover-read" id="charHover">悬停查看读数</div></div>';
-
-  // 人物画像：五维雷达（相对全书最大值）＋渠道构成环形
-  var ch2 = DETAIL.channels[c.__idx] || ({ say: 0, do: 0, other: 0 });
-  var chTotal = ch2.say + ch2.do + ch2.other;
-  h += '<h2>人物画像 <small>五维相对全书峰值 · 渠道构成</small></h2>';
-  h += '<div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">';
-  h += '<div id="radarBox" style="flex:none"></div>';
-  if (chTotal > 0) {
-    h += '<div style="flex:1;min-width:220px">';
-    h += svgDonut([
-      { label: '台词', value: ch2.say, color: C_SUCCESS },
-      { label: '行为', value: ch2.do, color: C_WARN },
-      { label: '其他', value: ch2.other, color: C_MUTED }
-    ], '次行为');
-    var mx = Math.max(ch2.say, ch2.do, ch2.other, 1);
-    h += '<div class="hbars" style="margin-top:10px">';
-    h += hbarRows([
-      { label: '台词', value: ch2.say, max: mx, color: C_SUCCESS },
-      { label: '行为', value: ch2.do, max: mx, color: C_WARN },
-      { label: '其他', value: ch2.other, max: mx, color: C_MUTED }
-    ]);
-    h += '</div></div>';
-  }
-  h += '</div>';
-
-  // 关系
-  if (c.edges.length) h += '<h2>关系</h2><ul>' + c.edges.map(function (e) {
-    return '<li>' + (e.dir === 'out' ? '→' : '←') + ' ' + charLink(e.other) + ' <span class="tag">' + escHtml(e.type) + '</span>' + (e.how ? ' <span class="sub">' + escHtml(e.how) + '</span>' : '') + '</li>';
-  }).join('') + '</ul>';
-
-  // 同场人物
-  if (c.cooccur.length) {
-    h += '<h2>同场人物 <small>共现段数</small></h2>';
-    var coMax = c.cooccur[0][1] || 1;
-    h += hbarRows(c.cooccur.slice(0, 8).map(function (p) {
-      return { label: p[0], link: true, value: p[1], max: coMax };
-    }));
+    h += '<h2>关键选择 <small>每个选择都能点回原文</small></h2><ul class="choices">';
+    c.keyChoices.forEach(function (choice) {
+      h += '<li><a data-go="chapter" data-no="' + choice.chapter + '">第' + choice.chapter + UNIT + '</a> ' + escHtml(choice.choice) + '</li>';
+    });
+    h += '</ul>';
   }
 
-  if (c.speechTotal > 0) {
-    h += '<details class="drill"><summary>台词 · 共 ' + c.speechTotal + ' 条（点开看原文摘录）</summary>'
-      + c.speech.map(function (s) { return '<div class="quote">“' + escHtml(s) + '”</div>'; }).join('') + '</details>';
+  // ⑤ 关系与镜像（人物之间的关系不是列表，是这张图的边——这里只放最关键的）
+  if (c.mirror) h += '<h2>镜像人物</h2><p>' + escHtml(c.mirror) + '</p>';
+  if (c.edges.length) {
+    h += '<h2>关系 <small>' + c.edges.length + ' 条</small></h2><ul>';
+    c.edges.slice(0, 8).forEach(function (edge) {
+      h += '<li>' + (edge.dir === 'out' ? '→' : '←') + ' ' + charLink(edge.other) + ' <span class="tag">' + escHtml(edge.type) + '</span>' + (edge.how ? ' <span class="sub">' + escHtml(edge.how) + '</span>' : '') + '</li>';
+    });
+    h += '</ul>';
   }
-  if (c.behavior.length) {
-    h += '<details class="drill"><summary>行为记录 · 摘 ' + c.behavior.length + ' 条（点开看原文）</summary>'
-      + '<ul>' + c.behavior.map(function (s) { return '<li>' + escHtml(s) + '</li>'; }).join('') + '</ul></details>';
-  }
-  return h;
-}
-
-function drawCharCharts(name) {
-  var c = CHARS[name];
-  var host = document.querySelector('#view .chartbox');
-  if (!c || !host) return;
-  var row = DETAIL.matrix[c.__idx];
-  svgAreaChart(host, row, {
-    height: 170, color: C_WARN, svgId: 'charSvg', hoverEl: document.getElementById('charHover'), unitLabel: ' 段在场',
-    onClickIdx: function (i) { go('chapter', DETAIL.chapters[i].no); }
-  });
-  // 五维雷达：台词/行为/覆盖章/关系/同场对象，各自对全书峰值归一
-  var radarBox = document.getElementById('radarBox');
-  if (radarBox) {
-    var maxOf = function (pick) {
-      var m = 1;
-      DETAIL.characters.forEach(function (p) { m = Math.max(m, pick(p)); });
-      return m;
-    };
-    var sayMax = maxOf(function (p) { return (DETAIL.channels[p.__idx] || {}).say || 0; });
-    var doMax = maxOf(function (p) { return (DETAIL.channels[p.__idx] || {}).do || 0; });
-    var covMax = maxOf(function (p) { return p.chapters.length; });
-    var edgeMax = maxOf(function (p) { return p.edges.length; });
-    var coMax2 = maxOf(function (p) { return p.cooccur.length; });
-    radarBox.insertAdjacentHTML('beforeend', svgRadar([
-      { label: '台词', value: (DETAIL.channels[c.__idx] || {}).say || 0, max: sayMax },
-      { label: '行为', value: (DETAIL.channels[c.__idx] || {}).do || 0, max: doMax },
-      { label: '覆盖章', value: c.chapters.length, max: covMax },
-      { label: '关系', value: c.edges.length, max: edgeMax },
-      { label: '同场', value: c.cooccur.length, max: coMax2 }
-    ]));
-  }
-}
-
-/* ===== 横条榜 ===== */
-function hbarRows(rows) {
-  var h = '';
-  rows.forEach(function (row) {
-    var pct = row.max > 0 ? Math.round(row.value / row.max * 100) : 0;
-    h += '<div class="hbar"><span class="hb-label">' + (row.link ? charLink(row.label) : escHtml(row.label)) + '</span>'
-      + '<span class="hb-track"><span class="hb-fill" style="width:' + pct + '%;background:' + (row.color || C_ACCENT) + '"></span></span>'
-      + '<span class="hb-val">' + row.value + (row.sub ? '<em>' + escHtml(row.sub) + '</em>' : '') + '</span></div>';
-  });
   return h;
 }
 
@@ -768,21 +595,18 @@ function vChapter(no) {
   h += '</div>';
   if (c.summary) h += '<div class="summary">' + escHtml(c.summary) + '</div>';
 
-  // ① 在场人物（本段出场次数条形）
-  var present = [];
-  if (chIdx >= 0) {
-    for (var r = 0; r < DETAIL.matrix.length; r++) {
-      var count = DETAIL.matrix[r][chIdx];
-      if (count > 0) present.push({ name: DETAIL.characters[r].name, count: count });
-    }
-  }
-  present.sort(function (a, b) { return b.count - a.count; });
+  // ① 在场人物（一行点名即可——逐人出场次数条形是低信息量报表）
+  var presence = {};
+  (DETAIL.timeline.find(function (t) { return t.no === Number(no); }) || { events: [] }).events.forEach(function (event) {
+    if (event.who) presence[event.who] = (presence[event.who] || 0) + 1;
+  });
+  var present = Object.entries(presence).sort(function (a, b) { return b[1] - a[1]; });
   if (present.length) {
-    h += '<h2>在场人物 <small>' + present.length + ' 人</small></h2>';
-    var maxP = present[0].count || 1;
-    h += hbarRows(present.slice(0, 10).map(function (p) {
-      return { label: p.name, link: true, value: p.count, max: maxP, sub: ' 段' };
-    }));
+    h += '<h2>在场人物</h2><div class="chips">' + present.map(function (entry) {
+      return CHARS[entry[0]]
+        ? '<a class="chip chip-link" data-go="char" data-name="' + escHtml(entry[0]) + '">' + escHtml(entry[0]) + '</a>'
+        : '<span class="chip">' + escHtml(entry[0]) + '</span>';
+    }).join('') + '</div>';
   }
 
   // ② 本章场景与道具（世界要素按章号过滤）
@@ -880,43 +704,26 @@ function drawTimelineCharts() {
 }
 
 /* ===== 人物矩阵 ===== */
-function vMatrix() {
-  var h = '<h1>人物矩阵</h1><div class="meta">人物 × ' + UNIT + ' 的出场段数热力图——颜色越亮在场越强；悬停读数</div>';
-  h += '<div class="chartbox" style="padding:16px"><div class="hover-read" id="mxHover">悬停查看读数</div></div>';
-  h += '<h2>读图指南</h2><ul class="sub" style="color:var(--muted)">'
-    + '<li>整行全亮＝全程在场（主线人物）；亮块集中＝阶段人物；零星亮点＝过客。</li>'
-    + '<li>列方向看剧情密度：亮列＝群像' + UNIT + '，暗列＝独角戏。</li>'
-    + '</ul>';
-  return h;
-}
-
-function drawMatrix() {
-  var host = document.getElementById('mxHover');
-  if (!host) return;
-  var order = DETAIL.characters.slice().sort(function (a, b) { return b.appearances - a.appearances; }).slice(0, 24);
-  svgHeat(host.parentElement, order.map(function (c) { return c.name; }), order.map(function (c) { return DETAIL.matrix[c.__idx]; }));
-}
-
 /* ===== 伏笔 ===== */
 function vForeshadow() {
+  // 伏笔视图（作者 2026-11-14）：不问「每章几条」，只问「埋了什么、收了没有」。
   var all = [];
   DETAIL.chapters.forEach(function (c) {
     c.foreshadow.forEach(function (f) { all.push({ no: c.no, text: f }); });
   });
-  var h = '<h1>伏笔（' + all.length + '）</h1>';
+  var h = '<h1>伏笔</h1><div class="meta">共 ' + all.length + ' 条 · 按埋设顺序</div>';
   if (!all.length) return h + '<p class="sub">本书增补窄窗未归纳出伏笔（或原文确实没有明显伏笔）。</p>';
-  h += '<div class="chartbox"><div class="hover-read" id="fsHover">悬停查看读数</div></div>';
-  h += '<ul>';
-  all.forEach(function (f) { h += '<li><span class="tag">第' + f.no + UNIT + '</span> ' + escHtml(f.text) + '</li>'; });
-  return h + '</ul>';
-}
-
-function drawForeshadowCharts() {
-  var host = document.querySelector('#view .chartbox');
-  if (!host) return;
-  svgBars(host, DETAIL.chapters.map(function (c) { return c.foreshadow.length; }), {
-    height: 150, color: C_DANGER, svgId: 'fsSvg', hoverEl: document.getElementById('fsHover'), unitLabel: ' 条伏笔'
+  h += '<div class="hooklist">';
+  all.forEach(function (f) {
+    var chapter = CH_BY_NO[f.no];
+    h += '<div class="hook">'
+      + '<div class="hook-when"><a data-go="chapter" data-no="' + f.no + '">第' + f.no + UNIT + '</a>'
+      + (chapter && chapter.title ? '<em>' + escHtml(chapter.title) + '</em>' : '') + '</div>'
+      + '<div class="hook-text">' + escHtml(f.text) + '</div>'
+      + '</div>';
   });
+  h += '</div>';
+  return h;
 }
 
 /* ===== 设定 / 物品 ===== */
@@ -1219,7 +1026,6 @@ function renderMain() {
   if (CUR.view === 'overview') v.innerHTML = vOverview();
   else if (CUR.view === 'slots') v.innerHTML = vSlots();
   else if (CUR.view === 'outline') v.innerHTML = vOutline();
-  else if (CUR.view === 'matrix') v.innerHTML = vMatrix();
   else if (CUR.view === 'timeline') v.innerHTML = vTimeline();
   else if (CUR.view === 'foreshadow') v.innerHTML = vForeshadow();
   else if (CUR.view === 'graph') v.innerHTML = vGraph();
@@ -1228,11 +1034,7 @@ function renderMain() {
   else if (CUR.view === 'chapter') v.innerHTML = vChapter(Number(CUR.name));
   renderSide();
   // 图表在 innerHTML 落地后注入（SVG 要量实际容器宽）
-  if (CUR.view === 'overview') drawOverviewCharts();
-  else if (CUR.view === 'timeline') drawTimelineCharts();
-  else if (CUR.view === 'matrix') drawMatrix();
-  else if (CUR.view === 'foreshadow') drawForeshadowCharts();
-  else if (CUR.view === 'char') drawCharCharts(CUR.name);
+  if (CUR.view === 'timeline') drawTimelineCharts();
   else if (CUR.view === 'graph') drawRelationGraph(null);
 }
 

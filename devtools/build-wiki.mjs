@@ -108,7 +108,7 @@ function chapterTitlesFromSource(text) {
 }
 
 /** 人物派生：言行逐字 + 增补档案（identity/personality/summary）。 */
-function deriveCharacter(entry, plots, profile) {
+function deriveCharacter(entry, plots, profile, totalChapters, chapterOfPlot) {
   const name = entry.name
   const aliases = entry.aliases ?? []
   const allNames = [name, ...aliases]
@@ -152,6 +152,37 @@ function deriveCharacter(entry, plots, profile) {
     }
   }
 
+  // 人物三节点（作者 2026-11-14：「只要知道首次出场、第几章退出、第几章高光就够了」）
+  // 逐章出场矩阵是低信息量报表，不再输出。三节点才是人物在故事里的骨架。
+  const presenceByChapter = new Map()
+  for (const plot of involved) {
+    const chapter = chapterOfPlot?.get(plot)
+    if (!Number.isInteger(chapter)) continue
+    presenceByChapter.set(chapter, (presenceByChapter.get(chapter) ?? 0) + 1)
+  }
+  const presenceChapters = [...presenceByChapter.keys()].sort((a, b) => a - b)
+  const firstChapter = presenceChapters[0] ?? null
+  const lastChapter = presenceChapters[presenceChapters.length - 1] ?? null
+  // 退出 = 最后一次出场之后还有 ≥2 章没再出现（否则算贯穿到结局）
+  const exitChapter = (lastChapter != null && totalChapters && lastChapter < totalChapters - 1) ? lastChapter : null
+  // 高光章 = 该人物出现段数最多的一章（并列取最早）
+  let highlightChapter = null
+  let highlightValue = 0
+  for (const [chapter, count] of presenceByChapter) {
+    if (count > highlightValue) { highlightValue = count; highlightChapter = chapter }
+  }
+  // 高光时刻：该章由他/她说或做的、最有分量的一条原文
+  let highlightQuote = ''
+  if (highlightChapter != null) {
+    const candidates = involved
+      .filter((plot) => chapterOfPlot?.get(plot) === highlightChapter)
+      .flatMap((plot) => (plot.events ?? []).filter((event) => allNames.includes(event.who) && (event.channel === 'say' || event.channel === 'do')))
+      .map((event) => event.content)
+      .filter((line) => String(line).trim().length >= 8)
+      .sort((left, right) => String(right).length - String(left).length)
+    highlightQuote = candidates[0] ?? ''
+  }
+
   return {
     name,
     aliases,
@@ -166,6 +197,10 @@ function deriveCharacter(entry, plots, profile) {
     castTier: entry.castRole?.tier ?? null,
     appearances: involved.length,
     chapters,
+    firstChapter,
+    exitChapter,
+    highlightChapter,
+    highlightQuote,
     speech: speech.slice(0, 12),
     speechTotal: speech.length,
     behavior: behavior.slice(0, 10),
@@ -252,13 +287,18 @@ function buildBook(id, ds) {
       byChapter.get(chapter).push(plot)
     }
   }
+  // plot → 章号映射（伪章书 validity.from 恒为 1，必须用这里的分组结果）
+  const chapterOfPlot = new Map()
+  for (const [chapterNo, chapterPlots] of byChapter) {
+    for (const plot of chapterPlots) chapterOfPlot.set(plot, chapterNo)
+  }
   const chapterNumbers = [...byChapter.keys()].sort((a, b) => a - b)
   // 伪章标题优先用增补小标题（enrich 与本侧用同一伪章切分公式，章号对得上）
   const enrichTitle = (no) => (usePseudo ? (wiki?.chapterSummaries?.find((item) => item.chapter === no)?.title ?? '') : '')
   const chapterInfo = (no) => wiki?.chapterSummaries?.find((item) => item.chapter === no) ?? null
 
   // 人物派生
-  const charactersAll = characterEntries.map((entry) => deriveCharacter(entry, plots, enrichProfile(entry.name)))
+  const charactersAll = characterEntries.map((entry) => deriveCharacter(entry, plots, enrichProfile(entry.name), chapterNumbers.length, chapterOfPlot))
   // 碎片降噪（显示侧过滤，不改 fact 数据）：出场 <3 段且无档案（identity/summary/archetype）的
   // 是绑定噪声（相亲/甚至/心头/司机…），侧栏/矩阵/图谱都不要。真配角有档案或出场足够，保留。
   // 停用黑名单兜底：时间/副词类 who 偶有出场 ≥3 的（「最后」），形态上就不是人名。
@@ -605,6 +645,73 @@ details.drill summary { cursor:pointer; color:var(--muted); font-size:13px; user
 details.drill summary:hover { color:var(--accent); }
 details.drill[open] summary { border-bottom:1px solid var(--border-soft); padding-bottom:8px; margin-bottom:8px; }
 .arc-range { font-size:12px; color:var(--muted); font-weight:400; margin-left:10px; }
+/* ---------- 视图体系重设计（作者 2026-11-14：一视图一问，不做低信息量报表） ---------- */
+/* 骨架五维卡 */
+.skeleton { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; margin:12px 0 4px; }
+.sk-card { background:var(--surface); border:1px solid var(--hairline); border-radius:14px; padding:15px 17px; box-shadow:var(--shadow-1); transition:transform .18s ease, box-shadow .18s ease; }
+.sk-card:hover { transform:translateY(-2px); box-shadow:var(--shadow-2); }
+.sk-label { font-size:11px; letter-spacing:.14em; color:var(--muted); text-transform:uppercase; }
+.sk-value { font-family:var(--serif); font-size:19px; font-weight:700; color:var(--ink); line-height:1.35; margin-top:6px; }
+.sk-note { font-size:11.5px; color:var(--muted); margin-top:5px; line-height:1.5; }
+
+/* 人物骨架表（三节点取代热力图） */
+.bone-table { background:var(--surface); border:1px solid var(--hairline); border-radius:14px; overflow:hidden; box-shadow:var(--shadow-1); }
+.bone-row { display:grid; grid-template-columns:1.1fr 1.5fr .7fr .7fr .7fr 1.6fr; gap:10px; align-items:center;
+  padding:10px 16px; font-size:13px; border-top:1px solid var(--border-soft); }
+.bone-row:first-child { border-top:none; }
+.bone-head { background:color-mix(in srgb,var(--accent) 5%,var(--paper)); font-size:11px; letter-spacing:.1em; color:var(--muted); text-transform:uppercase; font-weight:600; }
+.bone-name { font-weight:650; font-family:var(--serif); font-size:14px; }
+.bone-id { color:var(--muted); font-size:12px; }
+.bone-arc { color:var(--ink-2); font-size:12px; }
+.bone-row em.muted { color:var(--muted); font-style:normal; }
+
+/* 人物页：出场跨度生命线 */
+.lifeline { display:flex; align-items:center; gap:0; margin:14px 0 10px; }
+.lf-node { flex:none; text-align:center; padding:9px 16px; border-radius:12px; background:var(--surface);
+  border:1px solid var(--hairline); box-shadow:var(--shadow-1); min-width:104px; }
+.lf-node b { display:block; font-size:11px; letter-spacing:.08em; color:var(--muted); font-weight:600; }
+.lf-node span { display:block; font-family:var(--serif); font-size:16px; font-weight:700; color:var(--ink); margin-top:3px; }
+.lf-node.highlight { background:linear-gradient(135deg,color-mix(in srgb,var(--warn) 14%,var(--surface)),var(--surface)); border-color:color-mix(in srgb,var(--warn) 35%,var(--hairline)); }
+.lf-node.highlight span { color:#b45309; }
+.lf-bar { flex:1; height:2px; background:linear-gradient(90deg,var(--border),color-mix(in srgb,var(--accent) 40%,var(--border))); }
+.hl-quote { margin-top:4px; }
+
+/* 弧光块 */
+.arc-block { background:var(--surface); border:1px solid var(--hairline); border-radius:14px; padding:16px 18px; box-shadow:var(--shadow-1); }
+.arc-line { display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:14.5px; line-height:1.7; }
+.arc-line span { flex:1; min-width:200px; }
+.arc-line i { color:var(--accent); font-style:normal; font-weight:700; font-size:18px; }
+.arc-turn { margin-top:10px; font-size:12px; color:var(--warn); }
+.arc-evidence { margin-top:8px; font-size:12.5px; color:var(--muted); border-left:2px solid var(--border-soft); padding-left:10px; }
+
+/* 结构阶段 */
+.stages { display:flex; flex-direction:column; gap:10px; }
+.stage { display:flex; gap:14px; background:var(--surface); border:1px solid var(--hairline); border-radius:12px; padding:13px 16px; box-shadow:var(--shadow-1); }
+.stage-no { flex:none; width:24px; height:24px; border-radius:50%; display:flex; align-items:center; justify-content:center;
+  background:color-mix(in srgb,var(--accent) 12%,transparent); color:var(--accent); font-size:12px; font-weight:700; }
+.stage-body b { font-family:var(--serif); font-size:15.5px; }
+.stage-body em { font-style:normal; font-size:11.5px; color:var(--muted); margin-left:9px; }
+.stage-body div { font-size:13px; color:var(--ink-2); margin-top:4px; line-height:1.65; }
+.turns { margin-top:14px; }
+.turns b { font-size:13px; }
+
+/* 伏笔清单 */
+.hooklist { display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+.hook { display:flex; gap:14px; background:var(--surface); border:1px solid var(--hairline); border-left:2px solid color-mix(in srgb,var(--danger) 40%,transparent);
+  border-radius:0 12px 12px 0; padding:11px 15px; box-shadow:var(--shadow-1); }
+.hook-when { flex:none; width:118px; font-size:12px; }
+.hook-when em { display:block; font-style:normal; color:var(--muted); font-size:11px; margin-top:2px; }
+.hook-text { font-size:13.5px; color:var(--ink-2); line-height:1.65; }
+
+/* 章节页在场人物 chips */
+.chip-link { cursor:pointer; }
+.chip-link:hover { background:color-mix(in srgb,var(--accent) 14%,transparent); color:var(--accent); }
+
+/* 情绪曲线头部 */
+.curve-head { display:flex; align-items:baseline; gap:10px; margin-bottom:6px; }
+.curve-head b { font-size:14px; }
+.curve-head span { font-size:11.5px; color:var(--muted); }
+
 /* 六槽位卡（kb/deconstruct/protocol 对齐） */
 .slotcard { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius-md); padding:16px 18px; margin:10px 0; }
 .slotcard .logline { font-size:17px; font-weight:600; color:var(--fg); line-height:1.5; letter-spacing:-0.01em; }
